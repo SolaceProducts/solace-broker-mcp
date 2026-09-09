@@ -96,7 +96,7 @@ not rename what is already there.
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.0**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.1**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -161,8 +161,9 @@ share one meter provider.
 wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bind it to
 loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
 version, schema versions, and — once tools run — tool names already public in
-`docs/tools-reference.md`, broker aliases, and usage timing), but the listener is absent
-entirely unless `OBS_METRICS_ENABLED` is set.
+`docs/tools-reference.md`, broker aliases, broker hostnames via `server_address` on the SEMP
+metrics, and usage timing), but the listener is absent entirely unless `OBS_METRICS_ENABLED`
+is set.
 
 ### Tool Invocations (RED)
 
@@ -195,7 +196,7 @@ before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, an
 alias — so the real total is well under the naive product. CI enforcement of the closed sets is
 planned for GA.
 
-### SEMP Requests (RED, per Attempt)
+### SEMP Requests (RED, per Attempt) — [Implemented]
 
 Request rate, errors, and latency for each call the server makes to a broker over SEMP,
 recorded per retry attempt so you can see retry storms and per-broker latency.
@@ -203,13 +204,22 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_semp_request_total` | Counter | `http_request_method`, `http_response_status_code`, `server_address`, `broker`, `api`, `operation`, `attempt` | Mixed (see the following list) |
-| `mcp_semp_request_duration_seconds` | Histogram | same label set | Mixed |
+| `mcp_semp_request_duration_seconds` | Histogram | same label set, minus `attempt` | Mixed |
 
 - **OTel** labels (adopted from the OpenTelemetry HTTP semantic conventions,
   https://opentelemetry.io/docs/specs/semconv/http/http-spans/): `http_request_method`,
   `http_response_status_code`, `server_address`.
 - **Solace** labels: `broker` (the configured alias), `api` (`v1` or `v2`), `operation`
-  (the SEMP operation), `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...).
+  (the SEMP operation ID, or `unknown` if a call reaches the metric with no operation ID;
+  for SEMPv1 this is always the constant `"SEMPv1"` because the protocol routes every
+  command through one endpoint with no per-operation distinction),
+  `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...). `attempt` is on the
+  **counter only**: the histogram omits it so its bucket series are not multiplied by the
+  retry cap. Retry-storm detection reads the counter.
+- **The duration is the time to the response's first byte for one attempt.** It excludes the
+  MCP-side admission wait (rate limiting and the in-flight cap) and the response-body read,
+  and it excludes retry backoff between attempts — so it is broker round-trip latency, not
+  end-to-end call time.
 - **When no response arrives** — DNS failure, connection refused, TLS handshake failure,
   or a timeout — `http_response_status_code` is the **empty string**. The attempt is still
   counted; only the status is unknown. This follows the OTel convention of leaving the
@@ -220,8 +230,9 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   **Deliberately coarser at the low end than the tool histogram**, because a SEMP call is a
   network round-trip to a broker and sub-millisecond resolution would buy nothing.
 
-**Cardinality:** bounded by the product of these finite sets. `attempt` is bounded by the
-retry cap, and the empty status adds one value to that dimension rather than an open set.
+**Cardinality:** bounded by the product of these finite sets. `attempt` rides the counter
+only — the histogram omits it, so the histogram's many bucket series are not multiplied by the
+retry cap — and the empty status adds one value to the status dimension rather than an open set.
 See open items for the two decisions we want your input on here: whether the histogram bucket
 boundaries fit your brokers under stress, and whether a bare empty status is enough for the
 no-response case or you need the reason (DNS, TLS, timeout) as a label.
@@ -1201,17 +1212,12 @@ These are the decisions we most want pilot input on. Most are unresolved; where 
 taken a position, we say so and name what would change it. Resolving them is the point of
 the review.
 
-1. **SEMP duration histogram buckets.** The name `mcp_semp_request_duration_seconds` is
-   settled. The buckets are `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds,
-   deliberately coarser at the low end than the tool histogram because a SEMP call is a network
-   round-trip. Do those boundaries fit your broker's latency profile under stress? Bucket
-   boundaries are effectively unchangeable after the freeze, so this is the highest-value thing
-   to check.
-2. **The no-response case on SEMP metrics.** When an attempt fails before any response —
-   DNS, connection refused, TLS, timeout — `http_response_status_code` is the empty string,
-   following OTel. Is that enough to alert on, or do you need the reason as its own label?
-   Splitting it out costs cardinality and would duplicate, per attempt, what
-   `mcp_broker_unreachable_reason` already carries as broker state.
+1. ~~**SEMP duration histogram buckets.**~~ **Decided.** Buckets are committed as
+   `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds and are frozen.
+   Pilot feedback is welcome but cannot change the shipped values.
+2. ~~**The no-response case on SEMP metrics.**~~ **Decided.** `http_response_status_code`
+   is the empty string when no response arrives. Story 41 can revisit if pilots need the
+   failure reason as its own label.
 3. **`principal.preferred_username`.** **Decided for v1: we omit it.** The audit event carries
    the opaque `sub` only. A readable username helps access reviews, but it places directly
    identifying PII in an append-only store, which conflicts with erasure obligations under

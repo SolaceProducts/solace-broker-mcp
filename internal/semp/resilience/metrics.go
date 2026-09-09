@@ -33,8 +33,13 @@ type metricsTransport struct {
 }
 
 // RoundTrip times one try and records its method, host, status, and attempt
-// number. A try that gets no response records an empty status.
+// number. A try that gets no response records an empty status. Redirect hops
+// (req.Response != nil) are passed through without recording — they are not
+// new SEMP attempts.
 func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Response != nil {
+		return t.base.RoundTrip(req)
+	}
 	attempt := nextAttempt(req.Context())
 
 	start := time.Now()

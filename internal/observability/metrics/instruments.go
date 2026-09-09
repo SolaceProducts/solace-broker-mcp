@@ -196,16 +196,17 @@ func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Durati
 	if s == nil {
 		return
 	}
-	opts := metric.WithAttributes(
+	// attempt goes on the counter only; off the histogram it would multiply the
+	// bucket series by the retry cap.
+	base := []attribute.KeyValue{
 		attribute.String("http.request.method", r.Method),
 		attribute.String("http.response.status_code", r.Status),
 		attribute.String("server.address", r.Address),
 		attribute.String("broker", r.Broker),
 		attribute.String("api", r.API),
 		attribute.String("operation", r.Operation),
-		attribute.String("attempt", strconv.Itoa(r.Attempt)),
-	)
+	}
 
-	s.requests.Add(ctx, 1, opts)
-	s.duration.Record(ctx, dur.Seconds(), opts)
+	s.requests.Add(ctx, 1, metric.WithAttributes(append(base, attribute.String("attempt", strconv.Itoa(r.Attempt)))...))
+	s.duration.Record(ctx, dur.Seconds(), metric.WithAttributes(base...))
 }

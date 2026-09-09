@@ -139,20 +139,20 @@ func TestSEMPMetrics_HistogramBuckets(t *testing.T) {
 	const want = `
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 0
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.01"} 0
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.025"} 0
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.05"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.1"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.25"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.5"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="1"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="2.5"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="5"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="10"} 1
-mcp_semp_request_duration_seconds_bucket{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="+Inf"} 1
-mcp_semp_request_duration_seconds_sum{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 0.042
-mcp_semp_request_duration_seconds_count{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.01"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.025"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.05"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.1"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.25"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="1"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="2.5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="10"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="+Inf"} 1
+mcp_semp_request_duration_seconds_sum{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 0.042
+mcp_semp_request_duration_seconds_count{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
 `
 	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_semp_request_duration_seconds"); err != nil {
 		t.Error(err)

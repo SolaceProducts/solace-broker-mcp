@@ -60,8 +60,9 @@ type retryStateKey struct{}
 // retryState tracks per-request retry decisions to enforce the retry caps: the
 // "retry once" limits for 401 re-auth (auth401Retried) and non-429/503 5xx
 // (other5xxRetried), plus the maxTransientRetries cap for 429/503
-// (transientRetried). Each Do() call creates its own instance via context, so
-// concurrent requests to the same Sender are safe.
+// (transientRetried). It also carries attempt, the 1-based try counter read by
+// the recording transport. Each Do() call creates its own instance via context,
+// so concurrent requests to the same Sender are safe.
 type retryState struct {
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	other5xxRetried  bool   // true after first non-429/503 5xx retry
@@ -148,8 +149,13 @@ func getRetryState(ctx context.Context) *retryState {
 // nextAttempt bumps and returns the 1-based try counter on the per-request
 // retry state. The recording transport calls it once per attempt. The state
 // pointer is shared across a request's tries, so the count runs 1, 2, 3.
+// If no state is on the context (Sender.Do was bypassed), returns 1 — the
+// attempt is real but uncounted.
 func nextAttempt(ctx context.Context) int {
-	s := getRetryState(ctx)
+	s, ok := ctx.Value(retryStateKey{}).(*retryState)
+	if !ok {
+		return 1
+	}
 	s.attempt++
 	return s.attempt
 }
