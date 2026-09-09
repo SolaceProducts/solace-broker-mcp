@@ -127,10 +127,11 @@ counter (`mcp_auth_failure_total`) is recorded has its own flag,
 operator can set it independently, so the counter can be suppressed while the rest of the
 surface is on, or kept while the rest is off. The flag governs recording only. What is
 exposed when it is forced on while `OBS_METRICS_ENABLED` is false is a property of the
-`/metrics` endpoint and is settled when that endpoint is wired, not by this schema.
+`/metrics` endpoint and is settled by `OBS_METRICS_ENABLED`, not by this schema.
 
-The same instruments can additionally be **pushed over OTLP**, behind its own flag,
-`OBS_METRICS_OTLP_ENABLED`. The endpoint comes from the standard
+The `mcp_*` instruments can additionally be **pushed over OTLP**, behind its own flag,
+`OBS_METRICS_OTLP_ENABLED`. The `go_*`/`process_*` collectors are scrape-only and are
+**not** pushed — see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics). The endpoint comes from the standard
 `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. Push is off by
 default and does not activate merely because an endpoint variable is present in the
 environment; see [Decided Since the First Draft](#decided-since-the-first-draft) for why.

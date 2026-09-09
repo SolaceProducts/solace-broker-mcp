@@ -172,7 +172,9 @@ func scrapeCounterValue(t *testing.T, body string) int {
 
 // TestGoAndProcessFamiliesPresent asserts the standard Go runtime and process
 // metric families are present in a plain-text scrape. Values are not checked —
-// they are environment-dependent.
+// they are environment-dependent. This test exercises New()'s MustRegister call;
+// TestExporterFidelity_SharedRegistry covers the same families on an isolated
+// harness registry and the two are not redundant.
 func TestGoAndProcessFamiliesPresent(t *testing.T) {
 	p, err := New(testVersion, sdkresource.Default())
 	if err != nil {
@@ -180,8 +182,16 @@ func TestGoAndProcessFamiliesPresent(t *testing.T) {
 	}
 	body := scrapePlainText(t, p)
 	for _, prefix := range []string{"go_goroutines", "go_gc_", "go_memstats_", "process_"} {
-		if !strings.Contains(body, prefix) {
-			t.Errorf("scrape missing family with prefix %q", prefix)
+		found := false
+		s := bufio.NewScanner(strings.NewReader(body))
+		for s.Scan() {
+			if strings.HasPrefix(s.Text(), prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("scrape has no line matching %q", prefix)
 		}
 	}
 }
