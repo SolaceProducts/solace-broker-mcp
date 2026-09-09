@@ -191,8 +191,26 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 				t.Errorf("tool %q step %q: no generated schema", tool.Name, step.ID)
 				continue
 			}
-			if _, isStrict := stepSchema["additionalProperties"]; !isStrict {
-				t.Errorf("tool %q step %q: generated schema fell back to the fully permissive shape ({\"type\":\"object\"} only) — the strict, spec-derived schema was expected here", tool.Name, step.ID)
+			// Assert the spec-derived field list actually landed, rather than
+			// the mere presence of a strictness keyword. SOL-154164 removed
+			// additionalProperties:false from the broker-supplied levels of
+			// this schema, so its presence no longer distinguishes the
+			// spec-derived shape from the permissive fallback — but a typed
+			// "data" item with properties in it still does, and that is the
+			// thing this guard actually cares about.
+			stepProps, ok := stepSchema["properties"].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q step %q: generated schema fell back to the fully permissive shape ({\"type\":\"object\"} only) — the spec-derived schema was expected here", tool.Name, step.ID)
+				continue
+			}
+			item, ok := stepProps["data"].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q step %q: generated schema has no \"data\" item schema — the SEMP response envelope was expected here", tool.Name, step.ID)
+				continue
+			}
+			itemProps, ok := item["properties"].(map[string]any)
+			if !ok || len(itemProps) == 0 {
+				t.Errorf("tool %q step %q: generated \"data\" item schema declares no properties — the spec-derived response fields did not reach it", tool.Name, step.ID)
 			}
 		}
 	})
