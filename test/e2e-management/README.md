@@ -50,7 +50,9 @@ monitoring suite's F1–F7.
 | Cross-broker isolation (queue) | create/delete-queue | `e2e-config-iso` (broker-a only) | present on broker-a, absent on broker-b (`list-queues`) |
 | Cross-broker isolation (RDP) | create/delete-rdp | `e2e-config-rdp-iso` (both brokers) | created identically on both; broker-a delete leaves broker-b's copy present (`list-rdps`) |
 | Annotations | `tools/list` | — | each config tool advertised; `readOnlyHint=false`; `destructiveHint` false for create-*, true for update-*/delete-* |
-| Error translation | create-message-vpn | `e2e-config-vpn-broker-a` | duplicate create → `isError=true`, HTTP 400, "already exists" surfaced through the wire |
+| Error translation | create-message-vpn | `e2e-config-vpn-broker-a` | duplicate create → `isError=false`, `outcome="already_exists"`, `changed=false` (SOL-153341: a desired-state noop, not a failure) |
+| Desired-state noop (delete) | delete-message-vpn | a name never created | delete of a nonexistent VPN → `isError=false`, `outcome="already_absent"`, `changed=false` |
+| Parent-missing (real error) | create-rdp | a nonexistent VPN | `isError=true`, missing-parent message names the VPN in plain language |
 
 Presence/absence is verified through the monitoring tools (`list-vpns`/`list-queues`/`list-rdps`)
 — the read-after-write check (there is no response cache; reads hit the broker live). Updated

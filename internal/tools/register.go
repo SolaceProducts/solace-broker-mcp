@@ -263,7 +263,10 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
 
 					ctx, span := tracer.Start(ctx, dispatchSpanName, trace.WithTimestamp(start))
-					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, id)
+					// nil: a parse failure never reaches classifyDesiredStateOutcome,
+					// so there is no desiredOutcome to report (SOL-153341) — same as
+					// the list-brokers dispatch site below.
+					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, nil, id)
 					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
 					endDispatchSpan(ctx, span, reg.name, brokerLabelNone, errorType, toolErr)
 
@@ -374,7 +377,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.
 					errorType = metrics.ErrorTypePanic
 					toolErr = panicError{}
 				}
-				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, id)
+				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, nil, id)
 				recordToolInvocation(ctx, tm, "list-brokers", brokerLabelNone, start, errorType, toolErr)
 			}()
 

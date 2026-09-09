@@ -646,6 +646,270 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	}
 }
 
+// TestCallTool_DesiredStateOutcome_AlreadyExists verifies the AC1/AC5/AC6
+// path of SOL-153341 end to end through CallTool: a duplicate create
+// (ALREADY_EXISTS) comes back as a non-failure — IsError: false — with the
+// outcome/changed fields an agent needs to tell "already done" from
+// "failed" without reconciling against the broker, and the "tool invoked"
+// audit line logs it at INFO (not ERROR) with a "desired_state" field, per
+// the design note that this must not page dashboards keyed on error level.
+// Checks the actual "level" JSON key, not just status/desired_state — those
+// two string values are unchanged by the log level itself, so only "level"
+// can prove the line didn't log at ERROR.
+func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	// The default stub schema (additionalProperties: {"type":"object"}) only
+	// admits object-valued properties — it would reject the noop's own
+	// string/bool fields. This test is about CallTool's classification and
+	// logging, not schema shape (that's covered by
+	// TestCompositeToolHandler_OutputSchema_RealCatalogAdmitsDesiredStateNoop),
+	// so use a fully permissive schema here.
+	handler.outputSch = map[string]any{"type": "object"}
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Subscription foo/*/bar already exists.",
+			SEMPCode:    10,
+			SEMPStatus:  "ALREADY_EXISTS",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected IsError to be false — ALREADY_EXISTS on a create is a non-failure")
+	}
+
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["outcome"] != "already_exists" {
+		t.Errorf("outcome = %v, want already_exists", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if v, ok := sc["attributes_verified"]; !ok || v != false {
+		t.Errorf("attributes_verified = %v (present=%v), want false present=true", v, ok)
+	}
+
+	var foundInfo, foundError bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
+			continue
+		}
+		if fields["outcome"] == "error" {
+			foundError = true
+		}
+		if fields["outcome"] == "success" && fields["desired_state"] == "already_exists" {
+			if fields["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
+			}
+			foundInfo = true
+		}
+	}
+	if foundError {
+		t.Errorf("found an outcome=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+	}
+	if !foundInfo {
+		t.Errorf("did not find an outcome=success desired_state=already_exists \"tool invoked\" line; log:\n%s", buf.String())
+	}
+}
+
+// TestCallTool_DesiredStateOutcome_AlreadyAbsent is the AC2 counterpart:
+// NOT_FOUND on a delete is a non-failure too. Also verifies the "tool
+// invoked" audit line logs at INFO with a "desired_state" field, the same
+// claim TestCallTool_DesiredStateOutcome_AlreadyExists checks — this variant
+// had no logging assertion at all before, so the delete-side path went
+// unverified for the one thing the design note says matters most.
+func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("delete-queue")
+	// See the same note in TestCallTool_DesiredStateOutcome_AlreadyExists —
+	// this test isn't about schema shape, so use a permissive schema rather
+	// than the default, which would reject the noop's string/bool fields.
+	handler.outputSch = map[string]any{"type": "object"}
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "deleteMsgVpnQueue",
+			StatusCode:  400,
+			Description: "Could not find match for queue mcp-subdel-test-q",
+			SEMPCode:    6,
+			SEMPStatus:  "NOT_FOUND",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "delete-queue", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected IsError to be false — NOT_FOUND on a delete is a non-failure")
+	}
+
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["outcome"] != "already_absent" {
+		t.Errorf("outcome = %v, want already_absent", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if _, ok := sc["attributes_verified"]; ok {
+		t.Errorf("attributes_verified present = %v, want absent for an already_absent outcome", sc["attributes_verified"])
+	}
+
+	var foundInfo, foundError bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
+			continue
+		}
+		if fields["outcome"] == "error" {
+			foundError = true
+		}
+		if fields["outcome"] == "success" && fields["desired_state"] == "already_absent" {
+			if fields["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
+			}
+			foundInfo = true
+		}
+	}
+	if foundError {
+		t.Errorf("found an outcome=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+	}
+	if !foundInfo {
+		t.Errorf("did not find an outcome=success desired_state=already_absent \"tool invoked\" line; log:\n%s", buf.String())
+	}
+}
+
+// TestCallTool_DesiredStateOutcome_RoutesThroughSchemaValidation pins the one
+// thing the two tests above deliberately don't (PR #382 review, aross): that
+// a desired-state noop actually goes through buildValidatedResult's real
+// schema check inside CallTool, not a hand-built CallToolResult that happens
+// to look right. Both tests above install a fully permissive output schema
+// specifically because they are about classification/logging, not schema
+// shape — which means neither would notice a regression back to the
+// pre-fix behavior (manager.go's own comment on buildValidatedResult: "it
+// used to build and return its own CallToolResult directly, bypassing this
+// validation entirely"). Verified by mutation before writing this test:
+// reverting the noop branch to build its own CallToolResult (bypassing
+// buildValidatedResult) left the entire internal/tools suite green,
+// including both tests above.
+//
+// The proof here is a schema that would reject the noop's own payload —
+// requiring a field the noop never sets, with additionalProperties: false —
+// so a real IsError:true/validation-failure result can only come from the
+// noop path actually being checked against it. The pre-fix bypass would
+// instead return IsError:false with the unchecked payload, exactly like
+// TestCallTool_DesiredStateOutcome_AlreadyExists asserts today; this test
+// asserts the opposite outcome, on a schema built to disagree with what
+// classifyDesiredStateOutcome produces.
+func TestCallTool_DesiredStateOutcome_RoutesThroughSchemaValidation(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.outputSch = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			// A field desiredStateStructuredContent never sets. A schema
+			// admitting the real noop payload would not require this.
+			"impossible_field_no_noop_ever_sets": map[string]any{"type": "string"},
+		},
+		"required":             []string{"impossible_field_no_noop_ever_sets"},
+		"additionalProperties": false,
+	}
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Subscription foo/*/bar already exists.",
+			SEMPCode:    10,
+			SEMPStatus:  "ALREADY_EXISTS",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError: true — the noop's own payload does not satisfy this schema, " +
+			"so the result can only be true if the noop path actually validated against it; " +
+			"IsError:false here means the pre-fix bypass has regressed")
+	}
+}
+
+// TestCallTool_ParentNotFound_NamesTheParent verifies the AC3 path end to
+// end: NOT_FOUND on a create names the missing parent's type in plain
+// language, rather than surfacing "Cannot enter <mode>: not found" CLI
+// jargon to the agent. Still a hard failure — IsError: true — since a
+// missing parent is a real error, not a desired-state noop.
+func TestCallTool_ParentNotFound_NamesTheParent(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Cannot enter queue mode: not found.",
+			SEMPCode:    6,
+			SEMPStatus:  "NOT_FOUND",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true — a missing parent is a real error, not a noop")
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "queue") || strings.Contains(text, "Cannot enter") {
+		t.Errorf("text = %q, want the CLI-mode jargon translated to plain language", text)
+	}
+}
+
 // TestCallTool_SanitizesResponseButPreservesLogDetail verifies the sanitization
 // boundary: the agent-facing result has internal detail (IP, filesystem path)
 // redacted, while the full unsanitized error is preserved server-side as the

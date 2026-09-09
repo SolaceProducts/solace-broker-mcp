@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // writeToolIdentifierFields names, per write tool, the response field(s) that
@@ -50,6 +51,32 @@ var writeToolIdentifierFields = map[string][]string{
 func callsConfigOrActionOperation(tool composite.CompositeTool) bool {
 	for _, step := range tool.Steps {
 		if strings.HasPrefix(step.Operation, "config/") || strings.HasPrefix(step.Operation, "action/") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDesiredStateEligibleStep reports whether any step of tool resolves to
+// an operation classifyDesiredStateOutcome could produce a desired-state
+// noop for: a create- or delete-prefixed operation ID (see that function's
+// doc comment for the exact ALREADY_EXISTS/NOT_FOUND + prefix rule). Purely
+// structural, like callsConfigOrActionOperation above — no per-tool list to
+// keep in sync, so a future multi-step write tool is covered automatically
+// the moment one of its steps matches, with no manual update here.
+//
+// Every write tool today is single-step (verified against the embedded
+// catalog by TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix),
+// so in practice this currently agrees with "is tool.Steps[0] create-/
+// delete-prefixed" — but scanning every step keeps that true by
+// construction rather than by coincidence.
+func hasDesiredStateEligibleStep(tool composite.CompositeTool, operations map[string]*sempv2.Operation) bool {
+	for _, step := range tool.Steps {
+		op, ok := operations[step.Operation]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(op.ID, "create") || strings.HasPrefix(op.ID, "delete") {
 			return true
 		}
 	}
@@ -112,7 +139,29 @@ func (h *CompositeToolHandler) outputSchema() map[string]any {
 	if fields, ok := writeToolIdentifierFields[h.tool.Name]; ok && len(h.tool.Steps) > 0 {
 		required = map[string][]string{h.tool.Steps[0].ID: fields}
 	}
-	return composite.BuildStrictOutputSchema(h.tool, h.executor.Operations(), required)
+	strict := composite.BuildStrictOutputSchema(h.tool, h.executor.Operations(), required)
+
+	// SOL-153341 review: a duplicate create / delete-of-missing-object comes
+	// back as {outcome, changed, message[, attributes_verified]}, which the
+	// strict step-keyed schema above forbids outright (missing the required
+	// step key, extra properties additionalProperties:false disallows). Widen
+	// with oneOf — not by loosening required/additionalProperties on the
+	// strict schema itself, which would also admit a malformed hybrid
+	// carrying both shapes, or neither — for exactly the tools that can ever
+	// produce that shape.
+	if hasDesiredStateEligibleStep(h.tool, h.executor.Operations()) {
+		// "type": "object" alongside oneOf, not implied by it: the wire
+		// conformance suite (cmd/server/conformance_test.go) requires every
+		// declared outputSchema to state "type": "object" explicitly at the
+		// top level — oneOf's branches being objects isn't sufficient on its
+		// own. Redundant with what each branch already asserts, but cheap
+		// and correct.
+		return map[string]any{
+			"type":  "object",
+			"oneOf": []any{strict, desiredStateOutcomeSchema()},
+		}
+	}
+	return strict
 }
 
 // Handle executes the composite tool's steps against the SEMP client in the

@@ -353,7 +353,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 				errorType = metrics.ErrorTypePanic
 				toolErr = panicError{}
 			}
-			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
+			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, nil, id)
 			recordToolInvocation(ctx, tm, describeSempSchemaToolName, brokerLabelNone, start, errorType, toolErr)
 		}()
 

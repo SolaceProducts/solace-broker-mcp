@@ -22,9 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
@@ -156,6 +159,63 @@ func TestBuildSEMPv2Message(t *testing.T) {
 
 		// The description is run through sanitizeBrokerText.
 		{"description is sanitized", &sempv2.SEMPError{StatusCode: 400, Description: "connect to 10.0.0.1 failed"}, "connect to [ip] failed"},
+
+		// Parent-naming (SOL-153341, AC3). All four descriptions below are
+		// verbatim strings captured live against a real broker. The shape a
+		// given create command uses does NOT track its parent's object type:
+		// create-queue and create-rdp produce different shapes for the exact
+		// same "missing message-vpn" situation.
+		{
+			"NOT_FOUND on create, parent named inline (create-queue against a missing VPN)",
+			&sempv2.SEMPError{Operation: "createMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter mode for message-vpn lkiri-no-such-vpn: not found."},
+			`The Message VPN "lkiri-no-such-vpn" does not exist.`,
+		},
+		{
+			"NOT_FOUND on create, parent named inline (create-topic-endpoint against a missing VPN)",
+			&sempv2.SEMPError{Operation: "createMsgVpnTopicEndpoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter mode for message-vpn lkiri-no-such-vpn-3: not found."},
+			`The Message VPN "lkiri-no-such-vpn-3" does not exist.`,
+		},
+		{
+			"NOT_FOUND on create, parent type only, same missing-VPN situation, different shape (create-rdp)",
+			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter message-vpn mode: not found."},
+			"The Message VPN does not exist.",
+		},
+		{
+			"NOT_FOUND on create, parent type only (create-queue-subscription against a missing queue)",
+			&sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter queue mode: not found."},
+			"The queue does not exist.",
+		},
+		{
+			// From the ticket's own fixtures — not independently re-verified live
+			// in this repo, unlike the four above, but included since the shape
+			// (bare "X mode") is already covered by the queue/message-vpn cases.
+			"NOT_FOUND on create, parent type only (rest-delivery-point, from the ticket's own report)",
+			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPointQueueBinding", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter rest-delivery-point mode: not found."},
+			"The REST Delivery Point does not exist.",
+		},
+		{
+			// NOT_FOUND on a non-create op is untouched by the translation —
+			// the missing object there is the target itself, not a parent, and
+			// already gets a good, already-instance-named broker message.
+			"NOT_FOUND on a get (not a create) is not translated",
+			&sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for queue lkiri-does-not-exist-q"},
+			"Could not find match for queue lkiri-does-not-exist-q",
+		},
+		{
+			// A mode word this codebase hasn't seen live (parentModeFriendlyNames
+			// has no entry) falls back to the raw broker text unchanged, rather
+			// than guessing a translation.
+			"NOT_FOUND on create, unrecognized mode word falls back to raw text",
+			&sempv2.SEMPError{Operation: "createMsgVpnTopicEndpointSomethingFuture", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter topic-endpoint mode: not found."},
+			"Problem with POST: Cannot enter topic-endpoint mode: not found.",
+		},
 	}
 
 	for _, tt := range tests {
@@ -164,6 +224,222 @@ func TestBuildSEMPv2Message(t *testing.T) {
 				t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClassifyDesiredStateOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       error
+		wantOutcome DesiredState // "" means want nil
+		wantMessage string       // "" means don't check beyond non-empty
+	}{
+		{
+			name: "ALREADY_EXISTS on create -> already_exists",
+			input: &sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10,
+				Description: "Problem with POST: Subscription foo/*/bar already exists."},
+			wantOutcome: DesiredStateAlreadyExists,
+		},
+		{
+			name: "NOT_FOUND on delete, target missing -> already_absent",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for queue mcp-subdel-test-q"},
+			wantOutcome: DesiredStateAlreadyAbsent,
+		},
+		{
+			// Review finding (SOL-153341): a delete under a missing PARENT
+			// classifies the same as a delete of a missing TARGET — both are
+			// already_absent — but before the fix, the message was left as
+			// raw CLI jargon. Pins that the widened buildSEMPv2Message gate
+			// now translates it to plain language instead.
+			name: "NOT_FOUND on delete, parent missing -> already_absent with translated message",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with DELETE: Cannot enter mode for message-vpn no-such-vpn: not found."},
+			wantOutcome: DesiredStateAlreadyAbsent,
+			wantMessage: `The Message VPN "no-such-vpn" does not exist.`,
+		},
+		{
+			name: "ALREADY_EXISTS on create, SEMPStatus omitted, falls back to SEMPCode 10",
+			input: &sempv2.SEMPError{Operation: "createMsgVpn", StatusCode: 400, SEMPCode: 10,
+				Description: "Unable to create message VPN 'default': already exists."},
+			wantOutcome: DesiredStateAlreadyExists,
+		},
+		{
+			name:        "NOT_FOUND on delete, SEMPStatus omitted, falls back to SEMPCode 6",
+			input:       &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPCode: 6},
+			wantOutcome: DesiredStateAlreadyAbsent,
+		},
+		{
+			// Regression guard: NOT_FOUND on a GET must never classify as a
+			// noop — it's a real error the caller needs to see, not an
+			// idempotent-replay signal. This is exactly the fixture
+			// TestCallTool_SEMPErrorWrapped already exercises end to end.
+			name:  "NOT_FOUND on a get is not classified",
+			input: &sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 404, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
+		},
+		{
+			name:  "ALREADY_EXISTS on an update is not classified (not a create)",
+			input: &sempv2.SEMPError{Operation: "updateMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
+		},
+		{
+			name:  "NOT_FOUND on a create is not classified (missing parent, not a noop)",
+			input: &sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
+		},
+		{
+			name:  "ALREADY_EXISTS on a delete is not classified",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
+		},
+		{
+			name:  "a non-SEMP error is not classified",
+			input: errors.New("boom"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyDesiredStateOutcome(tt.input)
+			if tt.wantOutcome == "" {
+				if got != nil {
+					t.Fatalf("got %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("got nil, want outcome %q", tt.wantOutcome)
+			}
+			if got.Outcome != tt.wantOutcome {
+				t.Errorf("Outcome = %q, want %q", got.Outcome, tt.wantOutcome)
+			}
+			if got.Message == "" {
+				t.Error("Message is empty, want a non-empty agent-facing message")
+			}
+			if tt.wantMessage != "" && got.Message != tt.wantMessage {
+				t.Errorf("Message = %q, want %q", got.Message, tt.wantMessage)
+			}
+			// AttributesVerified is always false today (existence-only,
+			// ticket owner's ruling on AC1) — pin it so a future change that
+			// starts setting it true doesn't do so silently without also
+			// updating this test to reflect real verification.
+			if got.AttributesVerified {
+				t.Error("AttributesVerified = true, want false — classification never compares attributes (see doc comment)")
+			}
+		})
+	}
+}
+
+// TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix guards
+// the invariant classifyDesiredStateOutcome's doc comment claims but, before
+// this test, only checked by manual grep: every config/action (write)
+// operation referenced by the real, embedded tools.yaml catalog has an
+// operationId starting with create/update/delete/do. Same pattern as
+// write_tool_drift_test.go and loader_embedded_test.go — load the real
+// catalog and specs, assert a structural property against them — so a
+// future operation that violates this convention fails CI instead of
+// silently never getting classified as a desired-state noop (no crash, no
+// test failure, just quietly missing coverage for that one operation).
+func TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+
+	wantPrefixes := []string{"create", "update", "delete", "do"}
+	for _, tool := range realTools {
+		for _, step := range tool.Steps {
+			// A monitor step never fails with ALREADY_EXISTS/NOT_FOUND in the
+			// sense classifyDesiredStateOutcome cares about; only config/
+			// action steps are write operations this invariant applies to.
+			if !strings.HasPrefix(step.Operation, "config/") && !strings.HasPrefix(step.Operation, "action/") {
+				continue
+			}
+			op, ok := operations[step.Operation]
+			if !ok {
+				t.Errorf("%s step %s: operation %q not found in the real specs", tool.Name, step.ID, step.Operation)
+				continue
+			}
+			hasExpectedPrefix := false
+			for _, prefix := range wantPrefixes {
+				if strings.HasPrefix(op.ID, prefix) {
+					hasExpectedPrefix = true
+					break
+				}
+			}
+			if !hasExpectedPrefix {
+				t.Errorf("%s step %s: operation id %q starts with none of %v — "+
+					"classifyDesiredStateOutcome would never classify a duplicate-create "+
+					"or delete-of-missing-object failure on this operation as a "+
+					"desired-state noop", tool.Name, step.ID, op.ID, wantPrefixes)
+			}
+		}
+	}
+}
+
+// TestDesiredStateStructuredContent_AlreadyExists pins the AC1 shape and,
+// specifically, that attributes_verified is present and false — the field
+// that makes the existence-only limit explicit rather than implied by the
+// outcome value's name (SOL-153341 review, AC1 ruling).
+func TestDesiredStateStructuredContent_AlreadyExists(t *testing.T) {
+	sc := desiredStateStructuredContent(&desiredStateOutcome{
+		Outcome: DesiredStateAlreadyExists,
+		Message: "Subscription foo/*/bar already exists.",
+	})
+	if sc["outcome"] != "already_exists" {
+		t.Errorf("outcome = %v, want already_exists", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if sc["message"] != "Subscription foo/*/bar already exists." {
+		t.Errorf("message = %v, want the broker's own text", sc["message"])
+	}
+	if v, ok := sc["attributes_verified"]; !ok || v != false {
+		t.Errorf("attributes_verified = %v (present=%v), want false present=true", v, ok)
+	}
+}
+
+// TestDesiredStateStructuredContent_AlreadyAbsent pins that
+// attributes_verified is absent for a delete outcome — deletion has no
+// attribute-match question, so the field would be a meaningless always-false
+// on every delete rather than a real caveat (see DesiredStateAlreadyAbsent's
+// doc comment).
+func TestDesiredStateStructuredContent_AlreadyAbsent(t *testing.T) {
+	sc := desiredStateStructuredContent(&desiredStateOutcome{
+		Outcome: DesiredStateAlreadyAbsent,
+		Message: "Queue mcp-subdel-test-q does not exist.",
+	})
+	if sc["outcome"] != "already_absent" {
+		t.Errorf("outcome = %v, want already_absent", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if _, ok := sc["attributes_verified"]; ok {
+		t.Errorf("attributes_verified present = %v, want absent for an already_absent outcome", sc["attributes_verified"])
+	}
+}
+
+// TestDesiredStateOutcomeSchema_AcceptsBothOutcomes pins that the schema
+// desiredStateOutcomeSchema declares actually admits what
+// desiredStateStructuredContent produces for both outcomes — the exact gap
+// the review found (the noop shape violated the tool's declared output
+// schema because nothing checked the two stayed in sync).
+func TestDesiredStateOutcomeSchema_AcceptsBothOutcomes(t *testing.T) {
+	compiled, err := compileSchema(desiredStateOutcomeSchema())
+	if err != nil {
+		t.Fatalf("compileSchema: %v", err)
+	}
+	for _, outcome := range []*desiredStateOutcome{
+		{Outcome: DesiredStateAlreadyExists, Message: "already exists"},
+		{Outcome: DesiredStateAlreadyAbsent, Message: "already absent"},
+	} {
+		sc := desiredStateStructuredContent(outcome)
+		if _, err := validateAgainstCompiledSchema(sc, compiled, "x"); err != nil {
+			t.Errorf("outcome %q: desiredStateOutcomeSchema rejects desiredStateStructuredContent's own output: %v", outcome.Outcome, err)
+		}
 	}
 }
 
@@ -272,6 +548,24 @@ func TestBuildErrorMessage(t *testing.T) {
 			"broker-eu-prod",
 			"Queue not found",
 			[]string{"Verify the name is correct."},
+		},
+		// SOL-153341 AC4 (descoped): neither 135 nor 403 names which limit was
+		// hit or its current count — see translatedErrorCodes' doc comment for
+		// why each hint instead says plainly that the scope is unknown, and why
+		// the two hints name different scope pairs (per-VPN vs. per-queue).
+		{
+			"sempv2 code 135 (max num exceeded) yields generic limit hint",
+			&sempv2.SEMPError{StatusCode: 400, SEMPCode: 135, Description: "max num queues exceeded"},
+			"broker-eu-prod",
+			"max num queues exceeded",
+			[]string{"A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-VPN."},
+		},
+		{
+			"sempv2 code 403 (max subscriptions) yields generic limit hint",
+			&sempv2.SEMPError{StatusCode: 400, SEMPCode: 403, Description: "max num subscriptions exceeded"},
+			"broker-eu-prod",
+			"max num subscriptions exceeded",
+			[]string{"A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-queue."},
 		},
 		// Code 72 (permission denied) with a known alias: message is replaced with
 		// an alias-tagged line and the generic role/VPN-scope hint is suppressed.

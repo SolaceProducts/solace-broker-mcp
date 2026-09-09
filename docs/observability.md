@@ -1191,6 +1191,33 @@ Notes:
   [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only))
   and is planned as a metric in a later release (see
   [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)).
+- **A desired-state noop (SOL-153341) reads `outcome=success`, plus a separate
+  `desired_state` field — never a fourth `outcome` value.** Creating an object that already
+  exists, or deleting one that's already gone, is success by this ticket's own definition, not
+  a distinct kind of outcome — so the "tool invoked" log line for these two cases carries
+  `outcome=success` like any other success, with `desired_state` (`already_exists` or
+  `already_absent`) alongside it distinguishing "this was a no-op" from an ordinary fresh
+  create/delete. `desired_state` is deliberately not named `outcome`: the write tool's own
+  structured *result* also has a field literally called `outcome` with these same two values
+  (plus `changed` and, for `already_exists`, `attributes_verified` — see the tool
+  descriptions), but that is a different namespace — the tool's own output schema, not this
+  shared telemetry vocabulary — and the two must not be confused when grepping logs versus
+  reading a tool result. A monitor that alerted on `ERROR`-level volume for these two cases
+  before this ticket should switch to a rule on `desired_state` instead; see the CHANGELOG
+  entry for the full operator-visible effect.
+- **The `operation` audit record does not carry `desired_state` — only the "tool invoked" log
+  line does.** A desired-state noop against a destructive tool (`delete-message-vpn` against a
+  VPN that is already gone, for example) still writes an `operation` record with
+  `outcome: success` and no field distinguishing it from a genuine deletion — `audit.Fields`
+  (`internal/observability/audit/event.go`) has no `desired_state`/`changed` field today, and
+  `emitOperationAudit` (`internal/tools/manager.go`) branches only on whether the call errored,
+  which a noop deliberately does not. For the durable, schema-enforced compliance trail this
+  means "I deleted it" and "it was already gone" render identically: a reviewer reconstructing
+  what an agent actually changed from the audit stream alone cannot tell the two apart. If you
+  need that distinction, join to the "tool invoked" log line for the same `correlation_id` and
+  read its `desired_state` field instead — the audit record alone is not enough. This gap is
+  tracked, not fixed here (SOL-153341); a future revision may add the field to `audit.Fields`,
+  which would be a schema-version bump like any other.
 
 ---
 

@@ -848,7 +848,9 @@ tools:
       as a pre-confirmation, even if it implies intent.
       Create a Message VPN. Requires msgVpnName to name the new VPN; any
       attribute omitted from msgVpnConfig is set to its broker default. Use this
-      to provision a new VPN. Fails if a VPN with the same name already exists.
+      to provision a new VPN. If a VPN with the same name already exists, this is
+      not an error: the call returns outcome:"already_exists" (existence only —
+      attributes are not compared against msgVpnConfig) instead of failing.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpn) if you need the full list.
     annotations:
@@ -912,7 +914,8 @@ tools:
       Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
       This is a destructive operation that removes the VPN and all its
       configuration. The VPN must have no active client connections before
-      deletion.
+      deletion. If the VPN is already gone, this is not an error: the call
+      returns outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -938,8 +941,10 @@ tools:
       a pre-confirmation, even if it implies intent.
       Create a queue in a Message VPN. Requires msgVpnName to identify the VPN
       and queueName to name the new queue; any attribute omitted from queueConfig
-      is set to its broker default. Use this to provision a new queue. Fails if a
-      queue with the same name already exists in the VPN.
+      is set to its broker default. Use this to provision a new queue. If a
+      queue with the same name already exists in the VPN, this is not an error:
+      the call returns outcome:"already_exists" (existence only — attributes
+      are not compared against queueConfig) instead of failing.
       A newly created queue has no topic subscriptions and will not attract any
       messages — call create-queue-subscription next to give it one.
       queueConfig accepts more attributes than listed here; call describe-semp-schema
@@ -1021,7 +1026,9 @@ tools:
       identify the queue to delete. This is a destructive operation that removes
       the queue, discards any messages still spooled on it, and removes any
       topic subscriptions attached to it — there is no separate step to detach
-      subscriptions first.
+      subscriptions first. If the queue is already gone — including when the
+      VPN itself no longer exists — this is not an error: the call returns
+      outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1116,8 +1123,10 @@ tools:
       to (Solace wildcards > and * are accepted). A queue with no
       subscriptions attracts no messages regardless of its other settings —
       call this immediately after create-queue if the queue needs to receive
-      traffic. Fails if the queue already has this exact subscription, or if
-      the queue does not exist.
+      traffic. If the queue already has this exact subscription, this is not
+      an error: the call returns outcome:"already_exists" instead of failing.
+      It still fails if the queue itself does not exist (a missing parent, not
+      a missing subscription).
     annotations:
       readOnly: false
       destructive: false
@@ -1160,9 +1169,9 @@ tools:
       queueName, and subscriptionTopic to identify the subscription to
       remove. A successful removal is silent: the broker raises no error and
       gives no further signal that messages matching this topic have stopped
-      arriving. The call itself can still fail — for example, NOT_FOUND if
-      the subscription does not exist — and that failure does surface
-      normally.
+      arriving. If the subscription (or the queue itself) is already gone,
+      this is not an error either: the call returns outcome:"already_absent"
+      instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1244,8 +1253,10 @@ tools:
       Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
       the VPN and topicEndpointName to name the new topic endpoint; any attribute
       omitted from topicEndpointConfig is set to its broker default. Use this to
-      provision a new topic endpoint. Fails if a topic endpoint with the same
-      name already exists in the VPN.
+      provision a new topic endpoint. If a topic endpoint with the same
+      name already exists in the VPN, this is not an error: the call returns
+      outcome:"already_exists" (existence only — attributes are not compared
+      against topicEndpointConfig) instead of failing.
       topicEndpointConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnTopicEndpoint) if you need the full list.
     annotations:
@@ -1326,7 +1337,9 @@ tools:
       Delete a topic endpoint from a Message VPN. Requires msgVpnName and
       topicEndpointName to identify the topic endpoint to delete. This is a
       destructive operation that removes the topic endpoint and discards any
-      messages still spooled on it.
+      messages still spooled on it. If the topic endpoint is already gone —
+      including when the VPN itself no longer exists — this is not an error:
+      the call returns outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1360,7 +1373,9 @@ tools:
       omitted from rdpConfig is set to its broker default. Creates only the RDP
       itself — REST consumers and queue bindings are separate resources not managed
       by this tool, so a new RDP is created disabled by default and delivers nothing
-      until those are added. Fails if an RDP with the same name already exists.
+      until those are added. If an RDP with the same name already exists, this
+      is not an error: the call returns outcome:"already_exists" (existence
+      only — attributes are not compared against rdpConfig) instead of failing.
       rdpConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
@@ -1441,7 +1456,9 @@ tools:
       Delete a REST Delivery Point from a Message VPN. Requires msgVpnName and
       restDeliveryPointName to identify the RDP to delete. This is a destructive
       operation that permanently removes the RDP along with its REST consumers and
-      queue bindings.
+      queue bindings. If the RDP is already gone — including when the VPN itself
+      no longer exists — this is not an error: the call returns
+      outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
