@@ -115,6 +115,14 @@ func TestGoldenSchema(t *testing.T) {
 		Attempt:   1,
 	}, 5*time.Millisecond)
 
+	// Security counters (SOL-152099): registration seeds the auth-failure
+	// series; one denial surfaces the unseeded authz family.
+	sec, err := p.SecurityMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec.RecordAuthzDenied(context.Background(), "test-tool", "not_permitted")
+
 	if err := panics.Register(p.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register() error = %v", err)
 	}

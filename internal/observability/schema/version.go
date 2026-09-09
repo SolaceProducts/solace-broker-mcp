@@ -33,7 +33,9 @@ package schema
 // component on anything else — see docs/observability.md, "The schema is
 // additive-only within a major version". 1.1 (SOL-152093): added the
 // mcp_semp_request_total and mcp_semp_request_duration_seconds families.
-const MetricsSchemaVersion = "1.1"
+// 1.2 (SOL-152099): added the mcp_auth_failure_total and mcp_authz_denied_total
+// families.
+const MetricsSchemaVersion = "1.2"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major

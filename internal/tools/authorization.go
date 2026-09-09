@@ -27,6 +27,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -39,9 +40,9 @@ const (
 	authzMissingClaimMessage = "You are not authorized to use this tool."
 )
 
-// decision_reason values for the "tool authorization" WARN log and the
-// authz_denied audit record (SOL-152097). Named once here so the two never
-// drift into reporting different reasons for the same denial.
+// decision_reason values shared by the "tool authorization" WARN log, the
+// authz_denied audit record (SOL-152097), and mcp_authz_denied_total's reason
+// label (SOL-152099), so the three cannot drift.
 const (
 	decisionReasonMissingClaim = "missing_claim"
 	decisionReasonNotPermitted = "not_permitted"
@@ -97,7 +98,10 @@ const matchedGroupsBound = 32
 // tools.WithAuditLog reads at ToolManager construction — so this wrapper and
 // the destructive-operation audit trail agree about whether the capability
 // is on.
-func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, auditLog bool, next mcp.ToolHandler) mcp.ToolHandler {
+//
+// sm records mcp_authz_denied_total{tool,reason} (SOL-152099) on both deny
+// branches with the same reason constant the audit record gets; nil is inert.
+func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, auditLog bool, sm *metrics.SecurityMetrics, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Enforce the precondition uniformly across every branch. Without
 		// this guard, nil policy panics on the branch that reaches
@@ -129,6 +133,7 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 				slog.String("expected_claim", sanitize.Claim(configuredGroupsClaimName)),
 				slog.Any("", id))
 			auditAuthzDenied(ctx, auditLog, toolName, decisionReasonMissingClaim)
+			sm.RecordAuthzDenied(ctx, toolName, decisionReasonMissingClaim)
 			return authzErrorResult(authzMissingClaimMessage), nil
 		}
 
@@ -149,6 +154,7 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 				slog.Bool("matched_groups_truncated", false),
 				slog.Any("", id))
 			auditAuthzDenied(ctx, auditLog, toolName, decisionReasonNotPermitted)
+			sm.RecordAuthzDenied(ctx, toolName, decisionReasonNotPermitted)
 			return authzErrorResult(authzDeniedMessage), nil
 		}
 

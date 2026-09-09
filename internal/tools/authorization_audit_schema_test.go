@@ -176,7 +176,7 @@ func TestAuditEvent_Allow_EmitsInfoWithFullSchema(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups", false,
+		"groups", false, nil,
 		newRecordingHandler().handler())
 	req := requestWithGroupsAndCorrelation([]string{"Ops"})
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-allow"), req)
@@ -236,7 +236,7 @@ func TestAuditEvent_Deny_EmitsWarnWithNotPermittedAndNoCallerGroups(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"delete-queue",
-		"groups", false,
+		"groups", false, nil,
 		newRecordingHandler().handler())
 	req := requestWithGroupsAndCorrelation([]string{"OtherGroup"})
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-deny"), req)
@@ -294,7 +294,7 @@ func TestAuditEvent_MissingClaim_EmitsWarnWithExpectedClaimAndNoMatchedGroupsFie
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups", false,
+		"groups", false, nil,
 		newRecordingHandler().handler())
 	req := requestMissingClaimWithCorrelation()
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-miss"), req)
@@ -352,7 +352,7 @@ func TestAuditEvent_MissingClaim_SanitizesExpectedClaim(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups\u200d", false,
+		"groups\u200d", false, nil,
 		newRecordingHandler().handler())
 	missingReq := requestMissingClaimWithCorrelation()
 	if _, err := wrapped(ctxWithPrincipal(context.Background(), missingReq), missingReq); err != nil {
@@ -392,7 +392,7 @@ func TestAuditEvent_Allow_SanitizesMatchedGroupsElements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPolicy: %v", err)
 	}
-	wrapped := withAuthorization(policy, "list-queues", "groups", false, newRecordingHandler().handler())
+	wrapped := withAuthorization(policy, "list-queues", "groups", false, nil, newRecordingHandler().handler())
 	if _, err := wrapped(context.Background(), requestWithGroupsAndCorrelation([]string{group1, group2})); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestAuditEvent_MatchedGroupsBounding(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewPolicy: %v", err)
 			}
-			wrapped := withAuthorization(policy, "list-queues", "groups", false, newRecordingHandler().handler())
+			wrapped := withAuthorization(policy, "list-queues", "groups", false, nil, newRecordingHandler().handler())
 			boundReq := requestWithGroupsAndCorrelation(groups)
 			if _, err := wrapped(ctxWithPrincipal(context.Background(), boundReq), boundReq); err != nil {
 				t.Fatalf("wrapper returned error: %v", err)
