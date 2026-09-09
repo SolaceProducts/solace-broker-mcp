@@ -16,7 +16,6 @@ package resilience
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"go.opentelemetry.io/otel"
@@ -104,6 +103,31 @@ func (t *attemptTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return t.base.RoundTrip(req.WithContext(ctx))
 }
 
+// CloseIdleConnections forwards to the wrapped transport.
+//
+// Required, not politeness. http.Client.CloseIdleConnections reaches the
+// transport by type assertion on an unexported `closeIdler` interface, so a
+// wrapper without this method turns the call into a silent no-op — and
+// retryablehttp calls it at three points that all mean "this chain went wrong,
+// do not reuse these connections": a request-body rewind failure, the context
+// ending during backoff, and a deferred call on every failure path before
+// ErrorHandler. Because this wrapper is installed unconditionally, omitting the
+// method would disable that hygiene on the default configuration for every
+// broker, invisibly.
+func (t *attemptTransport) CloseIdleConnections() {
+	forwardCloseIdleConnections(t.base)
+}
+
+// forwardCloseIdleConnections calls CloseIdleConnections on rt when it has one,
+// so a chain of wrappers relays it down to the real *http.Transport. Every
+// wrapper in the chain has to relay, or the first one that does not breaks it.
+func forwardCloseIdleConnections(rt http.RoundTripper) {
+	type closeIdler interface{ CloseIdleConnections() }
+	if c, ok := rt.(closeIdler); ok {
+		c.CloseIdleConnections()
+	}
+}
+
 // endAttemptSpan closes the attempt span opened by attemptTransport, tagging it
 // with the retry decision checkRetry is about to return. Called from
 // checkRetry's own defer, so it fires on every one of that function's exits
@@ -122,7 +146,7 @@ func (t *attemptTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // attemptTransport, or that checkRetry ran twice for one attempt (which
 // retryablehttp does when a Request carries a responseHandler — nothing in this
 // codebase sets one). Both are no-ops rather than errors.
-func endAttemptSpan(ctx context.Context, retryMax int, resp *http.Response, retry bool, checkErr error) {
+func endAttemptSpan(ctx context.Context, retryMax int, resp *http.Response, retry, allowanceSpent bool) {
 	state := getRetryStateOrNil(ctx)
 	if state == nil || state.attemptSpan == nil {
 		return
@@ -160,7 +184,7 @@ func endAttemptSpan(ctx context.Context, retryMax int, resp *http.Response, retr
 		if resp != nil {
 			attrs = append(attrs, attribute.Int("http.response.status_code", resp.StatusCode))
 		}
-		if retriesExhausted(retryMax, state.attempt, retry, checkErr) {
+		if retriesExhausted(retryMax, state.attempt, retry, allowanceSpent) {
 			attrs = append(attrs, attribute.Bool("retry.exhausted", true))
 		}
 		span.SetAttributes(attrs...)
@@ -178,10 +202,16 @@ func endAttemptSpan(ctx context.Context, retryMax int, resp *http.Response, retr
 }
 
 // closeDanglingAttemptSpan ends an attempt span that was opened but never
-// closed by checkRetry, so it is exported (undecided) rather than dropped. See
-// the deferred call in Sender.Do for why this is a backstop and not a normal
-// path: it is unreachable on today's retryablehttp, where CheckRetry runs after
-// every dispatch.
+// closed by checkRetry, so it is exported (undecided) rather than dropped.
+//
+// A backstop, not a normal path, and unreachable on today's retryablehttp,
+// where CheckRetry runs immediately after every dispatch. No behavioural test
+// can therefore pin the deferred call site in Sender.Do — deleting that defer
+// leaves the suite green, and that is inherent to guarding an unreachable
+// state, not an oversight. What it bounds is the failure mode if a future
+// library version grows an exit between the dispatch and CheckRetry: a span
+// with no decision, rather than a span the SDK drops entirely because it was
+// never ended. This method itself is tested directly.
 //
 // No attributes are written. A span reaching here has no decision to report,
 // and inventing one would be exactly the re-derivation SOL-152422 forbids; its
@@ -196,31 +226,44 @@ func (s *retryState) closeDanglingAttemptSpan() {
 	span.End()
 }
 
-// retriesExhausted reports whether the retry allowance ran out on this attempt,
-// which is what `retry.exhausted` means: the policy wanted to keep going, or
-// had capped itself, and no further attempt was made.
+// retriesExhausted reports whether a retry allowance ran out on this attempt,
+// which is the one thing `retry.exhausted` means: the policy stopped because
+// something it was counting was already spent, not because the outcome was
+// terminal on its own merits.
 //
-// Two cases, both read off checkRetry's own return values plus the real attempt
-// counter:
+// Two ways that happens, both read off checkRetry's own decision plus real
+// per-request state, never re-derived from the response:
 //
 //   - retry == true with no attempts left. retryablehttp breaks out of its loop
 //     when `remain := RetryMax - i` is non-positive, with i the 0-based loop
 //     index, so the last attempt it will make is attempt RetryMax+1. Past that
 //     the decision to retry stands but is never acted on, and this attribute is
 //     what tells the two apart in a trace.
-//   - checkRetry returned errTransientCapReached. maxTransientRetries caps a
-//     429/503 episode well below RetryMax, so at default settings this — not
-//     RetryMax — is how a real broker-overload retry storm ends. Leaving it out
-//     would mean the storm this story exists to make legible never carried the
-//     attribute.
+//   - allowanceSpent — one of checkRetry's own sub-caps refused the replay
+//     because its budget was already used: the maxTransientRetries cap on
+//     429/503, the once-only replay for a non-429/503 5xx, or the once-only
+//     401 re-auth. All three matter to an operator for the same reason
+//     RetryMax does, and the 429/503 cap fires far below RetryMax, so at
+//     default settings it — not RetryMax — is how a real broker-overload retry
+//     storm ends. Covering only RetryMax would leave the storm this story
+//     exists to make legible without the attribute.
 //
-// errNonIdempotentNotRetried is deliberately NOT exhaustion: nothing ran out,
-// the policy refused to replay a request the broker may already have carried
-// out. `retry.decision = false` already says no retry happened, and the
-// difference between "refused" and "ran out" matters to whoever is reading.
-func retriesExhausted(retryMax, attempt int, retry bool, checkErr error) bool {
+// Deliberately NOT exhaustion, and the distinction is the point:
+//
+//   - A refused replay of a caller-declared non-idempotent request. Nothing ran
+//     out; the policy declined to repeat a request the broker may already have
+//     carried out. An operator seeing "exhausted" here would go looking for a
+//     budget to raise when the answer is that the request is not replayable.
+//   - A context that ended, and any status the policy never retries (2xx, 4xx).
+//   - An authenticator that declined to retry the FIRST 401. That is the auth
+//     mode saying it cannot recover, not a budget running out; the once-only
+//     allowance is only spent on a 401 that persists after an attempt.
+//
+// `retry.decision = false` already says no retry happened. This attribute says
+// why, and the two answers have different remedies.
+func retriesExhausted(retryMax, attempt int, retry, allowanceSpent bool) bool {
 	if retry {
 		return attempt > retryMax
 	}
-	return errors.Is(checkErr, errTransientCapReached)
+	return allowanceSpent
 }

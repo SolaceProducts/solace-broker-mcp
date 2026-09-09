@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -357,6 +358,264 @@ func TestAttemptSpans_ExhaustedWhenRetryMaxRunsOut(t *testing.T) {
 		}
 	}
 }
+
+// TestAttemptSpans_NotExhaustedWhenTheReplayWasRefused is the negative half of
+// retry.exhausted, and it is the half a naive predicate gets wrong.
+//
+// A caller-declared non-idempotent request answered with a 503 ends the chain
+// with a sentinel error, exactly like the transient cap does — so a predicate
+// written as "checkRetry returned an error" reports exhaustion here. Nothing
+// ran out: the policy refused to replay a request the broker may already have
+// carried out. An operator seeing `retry.exhausted` would go hunting for a
+// budget to raise when the request is simply not replayable.
+func TestAttemptSpans_NotExhaustedWhenTheReplayWasRefused(t *testing.T) {
+	sr := recordSpans(t)
+
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}, "bearer", 10)
+	defer server.Close()
+
+	// PUT, so the method guard does not fire first — this exercises the
+	// caller-declared non-idempotency gate specifically.
+	req := newMethodRequest(t, http.MethodPut, server.URL)
+	req = req.WithContext(WithRetryUnsafe(req.Context()))
+
+	parentSC, err := runTracedRequest(t, sender, req)
+	if err == nil {
+		t.Fatal("Do returned no error; a gated non-idempotent 503 must fail")
+	}
+
+	spans := attemptSpans(sr, parentSC.TraceID())
+	if len(spans) != 1 {
+		t.Fatalf("got %d %s spans, want 1 (the request is never replayed)", len(spans), attemptSpanName)
+	}
+	attrs := spanAttrs(spans[0])
+	if got := attrs["retry.decision"]; got != false {
+		t.Errorf("retry.decision = %v, want false", got)
+	}
+	if _, present := attrs["retry.exhausted"]; present {
+		t.Error("retry.exhausted is set on a refused replay. Nothing ran out — the policy declined to " +
+			"repeat a request the broker may already have carried out, and the remedy for that is not " +
+			"a bigger retry budget")
+	}
+}
+
+// TestAttemptSpans_NotExhaustedWhenTheContextEnded is the other negative case a
+// "checkRetry returned an error" predicate would get wrong: a cancelled context
+// makes checkRetry return ctx.Err(), which is an error but not a budget.
+func TestAttemptSpans_NotExhaustedWhenTheContextEnded(t *testing.T) {
+	sr := recordSpans(t)
+
+	// Cancel while the handler is still deciding, so checkRetry's own ctx guard
+	// is what ends the chain, on a status it would otherwise retry.
+	cancelled := make(chan struct{})
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		close(cancelled)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}, "bearer", 10)
+	defer server.Close()
+
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-cancelled
+		cancel()
+	}()
+
+	req := newGetRequest(t, server.URL)
+	parentSC, err := runTracedRequest(t, sender, req.WithContext(base))
+	if err == nil {
+		t.Fatal("Do returned no error; the caller's context was cancelled")
+	}
+
+	spans := attemptSpans(sr, parentSC.TraceID())
+	if len(spans) == 0 {
+		t.Fatalf("no %s spans", attemptSpanName)
+	}
+	for i, s := range spans {
+		if _, present := spanAttrs(s)["retry.exhausted"]; present {
+			t.Errorf("attempt %d: retry.exhausted is set on a call the caller abandoned; a context ending "+
+				"is not a retry budget running out", i+1)
+		}
+	}
+}
+
+// TestAttemptSpans_ExhaustedOnTheOnceOnlyServerErrorCap covers the third retry
+// allowance. A non-429/503 5xx is replayed once; the second one ends the chain
+// with (false, nil) — no sentinel, no RetryMax involvement.
+//
+// Included because `retry.exhausted` means one thing: an allowance the policy
+// enforces was already spent. A predicate keyed only on the transient sentinel
+// and RetryMax would leave a 500,500 chain looking like a plain terminal
+// failure, so an operator filtering for chains that ran out would miss it.
+func TestAttemptSpans_ExhaustedOnTheOnceOnlyServerErrorCap(t *testing.T) {
+	sr := recordSpans(t)
+
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}, "bearer", 10)
+	defer server.Close()
+
+	parentSC, _ := runTracedRequest(t, sender, newGetRequest(t, server.URL))
+
+	spans := attemptSpans(sr, parentSC.TraceID())
+	if len(spans) != 2 {
+		t.Fatalf("got %d %s spans, want 2 (a non-429/503 5xx is replayed once)", len(spans), attemptSpanName)
+	}
+	if _, present := spanAttrs(spans[0])["retry.exhausted"]; present {
+		t.Error("attempt 1: retry.exhausted is set while the once-only replay was still available")
+	}
+	final := spanAttrs(spans[1])
+	if got := final["retry.decision"]; got != false {
+		t.Errorf("attempt 2: retry.decision = %v, want false", got)
+	}
+	if got := final["retry.exhausted"]; got != true {
+		t.Errorf("attempt 2: retry.exhausted = %v, want true (the once-only 5xx replay was spent)", got)
+	}
+}
+
+// TestAttemptSpans_ExhaustedOnTheOnceOnly401Reauth covers the fourth allowance:
+// a 401 that persists after the one re-auth attempt.
+//
+// Distinct from an authenticator that declines the FIRST 401 — that is "cannot
+// recover", not a budget running out, and TestAttemptSpans_NotExhausted... does
+// not cover it because no allowance was ever spent there.
+func TestAttemptSpans_ExhaustedOnTheOnceOnly401Reauth(t *testing.T) {
+	sr := recordSpans(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	// rotatingTokenAuth signals Retry+ReAuth, so the one re-auth allowance is
+	// used and the persisted 401 then ends the chain.
+	sender := newTestSender(t, server.Client(), &rotatingTokenAuth{}, 10)
+	sender.brokerURL = server.URL
+
+	parentSC, _ := runTracedRequest(t, sender, newGetRequest(t, server.URL))
+
+	spans := attemptSpans(sr, parentSC.TraceID())
+	if len(spans) != 2 {
+		t.Fatalf("got %d %s spans, want 2 (one 401, one re-auth replay)", len(spans), attemptSpanName)
+	}
+	if _, present := spanAttrs(spans[0])["retry.exhausted"]; present {
+		t.Error("attempt 1: retry.exhausted is set while the re-auth allowance was still available")
+	}
+	if got := spanAttrs(spans[1])["retry.exhausted"]; got != true {
+		t.Errorf("attempt 2: retry.exhausted = %v, want true (the once-only 401 re-auth was spent)", got)
+	}
+}
+
+// TestRetriesExhausted_Predicate pins the predicate directly, both directions,
+// so the two meanings cannot be collapsed by a later edit.
+func TestRetriesExhausted_Predicate(t *testing.T) {
+	cases := []struct {
+		name           string
+		retryMax       int
+		attempt        int
+		retry          bool
+		allowanceSpent bool
+		want           bool
+	}{
+		{"retrying with attempts left", 10, 1, true, false, false},
+		{"retrying with none left", 2, 3, true, false, true},
+		{"retrying past the end", 2, 4, true, false, true},
+		{"not retrying, allowance spent", 10, 4, false, true, true},
+		{"not retrying, nothing spent", 10, 1, false, false, false},
+		// A spent allowance is what matters, not the attempt number: the
+		// 429/503 cap fires at attempt 4 of a RetryMax of 10.
+		{"spent allowance well inside RetryMax", 10, 4, false, true, true},
+		// retry=true takes the attempt-count branch, so a spent allowance
+		// cannot mask an available attempt.
+		{"retrying with attempts left despite a spent allowance", 10, 1, true, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := retriesExhausted(tc.retryMax, tc.attempt, tc.retry, tc.allowanceSpent)
+			if got != tc.want {
+				t.Errorf("retriesExhausted(%d, %d, %v, %v) = %v, want %v",
+					tc.retryMax, tc.attempt, tc.retry, tc.allowanceSpent, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNew_DoesNotMutateTheCallersHTTPClient pins that New composes its transport
+// wrappers onto a copy.
+//
+// Two properties depend on it. A caller that installed its own RoundTripper
+// keeps the client it configured; and two Senders over one *http.Client each get
+// their own complete chain, rather than the second silently inheriting the
+// first's — which, if only the second carried WithMetrics, would drop that
+// Sender's SEMP metrics entirely.
+func TestNew_DoesNotMutateTheCallersHTTPClient(t *testing.T) {
+	callerTransport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+	})
+	httpClient := &http.Client{Transport: callerTransport, Timeout: 7 * time.Second}
+
+	first := newTestSender(t, httpClient, bearerAuth(t), 1)
+	second := newTestSender(t, httpClient, bearerAuth(t), 1)
+
+	if _, wrapped := httpClient.Transport.(*attemptTransport); wrapped {
+		t.Error("New replaced the caller's own Transport; it must wrap a copy of the client instead")
+	}
+
+	// Each Sender got its own attemptTransport over the caller's transport —
+	// one layer each, not one nested inside the other.
+	for name, d := range map[string]*Sender{"first": first, "second": second} {
+		at, ok := d.retryClient.HTTPClient.Transport.(*attemptTransport)
+		if !ok {
+			t.Fatalf("%s Sender: retry client transport is %T, want *attemptTransport", name, d.retryClient.HTTPClient.Transport)
+		}
+		if _, nested := at.base.(*attemptTransport); nested {
+			t.Errorf("%s Sender: attemptTransport is nested inside another; every attempt would be "+
+				"counted twice and carry two spans", name)
+		}
+		if d.retryClient.HTTPClient.Timeout != httpClient.Timeout {
+			t.Errorf("%s Sender: per-attempt Timeout = %s, want the caller's %s — the copy must carry it",
+				name, d.retryClient.HTTPClient.Timeout, httpClient.Timeout)
+		}
+	}
+}
+
+// TestAttemptTransport_ForwardsCloseIdleConnections pins the passthrough.
+//
+// http.Client.CloseIdleConnections reaches the transport by type assertion, so
+// a wrapper without the method makes the call a silent no-op — and retryablehttp
+// calls it on every failure path to stop a chain that just went wrong from
+// leaving connections in the pool. Because attemptTransport is installed
+// unconditionally, losing this would disable that hygiene on the default
+// configuration for every broker, with nothing failing.
+func TestAttemptTransport_ForwardsCloseIdleConnections(t *testing.T) {
+	var closed int
+	inner := &closeIdleRecorder{closed: &closed}
+
+	// The full production chain: attemptTransport over metricsTransport over
+	// the real transport. Both wrappers have to relay or the chain breaks.
+	tr := &attemptTransport{base: &metricsTransport{base: inner}}
+	client := &http.Client{Transport: tr}
+	client.CloseIdleConnections()
+
+	if closed != 1 {
+		t.Errorf("inner transport saw %d CloseIdleConnections calls, want 1; the wrapper chain swallowed it, "+
+			"so retryablehttp's post-failure connection hygiene is a no-op", closed)
+	}
+}
+
+// closeIdleRecorder is a RoundTripper that counts CloseIdleConnections calls,
+// standing in for the real *http.Transport at the bottom of the chain.
+type closeIdleRecorder struct {
+	closed *int
+}
+
+func (c *closeIdleRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+}
+
+func (c *closeIdleRecorder) CloseIdleConnections() { *c.closed++ }
 
 // TestAttemptNumber_AgreesWithTheMetricLabelSource pins the single-owner
 // invariant the story's technical notes require: the attempt number on the span

@@ -242,6 +242,28 @@ func (a *attemptsRecorder) RoundTrip(req *http.Request) (*http.Response, error) 
 	return a.inner.RoundTrip(req)
 }
 
+// CloseIdleConnections forwards to the wrapped transport. See
+// forwardCloseIdleConnections for why every wrapper in the chain has to.
+func (a *attemptsRecorder) CloseIdleConnections() {
+	forwardCloseIdleConnections(a.inner)
+}
+
+// forwardCloseIdleConnections calls CloseIdleConnections on rt when it has one.
+//
+// Required, not politeness. http.Client.CloseIdleConnections reaches the
+// transport by type assertion on an unexported `closeIdler` interface, so any
+// wrapper in the chain that omits the method turns the call into a silent
+// no-op — and retryablehttp calls it at three points that all mean "this chain
+// went wrong, do not reuse these connections": a request-body rewind failure,
+// the context ending during backoff, and a deferred call on every failure path
+// before ErrorHandler.
+func forwardCloseIdleConnections(rt http.RoundTripper) {
+	type closeIdler interface{ CloseIdleConnections() }
+	if c, ok := rt.(closeIdler); ok {
+		c.CloseIdleConnections()
+	}
+}
+
 // attemptSpanKey is the context key for the per-request attempt-span state.
 // Unexported, and seeded only by attemptSpanSeeder, so no caller can plant a
 // state this package would then write spans into.
@@ -294,6 +316,12 @@ func (s *attemptSpanSeeder) RoundTrip(req *http.Request) (*http.Response, error)
 	return s.inner.RoundTrip(req.WithContext(ctx))
 }
 
+// CloseIdleConnections forwards to the wrapped transport. See
+// forwardCloseIdleConnections.
+func (s *attemptSpanSeeder) CloseIdleConnections() {
+	forwardCloseIdleConnections(s.inner)
+}
+
 // attemptSpanRecorder opens one span per HTTP attempt. A sibling of
 // attemptsRecorder, composed the same way and for the same reason: it sits on
 // the inner *http.Client, which retryablehttp calls exactly once per attempt.
@@ -334,6 +362,13 @@ func (a *attemptSpanRecorder) RoundTrip(req *http.Request) (*http.Response, erro
 	state.span = span
 
 	return a.inner.RoundTrip(req.WithContext(ctx))
+}
+
+// CloseIdleConnections forwards to the wrapped transport, so the relay reaches
+// the real *http.Transport below attemptsRecorder. See
+// forwardCloseIdleConnections.
+func (a *attemptSpanRecorder) CloseIdleConnections() {
+	forwardCloseIdleConnections(a.inner)
 }
 
 // endAttemptSpan closes the span attemptSpanRecorder opened, tagging it with

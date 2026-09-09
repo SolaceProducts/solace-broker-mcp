@@ -375,36 +375,48 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		opt(d)
 	}
 
-	// Wrap the transport so each attempt is seen exactly once. httpClient is the
-	// same pointer held by retryClient, so swapping its transport here takes
-	// effect for every attempt.
+	// Wrap the transport so each attempt is seen exactly once.
 	//
 	// Two wrappers, outermost first: attemptTransport always (it owns the
 	// attempt counter and the `semp.attempt` span, SOL-152422), and inside it
 	// metricsTransport only when WithMetrics supplied a recorder. That order is
 	// required, not stylistic — metricsTransport reads the counter
-	// attemptTransport has just bumped.
+	// attemptTransport has just bumped, and the order is pinned by the sempv2
+	// metric-label tests.
 	//
-	// Skipped when this client's transport is already wrapped. Every production
-	// path gives each protocol client its own *http.Client (sempv1.New,
-	// sempv2.New), so this only fires if a caller shares one between two
-	// Senders, where re-wrapping would double-count every attempt and nest a
-	// second attempt span inside the first.
-	if _, wrapped := httpClient.Transport.(*attemptTransport); !wrapped {
-		base := httpClient.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		if d.sempMetrics != nil {
-			base = &metricsTransport{
-				base:        base,
-				recorder:    d.sempMetrics,
-				api:         d.api,
-				brokerAlias: d.brokerAlias,
-			}
-		}
-		httpClient.Transport = &attemptTransport{base: base}
+	// The wrappers go on a shallow COPY of the caller's client rather than on
+	// the client itself. The copy is cheap (four fields, none with internal
+	// state) and carries Timeout, Jar and CheckRedirect through unchanged, so
+	// the retry loop behaves identically. What it buys is that New no longer
+	// mutates an object its caller owns:
+	//
+	//   - Two Senders built over one *http.Client each get their own correct
+	//     chain. Mutating in place instead had to skip the second Sender's
+	//     wrapping to avoid double-counting every attempt, which silently
+	//     dropped that Sender's SEMP metrics if only it had WithMetrics — the
+	//     same class of defect (a signal present only because an unrelated
+	//     feature happened to be on) that SOL-152422 exists to fix.
+	//   - A caller that installs its own RoundTripper before calling New keeps
+	//     the client it configured; this composes over it rather than
+	//     rewriting it.
+	//
+	// Production gives each protocol client its own *http.Client anyway
+	// (sempv1.New, sempv2.New), so this is about not depending on that.
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
 	}
+	if d.sempMetrics != nil {
+		base = &metricsTransport{
+			base:        base,
+			recorder:    d.sempMetrics,
+			api:         d.api,
+			brokerAlias: d.brokerAlias,
+		}
+	}
+	wrapped := *httpClient
+	wrapped.Transport = &attemptTransport{base: base}
+	retryClient.HTTPClient = &wrapped
 
 	return d
 }
@@ -762,11 +774,11 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 	// Backstop for the attempt span's lifecycle (SOL-152422). attemptTransport
 	// opens the span and checkRetry closes it, and on today's retryablehttp
-	// every dispatch is followed by a CheckRetry call, so nothing should be left
-	// open here. Deferred anyway, and deferred rather than placed after
-	// retryClient.Do so it also covers a panic: an unended span is never
-	// exported at all, so the cost of being wrong is losing the attempt from the
-	// trace entirely rather than seeing one with a missing attribute.
+	// every dispatch is followed by a CheckRetry call, so nothing is left open
+	// here — see closeDanglingAttemptSpan for why that makes this call site
+	// unpinnable by test, and what it bounds if a future library version
+	// changes. Deferred rather than placed after retryClient.Do so it also runs
+	// while a panic unwinds.
 	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)

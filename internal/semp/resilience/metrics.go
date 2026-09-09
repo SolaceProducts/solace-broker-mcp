@@ -76,3 +76,11 @@ func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	return resp, err
 }
+
+// CloseIdleConnections forwards to the wrapped transport, so the relay from
+// attemptTransport above it reaches the real *http.Transport below. See
+// attemptTransport.CloseIdleConnections for why a wrapper that omits this
+// silently disables retryablehttp's post-failure connection hygiene.
+func (t *metricsTransport) CloseIdleConnections() {
+	forwardCloseIdleConnections(t.base)
+}

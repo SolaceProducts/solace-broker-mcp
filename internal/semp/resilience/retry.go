@@ -202,8 +202,14 @@ func attemptNumber(ctx context.Context) int {
 // real decision on every path — including the two sentinel-error exits, which a
 // span site reading only the status code would misreport.
 func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (retry bool, checkErr error) {
+	// allowanceSpent records that one of the sub-caps below refused the replay
+	// because its own budget was already used, which is what `retry.exhausted`
+	// reports (see retriesExhausted). A local rather than a field on
+	// retryState: scoped to this one call, so a value set on one attempt can
+	// never be read by the span of a later one.
+	var allowanceSpent bool
 	defer func() {
-		endAttemptSpan(ctx, d.retryClient.RetryMax, resp, retry, checkErr)
+		endAttemptSpan(ctx, d.retryClient.RetryMax, resp, retry, allowanceSpent)
 	}()
 
 	// Context cancellation: never retry.
@@ -312,6 +318,10 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			}
 			return result.Retry, nil
 		}
+		// The once-only 401 re-auth allowance is spent: an attempt was made and
+		// the 401 came back anyway. Distinct from the authenticator declining
+		// the first 401 above, which is "cannot recover", not "budget used".
+		allowanceSpent = true
 		slog.Warn("auth failure: 401 persisted after recovery attempt",
 			slog.String("broker", d.brokerURL))
 		return false, nil
@@ -365,6 +375,7 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			// after retries exhausted", carrying the cap-reached error string) for
 			// this same terminal failure, so a WARN here would double-log every
 			// capped 429/503 — noisy precisely when the broker is overloaded.
+			allowanceSpent = true
 			slog.Debug("not retrying: transient-error retry cap reached",
 				slog.String("broker", d.brokerURL),
 				slog.Int("status", resp.StatusCode),
@@ -388,6 +399,8 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 				slog.Int("status", resp.StatusCode))
 			return true, nil
 		}
+		// The once-only replay for a non-429/503 5xx is spent.
+		allowanceSpent = true
 		return false, nil
 
 	default:
