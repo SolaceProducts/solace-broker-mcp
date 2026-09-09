@@ -232,10 +232,9 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 	// The tool-dispatch span (SOL-152421). The reassigned ctx is what every
 	// layer below receives — threading context.Background() anywhere below
-	// detaches their spans and silently yields zero exemplars for Story 47.
-	// The tool-dispatch span (SOL-152421). The reassigned ctx is what every
-	// layer below receives — threading context.Background() anywhere below
-	// detaches their spans and silently yields zero exemplars for Story 47.
+	// detaches their spans and silently yields zero exemplars (SOL-152419).
+	// TestCallTool_LatencyBucketCarriesTheDispatchSpansTraceID is what fails if
+	// the observation site below stops seeing this span.
 	ctx, span := tracer.Start(ctx, dispatchSpanName)
 
 	// Registered BEFORE the emission defer below, so LIFO runs it AFTER that

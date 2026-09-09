@@ -449,23 +449,51 @@ substituting the metric schema's label value into a field name (e.g. guessing
 `spans_dropped_total{reason="export_timeout"}` has a log-line equivalent of the same shape)
 matches nothing.
 
-### Trace Exemplars
+### Trace Exemplars — [Implemented]
 
 The two latency histograms (`mcp_tool_invocation_duration_seconds` and
 `mcp_semp_request_duration_seconds`) carry **trace exemplars** when both metrics and tracing are
 enabled, so a slow bucket on a Grafana panel links straight to the trace that produced it and
-you skip correlating by timestamp.
+you skip correlating by timestamp. The matching `_total` counters carry them too.
 
-Two things to know, because both look like bugs otherwise:
+Four things to know. Each is a reason exemplars can be missing from a scrape that is
+otherwise perfectly healthy, and none of them is visible from the scrape itself:
 
 - **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
   older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
   default; if yours does not, exemplars will be silently absent from an otherwise healthy
-  scrape.
+  scrape. To confirm by hand:
+
+  ```
+  curl -H 'Accept: application/openmetrics-text; version=1.0.0; charset=utf-8' \
+    http://<host>:<metrics-port>/metrics
+  ```
+
+  Success looks like an exemplar appended as a `# {trace_id="…",span_id="…"} <value>
+  <timestamp>` suffix on a bucket line. A plain `curl` with no `Accept` header returns the
+  older text exposition and shows none — that result on its own is not a defect, only a
+  scraper that has not asked for OpenMetrics.
 - **An exemplar can only point at a *sampled* trace.** Under a low `OTEL_TRACES_SAMPLER_ARG`
-  most buckets carry no exemplar. That is expected, not a gap.
+  most buckets carry no exemplar. That is expected, not a gap. Raise the sampler argument if
+  exemplar coverage matters to you more than collector volume; it is a sampling trade-off, not
+  a defect.
+- **With `OBS_TRACING_ENABLED` off, the histograms are unchanged and simply carry no
+  exemplars.** Metrics do not depend on tracing being on: same series, same label keys, same
+  bucket counts either way.
+- **`OTEL_METRICS_EXEMPLAR_FILTER` overrides all of the above.** This server ships no default
+  of its own and honors the standard OpenTelemetry SDK contract, whose default is
+  `trace_based` — attach an exemplar when a sampled span is active, and otherwise not. That
+  is the behavior the three points above describe. Setting `always_off` suppresses every
+  exemplar even under full sampling, and it is the second thing to check when exemplars are
+  missing. Setting `always_on` is **not recommended**: it attaches an exemplar even when no
+  span was active, carrying an empty `trace_id` that links nowhere, which a Grafana panel
+  renders as a dead link.
 
 Exemplars add no new label keys and no new series.
+
+The server emits the exemplars; turning them into clickable panel links is a dashboard
+concern. You point your latency panels at a Tempo or Jaeger data source, and a panel with no
+trace data source configured renders as a plain histogram.
 
 ### Go Runtime and Process Metrics
 
@@ -809,11 +837,12 @@ which you own.** The server does not itself persist or sign events.
 > dispatcher, the composite executor, and one span per SEMP call — and installs the W3C Trace
 > Context propagator, so a trace started by your AI agent now continues unbroken into this
 > server. Enabling the flag today therefore exports a real four-or-more-span trace per tool
-> call, not a single-span root. **Still pending:** per-*attempt* SEMP spans and the
-> `retry.decision` / `retry.exhausted` attributes (Story 27, SOL-152422) — the `semp.request`
-> span shipped today covers a whole retry chain, so a call that retried three times is one span,
-> not three; and trace exemplars linking metric buckets to these traces (Story 47, SOL-152419),
-> which depend on the SEMP histogram that is itself still [Planned]. Span names
+> call, not a single-span root. Trace exemplars linking the latency histogram buckets to these
+> traces are live as well (Story 47, SOL-152419) — see
+> [Trace Exemplars](#trace-exemplars--implemented). **Still pending:** per-*attempt* SEMP spans
+> and the `retry.decision` / `retry.exhausted` attributes (Story 27, SOL-152422) — the
+> `semp.request` span shipped today covers a whole retry chain, so a call that retried three
+> times is one span, not three. Span names
 > beyond `tokenexchange.Exchange` and `semp.attempt`, and span kinds, remain open items for
 > pilot input (item 4) — the names shipped in Story 26 are listed under
 > [Spans](#spans) and can still change on your feedback._
@@ -864,7 +893,8 @@ Two further named spans:
 - `semp.attempt`: one per SEMP request *attempt* (Story 27, SOL-152422, not yet landed). This
   is the span that will distinguish a call that succeeded first time from one that succeeded on
   its third attempt. Until it lands, `semp.request` is the finest SEMP granularity available,
-  and a retry is invisible in the trace — check `mcp_semp_request_total` (also [Planned]) or the
+  and a retry is invisible in the trace — check `mcp_semp_request_total`, whose `attempt` label
+  counts them (SOL-152093, emitted today), or the
   Sender's own log lines. **`semp.request` is deliberately not named `semp.attempt`:** naming a
   whole retry chain "attempt" would mislabel it and leave Story 27 no name to use.
 
