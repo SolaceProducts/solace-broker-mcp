@@ -168,8 +168,11 @@ wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bi
 loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
 version, schema versions, and — once tools run — tool names already public in
 `docs/tools-reference.md`, broker aliases, broker hostnames via `server_address` on the SEMP
-metrics, and usage timing), but the listener is absent entirely unless `OBS_METRICS_ENABLED`
-is set.
+metrics, and usage timing), with two exceptions: `mcp_auth_failure_total{reason}` exposes a
+readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_total{tool}`
+tells a reader which tools authorization is refusing. Treat restricting the listener as the
+default posture, not optional hardening. The listener is absent entirely unless
+`OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
@@ -291,8 +294,9 @@ broker state, not per attempt.
 - All five `reason` series are seeded at zero when the counter is registered, so they are
   present from the first scrape and `increase(mcp_auth_failure_total[5m]) > 0` fires on a
   process's first rejected token — after a key rotation, the first `signature_invalid` is the
-  sample that matters. A flat zero means "no failures", not "no data", and
-  `absent(mcp_auth_failure_total)` means the counter was never wired.
+  sample that matters. A flat zero means "no failures", not "no data".
+  `absent(mcp_auth_failure_total)` means the counter is not registered: metrics are off,
+  `OBS_AUTH_FAILURE_COUNTER_ENABLED` was set to `false`, or the counter was never wired.
 - Recorded behind `OBS_AUTH_FAILURE_COUNTER_ENABLED` (see the flag note at the top of
   [Metrics](#metrics--planned-with-exceptions)); the same flag governs `mcp_authz_denied_total`.
 

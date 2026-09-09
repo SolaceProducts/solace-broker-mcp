@@ -294,13 +294,14 @@ func NewSecurityMetrics(meter metric.Meter) (*SecurityMetrics, error) {
 	return s, nil
 }
 
-// RecordAuthFailure counts one rejected credential. reason is a value
-// auth.ClassifyAuthFailure returned. No-op on a nil receiver.
-func (s *SecurityMetrics) RecordAuthFailure(ctx context.Context, reason string) {
+// RecordAuthFailure counts one rejected credential. Typed to the vocabulary so
+// the only string widening is CountingAuthHook's, at the interface boundary.
+// No-op on a nil receiver.
+func (s *SecurityMetrics) RecordAuthFailure(ctx context.Context, reason schema.AuthFailureReason) {
 	if s == nil {
 		return
 	}
-	s.authFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
+	s.authFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", string(reason))))
 }
 
 // RecordAuthzDenied counts one tool call refused by tool authorization. reason

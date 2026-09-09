@@ -66,7 +66,7 @@ func TestSecurityMetrics_RecordAuthFailure_IncrementsOnlyThatReason(t *testing.T
 	sm, p := newSecurityMetrics(t)
 	want := map[schema.AuthFailureReason]int{}
 	for _, reason := range schema.AuthFailureReasons() {
-		sm.RecordAuthFailure(context.Background(), string(reason))
+		sm.RecordAuthFailure(context.Background(), reason)
 		want[reason] = 1
 	}
 
@@ -111,7 +111,7 @@ mcp_authz_denied_total{reason="missing_claim",tool="list-queues"} 1
 func TestSecurityMetrics_NilReceiver_NoOp(t *testing.T) {
 	var sm *SecurityMetrics
 	ctx := context.Background()
-	sm.RecordAuthFailure(ctx, "expired")
+	sm.RecordAuthFailure(ctx, schema.AuthFailureReasonExpired)
 	sm.RecordAuthzDenied(ctx, "delete-queue", "not_permitted")
 }
 

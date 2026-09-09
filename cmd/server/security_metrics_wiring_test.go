@@ -22,7 +22,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
@@ -90,7 +92,7 @@ func TestBuildSecurityMetrics_FlagOnWithProvider_RecordsOnScrape(t *testing.T) {
 		t.Fatal("buildSecurityMetrics with flag on and a provider = nil, want a recorder")
 	}
 
-	sm.RecordAuthFailure(context.Background(), "signature_invalid")
+	sm.RecordAuthFailure(context.Background(), schema.AuthFailureReasonSignatureInvalid)
 	sm.RecordAuthzDenied(context.Background(), "delete-queue", "not_permitted")
 
 	rec := httptest.NewRecorder()
@@ -107,5 +109,56 @@ func TestBuildSecurityMetrics_FlagOnWithProvider_RecordsOnScrape(t *testing.T) {
 	}
 	if want := `mcp_authz_denied_total{reason="not_permitted",tool="delete-queue"} 1`; !strings.Contains(body, want) {
 		t.Errorf("scrape missing %q", want)
+	}
+}
+
+// The whole authentication composition, as main wires it: NewAuthMiddleware
+// reports rejections to CountingAuthHook, which counts them. Static mode keeps
+// the test IdP-free; the no-header case is the one the SDK never hands to a
+// verifier at all, so it proves the missing-bearer peek is inside the chain.
+func TestCountingAuthHook_WiredThroughAuthMiddleware(t *testing.T) {
+	p := newTestMetricsProvider(t)
+	sm := buildSecurityMetrics(securityCfg(true, true), p)
+	cfg := &config.ServerConfig{
+		Port:          9090,
+		Observability: config.ObservabilityConfig{AuthFailureCounterEnabled: true, MetricsEnabled: true},
+		MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "s3cr3t", ResourceURL: "http://localhost:9090/mcp"},
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler, err := auth.NewAuthMiddleware(cfg, nil, ok, metrics.CountingAuthHook(sm, audit.NewAuthHook(false)))
+	if err != nil {
+		t.Fatalf("NewAuthMiddleware: %v", err)
+	}
+	send := func(authorization string) int {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := send(""); code != http.StatusUnauthorized {
+		t.Errorf("no header: status = %d, want 401", code)
+	}
+	if code := send("Bearer wrong"); code != http.StatusUnauthorized {
+		t.Errorf("wrong token: status = %d, want 401", code)
+	}
+	if code := send("Bearer s3cr3t"); code != http.StatusOK {
+		t.Errorf("right token: status = %d, want 200", code)
+	}
+
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`mcp_auth_failure_total{reason="missing"} 1`,
+		`mcp_auth_failure_total{reason="invalid_token"} 1`,
+		`mcp_auth_failure_total{reason="expired"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape missing %q", want)
+		}
 	}
 }

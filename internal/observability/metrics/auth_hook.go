@@ -17,6 +17,7 @@ package metrics
 import (
 	"context"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -33,7 +34,8 @@ type AuthHook interface {
 // mcp_auth_failure_total with the reason it receives — the same reason the
 // auth_failure audit record carries, classified once inside the TokenVerifier
 // (see auth.AuthAuditHook). Success delegates without counting. A nil sm
-// returns next unchanged.
+// returns next unchanged; next must be non-nil (cmd/server always passes
+// audit.NewAuthHook, which never is).
 func CountingAuthHook(sm *SecurityMetrics, next AuthHook) AuthHook {
 	if sm == nil {
 		return next
@@ -50,7 +52,11 @@ func (h *countingAuthHook) Success(ctx context.Context, info *sdkauth.TokenInfo)
 	h.next.Success(ctx, info)
 }
 
+// Failure widens the interface's plain-string reason to the vocabulary type
+// here, the same untrusted-boundary step audit.authHook.Failure performs;
+// every producer is auth.ClassifyAuthFailure, which only returns vocabulary
+// values, so this is a restatement of type rather than a validation.
 func (h *countingAuthHook) Failure(ctx context.Context, reason, sub, clientID string) {
-	h.sm.RecordAuthFailure(ctx, reason)
+	h.sm.RecordAuthFailure(ctx, schema.AuthFailureReason(reason))
 	h.next.Failure(ctx, reason, sub, clientID)
 }
