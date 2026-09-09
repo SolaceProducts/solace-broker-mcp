@@ -176,9 +176,8 @@ func TestAuditEvent_Allow_EmitsInfoWithFullSchema(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups",
-		newRecordingHandler().handler(),
-	)
+		"groups", false,
+		newRecordingHandler().handler())
 	req := requestWithGroupsAndCorrelation([]string{"Ops"})
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-allow"), req)
 	if _, err := wrapped(ctx, req); err != nil {
@@ -237,9 +236,8 @@ func TestAuditEvent_Deny_EmitsWarnWithNotPermittedAndNoCallerGroups(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"delete-queue",
-		"groups",
-		newRecordingHandler().handler(),
-	)
+		"groups", false,
+		newRecordingHandler().handler())
 	req := requestWithGroupsAndCorrelation([]string{"OtherGroup"})
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-deny"), req)
 	if _, err := wrapped(ctx, req); err != nil {
@@ -296,9 +294,8 @@ func TestAuditEvent_MissingClaim_EmitsWarnWithExpectedClaimAndNoMatchedGroupsFie
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups",
-		newRecordingHandler().handler(),
-	)
+		"groups", false,
+		newRecordingHandler().handler())
 	req := requestMissingClaimWithCorrelation()
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-miss"), req)
 	if _, err := wrapped(ctx, req); err != nil {
@@ -355,9 +352,8 @@ func TestAuditEvent_MissingClaim_SanitizesExpectedClaim(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "list-queues"),
 		"list-queues",
-		"groups\u200d",
-		newRecordingHandler().handler(),
-	)
+		"groups\u200d", false,
+		newRecordingHandler().handler())
 	missingReq := requestMissingClaimWithCorrelation()
 	if _, err := wrapped(ctxWithPrincipal(context.Background(), missingReq), missingReq); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
@@ -396,7 +392,7 @@ func TestAuditEvent_Allow_SanitizesMatchedGroupsElements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPolicy: %v", err)
 	}
-	wrapped := withAuthorization(policy, "list-queues", "groups", newRecordingHandler().handler())
+	wrapped := withAuthorization(policy, "list-queues", "groups", false, newRecordingHandler().handler())
 	if _, err := wrapped(context.Background(), requestWithGroupsAndCorrelation([]string{group1, group2})); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
@@ -464,7 +460,7 @@ func TestAuditEvent_MatchedGroupsBounding(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewPolicy: %v", err)
 			}
-			wrapped := withAuthorization(policy, "list-queues", "groups", newRecordingHandler().handler())
+			wrapped := withAuthorization(policy, "list-queues", "groups", false, newRecordingHandler().handler())
 			boundReq := requestWithGroupsAndCorrelation(groups)
 			if _, err := wrapped(ctxWithPrincipal(context.Background(), boundReq), boundReq); err != nil {
 				t.Fatalf("wrapper returned error: %v", err)

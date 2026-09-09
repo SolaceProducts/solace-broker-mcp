@@ -29,6 +29,14 @@ import (
 // legitimately omits other optional/feature-gated attributes, but a response
 // that doesn't name its own resource is broken, not sparse.
 //
+// Strictness stops where the payload stops being ours (SOL-154164). The levels
+// this server assembles — this step-keyed top level, and buildStepSchema's
+// paginated/fan-out wrappers — reject unknown keys, because an unexpected key
+// there means the executor's own result assembly is wrong. The levels the
+// broker supplies — the SEMP response envelope and the resource inside it —
+// tolerate keys the embedded spec doesn't declare; see fieldPropertiesSchema
+// for why rejecting them is worse than accepting them.
+//
 // A step whose operation isn't found in operations, or whose ResponseFields
 // is nil (no response data resolved — e.g. a delete/action op, or a response
 // shape extractResponseFields couldn't unwrap), falls back to a fully
@@ -141,6 +149,10 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 // "meta" as the sole required envelope field, but a create/update tool
 // returning no "data" would be meaningless to the caller regardless of what
 // the spec technically permits.
+//
+// Additional envelope keys are tolerated for the same reason
+// fieldPropertiesSchema tolerates additional attributes (SOL-154164): this
+// object's key set is the broker's, not ours.
 func envelopeSchema(item map[string]any) map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -149,8 +161,7 @@ func envelopeSchema(item map[string]any) map[string]any {
 			"meta":  map[string]any{"type": "object"},
 			"links": map[string]any{"type": "object"},
 		},
-		"required":             []string{"data"},
-		"additionalProperties": false,
+		"required": []string{"data"},
 	}
 }
 
@@ -163,10 +174,29 @@ func permissiveStepSchema() map[string]any {
 	return map[string]any{"type": "object"}
 }
 
-// fieldPropertiesSchema builds a strict object schema — properties, optional
-// required list, additionalProperties: false — from resolved response
-// fields. Shared by the flat, paginated-item, and fan-out-item cases in
-// buildStepSchema.
+// fieldPropertiesSchema builds an object schema — properties, plus an optional
+// required list — from resolved response fields. Shared by the flat,
+// paginated-item, and fan-out-item cases in buildStepSchema.
+//
+// Deliberately NOT additionalProperties: false (SOL-154164). This object is a
+// SEMP resource as the live broker returned it, and the field list comes from
+// the SEMPv2 spec embedded at build time. A broker newer than that spec
+// legitimately echoes attributes its own release added, and every attribute
+// SEMP has ever added to an existing object has been additive. Rejecting them
+// here fails the tool call AFTER the handler has already applied the mutation
+// (ToolManager.CallTool validates output post-execution), so a create/update
+// that genuinely succeeded is reported to the agent as IsError — the one
+// outcome a destructive tool must never produce, and the same spec/broker
+// mismatch the request side already tolerates (see constructRequestBody's
+// versioned-server-aware handling in executor.go).
+//
+// What the caller still gets is the part that catches client-breaking drift:
+// "properties" types every field the spec does declare (a retyped field is
+// rejected), and "required" pins the resource's own identifier (a response
+// that doesn't name what it just created is rejected). Strictness is retained
+// only on the levels this server assembles itself — the step-keyed top level in
+// BuildStrictOutputSchema, and the paginated/fan-out wrappers in
+// buildStepSchema — where an unexpected key means our bug, not broker drift.
 //
 // required is cloned before being stored, not stored as-is: callers (e.g.
 // CompositeToolHandler.outputSchema) pass the same slice value straight
@@ -181,9 +211,8 @@ func fieldPropertiesSchema(fields map[string]string, required []string) map[stri
 		properties[name] = map[string]any{"type": jsonType}
 	}
 	schema := map[string]any{
-		"type":                 "object",
-		"properties":           properties,
-		"additionalProperties": false,
+		"type":       "object",
+		"properties": properties,
 	}
 	if len(required) > 0 {
 		schema["required"] = slices.Clone(required)

@@ -26,6 +26,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -155,6 +156,16 @@ type Sender struct {
 	// selects. Shared per-broker with sem and rateLimiter, and not owned here —
 	// semp.BrokerClient.Close stops it.
 	scheduler *Scheduler
+	// sempMetrics, when non-nil, records one sample per attempt via a transport
+	// wrapper (see WithMetrics). nil is the disabled-metrics default.
+	sempMetrics *metrics.SEMPMetrics
+	api         string // protocol version label: "v1" or "v2"
+	// auditLog mirrors tools.ToolManager.auditLog: audit.Enabled(cfg.Observability)
+	// at construction (SOL-152097). False is inert, not degraded.
+	auditLog bool
+	// brokerAlias is the operator's configured display alias. Used by the
+	// metrics transport (broker label) and by the audit log (Broker field).
+	brokerAlias string
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -199,6 +210,42 @@ func WithSaturationEvents(slowAfter time.Duration) Option {
 func WithScheduler(s *Scheduler) Option {
 	return func(d *Sender) { d.scheduler = s }
 }
+
+// WithMetrics records one SEMP sample per attempt against recorder, tagged with
+// the broker alias. A nil recorder leaves recording off, which is the
+// disabled-metrics default, so no transport wrapper is installed and no sample
+// is emitted. The protocol version label is set by WithAPI, because the two
+// clients share this option but report different versions.
+func WithMetrics(recorder *metrics.SEMPMetrics, brokerAlias string) Option {
+	return func(d *Sender) {
+		d.sempMetrics = recorder
+		d.brokerAlias = brokerAlias
+	}
+}
+
+// WithAPI sets the protocol version label ("v1" or "v2"). Each client sets its
+// own; it has no effect when metrics are off.
+func WithAPI(api string) Option {
+	return func(d *Sender) { d.api = api }
+}
+
+// WithAuditLog turns on the broker_auth_retry audit record checkRetry emits
+// on a 401 recovery attempt (SOL-152097). Pass audit.Enabled(cfg.Observability)
+// — the same flag and read site tools.WithAuditLog uses for the destructive-op
+// audit trail (SOL-152096); false is the default and is fully inert, matching
+// that option's contract.
+func WithAuditLog(enabled bool) Option {
+	return func(d *Sender) { d.auditLog = enabled }
+}
+
+// WithBrokerAlias sets the broker's configured (display) alias, used by the
+// audit log (broker_auth_retry Broker field) and as a fallback when
+// WithMetrics has not been called. Every production construction site
+// (semp.NewBrokerClient) supplies this.
+func WithBrokerAlias(alias string) Option {
+	return func(d *Sender) { d.brokerAlias = alias }
+}
+
 
 // New creates a Sender configured for a specific broker. It sets up
 // retryablehttp with the retry policy from SEMPConfig and reads pacing from the
@@ -326,6 +373,22 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 
 	for _, opt := range opts {
 		opt(d)
+	}
+
+	// Wrap the transport so each attempt is recorded once. Off unless WithMetrics
+	// supplied a recorder. httpClient is the same pointer held by retryClient, so
+	// swapping its transport here takes effect for every attempt.
+	if d.sempMetrics != nil {
+		base := httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		httpClient.Transport = &metricsTransport{
+			base:        base,
+			recorder:    d.sempMetrics,
+			api:         d.api,
+			brokerAlias: d.brokerAlias,
+		}
 	}
 
 	return d
@@ -690,6 +753,15 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	}
 
 	resp, err := d.retryClient.Do(retryReq)
+
+	// Decided exactly once, here, at the request's true terminal point —
+	// after every attempt this call made, not from inside checkRetry (SOL-152097;
+	// see auditBrokerAuthRetryOutcome's doc for why). A no-op unless this
+	// request's chain actually saw a 401. Reads state.authRecovered rather than
+	// this call's own resp/err — see that function's doc for why the two are
+	// unreliable here.
+	d.auditBrokerAuthRetryOutcome(ctx)
+
 	if err != nil {
 		if cancel != nil {
 			cancel()

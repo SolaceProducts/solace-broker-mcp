@@ -17,6 +17,7 @@ package hooks
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,6 +126,41 @@ func TestRunAll_PanickingHookDoesNotCrashProcess(t *testing.T) {
 	}
 	if !fastRan.Load() {
 		t.Error("fast hook did not run; a panicking hook must not prevent the others from running")
+	}
+}
+
+// TestNames_NilRegistryReturnsNil matches RunAll's own nil-safety: a
+// *Registry that was never constructed reports no registrations rather than
+// panicking.
+func TestNames_NilRegistryReturnsNil(t *testing.T) {
+	var r *Registry
+	if got := r.Names(); got != nil {
+		t.Errorf("Names() on a nil Registry = %v, want nil", got)
+	}
+}
+
+// TestNames_EmptyRegistryReturnsEmpty matches the constructed-but-unused case
+// TestRunAll_EmptyRegistryIsNoop covers for RunAll.
+func TestNames_EmptyRegistryReturnsEmpty(t *testing.T) {
+	r := NewRegistry()
+	if got := r.Names(); len(got) != 0 {
+		t.Errorf("Names() on an empty Registry = %v, want empty", got)
+	}
+}
+
+// TestNames_ReturnsRegisteredNamesInOrder is the core claim this accessor
+// exists for (SOL-153965): a wiring test can see exactly what got registered,
+// in the order it was registered, without needing to invoke RunAll or inspect
+// hook behavior at all.
+func TestNames_ReturnsRegisteredNamesInOrder(t *testing.T) {
+	r := NewRegistry()
+	noop := func(context.Context) error { return nil }
+	r.Register("metrics_provider", noop)
+	r.Register("tracer_provider", noop)
+
+	want := []string{"metrics_provider", "tracer_provider"}
+	if got := r.Names(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Names() = %v, want %v", got, want)
 	}
 }
 

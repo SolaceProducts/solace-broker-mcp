@@ -294,6 +294,14 @@ func TestCompositeToolHandler_OutputSchema_MonitorToolUnchanged(t *testing.T) {
 	}
 }
 
+// TestCompositeToolHandler_OutputSchema_WriteToolIsStrict pins where the
+// generated write-tool schema is strict and where it deliberately is not.
+// Strict on the step-keyed top level, which the executor builds from this
+// tool's own step IDs; permissive about unknown keys on the broker-supplied
+// envelope and resource below it, which a broker newer than the embedded spec
+// legitimately extends (SOL-154164). The spec-derived constraints that catch
+// client-breaking drift — typed fields, and the required identifier list — are
+// asserted below either way.
 func TestCompositeToolHandler_OutputSchema_WriteToolIsStrict(t *testing.T) {
 	operations := map[string]*sempv2.Operation{
 		"config/createMsgVpnQueue": {
@@ -316,8 +324,11 @@ func TestCompositeToolHandler_OutputSchema_WriteToolIsStrict(t *testing.T) {
 	if !ok {
 		t.Fatal("expected createQueue step schema")
 	}
-	if step["additionalProperties"] != false {
-		t.Errorf("step additionalProperties = %v, want false", step["additionalProperties"])
+	if _, strictEnvelope := step["additionalProperties"]; strictEnvelope {
+		t.Errorf("the broker-supplied envelope must not constrain additionalProperties, got %v", step["additionalProperties"])
+	}
+	if step["type"] != "object" {
+		t.Errorf("step type = %v, want object", step["type"])
 	}
 	// The step's runtime value is the whole SEMP envelope ({"data": ...,
 	// "meta": ...}), not the item alone — the identifier fields live one
@@ -366,8 +377,13 @@ func TestCompositeToolHandler_OutputSchema_DeleteToolStaysUsable(t *testing.T) {
 	if !ok {
 		t.Fatal("expected deleteQueue step schema")
 	}
-	if _, hasAddProps := step["additionalProperties"]; hasAddProps {
-		t.Errorf("a nil-ResponseFields step must stay fully permissive, got additionalProperties=%v", step["additionalProperties"])
+	// Fully permissive means exactly {"type": "object"} — no properties, and so
+	// no "data" requirement a meta-only delete response could never satisfy.
+	// Asserted as the whole shape rather than by the absence of
+	// additionalProperties, which SOL-154164 removed from the spec-derived
+	// envelope too and so no longer tells the two apart.
+	if len(step) != 1 || step["type"] != "object" {
+		t.Errorf("a nil-ResponseFields step must stay fully permissive ({\"type\": \"object\"}), got %v", step)
 	}
 }
 

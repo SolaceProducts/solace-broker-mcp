@@ -55,7 +55,7 @@ func TestRawSubjectToken_NotOnHTTPHandlerCtx(t *testing.T) {
 			_, httpCtxHadToken = auth.RawSubjectTokenFromContext(r.Context())
 		})
 
-		handler, err := auth.NewAuthMiddleware(cfg, nil, downstream)
+		handler, err := auth.NewAuthMiddleware(cfg, nil, downstream, nil)
 		if err != nil {
 			t.Fatalf("NewAuthMiddleware: %v", err)
 		}

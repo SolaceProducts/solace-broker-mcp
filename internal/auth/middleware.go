@@ -28,6 +28,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -40,7 +41,16 @@ import (
 // non-nil client (built via idpclient.NewHTTPClient(idpclient.WithTimeout))
 // for SOL-150219 regression coverage. Ignored on the disabled and static
 // paths; nil is fine.
-func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next http.Handler) (http.Handler, error) {
+//
+// hook receives auth_success/auth_failure audit emission (SOL-152097). nil
+// (every pre-SOL-152097 call site, updated explicitly rather than left to a
+// variadic default — a variadic slot here would silently accept and drop a
+// second hook with no error, which is exactly the wrong failure mode for an
+// audit observer) means no emission. Production wires
+// audit.NewAuthHook(audit.Enabled(cfg.Observability)) in cmd/server/main.go.
+// See AuthAuditHook's doc for why this is an interface injected from outside
+// the package rather than a direct call to the audit package.
+func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next http.Handler, hook AuthAuditHook) (http.Handler, error) {
 	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
 	// lives in cmd/server/main.go via banner.LogStartupAuthMode — DO NOT add WARN
 	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
@@ -53,7 +63,7 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 		return nil, fmt.Errorf("internal: NewAuthMiddleware called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
 
-	verifier, err := NewTokenVerifier(cfg, httpClient)
+	verifier, err := NewTokenVerifier(cfg, httpClient, hook)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
 	}
@@ -77,7 +87,14 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 	// (PrincipalMiddleware) and the Hop 2 subject token
 	// (RequestExtraMiddleware) are stamped per JSON-RPC request by receiving
 	// middleware instead.
-	return middleware(next), nil
+	//
+	// auditMissingBearerToken wraps the whole chain: RequireBearerToken's own
+	// bearer-extraction check (unexported in the SDK) never calls our
+	// TokenVerifier at all when the Authorization header carries no bearer
+	// token, so that rejection would otherwise produce no auth_failure record
+	// whatsoever — the single most common shape of unauthenticated access for
+	// a story about detecting it (SOL-152097).
+	return auditMissingBearerToken(hook, middleware(next)), nil
 }
 
 // NewTokenVerifier creates a TokenVerifier based on cfg.MCPClientAuth.Mode.
@@ -88,31 +105,73 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 //
 // cfg has already been validated via config.validate(); other modes are
 // programming errors.
-func NewTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) (sdkauth.TokenVerifier, error) {
+//
+// hook follows NewAuthMiddleware's contract: nil means no emission.
+func NewTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client, hook AuthAuditHook) (sdkauth.TokenVerifier, error) {
 	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeStatic:
-		return createStaticTokenVerifier(cfg.MCPClientAuth.DevToken), nil
+		return createStaticTokenVerifier(cfg.MCPClientAuth.DevToken, hook), nil
 	case config.AuthModeOAuth:
-		return createOIDCTokenVerifier(cfg, httpClient)
+		return createOIDCTokenVerifier(cfg, httpClient, hook)
 	default:
 		return nil, fmt.Errorf("internal: NewTokenVerifier called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
 }
 
+// auditMissingBearerToken wraps next (the chain RequireBearerToken produced)
+// with a peek at the Authorization header, so a request that never reaches
+// our TokenVerifier at all — no bearer token presented — still produces an
+// auth_failure record (SOL-152097). Uses parseBearerToken, the same helper
+// RequestExtraMiddleware uses, which already mirrors go-sdk's own
+// bearer-extraction check (raw_subject_token.go) rather than a second,
+// independent copy of that parsing — the one thing this must never disagree
+// with. This wrapper only ever adds a record alongside the SDK's own 401,
+// never changes whether a request is accepted: it always calls next
+// regardless of what it observes.
+//
+// reason distinguishes two shapes parseBearerToken folds into one bool: no
+// Authorization header at all classifies as "missing" (nothing was
+// presented to reject); a header present but not parseable as a bearer token
+// — wrong scheme, malformed, an empty value after "Bearer" — classifies as
+// "invalid_token", because there is a token-shaped problem to name rather
+// than an absence. Conflating the two would inflate an "unauthenticated
+// probe" alert on `reason: missing` with callers who did present something.
+func auditMissingBearerToken(hook AuthAuditHook, next http.Handler) http.Handler {
+	if hook == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if _, ok := parseBearerToken(authHeader); !ok {
+			reason := ClassifyAuthFailure(nil)
+			if authHeader != "" {
+				reason = schema.AuthFailureReasonInvalidToken
+			}
+			reportAuthFailure(r.Context(), hook, reason, "", "")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // createStaticTokenVerifier returns a TokenVerifier that validates against a static token.
 // This is only for development/testing purposes.
 // Uses constant-time comparison to prevent timing attacks.
-func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
+func createStaticTokenVerifier(expectedToken string, hook AuthAuditHook) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+			// A static-token mismatch carries no claims to attribute — there
+			// is nothing behind the token to have parsed.
+			reportAuthFailure(ctx, hook, ClassifyAuthFailure(errVerificationFailed), "", "")
 			return nil, errVerificationFailed
 		}
-		return &sdkauth.TokenInfo{
+		info := &sdkauth.TokenInfo{
 			Scopes:     []string{},
 			UserID:     "dev-user",
 			Expiration: time.Now().Add(24 * time.Hour), // Dev tokens don't expire for 24 hours
-		}, nil
+		}
+		reportAuthSuccess(ctx, hook, info)
+		return info, nil
 	}
 }
 
@@ -123,7 +182,7 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 // via WithoutCancel, so http.Client.Timeout is the only bound that reaches
 // lazy JWKS refresh — the discovery deadline below only caps the initial
 // discovery call.
-func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) (sdkauth.TokenVerifier, error) {
+func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client, hook AuthAuditHook) (sdkauth.TokenVerifier, error) {
 	if httpClient == nil {
 		c, err := idpclient.NewHTTPClient()
 		if err != nil {
@@ -150,6 +209,9 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 		if err != nil {
 			slog.Warn("token verification failed",
 				slog.String("error", err.Error()))
+			// Verify failed before any claims were readable, so there is
+			// nothing to attribute the record to.
+			reportAuthFailure(ctx, hook, ClassifyAuthFailure(err), "", "")
 			return nil, errVerificationFailed
 		}
 
@@ -160,6 +222,9 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 		if err := idToken.Claims(&raw); err != nil {
 			slog.Warn("token claims undecodable",
 				slog.String("error", err.Error()))
+			// The signature verified, but the payload never decoded, so no
+			// claim — including sub — is readable.
+			reportAuthFailure(ctx, hook, ClassifyAuthFailure(err), "", "")
 			return nil, errMalformedClaims
 		}
 
@@ -167,8 +232,16 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 		if err != nil {
 			slog.Warn("token rejected",
 				slog.String("error", err.Error()))
+			// The token parsed and its signature verified; buildTokenInfo
+			// rejected it over a specific claim (e.g. missing sub, or a
+			// malformed scope/groups value). raw is still the decoded claim
+			// set regardless of which claim failed, so sub/client_id are
+			// attributed whenever they themselves decoded cleanly.
+			sub, clientID := bestEffortIdentity(raw)
+			reportAuthFailure(ctx, hook, ClassifyAuthFailure(err), sub, clientID)
 			return nil, sanitizeTokenError(err)
 		}
+		reportAuthSuccess(ctx, hook, info)
 		return info, nil
 	}, nil
 }

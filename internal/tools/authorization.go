@@ -25,6 +25,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -36,6 +37,14 @@ import (
 const (
 	authzDeniedMessage       = "You are not authorized to use this tool."
 	authzMissingClaimMessage = "You are not authorized to use this tool."
+)
+
+// decision_reason values for the "tool authorization" WARN log and the
+// authz_denied audit record (SOL-152097). Named once here so the two never
+// drift into reporting different reasons for the same denial.
+const (
+	decisionReasonMissingClaim = "missing_claim"
+	decisionReasonNotPermitted = "not_permitted"
 )
 
 // listBrokersToolName is one of two tools exempt from tool authorization; see
@@ -81,7 +90,14 @@ const matchedGroupsBound = 32
 // Correlation ID is stamped onto each emitted record by the correlation
 // slog handler reading it from ctx — do NOT add correlation_id at this
 // call site, or the record will carry two.
-func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, next mcp.ToolHandler) mcp.ToolHandler {
+//
+// auditLog gates the authz_denied audit record (SOL-152097) on a deny or
+// missing-claim branch, alongside the existing WARN log rather than in place
+// of it. Pass mgr.auditLog — the same audit.Enabled(cfg.Observability) flag
+// tools.WithAuditLog reads at ToolManager construction — so this wrapper and
+// the destructive-operation audit trail agree about whether the capability
+// is on.
+func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, auditLog bool, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Enforce the precondition uniformly across every branch. Without
 		// this guard, nil policy panics on the branch that reaches
@@ -109,9 +125,10 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
 				slog.String("decision", "denied"),
-				slog.String("decision_reason", "missing_claim"),
+				slog.String("decision_reason", decisionReasonMissingClaim),
 				slog.String("expected_claim", sanitize.Claim(configuredGroupsClaimName)),
 				slog.Any("", id))
+			auditAuthzDenied(ctx, auditLog, toolName, decisionReasonMissingClaim)
 			return authzErrorResult(authzMissingClaimMessage), nil
 		}
 
@@ -119,15 +136,19 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 		if !decision.Allowed {
 			// The caller's actual groups are deliberately NOT logged on
 			// deny — see PR description "audit-log disclosure discipline"
-			// for the separation-of-duties rationale.
+			// for the separation-of-duties rationale. The audit record
+			// carries the same restraint: authz_denied's Fields have no
+			// slot for group membership at all (event.go), so there is no
+			// second place this could leak from.
 			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
 				slog.String("decision", "denied"),
-				slog.String("decision_reason", "not_permitted"),
+				slog.String("decision_reason", decisionReasonNotPermitted),
 				slog.Any("matched_groups", []string{}),
 				slog.Int("matched_groups_total", 0),
 				slog.Bool("matched_groups_truncated", false),
 				slog.Any("", id))
+			auditAuthzDenied(ctx, auditLog, toolName, decisionReasonNotPermitted)
 			return authzErrorResult(authzDeniedMessage), nil
 		}
 
@@ -141,6 +162,39 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 			slog.Any("", id))
 		return next(ctx, req)
 	}
+}
+
+// auditAuthzDenied emits an authz_denied record (SOL-152097) alongside the
+// existing "tool authorization" WARN log — never in place of it, since the
+// WARN carries operational detail (expected_claim, matched_groups) the
+// audit-schema's field-applicability table (event.go) deliberately excludes
+// from this record type. Gated by auditLog; reason must be one of
+// decisionReasonMissingClaim or decisionReasonNotPermitted. Identity
+// (principal.sub, agent_client_id) is not passed in: audit.NewEvent reads it
+// from ctx via auth.PrincipalFrom, the same source id above was projected
+// from, so the WARN and this record can never name two different callers.
+func auditAuthzDenied(ctx context.Context, auditLog bool, toolName, reason string) {
+	if !auditLog {
+		return
+	}
+	event, err := audit.NewEvent(ctx, audit.Fields{
+		Type:   audit.EventAuthzDenied,
+		Tool:   toolName,
+		Reason: reason,
+	})
+	if err != nil {
+		// Same build-or-drop shape as every other audit emission site in
+		// this codebase (see internal/tools/manager.go's emitOperationAudit):
+		// the constructor rejected the record, so there is nothing valid to
+		// write — report the gap rather than let its absence read as "this
+		// call was never denied".
+		slog.ErrorContext(ctx, "audit: authz_denied record rejected by the schema constructor; recording a drop",
+			slog.String("tool", toolName),
+			slog.String("detail", err.Error()))
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventAuthzDenied, Tool: toolName})
+		return
+	}
+	audit.Emit(ctx, event)
 }
 
 // boundMatchedGroups sanitizes each element and applies matchedGroupsBound,

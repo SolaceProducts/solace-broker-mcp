@@ -813,6 +813,67 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 	}
 }
 
+// TestCallTool_DesiredStateOutcome_RoutesThroughSchemaValidation pins the one
+// thing the two tests above deliberately don't (PR #382 review, aross): that
+// a desired-state noop actually goes through buildValidatedResult's real
+// schema check inside CallTool, not a hand-built CallToolResult that happens
+// to look right. Both tests above install a fully permissive output schema
+// specifically because they are about classification/logging, not schema
+// shape — which means neither would notice a regression back to the
+// pre-fix behavior (manager.go's own comment on buildValidatedResult: "it
+// used to build and return its own CallToolResult directly, bypassing this
+// validation entirely"). Verified by mutation before writing this test:
+// reverting the noop branch to build its own CallToolResult (bypassing
+// buildValidatedResult) left the entire internal/tools suite green,
+// including both tests above.
+//
+// The proof here is a schema that would reject the noop's own payload —
+// requiring a field the noop never sets, with additionalProperties: false —
+// so a real IsError:true/validation-failure result can only come from the
+// noop path actually being checked against it. The pre-fix bypass would
+// instead return IsError:false with the unchecked payload, exactly like
+// TestCallTool_DesiredStateOutcome_AlreadyExists asserts today; this test
+// asserts the opposite outcome, on a schema built to disagree with what
+// classifyDesiredStateOutcome produces.
+func TestCallTool_DesiredStateOutcome_RoutesThroughSchemaValidation(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.outputSch = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			// A field desiredStateStructuredContent never sets. A schema
+			// admitting the real noop payload would not require this.
+			"impossible_field_no_noop_ever_sets": map[string]any{"type": "string"},
+		},
+		"required":             []string{"impossible_field_no_noop_ever_sets"},
+		"additionalProperties": false,
+	}
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Subscription foo/*/bar already exists.",
+			SEMPCode:    10,
+			SEMPStatus:  "ALREADY_EXISTS",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError: true — the noop's own payload does not satisfy this schema, " +
+			"so the result can only be true if the noop path actually validated against it; " +
+			"IsError:false here means the pre-fix bypass has regressed")
+	}
+}
+
 // TestCallTool_ParentNotFound_NamesTheParent verifies the AC3 path end to
 // end: NOT_FOUND on a create names the missing parent's type in plain
 // language, rather than surfacing "Cannot enter <mode>: not found" CLI

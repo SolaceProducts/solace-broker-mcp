@@ -191,8 +191,26 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 				t.Errorf("tool %q step %q: no generated schema", tool.Name, step.ID)
 				continue
 			}
-			if _, isStrict := stepSchema["additionalProperties"]; !isStrict {
-				t.Errorf("tool %q step %q: generated schema fell back to the fully permissive shape ({\"type\":\"object\"} only) — the strict, spec-derived schema was expected here", tool.Name, step.ID)
+			// Assert the spec-derived field list actually landed, rather than
+			// the mere presence of a strictness keyword. SOL-154164 removed
+			// additionalProperties:false from the broker-supplied levels of
+			// this schema, so its presence no longer distinguishes the
+			// spec-derived shape from the permissive fallback — but a typed
+			// "data" item with properties in it still does, and that is the
+			// thing this guard actually cares about.
+			stepProps, ok := stepSchema["properties"].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q step %q: generated schema fell back to the fully permissive shape ({\"type\":\"object\"} only) — the spec-derived schema was expected here", tool.Name, step.ID)
+				continue
+			}
+			item, ok := stepProps["data"].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q step %q: generated schema has no \"data\" item schema — the SEMP response envelope was expected here", tool.Name, step.ID)
+				continue
+			}
+			itemProps, ok := item["properties"].(map[string]any)
+			if !ok || len(itemProps) == 0 {
+				t.Errorf("tool %q step %q: generated \"data\" item schema declares no properties — the spec-derived response fields did not reach it", tool.Name, step.ID)
 			}
 		}
 	})
@@ -274,12 +292,13 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 	})
 }
 
-// TestLoadTools_ListVPNs_RetainsDiscoveryFields pins that list-vpns keeps
-// replicationEnabled and dmrEnabled in its select list.
+// TestLoadTools_ListVPNs_RetainsDiscoveryFields pins the fields list-vpns must
+// keep in its select list even though no framework validation covers them:
+// replicationEnabled, dmrEnabled and msgVpnConnections.
 //
-// These two sit in a validation blind spot. The framework's RequiredFields /
+// All three sit in a validation blind spot. The framework's RequiredFields /
 // RequiredFieldsPerStep checks (see ValidatePostProcess) only guard fields the
-// postprocess handler consumes, and list_vpns.go references neither of these —
+// postprocess handler consumes, and list_vpns.go references none of these —
 // it branches solely on enabled, state, and msgVpnName. So nothing else in the
 // suite notices if they are dropped from the YAML.
 //
@@ -290,10 +309,17 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 // the follow-up path (get-replication-status per VPN) has no other way to learn
 // which VPNs are worth asking about.
 //
-// Both fields being genuinely independent was confirmed against a live broker
-// during SOL-151996: a Message VPN with DR replication configured reported
-// replicationEnabled=true AND dmrEnabled=true, while the reserved and default
-// VPNs on the same broker reported false for both.
+// The two replication fields being genuinely independent was confirmed against
+// a live broker during SOL-151996: a Message VPN with DR replication configured
+// reported replicationEnabled=true AND dmrEnabled=true, while the reserved and
+// default VPNs on the same broker reported false for both.
+//
+// msgVpnConnections joins them for a different reason (SOL-154166): the
+// real-clients step's forEachIf predicate reads it to skip probing a VPN with
+// no connections, and the loader performs no static cross-check of the fields a
+// forEachIf template references against the parent step's select. Dropping it
+// costs no correctness — the predicate falls back to probing every enabled+up
+// VPN — but silently undoes the saving, with nothing failing.
 func TestLoadTools_ListVPNs_RetainsDiscoveryFields(t *testing.T) {
 	tools, err := LoadTools(definitions.FS, "tools.yaml")
 	if err != nil {
@@ -313,12 +339,16 @@ func TestLoadTools_ListVPNs_RetainsDiscoveryFields(t *testing.T) {
 	for _, f := range step.Select {
 		inSelect[f] = true
 	}
-	for _, field := range []string{"replicationEnabled", "dmrEnabled"} {
-		if !inSelect[field] {
+	required := []struct{ field, why string }{
+		{"replicationEnabled", "the tool's documented discovery role depends on it reaching the model"},
+		{"dmrEnabled", "the tool's documented discovery role depends on it reaching the model"},
+		{"msgVpnConnections", "the real-clients forEachIf predicate reads it to skip probing VPNs with no connections"},
+	}
+	for _, r := range required {
+		if !inSelect[r.field] {
 			t.Errorf("list-vpns step 'vpns' select is missing %q — the postprocess handler "+
-				"does not read it, so no other test guards it, but the tool's documented "+
-				"discovery role depends on it reaching the model; select = %v",
-				field, step.Select)
+				"does not read it, so no other test guards it, but %s; select = %v",
+				r.field, r.why, step.Select)
 		}
 	}
 }

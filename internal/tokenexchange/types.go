@@ -227,8 +227,12 @@ func (i ExchangeInput) LogValue() slog.Value {
 
 // Token is the result of a successful token exchange. Value is the
 // exchanged bearer token; ExpiresAt is computed from the IdP-reported
-// expires_in minus a 30-second skew so callers (and the future cache)
-// have a safe "use-by" instant rather than a fragile duration.
+// expires_in minus a 30-second skew so callers have a safe "use-by"
+// instant rather than a fragile duration.
+//
+// That skew is deducted here and nowhere else (SOL-154165). Every
+// consumer — the token cache included — treats ExpiresAt as the true
+// expiry and deducts nothing further; see cache.CachedCredential.
 type Token struct {
 	Value     string
 	ExpiresAt time.Time

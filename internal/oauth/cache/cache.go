@@ -27,15 +27,28 @@ import (
 )
 
 // CacheConfig holds the parameters for constructing a TokenCache.
+//
+// There is deliberately no clock-skew field. The skew is the token producer's
+// concern, applied once before an entry ever reaches the cache — see the
+// invariant on CachedCredential.ExpiresAt.
 type CacheConfig struct {
-	MaxSize   int
-	ClockSkew time.Duration
-	MaxTTL    time.Duration
+	MaxSize int
+	MaxTTL  time.Duration
 }
 
-// CachedCredential is a cached OAuth access token with its expiry time as
-// reported by the identity provider. The Value field must never appear in
-// error messages, log lines, or metrics labels — it is a credential.
+// CachedCredential is a cached OAuth access token with its "use-by" instant.
+// The Value field must never appear in error messages, log lines, or metrics
+// labels — it is a credential.
+//
+// INVARIANT (SOL-154165): ExpiresAt is a conservative use-by instant, NOT the
+// raw expiry the identity provider reported. The producer has already deducted
+// its clock-skew safety margin (defaults.DefaultTokenExpirySkew, applied in
+// internal/tokenexchange when the IdP response is parsed), so the cache treats
+// ExpiresAt as the true expiry and deducts nothing further. The skew is
+// subtracted exactly once, at the producer, and every consumer of this field
+// must keep it that way — a second deduction anywhere silently shortens every
+// token's cached lifetime and, past a certain IdP token lifetime, stops the
+// cache retaining anything.
 type CachedCredential struct {
 	Value     string
 	ExpiresAt time.Time
@@ -102,7 +115,7 @@ type PutStatus int
 
 const (
 	PutStored     PutStatus = iota // Entry accepted and stored.
-	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
+	PutDroppedTTL                  // Entry was already at or past its ExpiresAt; not stored.
 )
 
 func (s PutStatus) String() string {

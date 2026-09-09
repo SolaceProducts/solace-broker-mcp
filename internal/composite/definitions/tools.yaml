@@ -224,7 +224,9 @@ tools:
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
       no non-reserved client connected under zeroConnectionCount — derived by
       probing each enabled+up VPN for a client whose clientUsername does not
-      match Solace's reserved `#*` prefix. Standby VPNs are excluded from both.
+      match Solace's reserved `#*` prefix, unless the VPN reports exactly zero
+      connections; a VPN with no connection count at all is probed rather than
+      assumed empty. Standby VPNs are excluded from both.
       Admin-disabled VPNs land in disabledCount only and are excluded from
       downCount and zeroConnectionCount. For per-service TLS status and AMQP
       support, use get-vpn-status.
@@ -275,10 +277,41 @@ tools:
       # VPNs report state==down, and standby VPNs are excluded from the count;
       # calling getMsgVpnClients on either would be wasted work (and hits an
       # admin-disabled service on some brokers).
+      #
+      # The msgVpnConnections term (SOL-154166) drops the probe for a VPN the
+      # vpns step already proved empty: zero connections means no clients of
+      # any kind, so the probe would return no rows, and the handler reads an
+      # absent byKey entry exactly as it reads an empty one — "no real client",
+      # counted under zeroConnectionCount either way. A count of 1 is NOT
+      # skippable: it is indistinguishable between the reserved #client and one
+      # real client, which is what the probe is here to resolve.
+      #
+      # The skip rests on msgVpnConnections being the VPN's total client
+      # connection count across every service, not a subset — otherwise a real
+      # client could hide behind a 0. SEMP describes it as "The current number
+      # of Client connections to the Message VPN", and Solace Insights
+      # documents the same counter as vpn.connections with six per-service
+      # siblings (smf, web, mqtt, rest_incoming, rest_outgoing, amqp). AMQP
+      # being in that family is the part worth naming: it is the one
+      # client-facing service whose SEMP per-service counter sits outside the
+      # msgVpnConnections* family (it is connectionsServiceAmqp), so it is the
+      # service one would suspect of being excluded from the total.
+      #
+      # The term is deliberately written as `ne (index .Item ...) 0.0` rather
+      # than `gt .Item.msgVpnConnections 0.0`:
+      #   - `index` returns the zero value for an absent key, where `.Item.x`
+      #     errors under missingkey=error. A broker row without the field
+      #     therefore falls back to probing (today's behavior) instead of
+      #     failing the whole list-vpns call over a field only needed to skip
+      #     work. `and` short-circuits, so the term is not even reached for
+      #     disabled/down/standby rows.
+      #   - 0.0 (not 0) because SEMP counts arrive as JSON numbers decoded into
+      #     map[string]any, i.e. float64; text/template's comparisons reject a
+      #     float64-vs-int comparison outright.
       - id: real-clients
         operation: monitor/getMsgVpnClients
         forEach: vpns
-        forEachIf: '{{and .Item.enabled (eq .Item.state "up")}}'
+        forEachIf: '{{and .Item.enabled (eq .Item.state "up") (ne (index .Item "msgVpnConnections") 0.0)}}'
         forEachKey: msgVpnName
         args:
           msgVpnName: "{{.Item.msgVpnName}}"

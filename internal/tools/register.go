@@ -33,6 +33,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // serverInternalErrorMessage is returned to the agent when a tool handler
@@ -243,11 +244,32 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// itself — never text derived from client input — so it
 					// gets a separate, static message rather than the
 					// wrapped decode error.
+					//
+					// The span comes FIRST and its context is threaded into
+					// the audit and metric calls below, exactly as at the other
+					// three dispatch sites. Ordered the other way round, the
+					// log line and the metric are emitted while the request
+					// context still carries only the entry span, so a Story 47
+					// exemplar on this failure links to `POST /mcp` rather than
+					// to the dispatch span whose tool/outcome/error_type it is
+					// describing (SOL-152421).
+					//
+					// Started with the request's own start time so the span
+					// covers the dispatch rather than reading as instantaneous,
+					// and only on this branch — the success path below gets its
+					// span from CallTool itself.
 					var brokerAlias string
 					errorType := metrics.ErrorTypeBadRequest
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
+
+					ctx, span := tracer.Start(ctx, dispatchSpanName, trace.WithTimestamp(start))
+					// nil: a parse failure never reaches classifyDesiredStateOutcome,
+					// so there is no desiredOutcome to report (SOL-153341) — same as
+					// the list-brokers dispatch site below.
 					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, nil, id)
 					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
+					endDispatchSpan(ctx, span, reg.name, brokerLabelNone, errorType, toolErr)
+
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
 				}
 			}
@@ -258,7 +280,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		// correlation-ID stamping and panic containment. Nil policy skips
 		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
 		if policy != nil {
-			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, callToolHandler)
+			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, mgr.auditLog, callToolHandler)
 		}
 
 		server.AddTool(mcpTool, withRecovery(reg.name, callToolHandler))
@@ -335,6 +357,21 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.
 			var errorType metrics.ErrorType
 			var toolErr error
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
+
+			// ...and its own dispatch span, for the same reason: this tool
+			// would otherwise appear in every dashboard and in no trace
+			// (SOL-152421).
+			ctx, span := tracer.Start(ctx, dispatchSpanName)
+
+			// Registered BEFORE the emission defer below, so LIFO runs it
+			// AFTER that one — once a recovered panic has been reclassified,
+			// so the span reports the same cause the log line and the metric
+			// do. Reversed, the span reports nothing while both of them say
+			// `panic`. See endDispatchSpan for the full rationale.
+			defer func() {
+				endDispatchSpan(ctx, span, "list-brokers", brokerLabelNone, errorType, toolErr)
+			}()
+
 			defer func() {
 				if toolErr == nil && result == nil {
 					errorType = metrics.ErrorTypePanic
