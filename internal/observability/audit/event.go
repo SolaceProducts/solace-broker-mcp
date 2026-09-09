@@ -149,14 +149,14 @@ func EventTypes() []string {
 // authorization record (or a hop-1 reason on a hop-2 record) is a bug that
 // would corrupt a reviewer's query, so the constructor rejects it rather than
 // letting the vocabularies bleed into one another.
+//
+// authFailureReasons is derived rather than written out: the auth_failure
+// reasons are also mcp_auth_failure_total's counter labels, so the vocabulary
+// is owned by internal/observability/schema and read from there by every
+// signal that renders it (SOL-154163). The other two are rendered by an audit
+// record only, so they stay written here.
 var (
-	authFailureReasons = map[string]struct{}{
-		"invalid_token":     {},
-		"expired":           {},
-		"audience_mismatch": {},
-		"signature_invalid": {},
-		"missing":           {},
-	}
+	authFailureReasons = authFailureReasonSet(schema.AuthFailureReasons())
 	authzDeniedReasons = map[string]struct{}{
 		"missing_claim": {},
 		"not_permitted": {},
@@ -165,6 +165,22 @@ var (
 		"permission_denied": {},
 	}
 )
+
+// authFailureReasonSet turns schema's auth_failure vocabulary into the lookup
+// shape the applicability table's reasonVocab column uses. Fields.Reason is a
+// plain string (the constructor validates whatever a call site hands it,
+// including a value outside every vocabulary), so the keys are widened here.
+//
+// Deliberately not generic over ~string: the other two reason vocabularies are
+// declared as literals in this file and have no second renderer to stay in
+// sync with, so there is nothing for them to convert from.
+func authFailureReasonSet(reasons []schema.AuthFailureReason) map[string]struct{} {
+	out := make(map[string]struct{}, len(reasons))
+	for _, r := range reasons {
+		out[string(r)] = struct{}{}
+	}
+	return out
+}
 
 // applicability says whether a field may, must, or must not appear on a given
 // record type. Encoding the table once here is what keeps the emission sites

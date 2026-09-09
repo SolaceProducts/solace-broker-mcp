@@ -508,10 +508,15 @@ func crossOriginProtection(next http.Handler) http.Handler {
 	return protection.Handler(next)
 }
 
+// mcpRoutePath is a constant because two things must agree on it: mux.Handle
+// below, and the tracing entry span's name (`POST /mcp`), which
+// buildMCPEndpoint derives from it.
+const mcpRoutePath = "/mcp"
+
 // buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
 //
 // The layer order, outermost first, is: limitRequestBody → correlation →
-// crossOriginProtection → authedHandler. limitRequestBody's Content-Length
+// tracing → crossOriginProtection → authedHandler. limitRequestBody's Content-Length
 // short-circuit rejects an oversized request with 413 BEFORE correlation runs,
 // so that 413 carries no correlation ID. This is intentional: correlation sits
 // OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body-limit
@@ -526,15 +531,24 @@ func crossOriginProtection(next http.Handler) http.Handler {
 // it, and so the rejection is reported as the 403 it is rather than being
 // masked as a 401 whenever client auth is enabled.
 //
+// The tracing layer (SOL-152421) sits INSIDE correlation, because the entry
+// span stamps the correlation ID and so needs it to exist already, and OUTSIDE
+// cross-origin protection, so a 403 origin rejection lands in the trace rather
+// than a blind spot.
+//
 // When correlationEnabled is false the correlation layer is omitted entirely
-// (correlation.From then returns ""). Cross-origin protection is unconditional:
-// there is no scenario in which disabling it is the right call, so it takes no
-// config flag.
+// (correlation.From then returns ""), and likewise for tracingEnabled — with
+// tracing off the assembled chain is byte-identical to what it was before that
+// story. Cross-origin protection is unconditional: there is no scenario in
+// which disabling it is the right call, so it takes no config flag.
 //
 // The active-requests gauge sits outermost so it counts every /mcp request,
 // including ones rejected below (413/403/401). No-op when tm is nil.
-func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool, tm *metrics.ToolMetrics) http.Handler {
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled, tracingEnabled bool, tm *metrics.ToolMetrics) http.Handler {
 	endpoint := crossOriginProtection(authedHandler)
+	if tracingEnabled {
+		endpoint = tracing.HTTPMiddleware(mcpRoutePath, endpoint)
+	}
 	if correlationEnabled {
 		endpoint = correlation.Middleware(endpoint)
 	}
@@ -836,10 +850,12 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
+	// No clock skew is passed: DefaultTokenExpirySkew is already deducted from
+	// every token's ExpiresAt when the IdP response is parsed, and the cache
+	// treats ExpiresAt as the true expiry (see cache.CachedCredential).
 	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
-		MaxSize:   defaults.DefaultOAuthCacheMaxSize,
-		ClockSkew: defaults.DefaultTokenExpirySkew,
-		MaxTTL:    defaults.DefaultMaxOAuthTokenTTL,
+		MaxSize: defaults.DefaultOAuthCacheMaxSize,
+		MaxTTL:  defaults.DefaultMaxOAuthTokenTTL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating token cache: %w", err)
@@ -1331,7 +1347,12 @@ func main() {
 	// Wrap MCP handler with auth middleware. Cross-origin protection wraps
 	// this from the OUTSIDE, in buildMCPEndpoint — see that function for why
 	// it sits outside auth rather than around mcpHandler here.
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler)
+	//
+	// The audit hook (SOL-152097) is the one wiring point for auth_success/
+	// auth_failure emission — audit.NewAuthHook reads the same
+	// OBS_AUDIT_LOG_ENABLED flag as tools.WithAuditLog above, so this and the
+	// destructive-op audit trail turn on and off together.
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler, audit.NewAuthHook(audit.Enabled(cfg.Observability)))
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -1348,7 +1369,8 @@ func main() {
 	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
 	// limit on the outside so it bounds the request before any layer buffers
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled, toolMetrics))
+	mux.Handle(mcpRoutePath, buildMCPEndpoint(authedHandler, correlationEnabled,
+		tracing.Enabled(cfg.Observability), toolMetrics))
 
 	registerMetadataRoutes(mux, cfg)
 

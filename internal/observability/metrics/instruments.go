@@ -60,15 +60,57 @@ const (
 	ErrorTypeOther ErrorType = "other"
 )
 
-// knownErrorTypes is the closed set Record validates against. The empty string
-// (non-error outcomes) is valid and handled separately.
-var knownErrorTypes = map[ErrorType]bool{
-	ErrorTypePanic: true, ErrorTypeBadRequest: true, ErrorTypeUnknownTool: true,
-	ErrorTypeMissingBroker: true, ErrorTypeUnknownBroker: true, ErrorTypeBrokerInitError: true,
-	ErrorTypeValidationError: true, ErrorTypeExecutionError: true, ErrorTypeNilResult: true,
-	ErrorTypeNotFound: true, ErrorTypeOutputValidationError: true, ErrorTypeMarshalError: true,
-	ErrorTypeOther: true,
+// allErrorTypes is the vocabulary, and the single place it is enumerated.
+// Everything that needs the set — Record's coercion check, the cross-signal
+// tests, the doc-table check — derives from here, so a new const cannot be
+// added to the type while some consumer silently keeps the old set.
+//
+// That failure mode is not hypothetical: while this list and the coercion map
+// were maintained separately, a const added to the type but missed in the map
+// made Record coerce it to `other` while the span attribute carried the real
+// value — the same call reading two different ways on two signals, with
+// nothing failing in CI. ErrorTypeOther is included because Record legitimately
+// emits it; AllErrorTypes documents how to exclude it.
+var allErrorTypes = []ErrorType{
+	ErrorTypePanic,
+	ErrorTypeBadRequest,
+	ErrorTypeUnknownTool,
+	ErrorTypeMissingBroker,
+	ErrorTypeUnknownBroker,
+	ErrorTypeBrokerInitError,
+	ErrorTypeValidationError,
+	ErrorTypeExecutionError,
+	ErrorTypeNilResult,
+	ErrorTypeNotFound,
+	ErrorTypeOutputValidationError,
+	ErrorTypeMarshalError,
+	ErrorTypeOther,
 }
+
+// AllErrorTypes returns the closed error_type vocabulary, including the
+// ErrorTypeOther coercion sentinel. Callers that want only the values a
+// classifier may legitimately produce should drop ErrorTypeOther: nothing sets
+// it deliberately, and a span carrying it means the classifier produced a value
+// the set does not cover.
+//
+// Exported so a test in another package can assert its own copy of the set
+// matches this one, rather than drifting from it silently.
+func AllErrorTypes() []ErrorType {
+	out := make([]ErrorType, len(allErrorTypes))
+	copy(out, allErrorTypes)
+	return out
+}
+
+// knownErrorTypes is the closed set Record validates against, built from
+// allErrorTypes so it cannot lag the type. The empty string (non-error
+// outcomes) is valid and handled separately.
+var knownErrorTypes = func() map[ErrorType]bool {
+	m := make(map[ErrorType]bool, len(allErrorTypes))
+	for _, et := range allErrorTypes {
+		m[et] = true
+	}
+	return m
+}()
 
 // ToolMetrics holds the per-tool RED instruments: an invocation counter, a
 // duration histogram, and an unlabelled in-flight gauge. Every method is

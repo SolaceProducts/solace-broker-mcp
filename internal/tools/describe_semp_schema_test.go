@@ -17,12 +17,18 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
 // Smoke tests against the embedded specs: trimmed POST, trimmed PATCH,
@@ -198,6 +204,182 @@ func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	if got := audits[0]["broker"]; got != "none" {
 		t.Errorf("audit broker = %v, want %q", got, "none")
 	}
+}
+
+// newDescribeSempSchemaSession spins up a real MCP server+client session for
+// describe-semp-schema over an in-memory transport (same shape as
+// TestDescribeSempSchema_EmitsAuditLog), wired to a fresh *metrics.Provider so
+// a test can scrape the mcp_tool_invocation_total series it records in
+// isolation — the underlying counter is cumulative for the provider's
+// lifetime, so each test case needs its own provider to assert a bare "== 1"
+// occurrence rather than accounting for accumulation across cases.
+// clientMiddleware, if given, is installed on the client via
+// AddSendingMiddleware before Connect (mirrors callToolTestHarness in
+// register_test.go).
+func newDescribeSempSchemaSession(t *testing.T, logBuf *bytes.Buffer, clientMiddleware ...mcp.Middleware) (*mcp.ClientSession, *metrics.Provider) {
+	t.Helper()
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	p, err := metrics.New("v-test", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	if err := RegisterDescribeSempSchema(server, specs.FS, tm); err != nil {
+		t.Fatalf("RegisterDescribeSempSchema: %v", err)
+	}
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	if len(clientMiddleware) > 0 {
+		client.AddSendingMiddleware(clientMiddleware...)
+	}
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session, p
+}
+
+// forceMalformedArguments is client-sending middleware that overwrites
+// CallToolParams.Arguments with a syntactically valid but semantically
+// wrong-typed JSON literal (a bare string) immediately before the request is
+// marshaled and sent. Unlike forceOmitArguments (register_test.go), which
+// reproduces a request with no "arguments" field at all, this reproduces a
+// request whose "arguments" field is present but is not a JSON object — the
+// only way to make json.Unmarshal(req.Params.Arguments, &args) itself fail
+// inside describe_semp_schema.go's handler, since a normal client call
+// always sends a well-formed JSON object for Arguments.
+func forceMalformedArguments(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if method == "tools/call" {
+			if p, ok := req.GetParams().(*mcp.CallToolParams); ok {
+				p.Arguments = json.RawMessage(`"not an object"`)
+			}
+		}
+		return next(ctx, method, req)
+	}
+}
+
+// assertDescribeSempSchemaErrorType asserts that describe-semp-schema's audit
+// line and the mcp_tool_invocation_total counter both carry
+// error_type=wantErrorType for a single invocation — the two independent
+// surfaces logToolResult and recordToolInvocation each write to from the same
+// deferred call site in describe_semp_schema.go.
+func assertDescribeSempSchemaErrorType(t *testing.T, logBuf *bytes.Buffer, p *metrics.Provider, wantErrorType metrics.ErrorType) {
+	t.Helper()
+
+	audits := auditLines(t, logBuf, describeSempSchemaToolName)
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for %s, got %d: %s", describeSempSchemaToolName, len(audits), logBuf.String())
+	}
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q", got, "error")
+	}
+	if got := audits[0]["error_type"]; got != string(wantErrorType) {
+		t.Errorf("audit error_type = %v, want %q", got, wantErrorType)
+	}
+
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+	want := fmt.Sprintf(`mcp_tool_invocation_total{broker="none",error_type="%s",outcome="error",tool="%s"} 1`,
+		wantErrorType, describeSempSchemaToolName)
+	if body := rec.Body.String(); !strings.Contains(body, want) {
+		t.Errorf("scrape missing %s series.\nwant line: %s\n--- got ---\n%s", wantErrorType, want, body)
+	}
+}
+
+// TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric
+// covers describe_semp_schema.go's json.Unmarshal-failure branch: the
+// "arguments" field is present on the wire but is not a JSON object, so
+// json.Unmarshal(req.Params.Arguments, &args) itself fails. This is a
+// behavioral check — it drives the branch through a real dispatch and reads
+// back the audit/metric surfaces it actually writes — distinct from a static
+// scan of error_type literals in the source.
+func TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric(t *testing.T) {
+	var logBuf bytes.Buffer
+	session, p := newDescribeSempSchemaSession(t, &logBuf, forceMalformedArguments)
+
+	ctx := context.Background()
+	// forceMalformedArguments overwrites Arguments right before send, so the
+	// value supplied here is irrelevant to what actually reaches the wire.
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: describeSempSchemaToolName}); err == nil {
+		t.Fatalf("expected a protocol-level error for unparseable arguments, got nil")
+	}
+
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
+}
+
+// TestDescribeSempSchema_MissingOperation_ErrorTypeReachesAuditAndMetric
+// covers describe_semp_schema.go's missing-required-parameter branch: the
+// arguments object parses fine but carries no "operation" key.
+func TestDescribeSempSchema_MissingOperation_ErrorTypeReachesAuditAndMetric(t *testing.T) {
+	var logBuf bytes.Buffer
+	session, p := newDescribeSempSchemaSession(t, &logBuf)
+
+	ctx := context.Background()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      describeSempSchemaToolName,
+		Arguments: map[string]any{},
+	}); err == nil {
+		t.Fatalf("expected a protocol-level error for a missing 'operation' parameter, got nil")
+	}
+
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
+}
+
+// TestDescribeSempSchema_InvalidView_ErrorTypeReachesAuditAndMetric covers
+// describe_semp_schema.go's invalid-"view"-value branch: operation is present
+// but view is neither "trimmed" nor "raw".
+func TestDescribeSempSchema_InvalidView_ErrorTypeReachesAuditAndMetric(t *testing.T) {
+	var logBuf bytes.Buffer
+	session, p := newDescribeSempSchemaSession(t, &logBuf)
+
+	ctx := context.Background()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: describeSempSchemaToolName,
+		Arguments: map[string]any{
+			"operation": "config/createMsgVpnQueue",
+			"view":      "bogus",
+		},
+	}); err == nil {
+		t.Fatalf("expected a protocol-level error for an invalid 'view' parameter, got nil")
+	}
+
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
+}
+
+// TestDescribeSempSchema_UnknownOperation_ErrorTypeReachesAuditAndMetric
+// covers describe_semp_schema.go's not-found branch: a well-formed operation
+// identifier that isn't in the embedded spec index (reg.describe's error
+// return), mirroring TestSempSchemaMap_UnknownOperation's input but through
+// the full dispatch path rather than a direct call to describe().
+func TestDescribeSempSchema_UnknownOperation_ErrorTypeReachesAuditAndMetric(t *testing.T) {
+	var logBuf bytes.Buffer
+	session, p := newDescribeSempSchemaSession(t, &logBuf)
+
+	ctx := context.Background()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: describeSempSchemaToolName,
+		Arguments: map[string]any{
+			"operation": "config/thisDoesNotExist",
+		},
+	}); err == nil {
+		t.Fatalf("expected a protocol-level error for an unknown operation, got nil")
+	}
+
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeNotFound)
 }
 
 func TestSempSchemaMap_TrimmedView_UpdateReflectsMethod(t *testing.T) {

@@ -84,7 +84,7 @@ func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -127,7 +127,7 @@ func Test_StaticDevToken(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -213,7 +213,7 @@ func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 		},
 	}
 
-	_, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	_, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Errorf("expected no error under mcp_client_auth.mode: static without issuer/audience, got: %v", err)
 	}
@@ -331,7 +331,7 @@ func Test_ValidJWTToken(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -369,7 +369,7 @@ func Test_ExpiredJWTToken(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -407,7 +407,7 @@ func Test_WrongJWTAudience(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -445,7 +445,7 @@ func Test_WrongJWTIssuer(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -483,7 +483,7 @@ func Test_InvalidJWTSignature(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -523,7 +523,7 @@ func Test_NoJWTToken(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -555,7 +555,7 @@ func Test_OIDCProviderUnreachable(t *testing.T) {
 		},
 	}
 
-	_, err := NewTokenVerifier(cfg, nil)
+	_, err := NewTokenVerifier(cfg, nil, nil)
 	if err == nil {
 		t.Error("expected error when OIDC provider is unreachable")
 	}
@@ -602,7 +602,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				cfg.MCPClientAuth.Audience = mock.audience
 			}
 
-			middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+			middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 			if err != nil {
 				t.Fatalf("failed to create middleware: %v", err)
 			}
@@ -760,7 +760,7 @@ func Test_OIDCVerifier_PopulatesTokenInfo_AllClaims(t *testing.T) {
 		},
 	}
 
-	verifier, err := NewTokenVerifier(cfg, nil)
+	verifier, err := NewTokenVerifier(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewTokenVerifier: %v", err)
 	}
@@ -810,7 +810,7 @@ func Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString(t *testing.T) {
 		},
 	}
 
-	verifier, err := NewTokenVerifier(cfg, nil)
+	verifier, err := NewTokenVerifier(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewTokenVerifier: %v", err)
 	}
@@ -883,7 +883,7 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 
 	t.Run("TLS fails without SSL_CERT_FILE", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", "")
-		_, err := NewTokenVerifier(cfg, nil)
+		_, err := NewTokenVerifier(cfg, nil, nil)
 		if err == nil {
 			t.Error("expected TLS error when SSL_CERT_FILE is unset")
 		}
@@ -891,7 +891,7 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 
 	t.Run("TLS succeeds with SSL_CERT_FILE", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", validCert)
-		_, err := NewTokenVerifier(cfg, nil)
+		_, err := NewTokenVerifier(cfg, nil, nil)
 		if err != nil {
 			t.Errorf("expected success with SSL_CERT_FILE set, got: %v", err)
 		}
@@ -920,7 +920,7 @@ func Test_Verifier_PrincipalProjection(t *testing.T) {
 			ResourceURL: "http://localhost:9090/mcp",
 		},
 	}
-	verifier, err := NewTokenVerifier(cfg, nil)
+	verifier, err := NewTokenVerifier(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("NewTokenVerifier: %v", err)
 	}
@@ -1001,7 +1001,7 @@ func Test_OIDCVerifier_SanitizedErrorResponse(t *testing.T) {
 		},
 	}
 
-	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("NewAuthMiddleware: %v", err)
 	}
@@ -1069,7 +1069,7 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			},
 		}
 
-		verifier, err := NewTokenVerifier(cfg, nil)
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("NewTokenVerifier: %v", err)
 		}
@@ -1105,7 +1105,7 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			},
 		}
 
-		verifier, err := NewTokenVerifier(cfg, nil)
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("NewTokenVerifier: %v", err)
 		}
@@ -1149,7 +1149,7 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			},
 		}
 
-		verifier, err := NewTokenVerifier(cfg, nil)
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("NewTokenVerifier: %v", err)
 		}
@@ -1183,7 +1183,7 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			},
 		}
 
-		verifier, err := NewTokenVerifier(cfg, nil)
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("NewTokenVerifier: %v", err)
 		}

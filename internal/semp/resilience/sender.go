@@ -160,7 +160,12 @@ type Sender struct {
 	// wrapper (see WithMetrics). nil is the disabled-metrics default.
 	sempMetrics *metrics.SEMPMetrics
 	api         string // protocol version label: "v1" or "v2"
-	brokerAlias string // operator's configured alias, for the broker label
+	// auditLog mirrors tools.ToolManager.auditLog: audit.Enabled(cfg.Observability)
+	// at construction (SOL-152097). False is inert, not degraded.
+	auditLog bool
+	// brokerAlias is the operator's configured display alias. Used by the
+	// metrics transport (broker label) and by the audit log (Broker field).
+	brokerAlias string
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -223,6 +228,24 @@ func WithMetrics(recorder *metrics.SEMPMetrics, brokerAlias string) Option {
 func WithAPI(api string) Option {
 	return func(d *Sender) { d.api = api }
 }
+
+// WithAuditLog turns on the broker_auth_retry audit record checkRetry emits
+// on a 401 recovery attempt (SOL-152097). Pass audit.Enabled(cfg.Observability)
+// — the same flag and read site tools.WithAuditLog uses for the destructive-op
+// audit trail (SOL-152096); false is the default and is fully inert, matching
+// that option's contract.
+func WithAuditLog(enabled bool) Option {
+	return func(d *Sender) { d.auditLog = enabled }
+}
+
+// WithBrokerAlias sets the broker's configured (display) alias, used by the
+// audit log (broker_auth_retry Broker field) and as a fallback when
+// WithMetrics has not been called. Every production construction site
+// (semp.NewBrokerClient) supplies this.
+func WithBrokerAlias(alias string) Option {
+	return func(d *Sender) { d.brokerAlias = alias }
+}
+
 
 // New creates a Sender configured for a specific broker. It sets up
 // retryablehttp with the retry policy from SEMPConfig and reads pacing from the
@@ -730,6 +753,15 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	}
 
 	resp, err := d.retryClient.Do(retryReq)
+
+	// Decided exactly once, here, at the request's true terminal point —
+	// after every attempt this call made, not from inside checkRetry (SOL-152097;
+	// see auditBrokerAuthRetryOutcome's doc for why). A no-op unless this
+	// request's chain actually saw a 401. Reads state.authRecovered rather than
+	// this call's own resp/err — see that function's doc for why the two are
+	// unreliable here.
+	d.auditBrokerAuthRetryOutcome(ctx)
+
 	if err != nil {
 		if cancel != nil {
 			cancel()

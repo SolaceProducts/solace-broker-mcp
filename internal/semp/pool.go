@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
@@ -115,7 +116,14 @@ func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger,
 }
 
 // senderOptions builds the resilience options every BrokerClient this pool
-// creates is given. Empty unless the operator opted into saturation events.
+// creates is given.
+//
+// WithAuditLog is always included, mirroring tools.WithAuditLog's own
+// construction-time read of the same flag (SOL-152096): the option's bool
+// argument carries "on or off", the option itself is never conditionally
+// omitted. The saturation-events option, by contrast, IS conditionally
+// omitted below — that option has no off-state argument of its own, so
+// omitting it is how "off" is expressed for that capability.
 //
 // The threshold is observability.saturation_threshold_ms, which measures the
 // wait to be admitted to a broker, not end-to-end call latency. It must stay
@@ -123,12 +131,11 @@ func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger,
 // request routinely waits one interval, and a threshold below that would report
 // every request as slow.
 func (p *BrokerPool) senderOptions() []resilience.Option {
-	if !health.SaturationEventsEnabled(p.obs) {
-		return nil
+	opts := []resilience.Option{resilience.WithAuditLog(audit.Enabled(p.obs))}
+	if health.SaturationEventsEnabled(p.obs) {
+		opts = append(opts, resilience.WithSaturationEvents(time.Duration(p.obs.SaturationThresholdMs)*time.Millisecond))
 	}
-	return []resilience.Option{
-		resilience.WithSaturationEvents(time.Duration(p.obs.SaturationThresholdMs) * time.Millisecond),
-	}
+	return opts
 }
 
 // OccupancySnapshot reports current in-flight-semaphore occupancy for every

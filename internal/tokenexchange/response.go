@@ -176,9 +176,24 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 
 	// TODO(Commit C): log WARN when sr.ExpiresIn <= int64(defaults.DefaultTokenExpirySkew.Seconds())
 	// — token is effectively expired at issuance, likely IdP misconfiguration.
+	//
+	// Extend that warning to cover roughly 2x the skew, not just <= 1x
+	// (SOL-154165). Below 1x the token is unusable and the cache's
+	// PutDroppedTTL WARN already names it. Between 1x and 2x it caches for
+	// 1-30s, so the hit rate is near zero while every line stays at Debug —
+	// the operator gets no signal that their IdP's token lifetimes are too
+	// short to cache usefully. Before SOL-154165 that band was loud for the
+	// wrong reason: the double deduction refused the write outright, so a
+	// 60s-token IdP produced a WARN per call. Fixing the cache removed the
+	// noise and the only signal with it; this is where the signal belongs,
+	// since it is a property of the IdP's response, not of the cache.
 
 	return &Token{
 		Value: sr.AccessToken,
+		// This is the ONE place the expiry skew is deducted. ExpiresAt leaves
+		// here as a conservative use-by instant, and every consumer — the token
+		// cache included — treats it as the true expiry and deducts nothing
+		// further (SOL-154165; see cache.CachedCredential's invariant).
 		// TODO(Commit E): replace direct default with e.tokenExpirySkew struct field
 		ExpiresAt: now.Add(time.Duration(sr.ExpiresIn)*time.Second - defaults.DefaultTokenExpirySkew),
 	}, nil
