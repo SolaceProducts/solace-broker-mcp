@@ -172,13 +172,22 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 	// is what makes target_info carry the shared identity attributes.
 	meterProvider := sdkmetric.NewMeterProvider(append(readers, sdkmetric.WithResource(res))...)
 
+	// meterProvider already owns the OTLP reader's ticker goroutine and gRPC
+	// connection (when attached) from here on, so every error return between
+	// this point and the end of the function needs to shut it down — not
+	// just the next one, since a later addition to this function is exactly
+	// as exposed as the two below it. One deferred cleanup covers all of
+	// them by construction, rather than relying on each new return
+	// remembering to repeat the call by hand.
+	built := false
+	defer func() {
+		if !built {
+			_ = meterProvider.Shutdown(context.Background())
+		}
+	}()
+
 	if otlpStatsInstance != nil {
 		if err := otlpStatsInstance.registerInstruments(meterProvider); err != nil {
-			// meterProvider already owns the OTLP reader's ticker goroutine
-			// and gRPC connection at this point; every earlier error return
-			// in this function precedes anything being opened, so this is
-			// the one path that must clean up what it started.
-			_ = meterProvider.Shutdown(context.Background())
 			return nil, err
 		}
 	}
@@ -193,6 +202,7 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 	if err := p.registerInstruments(buildVersion); err != nil {
 		return nil, err
 	}
+	built = true
 	return p, nil
 }
 
