@@ -267,18 +267,16 @@ broker state, not per attempt.
 - `mcp_broker_reachable` is set passively from the result of real calls; it is not a
   heartbeat. A broker is reported unreachable only after a real call fails, so a broker
   outage shows up here as a metric to alert on, not as a failed pod.
-- `reason` is a closed set: `credential_invalid` (a 401 from the broker), `unreachable`
-  (connection refused, DNS failure, or I/O timeout), `broker_error` (any other non-2xx).
-- `mcp_broker_unreachable_reason` is **one-hot per broker**: at most one `reason` series
-  per broker is `1` at any moment, and every other `reason` for that broker is explicitly
-  `0`. All reasons for a broker are published once it has been seen, so a series never
-  disappears mid-incident and `max by (reason)` cannot straddle two causes. A broker that
-  is reachable has every `reason` at `0`.
-- Alert on `mcp_broker_reachable == 0` and use this gauge only to attribute the cause;
-  `mcp_broker_unreachable_reason == 1` is deliberately redundant with it rather than a
-  second, separately-timed source of truth.
+- `reason` vocabulary: `credential_invalid` (HTTP 401), `unreachable` (connection refused,
+  DNS failure, or I/O timeout), `broker_error_NNN` (any other non-2xx, where NNN is the
+  HTTP status code, e.g. `broker_error_503`). The `broker_error_NNN` values bound
+  cardinality to the finite set of HTTP status codes.
+- `mcp_broker_unreachable_reason` emits `1` for the broker's current failure reason only.
+  When a broker recovers, the series is no longer emitted and disappears from the next
+  scrape. Alert on `mcp_broker_reachable == 0`; use this gauge only to attribute the cause.
 
-**Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
+**Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second,
+where `|reason|` is bounded by the number of distinct HTTP status codes seen per broker.
 
 ### Authentication Failures — [Implemented]
 
