@@ -46,7 +46,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -96,7 +96,7 @@ not rename what is already there.
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.1**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.2**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -116,18 +116,22 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
 > `mcp_semp_request_duration_seconds`, the OTLP export-health counters,
-> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)),
+> `mcp_auth_failure_total` and `mcp_authz_denied_total` (see
+> [Authentication Failures](#authentication-failures--implemented) and
+> [Authorization Denials](#authorization-denials--implemented)), and the
 > `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume
 > any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
-format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
-counter (`mcp_auth_failure_total`) is recorded has its own flag,
-`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, but an
-operator can set it independently, so the counter can be suppressed while the rest of the
-surface is on, or kept while the rest is off. The flag governs recording only. What is
-exposed when it is forced on while `OBS_METRICS_ENABLED` is false is a property of the
-`/metrics` endpoint and is settled by `OBS_METRICS_ENABLED`, not by this schema.
+format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
+(`mcp_auth_failure_total` and `mcp_authz_denied_total`) are recorded has its own flag,
+`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, so with
+nothing set the counters are on exactly when metrics are. An explicit `false` suppresses both
+while the rest of the surface stays on; their series are then absent, not zero. An explicit
+`true` while `OBS_METRICS_ENABLED` is `false` has nothing to register against — there is no
+exporter and no `/metrics` listener — so the server logs a `WARN` naming the flag at startup
+and records nothing.
 
 The `mcp_*` instruments can additionally be **pushed over OTLP**, behind its own flag,
 `OBS_METRICS_OTLP_ENABLED`. The `go_*`/`process_*` collectors are scrape-only and are
@@ -164,14 +168,17 @@ wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bi
 loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
 version, schema versions, and — once tools run — tool names already public in
 `docs/tools-reference.md`, broker aliases, broker hostnames via `server_address` on the SEMP
-metrics, and usage timing), but the listener is absent entirely unless `OBS_METRICS_ENABLED`
-is set.
+metrics, and usage timing), with two exceptions: `mcp_auth_failure_total{reason}` exposes a
+readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_total{tool}`
+tells a reader which tools authorization is refusing. Treat restricting the listener as the
+default posture, not optional hardening. The listener is absent entirely unless
+`OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
 The core Rate / Errors / Duration signal for every tool call that reaches its handler. A call
 refused by tool authorization never reaches one, so it is absent here and counted by
-`mcp_authz_denied_total` instead.
+`mcp_authz_denied_total` instead (when that counter is enabled; see below).
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -273,7 +280,7 @@ broker state, not per attempt.
 
 **Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
 
-### Authentication Failures
+### Authentication Failures — [Implemented]
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -287,16 +294,24 @@ broker state, not per attempt.
   | `expired` | The token's `exp` claim has passed. |
   | `audience_mismatch` | The token's audience does not match what this server expects. |
   | `signature_invalid` | A token-signing or JWKS-rotation failure, distinct from a malformed token. |
-  | `missing` | No `Authorization` header was presented at all, or a token that verified fully but omitted the required `sub` claim (an IdP misconfiguration, not an absent caller) — both land here rather than getting a sixth value. |
+  | `missing` | No `Authorization` header was presented at all, or a token that verified fully but omitted the required `sub` claim (an IdP misconfiguration, not an absent caller) — both land here rather than getting a sixth value. Any credential-less request that reaches `/mcp` counts here, including a CORS preflight or a health check pointed at the wrong path, since the SDK rejects those with a 401 too. |
 
 - The values are deliberately coarse so no token content is ever exposed as a label.
 - There is no `broker` label. Authentication happens at the HTTP boundary, before any broker
   is selected, so there is no broker in scope to name. Use the resource attributes on
   `target_info` to attribute failures to a server instance.
+- All five `reason` series are seeded at zero when the counter is registered, so they are
+  present from the first scrape and `increase(mcp_auth_failure_total[5m]) > 0` fires on a
+  process's first rejected token — after a key rotation, the first `signature_invalid` is the
+  sample that matters. A flat zero means "no failures", not "no data".
+  `absent(mcp_auth_failure_total)` means the counter is not registered: metrics are off,
+  `OBS_AUTH_FAILURE_COUNTER_ENABLED` was set to `false`, or the counter was never wired.
+- Recorded behind `OBS_AUTH_FAILURE_COUNTER_ENABLED` (see the flag note at the top of
+  [Metrics](#metrics--planned-with-exceptions)); the same flag governs `mcp_authz_denied_total`.
 
 **Cardinality:** `|reason|` (five values).
 
-### Authorization Denials
+### Authorization Denials — [Implemented]
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -307,8 +322,11 @@ broker state, not per attempt.
   stream cannot disagree.
 - `tool` **is** a label here, unlike on `mcp_auth_failure_total`. Authorization runs after the
   tool is known, so the tool name is in scope and is the first thing you need on a denial.
-- Emitted only where tool authorization is enabled. With it off, the series is absent rather
-  than zero.
+- Emitted only where tool authorization is enabled, and behind the same
+  `OBS_AUTH_FAILURE_COUNTER_ENABLED` flag as `mcp_auth_failure_total`. With either off, the
+  series is absent rather than zero. Unlike `mcp_auth_failure_total`, nothing is pre-seeded: a
+  series appears on the first denial for a given `tool` and `reason`, so `absent()` is not a
+  usable alert here — alert on `increase()` instead.
 
 **Cardinality:** `|tool| x 2`.
 
@@ -1478,9 +1496,9 @@ the review.
    from `missing_claim` and `not_permitted`, plus a matching
    `mcp_authz_denied_total{tool,reason}` counter. Does that two-value `reason` set match how
    your access reviews classify a refusal, or do you distinguish cases we have merged? And is
-   the single-predicate query the shape you need? One caveat worth knowing: no shipped build
-   emits this record yet, so denial history begins at the release that first does and cannot
-   be back-filled.
+   the single-predicate query the shape you need? One caveat worth knowing: denial history
+   begins at the release that first emitted the record (SOL-152097) and the counter
+   (SOL-152099) and cannot be back-filled.
 ### Decided Since the First Draft
 
 Three items that appeared as open questions in earlier drafts are now settled, so you do not

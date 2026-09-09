@@ -53,6 +53,10 @@ type Provider struct {
 	sempMetricsOnce sync.Once
 	sempMetrics     *SEMPMetrics
 	sempMetricsErr  error
+
+	securityMetricsOnce sync.Once
+	securityMetrics     *SecurityMetrics
+	securityMetricsErr  error
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -208,6 +212,15 @@ func (p *Provider) SEMPMetrics() (*SEMPMetrics, error) {
 		p.sempMetrics, p.sempMetricsErr = NewSEMPMetrics(p.Meter(instrumentScope))
 	})
 	return p.sempMetrics, p.sempMetricsErr
+}
+
+// SecurityMetrics returns the security counters (SOL-152099), registering
+// them once on first call — the same contract as ToolMetrics.
+func (p *Provider) SecurityMetrics() (*SecurityMetrics, error) {
+	p.securityMetricsOnce.Do(func() {
+		p.securityMetrics, p.securityMetricsErr = NewSecurityMetrics(p.Meter(instrumentScope))
+	})
+	return p.securityMetrics, p.securityMetricsErr
 }
 
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a

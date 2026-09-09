@@ -1201,6 +1201,9 @@ func main() {
 		}
 	}
 
+	// Security counters (SOL-152099); nil means off.
+	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
+
 	// 4. Create broker pool
 	pool := semp.NewBrokerPool(cfg, exchanger, semp.WithSEMPMetrics(sempMetrics))
 	// Release per-broker rate-limiter tickers (and any other client-held
@@ -1272,6 +1275,7 @@ func main() {
 	// door-closing policy.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor,
 		tools.WithToolMetrics(toolMetrics),
+		tools.WithSecurityMetrics(securityMetrics),
 		tools.WithAuditLog(audit.Enabled(cfg.Observability)))
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
@@ -1374,8 +1378,10 @@ func main() {
 	// The audit hook (SOL-152097) is the one wiring point for auth_success/
 	// auth_failure emission — audit.NewAuthHook reads the same
 	// OBS_AUDIT_LOG_ENABLED flag as tools.WithAuditLog above, so this and the
-	// destructive-op audit trail turn on and off together.
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler, audit.NewAuthHook(audit.Enabled(cfg.Observability)))
+	// destructive-op audit trail turn on and off together. CountingAuthHook
+	// adds mcp_auth_failure_total on the same reason (SOL-152099).
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler,
+		metrics.CountingAuthHook(securityMetrics, audit.NewAuthHook(audit.Enabled(cfg.Observability))))
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
