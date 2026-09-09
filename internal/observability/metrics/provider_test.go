@@ -170,6 +170,22 @@ func scrapeCounterValue(t *testing.T, body string) int {
 	return 0
 }
 
+// TestGoAndProcessFamiliesPresent asserts the standard Go runtime and process
+// metric families are present in a plain-text scrape. Values are not checked —
+// they are environment-dependent.
+func TestGoAndProcessFamiliesPresent(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := scrapePlainText(t, p)
+	for _, prefix := range []string{"go_goroutines", "go_gc_", "go_memstats_", "process_"} {
+		if !strings.Contains(body, prefix) {
+			t.Errorf("scrape missing family with prefix %q", prefix)
+		}
+	}
+}
+
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.
 func TestProviderAccessors(t *testing.T) {
 	p, err := New(testVersion, sdkresource.Default())

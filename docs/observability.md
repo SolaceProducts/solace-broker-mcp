@@ -46,7 +46,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
 | Distributed tracing | **[Interim — request-path spans wired, per-attempt spans pending]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, and each SEMP call are live behind `OBS_TRACING_ENABLED`. Per-*attempt* spans and the retry attributes are still pending (Story 27). See [Distributed Tracing](#distributed-tracing--interim-request-path-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -115,8 +115,9 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
-> `mcp_semp_request_duration_seconds`, the OTLP export-health counters, and
-> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume
+> `mcp_semp_request_duration_seconds`, the OTLP export-health counters,
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the
+> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume
 > any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
@@ -455,9 +456,17 @@ Exemplars add no new label keys and no new series.
 
 Standard `go_*` and `process_*` collectors from the Prometheus Go client library
 (`collectors.NewGoCollector()` and `collectors.NewProcessCollector()`): goroutine count,
-garbage-collection timing, memory stats, file descriptors, CPU. These names are upstream
-Prometheus conventions, not Solace-defined, and are listed here only so you know they will be
-present, once the metrics endpoint is wired, for diagnosing memory pressure and goroutine leaks.
+garbage-collection timing, memory stats, file descriptors, CPU. These are live whenever
+`OBS_METRICS_ENABLED` is on, with no extra configuration.
+
+**Naming.** These are upstream Prometheus conventions, not Solace-defined schema. A future
+`client_golang` upgrade that renames them is not a breach of the additive-only commitment.
+
+**Scrape-only.** These collectors are registered directly into the Prometheus registry, not
+through the OTel meter API. They appear on `/metrics` but not on the OTLP metrics stream
+(`OBS_METRICS_OTLP_ENABLED`). An OTLP-only consumer receives the `mcp_*` instruments and
+resource attributes, but not `go_*` or `process_*`. If your OTLP pipeline shows no `go_*`
+metrics, this is expected — scrape `/metrics` to get them.
 
 ---
 
