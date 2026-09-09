@@ -790,6 +790,28 @@ func runShutdownHooks(shutdownHooks *hooks.Registry, forceSig <-chan os.Signal) 
 	}
 }
 
+// registerShutdownHooks registers the shutdown flush for each provider that
+// was actually built, so main() has one call site instead of a Register call
+// scattered next to each provider's own construction, and so a wiring test
+// can exercise the registration logic directly (SOL-153965) without running
+// the rest of main()'s startup — network binds, OTLP exporter construction,
+// route wiring — the way resource_wiring_test.go's own doc comment names as
+// exactly the thing it could not do before this seam existed.
+//
+// A nil provider is silently skipped: metricsProvider is nil with
+// OBS_METRICS_ENABLED off (or on build failure), and tracerProvider is nil
+// with OBS_TRACING_ENABLED off. Registration order (metrics, then tracer)
+// matches the order the two providers are built in main(), which is what
+// TestRegisterShutdownHooks_BothProvidersRegistered pins.
+func registerShutdownHooks(reg *hooks.Registry, metricsProvider *metrics.Provider, tracerProvider *tracing.Provider) {
+	if metricsProvider != nil {
+		reg.Register("metrics_provider", metricsProvider.Shutdown)
+	}
+	if tracerProvider != nil {
+		reg.Register("tracer_provider", tracerProvider.Shutdown)
+	}
+}
+
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
 // New SEMPv1 tools should be added here as they land — this is the single
 // source of truth for which v1 tools the server exposes. The handlers flow
@@ -1335,8 +1357,9 @@ func main() {
 	readiness := health.NewReadinessState()
 	mux := buildMux(readiness)
 
-	// The metrics provider flush registers below (SOL-153884); the tracing
-	// (SOL-152420) and audit (SOL-152418) flushes follow once those land.
+	// The metrics provider flush (SOL-153884) and the tracer provider flush
+	// (SOL-152420) both register below, via registerShutdownHooks; the OTLP
+	// metrics-egress flush (Story 46, SOL-152418) follows once that lands.
 	shutdownHooks := hooks.NewRegistry()
 
 	// Create MCP handler
@@ -1409,10 +1432,10 @@ func main() {
 
 	// Metrics endpoint: start the listener for the provider built above,
 	// registered before SetInitialized so a bind or build failure shows on the
-	// first /readyz check. The provider's flush is a shutdown hook.
+	// first /readyz check. The provider's flush is a shutdown hook, registered
+	// below alongside the tracer provider's (registerShutdownHooks).
 	if metricsProvider != nil {
 		serveMetricsEndpoint(cfg, readiness, metricsProvider)
-		shutdownHooks.Register("metrics_provider", metricsProvider.Shutdown)
 	} else if metricsBuildErr != nil {
 		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
 	}
@@ -1445,9 +1468,8 @@ func main() {
 		// routes that channel into slog with no raw text (see
 		// installOTelDiagnostics), which is the other half of this.
 		slog.Error("tracing unavailable: provider build failed")
-	} else if tracerProvider != nil {
-		shutdownHooks.Register("tracer_provider", tracerProvider.Shutdown)
 	}
+	registerShutdownHooks(shutdownHooks, metricsProvider, tracerProvider)
 
 	// Startup is complete and the serving goroutine has been launched:
 	// SetInitialized flips /readyz to ready. startServer only starts the
