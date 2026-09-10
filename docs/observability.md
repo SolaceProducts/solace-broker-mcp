@@ -1104,8 +1104,14 @@ worked example of the translation.
 
 **Pin every rule to `audit_schema_version`, as [Schema Versioning](#schema-versioning) already
 tells you to.** The four queries below do it explicitly, with the current version as a
-placeholder you maintain. A pinned query that stops matching after an upgrade has detected
-schema drift, which is the point; an unpinned one keeps matching and silently spans two
+placeholder **you must set to your deployment's actual `audit_schema` before the rule goes
+live, and update when it bumps.** A pinned query that stops matching after an upgrade has
+detected schema drift, which is the point. But a rule copied fresh *after* the bump, with no
+before-and-after to notice, is different: it returns zero rows on every run and looks like a
+clean estate rather than a stale pin — check the pinned version against the deployment's
+actual `audit_schema_version` before concluding anything from an empty result, especially on
+query 1, where zero rows reads as "no privileged changes" to whoever is running the review. An
+unpinned query is worse in the other direction: it keeps matching and silently spans two
 contracts.
 
 **1. Destructive-operation review — who changed what.**
