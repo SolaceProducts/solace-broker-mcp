@@ -213,7 +213,11 @@ func tracedSession(t *testing.T, h tools.ToolHandler, brokerURL string, tracingE
 // tracedSessionWith is tracedSession with a metrics recorder wired into the
 // manager, for the cross-signal test that has to read spans and metrics
 // produced by the same call. nil tm is the disabled path the other tests use.
-func tracedSessionWith(t *testing.T, h tools.ToolHandler, brokerURL string, tracingEnabled bool, tm *metrics.ToolMetrics) *mcp.ClientSession {
+//
+// extraOpts is variadic rather than a fifth positional parameter so the
+// existing call sites, none of which want one, stay untouched. Today only
+// tools.WithAuditLog uses it (SOL-154036).
+func tracedSessionWith(t *testing.T, h tools.ToolHandler, brokerURL string, tracingEnabled bool, tm *metrics.ToolMetrics, extraOpts ...tools.ManagerOption) *mcp.ClientSession {
 	t.Helper()
 	pool := spanPoolFor(t, brokerURL)
 	// tools.WithToolMetrics rather than a positional argument: the constructor
@@ -224,6 +228,7 @@ func tracedSessionWith(t *testing.T, h tools.ToolHandler, brokerURL string, trac
 	if tm != nil {
 		opts = append(opts, tools.WithToolMetrics(tm))
 	}
+	opts = append(opts, extraOpts...)
 	mgr := tools.NewToolManagerFromComposite(pool, nil, nil, opts...)
 	mgr.Register(h)
 
@@ -677,22 +682,22 @@ func toolMetricSeries(t *testing.T, p *metrics.Provider) []map[string]string {
 	return out
 }
 
-// TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall is SOL-152421's
-// cross-signal criterion, and the reason ADR-009 insists the three surfaces
-// share one vocabulary instead of three synonymous ones.
+// TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall is SOL-152421's
+// cross-signal criterion, widened by SOL-154036 to the third surface.
 //
-// The promise being tested is an operator's workflow: they see a spike on
-// `mcp_tool_invocation_total{outcome="error",error_type="execution_error"}`,
-// copy those label values into their trace backend as a span-attribute filter,
-// and land on the spans behind the spike. That only works if the two surfaces
-// spell the same call the same way — and nothing in the type system enforces
-// it, because the span writes `attribute.String` and the metric writes a
-// Prometheus label from a different call site. They can drift silently and
-// each surface still looks perfectly healthy on its own.
+// The promise: an operator copies the label values off a spiking
+// `mcp_tool_invocation_total` series into their trace backend and their SIEM
+// and lands on the same call. Nothing in the type system enforces that — an
+// `attribute.String`, a Prometheus label and an `slog.String` from three call
+// sites — so the surfaces can drift while each still looks healthy alone.
 //
-// Asserted on one real call per outcome so both sides are produced by the same
-// dispatch, not by two separately-arranged fixtures that agree by construction.
-func TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall(t *testing.T) {
+// The third surface here is logToolResult's `tool invoked` line, emitted for
+// every dispatch. The narrower `audit_event_type=operation` record is joined
+// by TestRequestPathSpans_OperationAuditRecordAgreesWithSpanAndMetric.
+//
+// One real call per outcome, so all three sides come from the same dispatch
+// rather than from fixtures that agree by construction.
+func TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		failStep bool
@@ -732,6 +737,8 @@ func TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
+			logged := captureLogRecords(t)
 
 			broker := fakeBroker(t)
 			session := tracedSessionWith(t,
@@ -778,6 +785,18 @@ func TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall(t *testing.T) {
 			}
 			if tt.outcome == "error" && labels["error_type"] == "" {
 				t.Error("metric error_type is empty on an error outcome; nothing was compared for it")
+			}
+
+			// `broker` is deliberately excluded: logToolResult logs the RAW
+			// caller alias for diagnostics while the metric and the span are
+			// canonicalized, so on the unknown-broker case they differ by
+			// design. Asserting equality would pin that divergence shut.
+			line := oneRecordWithMsg(t, logged, "tool invoked")
+			for _, key := range []string{"tool", "outcome", "error_type"} {
+				if got := stringField(line, key); got != labels[key] {
+					t.Errorf("%s: log line = %q, metric label = %q — a SIEM query carried over from a dashboard finds nothing",
+						key, got, labels[key])
+				}
 			}
 		})
 	}
