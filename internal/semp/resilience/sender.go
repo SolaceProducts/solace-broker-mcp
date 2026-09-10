@@ -166,6 +166,8 @@ type Sender struct {
 	// brokerAlias is the operator's configured display alias. Used by the
 	// metrics transport (broker label) and by the audit log (Broker field).
 	brokerAlias string
+	// resultHook, when non-nil, fires after every real SEMP call.
+	resultHook ResultHook
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -244,6 +246,15 @@ func WithAuditLog(enabled bool) Option {
 // (semp.NewBrokerClient) supplies this.
 func WithBrokerAlias(alias string) Option {
 	return func(d *Sender) { d.brokerAlias = alias }
+}
+
+// ResultHook fires after each real SEMP call. httpStatus is 0 when no HTTP
+// response was received. Admission failures and context cancellations are filtered out.
+type ResultHook func(brokerAlias string, httpStatus int)
+
+// WithResultHook installs a hook that fires after every real SEMP call. A nil hook is a no-op.
+func WithResultHook(h ResultHook) Option {
+	return func(d *Sender) { d.resultHook = h }
 }
 
 
@@ -741,7 +752,46 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 // On failure after retries, returns a RetriesExhaustedError or a wrapped error.
 // When the request cannot be admitted within semp.max_queue_wait it returns a
 // BrokerBusyError and never reaches the broker (see admit).
-func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+// brokerSignalStatus extracts the HTTP status to report from the terminal
+// outcome of a Do call. Returns (status, true) for real broker signals and
+// (0, false) for non-broker outcomes: admission failures, caller-context
+// cancellations, and unknown error shapes. callerCtx must be the context
+// passed into Do before the retry-budget inner context is created.
+func brokerSignalStatus(callerCtx context.Context, resp *http.Response, err error) (int, bool) {
+	var busy *BrokerBusyError
+	if errors.As(err, &busy) {
+		return 0, false
+	}
+	if resp != nil {
+		return resp.StatusCode, true
+	}
+	if err != nil {
+		var exhausted *RetriesExhaustedError
+		if errors.As(err, &exhausted) {
+			return exhausted.StatusCode, true
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			if callerCtx.Err() != nil {
+				return 0, false // caller's own context expired
+			}
+			return 0, true // internal timeout (retry budget or http.Client.Timeout)
+		}
+		return 0, false // unknown error (e.g. request-wrapping failure)
+	}
+	return 0, false
+}
+
+func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
+	// Capture before Do may reassign ctx to the retry-budget inner context.
+	callerCtx := ctx
+	if d.resultHook != nil {
+		defer func() {
+			if status, ok := brokerSignalStatus(callerCtx, resp, err); ok {
+				d.resultHook(d.brokerAlias, status)
+			}
+		}()
+	}
+
 	admitted, err := d.admit(ctx)
 	if err != nil {
 		return nil, err
@@ -791,7 +841,7 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		return nil, fmt.Errorf("wrapping request: %w", err)
 	}
 
-	resp, err := d.retryClient.Do(retryReq)
+	resp, err = d.retryClient.Do(retryReq)
 
 	// Decided exactly once, here, at the request's true terminal point —
 	// after every attempt this call made, not from inside checkRetry (SOL-152097;

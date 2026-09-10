@@ -46,7 +46,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — records implemented, drop counter not yet wired]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is now emitted. The `mcp_audit_events_dropped_total` counter is the one piece not yet wired. See [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -96,7 +96,7 @@ not rename what is already there.
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.3**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.4**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -119,9 +119,11 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)),
 > `mcp_auth_failure_total` and `mcp_authz_denied_total` (see
 > [Authentication Failures](#authentication-failures--implemented) and
-> [Authorization Denials](#authorization-denials--implemented)), and the
-> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume
-> any other metric below is not yet emitted._
+> [Authorization Denials](#authorization-denials--implemented)), the
+> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)),
+> and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and
+> `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
+> Assume any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
@@ -263,22 +265,27 @@ broker state, not per attempt.
 |---|---|---|---|
 | `mcp_broker_reachable` | Gauge (`1`/`0`) | `broker` | Solace |
 | `mcp_broker_unreachable_reason` | Gauge (`1`/`0`) | `broker`, `reason` | Solace |
+| `mcp_broker_last_result_timestamp_seconds` | Gauge (Unix seconds) | `broker` | Solace |
 
 - `mcp_broker_reachable` is set passively from the result of real calls; it is not a
-  heartbeat. A broker is reported unreachable only after a real call fails, so a broker
-  outage shows up here as a metric to alert on, not as a failed pod.
-- `reason` is a closed set: `credential_invalid` (a 401 from the broker), `unreachable`
-  (connection refused, DNS failure, or I/O timeout), `broker_error` (any other non-2xx).
-- `mcp_broker_unreachable_reason` is **one-hot per broker**: at most one `reason` series
-  per broker is `1` at any moment, and every other `reason` for that broker is explicitly
-  `0`. All reasons for a broker are published once it has been seen, so a series never
-  disappears mid-incident and `max by (reason)` cannot straddle two causes. A broker that
-  is reachable has every `reason` at `0`.
-- Alert on `mcp_broker_reachable == 0` and use this gauge only to attribute the cause;
-  `mcp_broker_unreachable_reason == 1` is deliberately redundant with it rather than a
-  second, separately-timed source of truth.
+  heartbeat. A broker that has not received any call since pod start is absent from this
+  gauge — use `absent(mcp_broker_reachable{broker="..."})` alongside `== 0` in reachability
+  alerts to catch both cases.
+- `reason` vocabulary: `credential_invalid` (HTTP 401 or 403), `unreachable` (connection
+  refused, DNS failure, or I/O timeout), `broker_error_NNN` (5xx or 429, where NNN is the
+  HTTP status code, e.g. `broker_error_503`). Other 4xx responses (404, 400, 409, …) classify
+  as `reachable` because the broker answered. `broker_error_NNN` cardinality is bounded by
+  the finite set of HTTP status codes.
+- `mcp_broker_unreachable_reason` is **one-hot per broker**: every reason ever recorded for a
+  broker is always present in the scrape — `1` for the current reason, `0` for all prior ones.
+  This guarantees series never disappear mid-incident and `max by (reason)` never straddles
+  two causes. Alert on `mcp_broker_reachable == 0`; use this gauge only to attribute the cause.
+- `mcp_broker_last_result_timestamp_seconds` records when the broker's most recent SEMP call
+  completed. Use `time() - mcp_broker_last_result_timestamp_seconds > 900` to alert on brokers
+  that have gone silent (no traffic, so reachability is unknown).
 
-**Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
+**Cardinality:** `|broker|` for the first and third metrics; `|broker| x |reason|` for the
+second, where `|reason|` grows only on distinct HTTP error status codes seen per broker.
 
 ### Authentication Failures — [Implemented]
 
