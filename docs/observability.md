@@ -4,8 +4,9 @@
 > trace schema for the Broker MCP Server. It is published for review **before** the names
 > freeze at GA, so the time to change a name is now. After GA the schema is **additive-only
 > within a MAJOR version**: names are added freely, and a rename or removal happens only at a
-> MAJOR bump, after an announced deprecation with at least two minor releases of dual
-> emission. That is a migration path, not a promise never to change — see
+> MAJOR bump, after an announced deprecation with at least two minor releases of notice,
+> dual-emitting where dual emission is possible. That is a migration path, not a promise never
+> to change — see
 > [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) and
 > [How to Give Feedback](#how-to-give-feedback).
 >
@@ -150,9 +151,25 @@ have not had time to migrate.
 
 | Change | Version effect | What you get |
 |---|---|---|
-| A new metric, label, audit field, or a new value in a closed set | MINOR bump | Nothing to do. Existing queries keep working. |
-| Renaming or removing a **name** — a metric, a label key, or an audit field | MAJOR bump, and only after the cycle below | An announcement, then at least two minor releases emitting both the old and the new name. |
+| A new metric, audit field, or a new value in a closed set | MINOR bump | Nothing to do. Existing queries keep working. |
+| A new **label** on an existing metric | MINOR bump | Existing selectors and `sum by (...)` keep working. A `without()`/`ignoring()` aggregation or a default one-to-one `rate(a)/rate(b)` match can silently change, because a new label changes the series identity those collapse or match on — see the note below. |
+| Renaming or removing a metric name or an audit field | MAJOR bump, and only after the cycle below | An announcement, then at least two minor releases emitting both the old and the new form side by side, **untouched** — the old artifact is unaffected, so a dashboard or SIEM rule pinned to it keeps working exactly as before. |
+| Renaming a **label key** | MAJOR bump, and only after the cycle below | An announcement, then at least two minor releases carrying both the old and the new key on every sample. This is a weaker guarantee than the row above: dual emission is possible, but adding the new key still changes the series identity of the metric consumers already query, so — same hazard as the MINOR row above — a `without()`/`ignoring()` aggregation or default vector match against it can silently change during the window. Where an untouched old series matters, ship the new key on a new metric name instead. |
 | Renaming or removing a **value** in a closed set (`outcome`, `error_type`, `reason`, `audit_event_type`) | MAJOR bump, and only after the cycle below | An announcement and at least two minor releases of notice. **Not** dual emission — see the carve-out below. |
+
+**A label change — new or renamed — changes series identity, which some queries do not survive.**
+`mcp_tool_invocation_total{broker="b1"}` and `mcp_tool_invocation_total{broker="b1",
+event_broker="b1"}` are different series. A plain selector or a `sum by (broker)` still
+matches either shape fine. But `sum without (broker) (...)`, `ignoring(broker)`, and a default
+one-to-one `rate(a_total[5m]) / rate(b_total[5m])` all require identical label sets, so the
+added label silently stops them matching or stops them collapsing the way they used to — no
+error, just a different number. A `rate()`/`increase()` window that spans the moment the label
+is added or removed sees the old series go stale and a new one start, which can transiently
+skew both. This is exposition-valid — the Prometheus/OpenMetrics text format does not require
+one label-name set per metric family, and this server's OTel-based exporter does not enforce
+one either — it is a query-correctness hazard, not a wire-format one, and it is why a
+label-key rename cannot promise the same "the old stays untouched" guarantee a name rename
+can.
 
 **The deprecation cycle, in order:**
 
@@ -160,9 +177,12 @@ have not had time to migrate.
    naming the old form, the new form, and the earliest release in which the old one may
    disappear.
 2. **Two minor releases of notice, dual-emitting where dual emission is possible.** For a
-   name, both the old and the new are emitted side by side for the whole window, so a
-   dashboard or SIEM rule written against either keeps working and you can verify the new
-   query against live data before cutting over.
+   metric name or an audit field, both the old and the new are emitted side by side,
+   untouched, for the whole window, so a dashboard or SIEM rule written against either keeps
+   working and you can verify the new query against live data before cutting over. For a
+   label key, both keys are emitted on every sample, which still lets you verify the new query
+   before cutover but — per the series-identity note above — does not leave the old series as
+   untouched as a name rename does.
 3. **Remove at a MAJOR bump.** The old form is removed only in a major version of the affected
    schema (`metrics_schema` or `audit_schema`), never in a minor.
 
@@ -1082,10 +1102,16 @@ routed by `event="audit"`, because that is the one filter every shipper applies;
 predicate into your own SIEM's syntax. A Splunk SPL rendering is shown for the first as a
 worked example of the translation.
 
+**Pin every rule to `audit_schema_version`, as [Schema Versioning](#schema-versioning) already
+tells you to.** The four queries below do it explicitly, with the current version as a
+placeholder you maintain. A pinned query that stops matching after an upgrade has detected
+schema drift, which is the point; an unpinned one keeps matching and silently spans two
+contracts.
+
 **1. Destructive-operation review — who changed what.**
 
 ```
-event="audit" AND audit_event_type="operation"
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="operation"
   → group by principal.sub
   → report tool, broker, outcome, timestamp_utc, correlation_id
 ```
@@ -1093,7 +1119,7 @@ event="audit" AND audit_event_type="operation"
 In Splunk SPL:
 
 ```
-index=<your_audit_index> event="audit" audit_event_type="operation"
+index=<your_audit_index> event="audit" audit_schema_version="1.1" audit_event_type="operation"
 | stats count, values(tool) as tools, values(broker) as brokers, values(outcome) as outcomes,
     values(timestamp_utc) as timestamps, values(correlation_id) as correlation_ids
     by principal.sub
@@ -1113,7 +1139,7 @@ made it. Two limits to state before a reviewer treats this as a complete record 
 **2. Rejected credentials — who could not get in.**
 
 ```
-event="audit" AND audit_event_type="auth_failure"
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="auth_failure"
   → group by reason
 ```
 
@@ -1126,7 +1152,7 @@ Events](#authentication-events)).
 **3. Denied privileged attempts, hop 1 — this server refused the tool.**
 
 ```
-event="audit" AND audit_event_type="authz_denied"
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="authz_denied"
   → group by reason, tool
 ```
 
@@ -1136,7 +1162,7 @@ is no `operation` record and no tool-invocation metric sample for them.
 **4. Denied privileged attempts, hop 2 — the broker refused the operation.**
 
 ```
-event="audit" AND audit_event_type="broker_authz_denied"
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="broker_authz_denied"
   → group by reason, tool, broker
 ```
 
