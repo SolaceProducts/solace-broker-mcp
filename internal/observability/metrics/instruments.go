@@ -121,9 +121,12 @@ var knownErrorTypes = func() map[ErrorType]bool {
 	return m
 }()
 
-// ToolMetrics holds the per-tool RED instruments: an invocation counter, a
-// duration histogram, and an unlabelled in-flight gauge. Every method is
-// nil-safe, so a disabled server (nil) records nothing.
+// ToolMetrics holds the per-tool RED instruments — an invocation counter, a
+// duration histogram, and an unlabelled in-flight gauge — plus one counter
+// that is not itself a RED instrument, mcp_broker_authz_denied_total
+// (SOL-153332, Story 49; see NewToolMetrics for why it lives here rather than
+// on SecurityMetrics). Every method is nil-safe, so a disabled server (nil)
+// records nothing.
 type ToolMetrics struct {
 	invocations       metric.Int64Counter
 	duration          metric.Float64Histogram
@@ -160,7 +163,15 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 
 	// mcp_broker_authz_denied_total (SOL-153332, Story 49): a hop-2 counterpart
 	// to hop-1's mcp_authz_denied_total, counting a broker-side permission
-	// denial rather than an MCP-server-side one.
+	// denial rather than an MCP-server-side one. Registered here, gated only by
+	// OBS_METRICS_ENABLED (this instrument's meter), rather than on
+	// SecurityMetrics: that struct's whole-struct nil gate additionally follows
+	// OBS_AUTH_FAILURE_COUNTER_ENABLED (cmd/server/security_metrics.go), a
+	// narrower, independently-settable flag SOL-152099 scoped to exactly two
+	// counters (mcp_auth_failure_total, mcp_authz_denied_total) — moving this
+	// counter there would let that flag silently gate a signal never in its
+	// documented scope, contradicting this story's own committed contract that
+	// mcp_broker_authz_denied_total is gated by OBS_METRICS_ENABLED alone.
 	brokerAuthzDenied, err := meter.Int64Counter(
 		"mcp.broker.authz_denied",
 		metric.WithDescription("Number of tool calls denied by broker-side (hop-2) authorization."),
@@ -327,6 +338,14 @@ func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Durati
 // The auth-failure counter carries no tool or broker label because
 // authentication fails before either is selected. Cardinality is |reason| for
 // the first and |tool| x 2 for the second.
+//
+// mcp_broker_authz_denied_total (SOL-153332, Story 49) is NOT here despite
+// being the same shape of signal (a security denial counter): it is gated
+// only by OBS_METRICS_ENABLED, while this struct's whole-struct nil gate
+// additionally follows OBS_AUTH_FAILURE_COUNTER_ENABLED, a narrower,
+// independently-settable flag SOL-152099 scoped to exactly the two counters
+// above (cmd/server/security_metrics.go). Moving it here would let that flag
+// silently also gate a signal outside its documented scope. See ToolMetrics.
 type SecurityMetrics struct {
 	authFailures metric.Int64Counter
 	authzDenials metric.Int64Counter

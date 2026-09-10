@@ -26,7 +26,7 @@ mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.1",metrics_schema="1.2"} 1
+mcp_schema_version{audit_schema="1.1",metrics_schema="1.3"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1

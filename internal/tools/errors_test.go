@@ -567,8 +567,10 @@ func TestBuildErrorMessage(t *testing.T) {
 			"max num subscriptions exceeded",
 			[]string{"A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-queue."},
 		},
-		// Code 72 (permission denied) with a known alias: message is replaced with
-		// an alias-tagged line and the generic role/VPN-scope hint is suppressed.
+		// SEMPv2 code 72 (permission denied) with a known alias: message is
+		// replaced with an alias-tagged line and the generic role/VPN-scope
+		// hint is suppressed. SEMPv1's own permission error does not get this
+		// treatment — see the case below.
 		{
 			"sempv2 code 72 with alias tags broker, drops hint",
 			&sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, Description: "not authorized"},
@@ -576,12 +578,20 @@ func TestBuildErrorMessage(t *testing.T) {
 			`Authorization failed on broker "broker-oauth".`,
 			nil,
 		},
+		// SEMPv1 permission errors deliberately do NOT get the alias-tagged
+		// rewrite, even with a known alias and even with ReasonCode
+		// artificially set to 72 (a real broker never sets it for
+		// ErrorKindPermission — see envelope.go's parser — so this fixture
+		// exists only to prove the rewrite is gated on a genuine SEMPv2
+		// classification, not on the bare reason-code int happening to
+		// equal 72 regardless of which protocol produced it). Keeps its own
+		// broker text plus the shared code-72 hint instead.
 		{
-			"sempv1 code 72 with alias tags broker, drops hint",
+			"sempv1 code 72 keeps its own text, not the sempv2-only alias rewrite",
 			&sempv1.Error{Kind: sempv1.ErrorKindPermission, StatusCode: 200, ReasonCode: 72, Message: "not authorized"},
 			"broker-oauth",
-			`Authorization failed on broker "broker-oauth".`,
-			nil,
+			"permission error: not authorized",
+			[]string{"Credentials lack permission; check the management role/VPN scope."},
 		},
 		// Code 72 with an empty alias: unchanged — broker's own message plus the
 		// existing generic code-72 hint.

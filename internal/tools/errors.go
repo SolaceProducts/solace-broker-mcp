@@ -572,24 +572,28 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	if !brokerTextMayBeShown(status) {
 		return message, nil
 	}
-	// SEMPv2 permission denial (sempv2.SEMPCodePermissionDenied — the named
-	// constant isBrokerAuthzDenial, manager.go, also compares against, so this
-	// numeric value is spelled once rather than as a second bare 72): when
-	// the caller's broker alias is known, replace the broker's own text with
-	// an alias-tagged authorization message and suppress the generic
-	// code-72 hint. That hint points at management role and VPN scope — the
+	// SEMPv2 permission denial (meta.error.code == sempv2.SEMPCodePermissionDenied,
+	// the same constant isBrokerAuthzDenial in manager.go checks, so this
+	// classification is spelled once rather than as a second bare 72 — see
+	// that function's comment for why this is a bare numeric-code comparison
+	// rather than isSEMPStatus's status-string preference): when the
+	// caller's broker alias is known, replace the broker's own text with an
+	// alias-tagged authorization message and suppress the generic code-72
+	// hint. That hint points at management role and VPN scope — the
 	// Basic-auth knobs — which actively misleads an OAuth operator, where
 	// authorization is governed by the oauthProfile accessLevelGroups
 	// mapping instead. When the alias is empty the behavior is unchanged:
 	// the broker's own message plus the generic hint below.
 	//
-	// SEMPv1 permission errors (ErrorKindPermission) deliberately keep their
-	// own broker text here instead — TestCallTool_SEMPv1Error_IsErrorResult
-	// pins that — even though isBrokerAuthzDenial treats both as the same
-	// hop-2 denial for audit/metric purposes; unifying the two message paths
-	// too would drop that detail, which is a real behavior change beyond
-	// what closing the duplicated-classification gap requires.
-	if code == sempv2.SEMPCodePermissionDenied && brokerAlias != "" {
+	// sempv2Err can be nil here (a SEMPv1 error reaching this shared
+	// suggestions section) — guarded rather than assumed, since SEMPv1
+	// permission errors (ErrorKindPermission) deliberately keep their own
+	// broker text here instead — TestCallTool_SEMPv1Error_IsErrorResult pins
+	// that — even though isBrokerAuthzDenial treats both as the same hop-2
+	// denial for audit/metric purposes; unifying the two message paths too
+	// would drop that detail, which is a real behavior change beyond what
+	// closing the duplicated-classification gap requires.
+	if sempv2Err != nil && sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied && brokerAlias != "" {
 		return fmt.Sprintf("Authorization failed on broker %q.", brokerAlias), nil
 	}
 	if info, ok := translatedErrorCodes[code]; ok && info.hint != "" {

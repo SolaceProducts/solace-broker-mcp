@@ -96,7 +96,7 @@ not rename what is already there.
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.2**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.3**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -1258,7 +1258,7 @@ Present only on `outcome: error`, drawn from a closed set of thirteen values:
 | `nil_result` | The tool returned no result. |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
-| `broker_permission_denied` | The broker refused the exchanged identity the SEMP operation behind this tool (a hop-2 denial, SOL-153332, Story 49) — paired with the `broker_authz_denied` audit event. |
+| `broker_permission_denied` | The broker refused the exchanged identity for the SEMP operation behind this tool (a hop-2 denial, SOL-153332, Story 49) — paired with the `broker_authz_denied` audit event. |
 
 **Only six of these reach an audit record.** The thirteen values above are the full vocabulary
 for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
