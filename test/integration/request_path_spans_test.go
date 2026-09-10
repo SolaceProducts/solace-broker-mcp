@@ -133,10 +133,20 @@ func fakeBroker(t *testing.T) *httptest.Server {
 
 // spanPoolFor points the "dev" alias at brokerURL, so the SEMP client reaches
 // fakeBroker rather than a dead port.
+//
+// A second alias, "Dev-EU", is configured in mixed case on purpose. Broker
+// lookup is case-insensitive while DisplayName preserves the configured
+// casing, so a caller typing "dev-eu" exercises real normalisation: every
+// canonicalized surface must report "Dev-EU". Without an alias whose
+// configured form differs from what a caller types, a broker-key comparison
+// passes trivially and verifies nothing — "dev" is spelled the same either
+// way.
 func spanPoolFor(t *testing.T, brokerURL string) *semp.BrokerPool {
 	t.Helper()
 	cfgYAML := "mcp_client_auth:\n  mode: disabled\nbrokers:\n" +
 		"  dev:\n    url: " + brokerURL + "\n    auth:\n      mode: basic\n" +
+		"      username: admin\n      password: admin\n" +
+		"  Dev-EU:\n    url: " + brokerURL + "\n    auth:\n      mode: basic\n" +
 		"      username: admin\n      password: admin\n"
 	cfgPath := filepath.Join(t.TempDir(), "broker-config.yaml")
 	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
@@ -727,37 +737,8 @@ func TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall(t *testing.T) {
 		{name: "panic", panics: true, broker: "dev", outcome: "error"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sr := recordRequestPathSpans(t)
-			p, err := metrics.New("v-test", sdkresource.Default())
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-			tm, err := p.ToolMetrics()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			logged := captureLogRecords(t)
-
-			broker := fakeBroker(t)
-			session := tracedSessionWith(t,
-				&compositeStubHandler{failStep: tt.failStep, panics: tt.panics}, broker.URL, true, tm)
-
-			if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-				Name:      "span-probe-tool",
-				Arguments: map[string]any{"broker": tt.broker, "msgVpnName": "default"},
-			}); err != nil {
-				t.Fatalf("CallTool returned a protocol error: %v", err)
-			}
-
-			series := toolMetricSeries(t, p)
-			if len(series) != 1 {
-				t.Fatalf("mcp_tool_invocation_total series = %d, want exactly 1 for one call: %v",
-					len(series), series)
-			}
-			labels := series[0]
-			dispatch := oneSpan(t, sr, "tools.CallTool")
+			dispatch, labels, logged := crossSignalCall(t,
+				&compositeStubHandler{failStep: tt.failStep, panics: tt.panics}, tt.broker)
 
 			if labels["outcome"] != tt.outcome {
 				t.Fatalf("metric outcome = %q, want %q", labels["outcome"], tt.outcome)

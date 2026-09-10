@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
@@ -40,24 +41,97 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// syncBuffer is a bytes.Buffer guarded by a mutex.
+//
+// slog's handler serialises writes to its own writer, but nothing serialises
+// those writes against a reader. The dispatch that produces these records runs
+// on an SDK-spawned goroutine (jsonrpc2.handleAsync), not the test goroutine —
+// the HTTP response to CallTool is what currently makes the records visible to
+// a subsequent read. That edge is a property of the transport, not of this
+// fixture, so the lock is what actually makes the pattern safe: adding
+// t.Parallel(), or any background goroutine that logs, would otherwise turn a
+// read into an intermittent data race.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // captureLogRecords redirects the default logger into a buffer for the test.
 // Both surfaces read here — logToolResult's line and audit.Emit's record —
 // write through slog.Default(), so one buffer proves the same process wrote
 // them. Debug level so nothing is filtered before it can be asserted on.
-func captureLogRecords(t *testing.T) *bytes.Buffer {
+func captureLogRecords(t *testing.T) *syncBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncBuffer{}
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return buf
+}
+
+// crossSignalCall drives exactly one `span-probe-tool` call against h with
+// every signal captured, and returns the three an assertion needs: the
+// tools.CallTool span, the labels of the single metric series the call
+// produced, and the log buffer holding both the `tool invoked` line and any
+// audit record.
+//
+// One fixture, not two: the arrange block is identical for both cross-signal
+// tests apart from the handler and the manager options, and two copies of "one
+// call, all signals captured" would drift — which is the exact failure class
+// these tests exist to catch.
+func crossSignalCall(t *testing.T, h tools.ToolHandler, brokerAlias string,
+	extraOpts ...tools.ManagerOption) (sdktrace.ReadOnlySpan, map[string]string, *syncBuffer) {
+	t.Helper()
+
+	sr := recordRequestPathSpans(t)
+	p, err := metrics.New("v-test", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logged := captureLogRecords(t)
+
+	broker := fakeBroker(t)
+	session := tracedSessionWith(t, h, broker.URL, true, tm, extraOpts...)
+
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "span-probe-tool",
+		Arguments: map[string]any{"broker": brokerAlias, "msgVpnName": "default"},
+	}); err != nil {
+		t.Fatalf("CallTool returned a protocol error: %v", err)
+	}
+
+	series := toolMetricSeries(t, p)
+	if len(series) != 1 {
+		t.Fatalf("mcp_tool_invocation_total series = %d, want exactly 1 for one call: %v",
+			len(series), series)
+	}
+	return oneSpan(t, sr, "tools.CallTool"), series[0], logged
 }
 
 // jsonLogRecords parses the JSON lines out of buf, skipping interleaved
 // non-JSON output rather than failing on it.
-func jsonLogRecords(buf *bytes.Buffer) []map[string]any {
+func jsonLogRecords(buf *syncBuffer) []map[string]any {
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 		if line == "" {
@@ -74,7 +148,7 @@ func jsonLogRecords(buf *bytes.Buffer) []map[string]any {
 
 // oneRecordWithMsg returns the single record with that msg. Exactly one, not
 // the first: a doubled emit for one call would otherwise pass unnoticed.
-func oneRecordWithMsg(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
+func oneRecordWithMsg(t *testing.T, buf *syncBuffer, msg string) map[string]any {
 	t.Helper()
 	var found []map[string]any
 	for _, rec := range jsonLogRecords(buf) {
@@ -93,7 +167,7 @@ func oneRecordWithMsg(t *testing.T, buf *bytes.Buffer, msg string) map[string]an
 // Filtered on event + audit_event_type, not msg: every audit record shares one
 // msg, and a hop-2 denial (SOL-153332) legitimately adds a second record for
 // the same call.
-func oneOperationAuditRecord(t *testing.T, buf *bytes.Buffer) map[string]any {
+func oneOperationAuditRecord(t *testing.T, buf *syncBuffer) map[string]any {
 	t.Helper()
 	var found []map[string]any
 	for _, rec := range jsonLogRecords(buf) {
@@ -111,18 +185,18 @@ func oneOperationAuditRecord(t *testing.T, buf *bytes.Buffer) map[string]any {
 // stringField reads a string field, reporting an absent one as "".
 //
 // Load-bearing, not convenience: each surface encodes "no value" differently —
-// a Prometheus label cannot be absent, an unset span attribute is missing, and
-// slog omits an attr the emit site never added (what both emitters do with
-// error_type on a success). All three mean the same thing, so they must
-// compare equal or every successful call reads as a disagreement.
+// a Prometheus label cannot be absent, an unset span attribute is simply
+// missing, and slog omits an attr the emit site never added (what both
+// emitters do with error_type on a success). All three mean the same thing, so
+// they must compare equal or every successful call reads as a disagreement.
 func stringField(rec map[string]any, key string) string {
 	s, _ := rec[key].(string)
 	return s
 }
 
-// destructiveStubHandler is compositeStubHandler with the one annotation that
-// puts a call on the audit surface. Embedded so the traced path stays
-// byte-for-byte the one the other tests exercise; only the annotation differs.
+// destructiveStubHandler is compositeStubHandler with the annotations that put
+// a call on the audit surface. Embedded so the traced path stays byte-for-byte
+// the one the other tests exercise.
 type destructiveStubHandler struct {
 	compositeStubHandler
 }
@@ -130,7 +204,14 @@ type destructiveStubHandler struct {
 func (h *destructiveStubHandler) Metadata() tools.Metadata {
 	md := h.compositeStubHandler.Metadata()
 	yes := true
-	md.Annotations = tools.Annotations{Destructive: &yes}
+	// TWO fields change, not one: types.go documents Destructive as meaningful
+	// only when ReadOnly is false, so the embedded handler's ReadOnly: true has
+	// to be cleared alongside it. Assigned field by field rather than replacing
+	// the whole Annotations struct, so an Idempotent or OpenWorld annotation
+	// added to the embedded handler later is carried here instead of being
+	// silently dropped.
+	md.Annotations.ReadOnly = false
+	md.Annotations.Destructive = &yes
 	return md
 }
 
@@ -158,52 +239,37 @@ func TestRequestPathSpans_OperationAuditRecordAgreesWithSpanAndMetric(t *testing
 		name          string
 		failStep      bool
 		panics        bool
+		broker        string
+		wantBroker    string
 		wantOutcome   string
 		wantErrorType string
 	}{
-		{name: "success", wantOutcome: "success"},
-		{name: "error", failStep: true, wantOutcome: "error", wantErrorType: "execution_error"},
-		{name: "panic", panics: true, wantOutcome: "error", wantErrorType: "panic"},
+		{name: "success", broker: "dev", wantBroker: "dev", wantOutcome: "success"},
+		{name: "error", failStep: true, broker: "dev", wantBroker: "dev",
+			wantOutcome: "error", wantErrorType: "execution_error"},
+		{name: "panic", panics: true, broker: "dev", wantBroker: "dev",
+			wantOutcome: "error", wantErrorType: "panic"},
+		// The case that gives the broker key something to prove. Unlike the
+		// `tool invoked` line, this record is written after CallTool has
+		// rewritten the alias to its configured form, so it is canonical by
+		// construction rather than by an explicit canonicalBrokerLabel call —
+		// and with a fixture whose alias and display name are spelled alike,
+		// a broker comparison cannot tell the two apart. The caller types
+		// "dev-eu"; every canonicalized surface must say "Dev-EU".
+		{name: "non-canonical caller alias", broker: "dev-eu", wantBroker: "Dev-EU",
+			wantOutcome: "success"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sr := recordRequestPathSpans(t)
-			p, err := metrics.New("v-test", sdkresource.Default())
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-			tm, err := p.ToolMetrics()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			logged := captureLogRecords(t)
-
-			broker := fakeBroker(t)
-			session := tracedSessionWith(t,
+			dispatch, labels, logged := crossSignalCall(t,
 				&destructiveStubHandler{compositeStubHandler{failStep: tt.failStep, panics: tt.panics}},
-				broker.URL, true, tm, tools.WithAuditLog(true))
-
-			if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-				Name:      "span-probe-tool",
-				Arguments: map[string]any{"broker": "dev", "msgVpnName": "default"},
-			}); err != nil {
-				t.Fatalf("CallTool returned a protocol error: %v", err)
-			}
+				tt.broker, tools.WithAuditLog(true))
 
 			record := oneOperationAuditRecord(t, logged)
-			dispatch := oneSpan(t, sr, "tools.CallTool")
-			series := toolMetricSeries(t, p)
-			if len(series) != 1 {
-				t.Fatalf("mcp_tool_invocation_total series = %d, want exactly 1 for one call: %v",
-					len(series), series)
-			}
-			labels := series[0]
 
 			// Pinned first, so the cross-comparison below cannot pass by all
-			// three surfaces being wrong the same way — or, for tool, by all
-			// three being empty, which would compare equal while proving
-			// nothing.
+			// three surfaces being wrong the same way — or, for tool and
+			// broker, by all three being empty, which would compare equal
+			// while proving nothing.
 			if got := stringField(record, "outcome"); got != tt.wantOutcome {
 				t.Errorf("audit outcome = %q, want %q", got, tt.wantOutcome)
 			}
@@ -213,8 +279,11 @@ func TestRequestPathSpans_OperationAuditRecordAgreesWithSpanAndMetric(t *testing
 			if got := stringField(record, "tool"); got != "span-probe-tool" {
 				t.Errorf("audit tool = %q, want %q", got, "span-probe-tool")
 			}
+			if got := stringField(record, "broker"); got != tt.wantBroker {
+				t.Errorf("audit broker = %q, want the canonical %q", got, tt.wantBroker)
+			}
 
-			for _, key := range []string{"tool", "outcome", "error_type"} {
+			for _, key := range []string{"tool", "broker", "outcome", "error_type"} {
 				spanValue, _ := spanAttr(dispatch, key)
 				auditValue := stringField(record, key)
 				if auditValue != labels[key] {
