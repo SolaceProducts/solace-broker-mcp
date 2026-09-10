@@ -33,6 +33,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 )
 
@@ -228,7 +229,7 @@ func (p *Provider) SecurityMetrics() (*SecurityMetrics, error) {
 }
 
 // BrokerMetrics returns the broker reachability gauges, registering them once on first call.
-func (p *Provider) BrokerMetrics(brokerStates func() map[string]string) (*BrokerMetrics, error) {
+func (p *Provider) BrokerMetrics(brokerStates func() map[string]health.BrokerSnapshot) (*BrokerMetrics, error) {
 	p.brokerMetricsOnce.Do(func() {
 		p.brokerMetrics, p.brokerMetricsErr = NewBrokerMetrics(p.Meter(instrumentScope), brokerStates)
 	})

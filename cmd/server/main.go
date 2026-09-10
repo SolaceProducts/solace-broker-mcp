@@ -1182,7 +1182,7 @@ func main() {
 			} else {
 				sempMetrics = sm
 			}
-			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotStrings); bmErr != nil {
+			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
 				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
 		}

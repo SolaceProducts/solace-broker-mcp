@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestClassify(t *testing.T) {
@@ -34,10 +35,12 @@ func TestClassify(t *testing.T) {
 		{"201 is reachable", 201, StateReachable},
 		{"299 is reachable", 299, StateReachable},
 		{"401 is credential_invalid", 401, StateCredentialInvalid},
-		{"403 is broker_error", 403, "broker_error_403"},
+		{"403 is credential_invalid", 403, StateCredentialInvalid},
+		{"404 is reachable (broker answered)", 404, StateReachable},
+		{"409 is reachable (broker answered)", 409, StateReachable},
+		{"429 is broker_error", 429, "broker_error_429"},
 		{"500 is broker_error", 500, "broker_error_500"},
 		{"503 is broker_error", 503, "broker_error_503"},
-		{"404 is broker_error", 404, "broker_error_404"},
 	}
 
 	for _, tc := range tests {
@@ -145,6 +148,52 @@ func TestBrokerTracker_MultipleBrokers(t *testing.T) {
 	}
 	if snap["staging"] != StateCredentialInvalid {
 		t.Errorf("staging: got %q, want %q", snap["staging"], StateCredentialInvalid)
+	}
+}
+
+func TestBrokerTracker_TimestampRecorded(t *testing.T) {
+	t.Parallel()
+
+	tr := NewBrokerTracker()
+	before := time.Now()
+	tr.RecordBrokerResult("prod", 200)
+	after := time.Now()
+
+	snap := tr.SnapshotForMetrics()
+	entry, ok := snap["prod"]
+	if !ok {
+		t.Fatal("expected broker 'prod' in snapshot")
+	}
+	if entry.LastResult.Before(before) || entry.LastResult.After(after) {
+		t.Errorf("LastResult %v not in [%v, %v]", entry.LastResult, before, after)
+	}
+}
+
+func TestBrokerTracker_OneHotSeenReasons(t *testing.T) {
+	t.Parallel()
+
+	tr := NewBrokerTracker()
+	tr.RecordBrokerResult("prod", 0)   // unreachable
+	tr.RecordBrokerResult("prod", 401) // credential_invalid
+	tr.RecordBrokerResult("prod", 200) // recovered
+
+	snap := tr.SnapshotForMetrics()
+	entry, ok := snap["prod"]
+	if !ok {
+		t.Fatal("expected broker 'prod' in snapshot")
+	}
+	if entry.Current != StateReachable {
+		t.Errorf("current: got %q, want %q", entry.Current, StateReachable)
+	}
+	seen := make(map[BrokerState]bool)
+	for _, r := range entry.SeenReasons {
+		seen[r] = true
+	}
+	if !seen[StateUnreachable] {
+		t.Error("unreachable missing from SeenReasons after recovery")
+	}
+	if !seen[StateCredentialInvalid] {
+		t.Error("credential_invalid missing from SeenReasons after recovery")
 	}
 }
 

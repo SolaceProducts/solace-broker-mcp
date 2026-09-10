@@ -753,14 +753,15 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 // When the request cannot be admitted within semp.max_queue_wait it returns a
 // BrokerBusyError and never reaches the broker (see admit).
 func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
+	// Capture the caller's context before Do reassigns ctx to the retry-budget
+	// inner context below. The defer uses callerCtx to distinguish a caller
+	// cancellation (not a broker signal) from an internal timeout (broker signal).
+	callerCtx := ctx
 	if d.resultHook != nil {
 		defer func() {
-			// Admission failures and context cancellations are not broker signals.
+			// BrokerBusyError: admission rejected before any HTTP — not a broker signal.
 			var busy *BrokerBusyError
 			if errors.As(err, &busy) {
-				return
-			}
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				return
 			}
 			status := 0
@@ -769,9 +770,19 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 			} else if err != nil {
 				var exhausted *RetriesExhaustedError
 				if errors.As(err, &exhausted) {
+					// Retries ran against the broker — always a broker signal.
+					// exhausted.StatusCode is 0 for transport failures (timeout,
+					// connection refused), which Classify maps to unreachable.
 					status = exhausted.StatusCode
+				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					if callerCtx.Err() != nil {
+						// Caller's own context expired — not a broker signal.
+						return
+					}
+					// Internal timeout (retry budget or http.Client.Timeout) — classify
+					// as unreachable (status 0).
 				} else {
-					// Unknown error type (request-wrapping failure) — not a broker signal.
+					// Unknown error type (e.g. request-wrapping failure).
 					return
 				}
 			}
