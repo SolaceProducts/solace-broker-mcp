@@ -395,6 +395,37 @@ perf_record_fixtures() {
   return 0
 }
 
+# perf_redact_userinfo <url> — the URL with any userinfo replaced by `***`.
+#
+# `http://user:secret@host:9090` becomes `http://***@host:9090`. Nothing in
+# this harness produces such a URL — the mock disables client auth entirely and
+# loadgen's only auth channel is MCP_DEV_TOKEN, an env var that is never
+# persisted — but the URL is caller-supplied, the record is an archived
+# artifact that gets shared between engineers, and userinfo is worth nothing as
+# provenance. Cheaper to make the shape impossible than to argue about how
+# likely it is.
+perf_redact_userinfo() {
+  local url=${1-}
+  # Only the authority component: a `@` later in a path or query is not
+  # userinfo, and rewriting it would corrupt the URL the run actually used.
+  if [[ "$url" =~ ^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+@(.*)$ ]]; then
+    printf '%s***@%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else
+    printf '%s\n' "$url"
+  fi
+}
+
+# perf_alias_count <csv> — how many broker aliases a comma-separated list pins.
+#
+# Empty entries do not count: "a,,b" pins two aliases, not three, and an empty
+# string pins none. Split out here rather than inlined in the runner because
+# the number it produces goes into the run record as `broker_count`, and a
+# provenance field that cannot be tested is how the previous one came to say
+# 50 for a run driving three brokers.
+perf_alias_count() {
+  awk -F, '{ n = 0; for (i = 1; i <= NF; i++) if ($i ~ /[^[:space:]]/) n++; print n }' <<<"${1-}"
+}
+
 # perf_record_admission <record> <mcp_log> <config_used> — the four settings
 # that move admission behaviour, each with the source it came from.
 #

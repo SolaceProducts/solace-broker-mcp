@@ -145,9 +145,17 @@ if [[ -n "$BROKERS_CSV" ]]; then
   fi
   broker_args=(-brokers "$BROKERS_CSV")
   broker_note="brokers=$BROKERS_CSV"
+  # Count what this instance actually drives. BROKERS keeps its default of 50
+  # on this path — the mutual-exclusion check above forbids setting it — so
+  # recording it here would state a number that corresponds to nothing,
+  # loudest in the split-population case this path exists for, where NO_MOCK=1
+  # means the 50 is not even the size of a mock this box owns.
+  # Empty entries are not counted: "a,,b" pins two aliases, not three.
+  broker_count=$(perf_alias_count "$BROKERS_CSV")
 else
   broker_args=(-broker-count "$BROKERS" -broker-prefix "$BROKER_PREFIX")
   broker_note="broker-count=$BROKERS"
+  broker_count=$BROKERS
 fi
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
@@ -263,7 +271,9 @@ perf_record_rig "$record"
 perf_record_code "$record" "$repo_root" "$bin" loadgen mock-semp fidelity
 perf_record_fixtures "$record" "$here"
 perf_record_comment "$record" "workload"
-perf_record_kv "$record" mcp_url "$mcp_url"
+# Userinfo stripped: the record is archived and shared, and a scheme://user:pass@
+# authority is worth nothing as provenance. See perf_redact_userinfo.
+perf_record_kv "$record" mcp_url "$(perf_redact_userinfo "$mcp_url")"
 perf_record_kv "$record" clients "$CLIENTS"
 perf_record_kv "$record" duration "$DURATION"
 # What the stats exclude, not what the load skipped: the run still drives load
@@ -271,7 +281,9 @@ perf_record_kv "$record" duration "$DURATION"
 # would read as a measured zero.
 perf_record_kv "$record" stats_warmup "${WARMUP:-none}"
 perf_record_kv "$record" tools "$TOOLS"
-perf_record_kv "$record" broker_count "$BROKERS"
+# The number of aliases this loadgen drives — not the size of the mock, which
+# is a different quantity whenever BROKERS_CSV pins a subset.
+perf_record_kv "$record" broker_count "$broker_count"
 # Only when an explicit alias list was pinned; an empty field would read as a
 # value rather than as "this run used the generated broker-01..N list".
 [[ -n "$BROKERS_CSV" ]] && perf_record_kv "$record" brokers_csv "$BROKERS_CSV"
@@ -283,6 +295,10 @@ perf_record_kv "$record" error_rate "$ERROR_RATE"
 perf_record_kv "$record" error_count "$ERROR_COUNT"
 perf_record_kv "$record" error_statuses "$ERROR_STATUSES"
 perf_record_kv "$record" no_mock "$NO_MOCK"
+# How many ports the mock on this box binds. Only when this box runs one:
+# under NO_MOCK=1 the mock belongs to someone else and its size is not ours to
+# state. Equal to broker_count unless BROKERS_CSV pinned a subset.
+[[ "$NO_MOCK" != "1" ]] && perf_record_kv "$record" mock_broker_ports "$BROKERS"
 perf_record_kv "$record" nofile_requested "$PERF_NOFILE_REQUESTED"
 perf_record_kv "$record" nofile_granted "$PERF_NOFILE_GRANTED"
 

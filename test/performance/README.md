@@ -228,8 +228,21 @@ Format is one `key=value` per line with `#` comments, the same shape the
 | fixtures | `fixtures_manifest_sha256`, `fixtures_files`, `fixtures_captured_at`, `fixtures_capture_commit`, `fixtures_capture_dirty`, `fixtures_vpn`, `fixtures_rdp`, `fixtures_broker_alias` |
 | admission | `semp_max_concurrent_per_broker`, `semp_request_min_interval`, `semp_max_queue_wait`, `semp_fair_scheduling`, each with a `_source` |
 | descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak`, `fd_peak_source`, plus `run_terminated` or `load_failed` when the run was not a whole one |
-| workload | `clients`, `duration`, `stats_warmup`, `tools`, `broker_count`, `vpn`, `rdp`, `latency_ms`, `total_rps`, the error-injection knobs |
+| workload | `clients`, `duration`, `stats_warmup`, `tools`, `broker_count`, `vpn`, `rdp`, `latency_ms`, `total_rps`, the error-injection knobs, plus `mcp_url`, `brokers_csv`, `no_mock` and `mock_broker_ports` on the load box and `mock_host`, `config_file` and `hold_duration` on the MCP box |
+| outcome | `load_rc` — the load generator's exit code, on the runners that drive it |
 | load phase | `load_start_epoch`, `load_end_epoch`, `load_window_source`, and `stats_start_epoch` when `WARMUP` is set |
+
+Two of those describe different quantities and are easy to conflate.
+`broker_count` is how many aliases **this loadgen drives** — the entry count of
+`BROKERS_CSV` when a subset is pinned, `BROKERS` otherwise. `mock_broker_ports`
+is how many ports the mock **on that box** binds, and is written only when the
+box runs one: under `NO_MOCK=1` the mock belongs to someone else and its size is
+not this record's to state. They are equal unless `BROKERS_CSV` pinned a subset.
+
+`mcp_url` is recorded with any userinfo replaced by `***`. Nothing here produces
+a credential-bearing URL — the mock disables client auth and loadgen's only auth
+channel is `MCP_DEV_TOKEN`, an env var that is never persisted — but the URL is
+caller-supplied and the record is an archived artifact.
 
 The governing rule is that **an absent field is honest and a guessed one is a
 trap**. Anything the harness cannot establish is either omitted (EC2 fields on
@@ -464,6 +477,16 @@ the window. A bare `<from_epoch> <to_epoch>` pair still works and is marked
 plausible number rather than an error.
 
 ## More than 50 brokers
+
+> **`gen-mock-config.sh -port-start` is not honoured by the runners.** All three
+> bind, probe and inject at `18081` — the port wait, the error-injection payload
+> and Box B's reachability check all assume it. A config generated with a
+> different `-port-start` is valid and MCP will dial it, but no runner starts a
+> mock there, so the run fails at the fidelity gate before any load runs. That
+> is a loud, early failure rather than a wrong number, which is why the option
+> stays: for a large `-n` that would otherwise reach the control port at 19000,
+> drive `mock-semp` by hand with a matching `-listen-start` instead of using a
+> runner. The runners cap `BROKERS` at 919 for the same collision.
 
 `broker-config.mock.yaml` hand-lists 50 aliases. `mock-semp -listen-count` and
 `loadgen -broker-count` both already scale well past that, so the config was

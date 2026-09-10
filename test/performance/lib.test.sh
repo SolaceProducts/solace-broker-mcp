@@ -886,6 +886,36 @@ got=$("$here/summary.sh" "$tmp/run-badwin" 2>&1)
 contains "a reversed pair is refused rather than reported as an empty window" \
   "$got" "is not before end"
 
+# The number this produces is written into the run record as `broker_count`.
+# The field previously took BROKERS, which keeps its default of 50 on the
+# BROKERS_CSV path (setting both is forbidden), so a run pinned to three
+# aliases recorded fifty — false provenance for exactly the split-population
+# case that path exists for.
+echo "== perf_redact_userinfo keeps credentials out of an archived record"
+
+eq "userinfo is replaced, host and port kept" \
+  "$(perf_redact_userinfo 'http://user:secret@box-b:9090')" "http://***@box-b:9090"
+eq "a bare username too" \
+  "$(perf_redact_userinfo 'https://token@host:9090/mcp')" "https://***@host:9090/mcp"
+eq "an ordinary URL is untouched" \
+  "$(perf_redact_userinfo 'http://198.51.100.31:9090')" "http://198.51.100.31:9090"
+# A `@` after the authority is part of the path or query, not userinfo, and
+# rewriting it would corrupt the URL the run actually used.
+eq "an @ in the path is not userinfo" \
+  "$(perf_redact_userinfo 'http://host:9090/a@b')" "http://host:9090/a@b"
+eq "nor in a query string" \
+  "$(perf_redact_userinfo 'http://host:9090/x?u=a@b')" "http://host:9090/x?u=a@b"
+eq "an empty URL stays empty"  "$(perf_redact_userinfo '')" ""
+
+echo "== perf_alias_count counts what a pinned list actually drives"
+
+eq "three pinned aliases"        "$(perf_alias_count "broker-01,broker-07,broker-42")" "3"
+eq "one is one"                  "$(perf_alias_count "solo")"      "1"
+eq "an empty list pins none"     "$(perf_alias_count "")"          "0"
+eq "an empty entry is not an alias" "$(perf_alias_count "a,,b")"   "2"
+eq "nor is whitespace"           "$(perf_alias_count "a, ,b")"     "2"
+eq "surrounding spaces do not create entries" "$(perf_alias_count " a , b , c ")" "3"
+
 echo "== perf_record_assert_fields names what is missing"
 
 rec="$tmp/rec-assert"

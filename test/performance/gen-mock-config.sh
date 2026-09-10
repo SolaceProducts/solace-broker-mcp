@@ -16,6 +16,13 @@
 #   -prefix <name>    alias prefix (default broker) — must match loadgen's
 #                     -broker-prefix
 #   -port-start <p>   first mock port (default 18081) — must match mock-semp's
+#                     -listen-start. NOTE: run.sh, run-loadgen.sh and
+#                     run-mcp.sh all assume 18081 (port waits, error injection
+#                     and Box B's reachability check), so a config generated
+#                     with a different value cannot be driven by them — start
+#                     mock-semp by hand with a matching -listen-start. The
+#                     failure is loud and early: the fidelity gate cannot
+#                     reach a mock that is not there.
 #                     -listen-start
 #   -o <path>         output path (required)
 #   -f                overwrite an existing output file
