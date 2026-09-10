@@ -983,13 +983,23 @@ audit record**, which is the point of a single vocabulary: filter a dashboard by
 `error_type="broker_init_error"` and you can carry that predicate into the trace backend and
 the SIEM unchanged, with no translation table.
 
-This is enforced, not merely intended: a test drives one real tool call and asserts that all
-four shared keys — `tool`, `broker`, `outcome`, `error_type` — hold identical values on the
-span and on the `mcp_tool_invocation_total` series that call produced. Nothing in the type
-system couples the two, since the span writes an attribute and the metric writes a Prometheus
-label from a different call site, so the two can drift while each surface still looks healthy
-on its own. `correlation_id` is span-only by design: it is per-request, and as a metric label
-it would be unbounded.
+This is enforced, not merely intended, and across all four signals rather than the two most
+obviously paired. One test drives a real tool call and asserts that all four shared keys —
+`tool`, `broker`, `outcome`, `error_type` — hold identical values on the span, on the
+`mcp_tool_invocation_total` series, and on the `tool invoked` log line that call produced; a
+second does the same for the `audit_event_type=operation` record, across a success, a failure
+and a recovered panic. Nothing in the type system couples any of them — the span writes an
+attribute, the metric writes a Prometheus label, the log line and the audit record write slog
+attrs, all from different call sites, and the audit record's `outcome` is its own typed
+vocabulary that merely happens to be spelled like the metric's — so they can drift while each
+surface still looks healthy on its own. `correlation_id` is span-only by design: it is
+per-request, and as a metric label it would be unbounded.
+
+Two exclusions are deliberate. The log line's `broker` is **not** joined: it carries the raw
+caller-supplied alias for diagnostics, while the metric label and the span attribute are
+canonicalized, so for a broker that cannot be resolved they differ by design. And a call that
+fails broker resolution produces no `operation` audit record at all — the record is written
+past the destructive gate, which that call never reaches.
 
 **The two attempt spans deliberately carry no `outcome`.** An attempt is not a call: a 503 that
 was retried and then succeeded is a normal step of a healthy call, so tagging it
