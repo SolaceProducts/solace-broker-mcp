@@ -1166,6 +1166,8 @@ func main() {
 	var toolMetrics *metrics.ToolMetrics
 	var sempMetrics *metrics.SEMPMetrics
 	var metricsBuildErr error
+	// brokerTracker is always active; gauges are only registered when metrics are enabled.
+	brokerTracker := health.NewBrokerTracker()
 	if metrics.Enabled(cfg.Observability) {
 		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
 			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
@@ -1179,6 +1181,9 @@ func main() {
 				slog.Error("SEMP metrics unavailable", slog.String("error", smErr.Error()))
 			} else {
 				sempMetrics = sm
+			}
+			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
+				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
 		}
 	}
@@ -1205,7 +1210,10 @@ func main() {
 	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
 
 	// 4. Create broker pool
-	pool := semp.NewBrokerPool(cfg, exchanger, semp.WithSEMPMetrics(sempMetrics))
+	pool := semp.NewBrokerPool(cfg, exchanger,
+		semp.WithSEMPMetrics(sempMetrics),
+		semp.WithBrokerResultHook(brokerTracker.RecordBrokerResult),
+	)
 	// Release per-broker rate-limiter tickers (and any other client-held
 	// resources) on the normal shutdown path. The defer fires after main()
 	// returns — i.e. after httpServer.Shutdown completes — so no in-flight

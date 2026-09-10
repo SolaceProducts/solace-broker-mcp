@@ -81,6 +81,8 @@ type BrokerPool struct {
 	// sempMetrics records per-attempt SEMP metrics; nil when metrics are off.
 	// Passed to every BrokerClient this pool creates (see WithSEMPMetrics).
 	sempMetrics *metrics.SEMPMetrics
+	// resultHook, when non-nil, fires after every real SEMP call.
+	resultHook resilience.ResultHook
 }
 
 // PoolOption customizes a BrokerPool at construction.
@@ -90,6 +92,11 @@ type PoolOption func(*BrokerPool)
 // the pool creates. A nil recorder (metrics off) leaves recording inert.
 func WithSEMPMetrics(recorder *metrics.SEMPMetrics) PoolOption {
 	return func(p *BrokerPool) { p.sempMetrics = recorder }
+}
+
+// WithBrokerResultHook installs a hook that fires after every real SEMP call. A nil hook is a no-op.
+func WithBrokerResultHook(h resilience.ResultHook) PoolOption {
+	return func(p *BrokerPool) { p.resultHook = h }
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -199,6 +206,9 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	// The broker label is the display alias, resolved here where it is known.
 	// A nil recorder makes WithMetrics inert, so this is safe when metrics are off.
 	opts := append(p.senderOptions(), resilience.WithMetrics(p.sempMetrics, cfg.DisplayName()))
+	if p.resultHook != nil {
+		opts = append(opts, resilience.WithResultHook(p.resultHook))
+	}
 	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger, opts...)
 	if err != nil {
 		return nil, err
