@@ -56,7 +56,7 @@ length bullet below. Match the conventions here, do not impose a generic style:
   old behavior, new behavior, and a migration path. **This is a deliberate change
   from what the file currently shows.** The `[0.6.0]`–`[0.8.0]` entries run to a
   median of 93–191 words — do not match their length. The older blocks (`[0.1.0]`
-  through `[0.5.0]`, medians 4–16) are the target.
+  through `[0.5.0]`, medians 4–21) are the target.
 - Say what changed and what breaks. **Why** it changed belongs in the commit message,
   and **how** it works belongs in a code comment; an entry that runs long is usually
   carrying one of those. A reader of this file is updating their queries, dashboards,
