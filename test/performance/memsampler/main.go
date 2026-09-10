@@ -12,16 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command memsampler polls /proc/<pid>/status at a fixed interval and
-// writes a CSV row per sample. Meant to run alongside test/performance/loadgen
+// Command memsampler polls /proc/<pid>/status and /proc/<pid>/fd at a fixed
+// interval and writes a CSV row per sample. Meant to run alongside test/performance/loadgen
 // so a plot of RSS vs. wall-clock during a load run reveals whether MCP's
 // footprint climbs (leak) or holds steady (per plan step 8's <10% drift
 // over 30s bar).
 //
 // The plan calls for HeapAlloc / Sys from Go's runtime alongside RSS, but
-// MCP does not expose pprof/expvar today. RSS + VmSize + thread count from
-// /proc is what we can get without touching production code. Add a
-// Go-heap column here if MCP later exposes /debug/vars or /debug/pprof.
+// MCP does not expose pprof/expvar today. RSS + VmSize + thread count +
+// open-descriptor count from /proc is what we can get without touching
+// production code. Add a Go-heap column here if MCP later exposes
+// /debug/vars or /debug/pprof.
+//
+// Descriptors are sampled here rather than scraped off /metrics, and the
+// reason is not convenience. Collecting the process collector's fd gauge
+// requires running with OBS_METRICS_ENABLED on, which changes the thing under
+// test — a histogram observation per tool invocation plus a scrape listener —
+// and makes the numbers non-comparable with every run measured so far, all of
+// which had it off. Reading /proc costs nothing and perturbs nothing. What it
+// does not give is the goroutine count and GC internals; the soak's pass
+// criteria (RSS drift, threads flat, descriptors flat) do not need them, and
+// GODEBUG=gctrace=1 answers "was that memory collectable garbage?" for free.
 //
 // Usage:
 //
@@ -40,6 +51,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -66,6 +78,12 @@ func main() {
 	}
 }
 
+// csvHeader is the CSV's column contract. lib.sh's fd/thread peak reader and
+// summary.sh both resolve these columns by name from the header row, so
+// reordering them is safe and *renaming* one is the breaking change. Adding a
+// column is free. Do not re-encode a position in a consumer.
+var csvHeader = []string{"t_sec", "wall_ts", "rss_kb", "vm_kb", "threads", "open_fds"}
+
 func run(ctx context.Context, pid int, interval, duration time.Duration, outPath string, quiet bool) error {
 	// Open the CSV sink first so we fail fast on a bad path before starting
 	// the ticker. stdout support keeps ad-hoc invocation cheap.
@@ -75,7 +93,7 @@ func run(ctx context.Context, pid int, interval, duration time.Duration, outPath
 	}
 	defer closeFn()
 
-	if err := w.Write([]string{"t_sec", "wall_ts", "rss_kb", "vm_kb", "threads"}); err != nil {
+	if err := w.Write(csvHeader); err != nil {
 		return fmt.Errorf("writing header: %w", err)
 	}
 	w.Flush()
@@ -99,18 +117,15 @@ func run(ctx context.Context, pid int, interval, duration time.Duration, outPath
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
-	var last procSample
-	last = first
-	samples := 1
-	rssMin, rssMax := first.rssKB, first.rssKB
+	st := newStats(first)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return finish(w, start, samples, rssMin, rssMax, first, last, quiet, "context canceled")
+			return finish(w, start, st, quiet, "context canceled")
 		case now := <-t.C:
 			if duration > 0 && !now.Before(deadline) {
-				return finish(w, start, samples, rssMin, rssMax, first, last, quiet, "duration elapsed")
+				return finish(w, start, st, quiet, "duration elapsed")
 			}
 			s, err := sampleProc(pid)
 			if err != nil {
@@ -118,62 +133,195 @@ func run(ctx context.Context, pid int, interval, duration time.Duration, outPath
 				// the former is a clean end-of-run, the latter shouldn't
 				// swallow silently.
 				if errors.Is(err, os.ErrNotExist) {
-					return finish(w, start, samples, rssMin, rssMax, first, last, quiet, "process exited")
+					return finish(w, start, st, quiet, "process exited")
 				}
 				fmt.Fprintf(os.Stderr, "memsampler: sample error at t+%s: %v\n", now.Sub(start).Round(time.Millisecond), err)
 				continue
 			}
 			writeRow(w, now.Sub(start), now, s)
 			w.Flush()
-			samples++
-			last = s
-			if s.rssKB < rssMin {
-				rssMin = s.rssKB
-			}
-			if s.rssKB > rssMax {
-				rssMax = s.rssKB
-			}
+			st.observe(s)
 		}
 	}
 }
 
-// procSample is what one poll of /proc/<pid>/status extracts. Kept small on
-// purpose — anything beyond RSS/VmSize/Threads should be added deliberately
-// with a matching CSV column.
+// stats is the running roll-up the end-of-run summary prints. Peaks matter as
+// much as the drift figure: a descriptor count that touched its ceiling
+// mid-run is invisible in a start-vs-end comparison, and that is exactly the
+// failure the >50-broker and concurrency-cap runs are looking for.
+type stats struct {
+	samples     int
+	first, last procSample
+	rssMin      int
+	rssMax      int
+	threadsMax  int
+	fdMax       int // fdUnavailable until a readable sample arrives
+}
+
+func newStats(first procSample) *stats {
+	return &stats{
+		samples:    1,
+		first:      first,
+		last:       first,
+		rssMin:     first.rssKB,
+		rssMax:     first.rssKB,
+		threadsMax: first.threads,
+		fdMax:      first.openFDs,
+	}
+}
+
+func (st *stats) observe(s procSample) {
+	st.samples++
+	st.last = s
+	if s.rssKB < st.rssMin {
+		st.rssMin = s.rssKB
+	}
+	if s.rssKB > st.rssMax {
+		st.rssMax = s.rssKB
+	}
+	if s.threads > st.threadsMax {
+		st.threadsMax = s.threads
+	}
+	if s.openFDs > st.fdMax {
+		st.fdMax = s.openFDs
+	}
+}
+
+// procSample is what one poll of /proc/<pid> extracts. Kept small on purpose —
+// anything beyond RSS/VmSize/Threads/open descriptors should be added
+// deliberately with a matching CSV column.
+//
+// openFDs is fdUnavailable when the descriptor directory could not be read
+// (another user's process, or the process exiting between the two reads).
+// A sentinel rather than 0: "no descriptors" and "we could not look" are
+// different facts, and a 0 in a run record would read as the former.
 type procSample struct {
 	rssKB   int
 	vmKB    int
 	threads int
+	openFDs int
 }
 
-// sampleProc parses the handful of fields we care about out of
-// /proc/<pid>/status. Not using gopsutil to keep this tool dependency-free.
+// fdUnavailable marks a sample whose descriptor count could not be read.
+// Written to the CSV as "NA", the same token sampler.sh already uses.
+const fdUnavailable = -1
+
+// sampleProc reads one sample: the status fields, then the descriptor count.
+// Not using gopsutil to keep this tool dependency-free.
+//
+// A failure to read the descriptor directory is not fatal to the sample. The
+// status read is what proves the process is alive, so an fd read that races a
+// process exit degrades that one row to NA and lets the next poll report the
+// exit properly, instead of dropping a row of memory data we did have.
 func sampleProc(pid int) (procSample, error) {
 	path := fmt.Sprintf("/proc/%d/status", pid)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return procSample{}, err
 	}
+	s, err := parseStatus(string(data))
+	if err != nil {
+		return procSample{}, fmt.Errorf("%s: %w", path, err)
+	}
+	s.openFDs, err = countOpenFDs(pid)
+	if err != nil {
+		s.openFDs = fdUnavailable
+		warnFDOnce(pid, err)
+	}
+	return s, nil
+}
+
+// parseStatus pulls the fields we record out of /proc/<pid>/status content.
+// Split from the file read so it can be tested without a live process — the
+// format is stable but the parse is where a silent zero would come from.
+func parseStatus(data string) (procSample, error) {
 	var s procSample
-	for line := range strings.SplitSeq(string(data), "\n") {
+	s.openFDs = fdUnavailable
+	// A field that is present but will not parse is an error, not a zero. The
+	// both-fields-bad case would be caught by the guard below, but a malformed
+	// VmRSS beside a valid VmSize used to record rss_kb=0 and carry on —
+	// writing a plausible number into a CSV a later comparison trusts, which
+	// is the exact silent zero splitting this parse out was meant to prevent.
+	for line := range strings.SplitSeq(data, "\n") {
 		key, val, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}
 		val = strings.TrimSpace(val)
+		var err error
 		switch key {
 		case "VmRSS":
-			s.rssKB, _ = parseKB(val)
+			if s.rssKB, err = parseKB(val); err != nil {
+				return procSample{}, fmt.Errorf("parsing VmRSS %q: %w", val, err)
+			}
 		case "VmSize":
-			s.vmKB, _ = parseKB(val)
+			if s.vmKB, err = parseKB(val); err != nil {
+				return procSample{}, fmt.Errorf("parsing VmSize %q: %w", val, err)
+			}
 		case "Threads":
-			s.threads, _ = strconv.Atoi(val)
+			if s.threads, err = strconv.Atoi(val); err != nil {
+				return procSample{}, fmt.Errorf("parsing Threads %q: %w", val, err)
+			}
 		}
 	}
 	if s.rssKB == 0 && s.vmKB == 0 {
-		return procSample{}, fmt.Errorf("no VmRSS/VmSize in %s", path)
+		return procSample{}, errors.New("no VmRSS/VmSize")
 	}
 	return s, nil
+}
+
+// countOpenFDs counts the entries in /proc/<pid>/fd.
+//
+// Readdirnames rather than os.ReadDir: it needs no stat per entry, so a
+// descriptor closing mid-read drops out of the listing instead of producing an
+// error. Partial results are still counted — a count one short of the truth is
+// a better answer than none, at a sampling interval of one second.
+//
+// The open directory handle holds a descriptor of its own, and it is visible in
+// the listing only when we are sampling ourselves. Subtract it in exactly that
+// case rather than unconditionally, which would under-report every real run
+// by one.
+func countOpenFDs(pid int) (int, error) {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		return fdUnavailable, err
+	}
+	defer f.Close()
+
+	names, err := f.Readdirnames(-1)
+	if err != nil && len(names) == 0 {
+		// Nothing read at all. Report it as unavailable *with* the error, so
+		// the caller warns. Applying the self-handle correction first would
+		// turn a zero-name read of our own /proc/self/fd into (-1, nil) —
+		// the unavailable sentinel arrived at by arithmetic accident, with no
+		// error to explain it, which is the one diagnostic that would tell an
+		// operator why a whole fd column reads NA.
+		return fdUnavailable, err
+	}
+	n := len(names)
+	if pid == os.Getpid() {
+		n--
+	}
+	return n, nil
+}
+
+// warnFDOnce reports an unreadable descriptor directory a single time. A
+// permission problem repeats on every poll, and a warning per second would
+// bury the summary the operator is actually reading.
+func warnFDOnce(pid int, err error) {
+	fdWarnOnce.Do(func() {
+		fmt.Fprintf(os.Stderr, "memsampler: cannot read /proc/%d/fd (%v); open_fds recorded as NA\n", pid, err)
+	})
+}
+
+var fdWarnOnce sync.Once
+
+// fdField renders openFDs for the CSV, as NA when it was not readable.
+func fdField(n int) string {
+	if n == fdUnavailable {
+		return "NA"
+	}
+	return strconv.Itoa(n)
 }
 
 // parseKB pulls the integer off strings like "12345 kB". /proc/<pid>/status
@@ -194,6 +342,7 @@ func writeRow(w *csv.Writer, elapsed time.Duration, wall time.Time, s procSample
 		strconv.Itoa(s.rssKB),
 		strconv.Itoa(s.vmKB),
 		strconv.Itoa(s.threads),
+		fdField(s.openFDs),
 	})
 }
 
@@ -212,11 +361,13 @@ func openCSV(path string) (*csv.Writer, func(), error) {
 	}, nil
 }
 
-func finish(w *csv.Writer, start time.Time, samples, rssMin, rssMax int, first, last procSample, quiet bool, reason string) error {
+func finish(w *csv.Writer, start time.Time, st *stats, quiet bool, reason string) error {
 	w.Flush()
 	if quiet {
 		return nil
 	}
+	samples, rssMin, rssMax := st.samples, st.rssMin, st.rssMax
+	first, last := st.first, st.last
 
 	// Drift vs the first sample is what the plan's <10% steady-state bar
 	// actually measures. Report both min/max span and end-vs-start delta;
@@ -242,6 +393,11 @@ func finish(w *csv.Writer, start time.Time, samples, rssMin, rssMax int, first, 
 			fmt.Println("  verdict:   PASS (<10% RSS drift end-vs-start)")
 		}
 	}
-	fmt.Printf("  threads:   start %d, end %d\n", first.threads, last.threads)
+	fmt.Printf("  threads:   start %d, end %d, peak %d\n", first.threads, last.threads, st.threadsMax)
+	// Descriptors are the signal the concurrency-cap and >50-broker runs turn
+	// on, so report the peak even when the run itself passed: a run that came
+	// within a hair of RLIMIT_NOFILE is a result, not a footnote.
+	fmt.Printf("  open fds:  start %s, end %s, peak %s\n",
+		fdField(first.openFDs), fdField(last.openFDs), fdField(st.fdMax))
 	return nil
 }

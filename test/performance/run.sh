@@ -11,6 +11,13 @@
 # Env overrides:
 #   CLIENTS      loadgen -clients      (default 32)
 #   DURATION     loadgen -duration     (default 60s)
+#   WARMUP       loadgen -warmup       (default unset = no warmup). Time
+#                discarded from the STATS at the head of the run; the run
+#                still lasts WARMUP + DURATION and the samplers are extended
+#                to match. For a run with a mid-run event: an isolation run
+#                that injects latency partway through otherwise reports
+#                percentiles over the whole run, and since only the summary is
+#                emitted they cannot be re-windowed afterwards.
 #   TOOLS        loadgen -tools        (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   LATENCY_MS   mock-semp -default-latency-ms (default 0). Set >0 to make every
 #                broker response take that long — with max_concurrent_per_broker=10
@@ -36,6 +43,19 @@
 #   RDP          fidelity/loadgen -rdp (default: the RDP recorded in fixtures.manifest;
 #                the mock serves get-rdp-status for that RDP only)
 #   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
+#   BROKERS      number of mock brokers, and loadgen -broker-count (default 50).
+#                Above 50 the committed config runs out of aliases, so generate
+#                one to match:
+#                  ./gen-mock-config.sh -n 120 -o broker-config.gen120.yaml
+#                  BROKERS=120 CONFIG_FILE=./broker-config.gen120.yaml ./run.sh
+#   PORT_WAIT_SECS  how long to wait for a port held by a previous sweep point
+#                to be released before giving up (default 60)
+#   NOFILE       descriptor limit to request (default 1048576; falls back to the
+#                hard limit, and both are recorded)
+#   RIG_NOTE     free-text note about this host. Control characters are
+#                flattened, `=` becomes `:` and the value is capped at 200
+#                characters so the record stays parseable — the substitutions
+#                are reported on stderr.
 
 set -euo pipefail
 
@@ -45,8 +65,18 @@ bin="$here/bin"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$runs"
 
+# shellcheck source=lib.sh
+source "$here/lib.sh"
+# Single host, so both halves of the run live in one directory — but still two
+# records, one per role, so a consumer reads a single-host run the same way it
+# reads the two halves of a split-host one.
+mcp_record="$runs/run-record.mcp"
+lg_record="$runs/run-record.loadgen"
+
 CLIENTS="${CLIENTS:-32}"
 DURATION="${DURATION:-60s}"
+# Unset by default, so an existing invocation behaves exactly as it did.
+WARMUP="${WARMUP:-}"
 TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 LATENCY_MS="${LATENCY_MS:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
@@ -57,8 +87,67 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # mock alias. VPN must match the capture and is resolved from
 # fixtures.manifest after the preflight below — hardcoding a default here is
 # how it drifted from regen-golden.sh's.
-BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+# Derived from the prefix, so setting BROKER_PREFIX alone cannot leave the
+# fidelity gate dialling an alias the generated config does not contain.
+BROKER_ALIAS="${BROKER_ALIAS:-${BROKER_PREFIX}-01}"
 CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+# The generator's -prefix and loadgen's -broker-prefix have to agree, and until
+# now only the generator had a knob: a config generated with `-prefix mock`
+# gave MCP aliases mock-01... while loadgen kept asking for broker-01..., so
+# every lookup missed. Both defaults are `broker`, so an existing invocation is
+# unchanged.
+BROKER_PREFIX="${BROKER_PREFIX:-broker}"
+BROKERS="${BROKERS:-50}"
+
+# The mock binds BROKERS ports from 18081 and its control endpoint at the fixed
+# 19000, so a count of 920 or more makes a broker land on the control port —
+# they race, and /_mock/config goes to whichever won. gen-mock-config.sh
+# already refuses this range; the runners have to as well, because a config
+# generated for a smaller count can still be driven with a larger BROKERS.
+if (( BROKERS > 919 )); then
+  echo "BROKERS must be 919 or fewer: 18081 + $BROKERS - 1 would reach the mock's control port 19000" >&2
+  exit 2
+fi
+PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
+
+# Validated before anything starts. loadgen would reject a malformed duration
+# itself, but only after the mock, the server and the fidelity gate have been
+# paid for — and a run that dies there has already spent the expensive part.
+# DURATION and WARMUP both size sampler windows, so both are resolved to whole
+# seconds here, once, and a value that cannot be resolved stops the run before
+# the mock, the server and the fidelity gate have been paid for.
+#
+# This is stricter than Go's own duration parser, which also takes "1m30s" and
+# "500ms" — deliberately. The samplers count in whole seconds, and the previous
+# arrangement (Go string to loadgen, a separate awk to the samplers, with a
+# silent `print 90` fallback for anything it could not parse) meant a
+# DURATION=2m30s run drove 150s of load while sampling 100s of it and said
+# nothing. A refusal at the door beats a window that quietly describes the
+# wrong span.
+duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+# Zero is a legitimate WARMUP and never a legitimate DURATION: `loadgen`
+# rejects a non-positive -duration, and `memsampler -duration 0s` means "run
+# until the process disappears", so a zero would sail through this preflight
+# and hang the run at its final wait. Refuse it here, where refusing is free.
+if (( duration_secs == 0 )); then
+  echo "DURATION must be greater than zero, got: '$DURATION'" >&2
+  exit 2
+fi
+warmup_secs=0
+warmup_args=()
+if [[ -n "$WARMUP" ]]; then
+  warmup_secs=$(perf_duration_secs "$WARMUP") || exit 2
+  # A zero warmup is the same run as no warmup, so it is normalised to one
+  # rather than recorded as a warmup with no stats window beside it.
+  if (( warmup_secs > 0 )); then
+    warmup_args=(-warmup "$WARMUP")
+  else
+    WARMUP=""
+  fi
+fi
+# One number for every window in this run: the load lasts warmup + duration, so
+# the samplers must cover that, not DURATION alone.
+load_secs=$(( duration_secs + warmup_secs ))
 
 # Fail loud on a bad path. Silently falling back to the committed config would
 # make every run measure the interval that file happens to ship, and a sweep
@@ -83,12 +172,42 @@ for b in "${required_bins[@]}"; do
   fi
 done
 
-if ss -tln 2>/dev/null | grep -q ":9090 "; then
-  echo "port 9090 already in use — another MCP is running:" >&2
-  ss -tlnp 2>/dev/null | grep ":9090 " >&2
-  echo "kill it before running this script." >&2
+# A non-numeric or zero BROKERS would build an empty port list and hand
+# mock-semp a -listen-count it rejects several steps later. Catch it here,
+# where the message can name the variable.
+if ! [[ "$BROKERS" =~ ^[0-9]+$ ]] || (( BROKERS < 1 )); then
+  echo "BROKERS must be a positive integer, got: $BROKERS" >&2
   exit 2
 fi
+
+mock_start=18081
+mock_count="$BROKERS"
+
+# Wait for every port this run needs rather than aborting on a held one. A
+# back-to-back sweep point was lost this way: the previous point's server still
+# held :9090 when the next one started. An immediate abort turns a two-second
+# wait into a missing data point; starting anyway would measure the previous
+# process. Bounded, and the failure names the port it waited on.
+#
+# "Free" means no listener, not no socket: a TIME_WAIT socket does not block a
+# bind with SO_REUSEADDR, so waiting for every socket to clear would wait for
+# something that never happens. See perf_first_held_port.
+#
+# The mock's whole port range is covered, not just its first port — a previous
+# run with a larger BROKERS leaves the tail bound while 18081 is already free.
+mock_ports=()
+for (( p = mock_start; p < mock_start + mock_count; p++ )); do mock_ports+=("$p"); done
+perf_wait_ports_free "$PORT_WAIT_SECS" 9090 19000 "${mock_ports[@]}" || exit 2
+
+# Raise the descriptor limit before anything is launched, so both the server
+# and the mock inherit it. Nothing in this suite, cmd/ or deploy/ raised
+# RLIMIT_NOFILE before, which left it varying with whatever the login shell
+# handed the operator — a result-moving input that was invisible in the output.
+# On a single host this shell's limit covers the server's two idle pools per
+# broker AND the load generator's inbound sessions, which is the larger of the
+# two by far at high client counts.
+perf_raise_nofile "${NOFILE:-1048576}"
+echo "== 0. descriptor limit: requested $PERF_NOFILE_REQUESTED, granted $PERF_NOFILE_GRANTED"
 
 # Fixture preflight. The canned responses and goldens are lab captures kept
 # out of git, so "absent" is the normal state of a fresh clone — fail here
@@ -123,6 +242,37 @@ fi
 # names would drift the first time a tool is added.
 "$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
 
+# Records first: a run that dies in startup should still say what it was.
+perf_record_begin "$mcp_record" mcp "$runs"
+perf_record_rig "$mcp_record"
+perf_record_code "$mcp_record" "$repo_root" "$bin" mcp-server memsampler
+perf_record_fixtures "$mcp_record" "$here"
+perf_record_kv "$mcp_record" config_file "$CONFIG_FILE"
+perf_record_kv "$mcp_record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$mcp_record" nofile_granted "$PERF_NOFILE_GRANTED"
+
+perf_record_begin "$lg_record" loadgen "$runs"
+perf_record_rig "$lg_record"
+perf_record_code "$lg_record" "$repo_root" "$bin" loadgen mock-semp fidelity
+perf_record_fixtures "$lg_record" "$here"
+perf_record_comment "$lg_record" "workload"
+perf_record_kv "$lg_record" clients "$CLIENTS"
+perf_record_kv "$lg_record" duration "$DURATION"
+# What the stats exclude, not what the load skipped: the run still drives load
+# for the whole of WARMUP + DURATION. `none` rather than an empty value, which
+# would read as a measured zero.
+perf_record_kv "$lg_record" stats_warmup "${WARMUP:-none}"
+perf_record_kv "$lg_record" tools "$TOOLS"
+perf_record_kv "$lg_record" broker_count "$BROKERS"
+perf_record_kv "$lg_record" vpn "$VPN"
+perf_record_kv "$lg_record" rdp "$RDP"
+perf_record_kv "$lg_record" latency_ms "$LATENCY_MS"
+perf_record_kv "$lg_record" error_rate "$ERROR_RATE"
+perf_record_kv "$lg_record" error_count "$ERROR_COUNT"
+perf_record_kv "$lg_record" error_statuses "$ERROR_STATUSES"
+perf_record_kv "$lg_record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$lg_record" nofile_granted "$PERF_NOFILE_GRANTED"
+
 mock_pid= mcp_pid= mem_pid= top_pid=
 # kill_tree signals a pid (and its process group if reachable) and waits for
 # it. It does NOT `wait` inside — callers that need the child's exit code
@@ -140,12 +290,56 @@ kill_tree() {
     kill -TERM "$pid" 2>/dev/null || true
   fi
 }
+# Set once the peaks have been written, so a run interrupted with Ctrl-C does
+# not append them twice: cleanup handles INT and TERM as well as EXIT, and its
+# `exit` re-enters it through the EXIT trap.
+peaks_recorded=0
+# Set at the end of the main flow. cleanup() is reached on every path, so this
+# is what tells it whether the peaks it is about to record cover a whole run.
+run_finished=0
+# Initialised here, not at the load phase, because cleanup() reads it and is
+# reached from every path — including the ones that never start a load.
+lg_rc=0
 cleanup() {
   local rc=$?
   set +e
   kill_tree "$top_pid";  wait "$top_pid" 2>/dev/null
   kill_tree "$mem_pid";  wait "$mem_pid" 2>/dev/null
   kill_tree "$mcp_pid";  wait "$mcp_pid" 2>/dev/null
+  # Peaks recorded here rather than at the end of the main flow: the runs that
+  # lose them are the ones that never reach the end. The samplers are waited
+  # for above, so mem.csv is final. A SIGKILL still loses them — nothing
+  # shell-side survives that — and the record then stays short.
+  if (( ! peaks_recorded )); then
+    peaks_recorded=1
+    perf_record_fd_peak "$mcp_record" "$runs/mem.csv"
+    # A peak taken over a run that was cut short is not the peak the run would
+    # have reached, and fd_peak is exactly the number a capacity claim gets
+    # quoted from. Absence used to be the marker that a run did not finish;
+    # now that the field is always written, say so in the record instead.
+    # Three outcomes, not two. A load that exited non-zero leaves the samplers
+    # running out their clock over an idle server, so the peak is real but the
+    # run is not a measurement — calling that `complete` would let a failed run
+    # be quoted as a whole one. It is not `run_terminated` either: the runner
+    # reached its end. Say which of the two it was.
+    perf_record_kv "$mcp_record" load_rc "$lg_rc"
+    if (( run_finished && lg_rc == 0 )); then
+      perf_record_kv "$mcp_record" fd_peak_source complete
+    elif (( run_finished )); then
+      perf_record_kv "$mcp_record" load_failed true
+      perf_record_kv "$mcp_record" fd_peak_source partial
+    else
+      perf_record_kv "$mcp_record" run_terminated true
+      perf_record_kv "$mcp_record" fd_peak_source partial
+    fi
+    # Assert only where there were samples to peak over: -s is true for a
+    # header-only CSV, which is what a run terminated inside the first sampling
+    # interval leaves behind, so count rows rather than bytes. A preflight
+    # abort has none, and the warning would bury the real error.
+    if [[ -r "$runs/mem.csv" ]] && (( $(wc -l <"$runs/mem.csv") > 1 )); then
+      perf_record_assert_fields "$mcp_record" fd_peak threads_peak
+    fi
+  fi
   if [[ -n "$mock_pid" ]]; then
     kill_tree "$mock_pid"
     wait "$mock_pid"
@@ -185,8 +379,6 @@ wait_for_tcp() {
   return 1
 }
 
-mock_start=18081
-mock_count=50
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
 # mock-semp reads canned/ from disk at startup (auto-located next to the
 # binary), so it replays whatever the last capture produced — no rebuild
@@ -264,6 +456,16 @@ setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-ser
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
 
+# The server has now reported its own effective configuration, so record the
+# four settings that move admission behaviour and the limit the process
+# actually runs under.
+perf_record_kv "$mcp_record" mcp_pid "$mcp_pid"
+perf_record_admission "$mcp_record" "$runs/mcp.log" "$runs/broker-config.used.yaml"
+perf_record_proc_nofile "$mcp_record" "$mcp_pid"
+# How much processor the Go runtime was entitled to. Without it, two runs on
+# one box with different GOMAXPROCS write records identical in every field.
+perf_record_runtime_cpu "$mcp_record" "$mcp_pid"
+
 echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN rdp=$RDP; exclusions in fidelity/exclusions.txt)"
 # BROKER_ALIAS + VPN must match how the goldens were captured; the mock
 # replays canned bytes regardless of the alias in the request path, so
@@ -293,19 +495,32 @@ if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
 fi
 
 echo "== 4. memsampler alongside MCP (pid=$mcp_pid)"
-"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "$DURATION" \
+# load_secs, not DURATION: WARMUP extends the run, so it extends the sampling.
+# A sampler sized on DURATION alone would stop before the load did and clip the
+# tail off the numbers.
+# load_secs plus the same tail buffer sampler.sh gets, and for the same
+# reason twice over: loadgen dials all its sessions BEFORE its warmup+duration
+# clock starts, so a window of exactly load_secs ends while load is still
+# running — and the value clipped off the end is fd_peak, the number this
+# sampler exists to record.
+"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "$(( load_secs + 10 ))s" \
   -out "$runs/mem.csv" >"$runs/memsampler.log" 2>&1 &
 mem_pid=$!
 
 # sampler samples MCP + mock CPU + RSS/PSS/USS via /proc, and box totals, in
-# parallel with memsampler. Duration argument is seconds; DURATION here is a
-# Go duration string (e.g. "60s", "2m") so convert with a tiny awk.
-top_secs=$(awk -v d="$DURATION" 'BEGIN {
-  if (match(d, /^([0-9.]+)s$/, m)) { print int(m[1]); exit }
-  if (match(d, /^([0-9.]+)m$/, m)) { print int(m[1]*60); exit }
-  if (match(d, /^([0-9.]+)h$/, m)) { print int(m[1]*3600); exit }
-  print 90  # fallback if duration is unparseable
-}')
+# parallel with memsampler. Same resolved seconds the memsampler got: the two
+# samplers used to size themselves from different parsers, and the awk one
+# fell back to a hardcoded 90 on anything it could not read — so on a mawk host
+# (its match() form is gawk-only) every run sampled 100s regardless of
+# DURATION, while memsampler sampled the right span. Two windows over one run,
+# one of them silently wrong.
+top_secs=$load_secs
+# Small tail buffer, the same one run-loadgen.sh gives its samplers. The
+# samplers start just before loadgen does, so an exactly-DURATION window ends a
+# few seconds before the load does and clips the tail off the load-phase
+# figures. The extra idle samples land in the whole-run average, which is the
+# diluted number this change exists to stop anyone relying on.
+top_secs=$(( top_secs + 10 ))
 echo "== 4b. sampler alongside MCP+mock (~${top_secs}s at 5s intervals)"
 "$here/sampler.sh" "$runs/sampler.csv" 5 "$top_secs" >"$runs/sampler.log" 2>&1 &
 top_pid=$!
@@ -314,10 +529,44 @@ inject_note="no error injection"
 if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
   inject_note="inject rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES"
 fi
-echo "== 5. loadgen ($CLIENTS clients, $DURATION, tools=$TOOLS; $inject_note)"
-"$bin/loadgen" -mcp-url http://localhost:9090 -broker-count 50 \
-  -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
+echo "== 5. loadgen ($CLIENTS clients, $DURATION${WARMUP:+ after $WARMUP warmup}, tools=$TOOLS, broker-count=$BROKERS; $inject_note)"
+# Stamp the load window into both records. summary.sh windows the sampler CSV
+# on it so the reported CPU is the load phase, not the load phase averaged
+# together with the idle stretch the fidelity gate ran in. Stamped by the
+# runner that starts the load, never inferred from the samples.
+# One clock read for both records: four independent `date +%s` calls could
+# leave the two files disagreeing by a second, and summary.sh reads whichever
+# record its glob happens to yield first — so the window a run reports would
+# depend on directory order.
+load_start_epoch=$(date +%s)
+perf_stamp_load_start "$mcp_record" "$load_start_epoch"
+perf_stamp_load_start "$lg_record" "$load_start_epoch"
+# With a warmup, the load window and the window the stats describe are not the
+# same span. Record the second one too, so CPU can be read over the span the
+# percentiles actually cover rather than over one that also contains the
+# traffic they exclude.
+if (( warmup_secs > 0 )); then
+  perf_record_kv "$mcp_record" stats_start_epoch "$(( load_start_epoch + warmup_secs ))"
+  perf_record_kv "$lg_record"  stats_start_epoch "$(( load_start_epoch + warmup_secs ))"
+fi
+"$bin/loadgen" -mcp-url http://localhost:9090 -broker-count "$BROKERS" \
+  -broker-prefix "$BROKER_PREFIX" \
+  -clients "$CLIENTS" -duration "$DURATION" ${warmup_args[@]+"${warmup_args[@]}"} -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
-  | tee "$runs/loadgen.log"
+  | tee "$runs/loadgen.log" || lg_rc=$?
+load_end_epoch=$(date +%s)
+perf_stamp_load_end "$mcp_record" "$load_end_epoch"
+perf_stamp_load_end "$lg_record" "$load_end_epoch"
+
+# Let the samplers flush. The peaks themselves are written by cleanup(), which
+# runs on the way out of every path including a terminated one.
+wait "$mem_pid" 2>/dev/null || true
+wait "$top_pid" 2>/dev/null || true
+
+run_finished=1
 
 echo "== done"
+echo
+"$here/summary.sh" "$runs" || true
+echo "run records: $mcp_record, $lg_record"
+exit "$lg_rc"
