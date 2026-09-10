@@ -54,10 +54,12 @@ they do not exist to link to. Each names the story that lands it:
 The Broker MCP Server is designed to emit three observability signals:
 
 - **Metrics**, on a Prometheus `/metrics` endpoint, for dashboards and alerts.
-- **An audit trail**, one JSON event per **destructive** tool call, for compliance evidence.
-  Note "destructive", not "state-changing": object creation is not audited today, and
-  [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) names
-  every tool that falls in the gap.
+- **An audit trail**, one JSON event per **destructive** tool call that reaches execution, for
+  compliance evidence. Note "destructive", not "state-changing": object creation is not
+  audited today, and a call that fails broker resolution or argument validation writes no
+  record either — see
+  [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) for both
+  gaps.
 - **Distributed traces**, exported over OTLP, for end-to-end request diagnosis.
 
 One correlation ID threads each request through logs, traces, and audit records, so they
@@ -177,9 +179,11 @@ cutover, not as a migration you can run both sides of.
 impossibility argument above does not reach it. It is the record **discriminator**, not a
 field on a record, so dual-emitting it would mean two whole records per event rather than two
 values in one field — technically possible. It still gets notice-then-cutover, because
-emitting both would break the one-record-per-call bound stated under [Audit
-Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) for the whole
-window, and would double audit volume and retention on the one signal you pay a SIEM to store.
+dual-emitting the discriminator doubles **every** audit record for the whole window, not only
+`operation` records, doubling volume and retention on the one signal you pay a SIEM to
+store — a much larger cost than the [Audit
+Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) coverage gaps
+this schema already tolerates.
 
 **The two schemas version independently, except where a vocabulary is shared.** A metrics
 rename does not normally force an audit-schema major bump, and a SIEM rule pinned to
@@ -248,7 +252,7 @@ here can be reconciled.
 > `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
 > Assume any other metric below is not yet emitted._
 >
-> **Two metric names below are documented but not emitted by any build yet**, and are marked
+> **Two metric groups below are documented but not emitted by any build yet**, and are marked
 > as such where they are defined: the OTLP **metrics** export-health pair
 > `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total{reason}` (see [OTLP
 > Export Health](#otlp-export-health)) and `mcp_broker_authz_denied_total{tool,broker,reason}`
@@ -778,6 +782,14 @@ Events](#authentication-events)). The stream is enabled with `OBS_AUDIT_LOG_ENAB
 > audit trigger from "destructive" to "all write tools" is a change to this schema's coverage,
 > not to its shape, and is not made here.
 
+> **The second gap: a call has to clear broker resolution and argument validation before it is
+> audited.** The record is built only once the arguments hash is computable, which happens
+> after the broker is resolved and the arguments pass schema validation. An unknown tool, a
+> missing or unresolved broker, or a validation failure returns its error normally but writes
+> no `operation` record — the call never reached the destructive gate. Unlike the annotation
+> gap above, this is not a coverage decision; it is a call that never started, so there is
+> nothing yet to audit.
+
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
 audit sub-stream to a dedicated SIEM index.
 
@@ -1038,10 +1050,11 @@ separation-of-duties measure. `reason` tells you why without disclosing the call
 entitlements to whoever reads the audit stream.
 
 **Broker-side denial has its own record type: `broker_authz_denied`.** Authorization is
-checked twice on a state-changing call. Hop 1 is this server deciding whether the caller may
-use the tool. Hop 2 is the broker deciding whether the exchanged human identity may perform
-the SEMP operation, and a refusal there emits `audit_event_type: broker_authz_denied`
-carrying `tool`, `broker`, the principal, and a single-value closed `reason` set:
+checked twice on any call that reaches the broker, destructive or read-only. Hop 1 is this
+server deciding whether the caller may use the tool. Hop 2 is the broker deciding whether the
+exchanged human identity may perform the SEMP operation, and a refusal there emits
+`audit_event_type: broker_authz_denied` carrying `tool`, `broker`, the principal, and a
+single-value closed `reason` set:
 
 | `reason` | Meaning |
 |---|---|
@@ -1081,7 +1094,9 @@ In Splunk SPL:
 
 ```
 index=<your_audit_index> event="audit" audit_event_type="operation"
-| stats count, values(tool) as tools, values(broker) as brokers by principal.sub
+| stats count, values(tool) as tools, values(broker) as brokers, values(outcome) as outcomes,
+    values(timestamp_utc) as timestamps, values(correlation_id) as correlation_ids
+    by principal.sub
 ```
 
 Every **destructive** tool call, successful or failed, attributed to the human principal that
