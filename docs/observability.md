@@ -97,7 +97,7 @@ not rename what is already there.
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
 - `metrics_schema` (current: **1.4**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
+- `audit_schema` (current: **1.2**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
 
@@ -617,7 +617,7 @@ records means your log level, not your flag.
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
 | `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
-| `audit_schema_version` | The schema version, for query pinning | string (`1.1`) |
+| `audit_schema_version` | The schema version, for query pinning | string (`1.2`) |
 
 **`audit_event_type`** is a closed set of seven: `operation` (a state-changing tool call),
 `auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`, `broker_auth_retry`,
@@ -1031,7 +1031,7 @@ below), none of which reach the tool dispatcher. Select those on
 `http.response.status_code` instead, and **not** on the span status: following the OTel server
 convention, `otelhttp` sets the status to `Error` only for 5xx, so a 403 or 413 entry span has
 status `Unset`. Only
-`tools.CallTool` carries `error_type`: the twelve-value set is scoped to tool-invocation outcomes,
+`tools.CallTool` carries `error_type`: the thirteen-value set is scoped to tool-invocation outcomes,
 and the executor and SEMP layers have no value in it that describes an orchestration or
 transport failure — the same reasoning that exempts `tokenexchange.Exchange` below. Those spans
 report `outcome: error` and an `Error` span status, and the classification for the call as a

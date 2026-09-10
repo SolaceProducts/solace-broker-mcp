@@ -922,7 +922,7 @@ func renderApplicabilityFingerprint() string {
 // TestApplicabilityByType_isVersioned, read the failure's "got" block, and
 // paste it in here. This test cannot make the additive-vs-breaking judgment
 // for you; it only proves a human made one, by pinning both together.
-const wantApplicabilityFingerprint = `schema_version=1.1
+const wantApplicabilityFingerprint = `schema_version=1.2
 audit_drop: outcome=forbidden error_type=forbidden reason=forbidden tool=optional arguments_hash=forbidden broker=optional timing=forbidden identity=forbidden dropped_event_type=optional
 auth_failure: outcome=forbidden error_type=forbidden reason=required tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
 auth_success: outcome=forbidden error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden

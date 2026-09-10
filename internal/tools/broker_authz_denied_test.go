@@ -214,10 +214,6 @@ func TestBrokerAuthzDenial_AuditLogOff_EmitsNoRecord(t *testing.T) {
 	}
 }
 
-// TestBrokerAuthzDenial_RecordsMetricErrorType pins that the tool RED metric
-// (mcp_tool_invocation_total's error_type label) reflects the hop-2 denial
-// distinctly from a generic execution_error, via the errorType captured by
-// CallTool's defer.
 // TestBrokerAuthzDenial_RecordsMetricErrorType is the one test that actually
 // pins the tool-RED error_type claim its name makes: earlier, this test
 // wired no ToolMetrics and asserted nothing beyond retryable, so a sabotaged

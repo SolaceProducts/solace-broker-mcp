@@ -33,6 +33,7 @@ package schema
 // component on anything else — see docs/observability.md, "The schema is
 // additive-only within a major version". 1.1 (SOL-152093): added the
 // mcp_semp_request_total and mcp_semp_request_duration_seconds families.
+// 1.2 (SOL-152099): added the mcp_auth_failure_total and mcp_authz_denied_total
 // families. 1.3 (SOL-152088): added mcp_broker_reachable,
 // mcp_broker_unreachable_reason, and mcp_broker_last_result_timestamp_seconds.
 // 1.4 (SOL-153332): added the mcp_broker_authz_denied_total family.
@@ -43,4 +44,11 @@ const MetricsSchemaVersion = "1.4"
 // component on anything else — see docs/observability.md, "The schema is
 // additive-only within a major version". 1.1 (SOL-152090): audit_drop gained
 // the optional dropped_audit_event_type, tool, and broker fields.
-const AuditSchemaVersion = "1.1"
+// 1.2 (SOL-153332): audit_event_type grew to seven (added
+// broker_authz_denied), and error_type and reason each gained a value
+// (broker_permission_denied, permission_denied) for a hop-2 (broker-side)
+// authorization denial. Both additions previously shipped without a version
+// bump; correcting that now costs nothing; per v0.8.0 (the latest tag),
+// AuditSchemaVersion was still 1.0 there, so no released consumer has ever
+// pinned to a version that saw the smaller closed sets.
+const AuditSchemaVersion = "1.2"

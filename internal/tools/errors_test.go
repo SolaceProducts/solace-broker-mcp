@@ -290,6 +290,17 @@ func TestClassifyDesiredStateOutcome(t *testing.T) {
 			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
 		},
 		{
+			// Regression guard for the disjointness manager.go's ordering
+			// comment relies on: a hop-2 permission denial (SOL-153332) must
+			// never be classified as a desired-state noop, or the caller
+			// would be told a denied call succeeded. isBrokerAuthzDenial
+			// checks SEMPCode 72; this classifier checks 10 (create) and 6
+			// (delete) — disjoint codes, so this must return nil regardless
+			// of the operation prefix or the SEMPStatus string sent.
+			name:  "SEMPCode 72 (permission denied) is never classified as a desired-state noop",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 403, SEMPStatus: "FORBIDDEN", SEMPCode: 72},
+		},
+		{
 			name:  "a non-SEMP error is not classified",
 			input: errors.New("boom"),
 		},
