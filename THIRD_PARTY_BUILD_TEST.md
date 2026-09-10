@@ -193,12 +193,14 @@ unusual.
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
-All five come from one repository, pinned to a single commit.
+All six come from one repository. Five share a single pin; `update-manifest.yaml`
+is pinned separately, for the reason below the table.
 
 | Action | Ref | Owner |
 |---|---|---|
 | `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6527948` | Solace |
 | `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `7b54c55` | Solace |
 | `SolaceDev/solace-public-workflows/guardian-db-sync` | `6527948` | Solace |
 | `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6527948` | Solace |
 | `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6527948` | Solace |
@@ -206,6 +208,10 @@ All five come from one repository, pinned to a single commit.
 `6527948` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0. Re-pinned 2026-09-08 by the Dependabot
 `github-actions` group update (#383); the prior pin was `ba836c7`.
+
+`7b54c55` is a branch commit on that same repository. It sits apart from the
+group only because `update-manifest.yaml` postdates `6527948` and so could not be
+pinned there; expect the next group update to collapse the two.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
@@ -217,7 +223,7 @@ resolve a reusable workflow from an internal repository in another organization.
 `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
 went when DATAGO-147232 moved FOSSA and Prisma scanning off the Vault-backed
 reusable workflow onto the preceding composite actions. This table previously held
-that one row; it now holds five, and the whole preceding third-party table changed
+that one row; it now holds six, and the whole preceding third-party table changed
 from tags to SHA pins in the same change. None of it was reflected here until
 this update, which is what SOL-152951 is about.
 

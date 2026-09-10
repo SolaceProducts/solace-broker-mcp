@@ -27,7 +27,14 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/correlationhdr"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// One named tracer per layer (SOL-152421).
+var tracer = otel.Tracer("solace-broker-mcp/semp/sempv1")
 
 // Client executes SEMPv1 XML commands against a Solace broker's /SEMP endpoint.
 // Implementations: HTTPClient (real), mock (tests).
@@ -113,6 +120,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
+	// Tag this client's SEMP metrics as v1. Fresh slice so the append cannot
+	// touch the caller's opts, which NewBrokerClient also passes to the v2 client.
+	opts = append([]resilience.Option{resilience.WithAPI("v1")}, opts...)
+
 	return &HTTPClient{
 		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem, limiter, opts...),
 		baseURL:       baseURL,
@@ -170,10 +181,47 @@ func isShowCommand(xml string) bool {
 //
 // Rate limiting is enforced before the request (new requests only, not retries).
 // Retry logic is handled by the shared resilience.Sender.
-func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
+func (c *HTTPClient) Execute(ctx context.Context, xml string) (result *Result, err error) {
+	// The nil-ctx guard runs BEFORE tracer.Start, which would panic on it —
+	// turning a typed error callers handle into a crash. So the span
+	// deliberately does not cover this branch.
 	if ctx == nil {
 		return nil, invalidInput("nil context")
 	}
+
+	// See the SEMPv2 client for why this is `semp.request`, not `semp.attempt`.
+	// No operation attribute: SEMPv1 has no operationId, and the xml carries
+	// the command with its arguments (queue/VPN names) — customer topology.
+	ctx, span := tracer.Start(ctx, "semp.request", trace.WithSpanKind(trace.SpanKindClient))
+	defer func() {
+		// A panic between tracer.Start and here would otherwise close this
+		// span reporting outcome=success — Go does not populate named returns
+		// on an unwound panic, so err is still nil — pointing the error in the
+		// worst possible direction right as the process goes down. Recovering
+		// only to record the outcome accurately and then re-panicking keeps
+		// this function's panic-propagates contract intact; the deferred
+		// panic(r) runs after span.End() below, so nothing is left unclosed.
+		// Same pattern as tokenexchange.Exchange (SOL-153333).
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panicked (%T)", r)
+			defer panic(r)
+		}
+		if span.IsRecording() {
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+			}
+			span.SetAttributes(
+				attribute.String("semp.version", "v1"),
+				attribute.String("outcome", outcome),
+			)
+		}
+		if err != nil {
+			span.SetStatus(codes.Error, "")
+		}
+		span.End()
+	}()
+
 	if xml == "" {
 		return nil, invalidInput("empty xml")
 	}

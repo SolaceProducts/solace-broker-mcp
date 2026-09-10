@@ -28,6 +28,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -75,6 +76,13 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
 	}
 
+	// RequireBearerToken's own verify() rejects on four conditions after our
+	// TokenVerifier has returned — nil TokenInfo, a missing required scope,
+	// a zero Expiration, and an expired Expiration — none of which reach the
+	// hook, and on which Success has already fired. All four are unreachable
+	// with this configuration: Scopes is never set, neither verifier returns
+	// (nil, nil), and both set a non-zero Expiration. Keep it that way, or
+	// the auth_failure record and mcp_auth_failure_total under-count.
 	middleware := sdkauth.RequireBearerToken(verifier, &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: metadataURL,
 	})
@@ -144,7 +152,7 @@ func auditMissingBearerToken(hook AuthAuditHook, next http.Handler) http.Handler
 		if _, ok := parseBearerToken(authHeader); !ok {
 			reason := ClassifyAuthFailure(nil)
 			if authHeader != "" {
-				reason = "invalid_token"
+				reason = schema.AuthFailureReasonInvalidToken
 			}
 			reportAuthFailure(r.Context(), hook, reason, "", "")
 		}

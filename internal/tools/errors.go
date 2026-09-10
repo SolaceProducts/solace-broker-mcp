@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
@@ -45,6 +46,22 @@ type codeInfo struct {
 
 // translatedErrorCodes maps the comRc_t integer to a generic actionable hint.
 // Note that the comRc_t code corresponds to the SEMPv2 error.code / SEMPv1 reasonCode.
+//
+// 135 (MAX_NUM_EXCEEDED) and 403 (MAX_NUM_SUBSCRIPTIONS_EXCEEDED) deliberately
+// stop short of naming which limit was hit or its current count (SOL-153341
+// AC4, descoped after review with the ticket owner) — each hint instead says
+// plainly that the tool can't tell, so a caller doesn't mistake silence for
+// certainty and act on the wrong scope. The two hints differ because the
+// broker-source finding differs per code: subscription creation (403) checks
+// a broker-wide total and a per-queue total with `||`
+// (adQueueCommand.cpp / moTypeHdlrQendpt.cpp), and the broker itself doesn't
+// retain which side tripped, so a confident claim there would be a guess
+// between broker-wide and per-queue; the other limit families 135 covers
+// (queues, endpoints, REST delivery points) are broker-wide totals allocated
+// per-VPN, and an accurate broker-wide count has no single SEMP call — it
+// would mean enumerating every VPN — so the guess there is between
+// broker-wide and per-VPN. Scoping and live counts are tracked as a
+// follow-up spike rather than guessed at or built at real per-error cost here.
 var translatedErrorCodes = map[int]codeInfo{
 	6:   {hint: "Verify the name is correct."},
 	10:  {hint: "Update the existing object or choose a new name."},
@@ -53,10 +70,43 @@ var translatedErrorCodes = map[int]codeInfo{
 	27:  {hint: "Check the request/query syntax."},
 	72:  {hint: "Credentials lack permission; check the management role/VPN scope."},
 	89:  {hint: "Not allowed in the object's current state."},
-	135: {hint: "A configured maximum was reached."},
+	135: {hint: "A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-VPN."},
 	228: {hint: "Supply all required fields for this object."},
 	229: {hint: "Retry shortly.", retryable: true},
 	256: {hint: "Drain or remove contained objects before deleting."},
+	403: {hint: "A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-queue."}, // MAX_NUM_SUBSCRIPTIONS_EXCEEDED
+}
+
+// parentModePattern matches the broker's two "Cannot enter X mode: not
+// found" message shapes, both confirmed live against a real broker
+// (SOL-153341): "Cannot enter mode for message-vpn X: not found." (names the
+// instance — capture "modeNamed" + "instance") and "Cannot enter queue mode:
+// not found." (names only the mode word — capture "modeBare", no instance).
+// The two alternatives are structurally distinct ("mode for X Y" vs. "X
+// mode") specifically so a literal "mode" can never be misread as an
+// instance name by the wrong branch.
+//
+// Which shape a given broker command uses is NOT determined by the parent's
+// object type: create-queue and create-topic-endpoint against a missing VPN
+// both use the first shape, but create-rdp against the very same missing
+// VPN uses the second — so both alternatives must always be tried for every
+// parent type, never dispatched on the mode word first.
+var parentModePattern = regexp.MustCompile(`^Problem with \w+: Cannot enter (?:mode for (?P<modeNamed>[a-z-]+) (?P<instance>.+)|(?P<modeBare>[a-z-]+) mode): not found\.$`)
+
+// parentModeFriendlyNames translates the CLI "mode" word captured by
+// parentModePattern to the human-readable object type AC3 asks for. Every
+// entry here has been seen live in this shape; a mode word not in this map
+// falls through to showing the broker's raw text unchanged (see
+// buildSEMPv2Message) rather than guessing a translation.
+//
+// "topic-endpoint" is deliberately absent: no tool in this catalog has
+// topicEndpointName as a non-final path segment for anything, so this mode
+// word may be unreachable with today's tool set. Add it once it's actually
+// seen, not preemptively.
+var parentModeFriendlyNames = map[string]string{
+	"queue":               "the queue",
+	"message-vpn":         "the Message VPN",
+	"rest-delivery-point": "the REST Delivery Point",
 }
 
 // fsPrefixPattern matches filesystem paths by their leading prefix only, so
@@ -173,6 +223,200 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 		StructuredContent: structured,
 		Content:           []mcp.Content{&mcp.TextContent{Text: contentText}},
 		IsError:           true,
+	}
+}
+
+// desiredStateOutcome describes a write-tool error that SEMP reported as a
+// hard failure, but that already reflects the caller's desired end state —
+// an idempotent create/delete replay (SOL-153341). ALREADY_EXISTS on a
+// create and NOT_FOUND on a delete both mean the desired state already
+// holds: for an idempotent workflow that is success, not failure, and an
+// agent that treats it as a hard error has no way to tell "already done"
+// from "actually broken" without a separate read to reconcile.
+// DesiredState is the closed set of values classifyDesiredStateOutcome can
+// classify to. A defined type rather than bare strings so a typo in a
+// four-place literal (this file, manager.go's dispatch, the structured
+// result, the log line) fails to compile instead of silently falling through
+// an equality check.
+type DesiredState string
+
+const (
+	// DesiredStateAlreadyExists is ALREADY_EXISTS on a create-prefixed
+	// operation. Named for existence only, not equivalence: classification
+	// never compares the pre-existing object's attributes against the
+	// request (see classifyDesiredStateOutcome's doc comment on why, and
+	// AttributesVerified below on how that limit is surfaced rather than
+	// implied by an "unchanged"-sounding name).
+	DesiredStateAlreadyExists DesiredState = "already_exists"
+	// DesiredStateAlreadyAbsent is NOT_FOUND on a delete-prefixed operation.
+	// Deletion has no attribute-match question the way a create does — a
+	// deleted object cannot partially match — so this outcome has no
+	// AttributesVerified counterpart.
+	DesiredStateAlreadyAbsent DesiredState = "already_absent"
+)
+
+type desiredStateOutcome struct {
+	Outcome DesiredState
+	Message string
+
+	// AttributesVerified is always false today: it exists so the structured
+	// result states plainly, rather than leaves implied, that no attribute
+	// comparison happened for DesiredStateAlreadyExists. Ignored for
+	// DesiredStateAlreadyAbsent (see the constant's doc comment). SOL-153341
+	// ships existence-only per the ticket owner's ruling; a future ticket
+	// that adds a real attribute diff flips this to true without changing
+	// the result's shape.
+	AttributesVerified bool
+
+	// SEMPCode, SEMPStatus, Operation, and Detail mirror the underlying SEMP
+	// error's audit fields. manager.go's CallTool clears toolErr back to nil
+	// for this outcome — a non-nil toolErr means "the call failed" to every
+	// other consumer in this codebase, including SOL-152086's per-tool
+	// metrics, which infer outcome=error from exactly that signal — so
+	// logToolResult reads these fields from here instead of re-deriving them
+	// from toolErr.
+	SEMPCode   int
+	SEMPStatus string
+	Operation  string
+	Detail     string
+}
+
+// classifyDesiredStateOutcome reports whether err is a SEMP error that,
+// despite being a hard failure at the protocol level, already reflects the
+// caller's desired state: ALREADY_EXISTS on a create-prefixed operation, or
+// NOT_FOUND on a delete-prefixed one. Returns nil for anything else,
+// including NOT_FOUND on a read (get/list) operation — a missing parent on
+// a read is a real error the caller needs to see, not a desired-state noop.
+//
+// Every SEMP write operationId in this catalog follows a fixed
+// create*/update*/delete*/do* naming convention (verified against every
+// operation referenced in tools.yaml), so this needs no per-tool metadata —
+// it classifies purely from the operation ID prefix and the broker's own
+// SEMPStatus/SEMPCode, and a new create-*/delete-* tool inherits the
+// classification automatically with no tools.yaml change.
+//
+// Matches SEMPStatus first (already-parsed, self-documenting); falls back
+// to the pinned SEMPCode (6=NOT_FOUND, 10=ALREADY_EXISTS — see
+// TestCallTool_SEMPErrorWrapped and executor_vpn_test.go's
+// TestExecute_CreateMessageVPN_AlreadyExists) in case a broker version ever
+// omits the status string.
+//
+// Deliberately does not verify the existing/absent object's attributes
+// match the request before classifying — shipped as existence-only per the
+// ticket owner's ruling on AC1 (SOL-153341 review): a GET-and-diff per
+// duplicate create doubles the call count on exactly the batch-provisioning
+// path this ticket exists to make cheaper, and "identical" is not
+// well-defined against a broker that returns defaulted attributes the
+// caller never sent. DesiredStateAlreadyExists's AttributesVerified field
+// states this limit explicitly rather than leaving it implied by the
+// outcome's name.
+//
+// The delete-prefixed branch does not distinguish "the target itself is
+// gone" from "a path parent is gone" (SOL-153341 review) — deleteMsgVpnQueue
+// against a VPN that no longer exists still classifies as
+// DesiredStateAlreadyAbsent, on the reasoning that a child cannot exist at a
+// path whose parent doesn't. This is standard idempotent-delete semantics
+// and is what AC2 asks for; falling through to a hard error here would
+// regress the common teardown case (the VPN was already removed by an
+// earlier step or a peer agent) to fix a rarer one (the caller meant a
+// different, existing VPN with a similar name). The failure direction is
+// also the safe one — nothing is destroyed that shouldn't be, an object
+// merely survives — so this is a deliberate choice, not an oversight; the
+// message for this case is still translated to plain language by
+// buildSEMPv2Message's widened parent-naming gate rather than left as raw
+// CLI jargon next to outcome:"already_absent".
+func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		return nil
+	}
+	switch {
+	case isSEMPStatus(sempErr, "ALREADY_EXISTS", 10) && strings.HasPrefix(sempErr.Operation, "create"):
+		return &desiredStateOutcome{
+			Outcome:    DesiredStateAlreadyExists,
+			Message:    buildSEMPv2Message(sempErr),
+			SEMPCode:   sempErr.SEMPCode,
+			SEMPStatus: sempErr.SEMPStatus,
+			Operation:  sempErr.Operation,
+			Detail:     sempErr.Error(),
+		}
+	case isSEMPStatus(sempErr, "NOT_FOUND", 6) && strings.HasPrefix(sempErr.Operation, "delete"):
+		return &desiredStateOutcome{
+			Outcome:    DesiredStateAlreadyAbsent,
+			Message:    buildSEMPv2Message(sempErr),
+			SEMPCode:   sempErr.SEMPCode,
+			SEMPStatus: sempErr.SEMPStatus,
+			Operation:  sempErr.Operation,
+			Detail:     sempErr.Error(),
+		}
+	}
+	return nil
+}
+
+// isSEMPStatus reports whether err's SEMPStatus (or, when the broker omitted
+// that string, its SEMPCode) matches the given category.
+func isSEMPStatus(err *sempv2.SEMPError, status string, code int) bool {
+	if err.SEMPStatus != "" {
+		return err.SEMPStatus == status
+	}
+	return err.SEMPCode == code
+}
+
+// desiredStateStructuredContent converts a desiredStateOutcome into the
+// structured result body an agent sees (SOL-153341). Not itself an
+// mcp.CallToolResult: manager.go's CallTool routes this map through
+// buildValidatedResult, the same schema-validation path a handler's real
+// result takes, so this shape and the tool's declared output schema — which
+// must independently admit it, see desiredStateOutcomeSchema — can never
+// drift apart unnoticed. IsError is false on the result this map ends up in
+// — that's the actual mechanism behind "reported as a non-failure": an agent
+// branching on IsError sees a completed step, while the outcome/changed
+// fields still let it report accurately that nothing new happened rather
+// than claiming a fresh success.
+//
+// attributes_verified is included only for DesiredStateAlreadyExists — see
+// that constant's doc comment for why deletion has no counterpart.
+func desiredStateStructuredContent(outcome *desiredStateOutcome) map[string]any {
+	structured := map[string]any{
+		"outcome": string(outcome.Outcome),
+		"changed": false,
+		"message": outcome.Message,
+	}
+	if outcome.Outcome == DesiredStateAlreadyExists {
+		structured["attributes_verified"] = outcome.AttributesVerified
+	}
+	return structured
+}
+
+// desiredStateOutcomeSchema is the JSON Schema for desiredStateStructuredContent's
+// output — the shape classifyDesiredStateOutcome's non-nil case actually
+// returns. composite_handler.go's outputSchema() widens a write tool's
+// declared schema with this alongside the normal step-keyed envelope
+// (oneOf) for exactly the tools hasDesiredStateEligibleStep says can
+// produce it, so a duplicate create or delete-of-missing-object doesn't
+// fail the server's own output validation the way it did before this
+// schema existed (SOL-153341 review: the noop result violated every write
+// tool's declared additionalProperties:false, required:[<stepID>] schema,
+// which a validating MCP client enforces on any isError:false result).
+//
+// attributes_verified is listed as optional, not required: it's present
+// only for DesiredStateAlreadyExists (see that constant's doc comment), so
+// a fixed "required" here would make DesiredStateAlreadyAbsent's payload
+// (which omits it) fail its own schema.
+func desiredStateOutcomeSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"outcome": map[string]any{
+				"type": "string",
+				"enum": []string{string(DesiredStateAlreadyExists), string(DesiredStateAlreadyAbsent)},
+			},
+			"changed":             map[string]any{"type": "boolean", "enum": []bool{false}},
+			"message":             map[string]any{"type": "string"},
+			"attributes_verified": map[string]any{"type": "boolean"},
+		},
+		"required":             []string{"outcome", "changed", "message"},
+		"additionalProperties": false,
 	}
 }
 
@@ -328,14 +572,24 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	if !brokerTextMayBeShown(status) {
 		return message, nil
 	}
-	// Code 72 (permission denied): when the caller's broker alias is known,
-	// replace the broker's own text with an alias-tagged authorization message
-	// and suppress the generic code-72 hint. That hint points at management role
-	// and VPN scope — the Basic-auth knobs — which actively misleads an OAuth
-	// operator, where authorization is governed by the oauthProfile
-	// accessLevelGroups mapping instead. When the alias is empty the behavior is
-	// unchanged: the broker's own message plus the generic hint below.
-	if code == 72 && brokerAlias != "" {
+	// SEMPv2 permission denial (sempv2.SEMPCodePermissionDenied — the named
+	// constant isBrokerAuthzDenial, manager.go, also compares against, so this
+	// numeric value is spelled once rather than as a second bare 72): when
+	// the caller's broker alias is known, replace the broker's own text with
+	// an alias-tagged authorization message and suppress the generic
+	// code-72 hint. That hint points at management role and VPN scope — the
+	// Basic-auth knobs — which actively misleads an OAuth operator, where
+	// authorization is governed by the oauthProfile accessLevelGroups
+	// mapping instead. When the alias is empty the behavior is unchanged:
+	// the broker's own message plus the generic hint below.
+	//
+	// SEMPv1 permission errors (ErrorKindPermission) deliberately keep their
+	// own broker text here instead — TestCallTool_SEMPv1Error_IsErrorResult
+	// pins that — even though isBrokerAuthzDenial treats both as the same
+	// hop-2 denial for audit/metric purposes; unifying the two message paths
+	// too would drop that detail, which is a real behavior change beyond
+	// what closing the duplicated-classification gap requires.
+	if code == sempv2.SEMPCodePermissionDenied && brokerAlias != "" {
 		return fmt.Sprintf("Authorization failed on broker %q.", brokerAlias), nil
 	}
 	if info, ok := translatedErrorCodes[code]; ok && info.hint != "" {
@@ -408,16 +662,79 @@ func brokerTextMayBeShown(status int) bool {
 }
 
 func buildSEMPv2Message(err *sempv2.SEMPError) string {
-	var msg string
-	switch {
-	case !brokerTextMayBeShown(err.StatusCode):
-		msg = genericInternalMessage
-	case err.Description != "":
-		msg = sanitizeBrokerText(err.Description)
-	default:
-		msg = fmt.Sprintf("%s returned HTTP %d", err.Operation, err.StatusCode)
+	if !brokerTextMayBeShown(err.StatusCode) {
+		return genericInternalMessage
 	}
-	return msg
+	// Parent-naming (SOL-153341, AC3): on a create, NOT_FOUND means a path
+	// parent is missing — the object being created never exists yet, so it
+	// cannot be what NOT_FOUND refers to. Translate the broker's CLI-mode
+	// jargon into plain language before falling back to its raw text. Not
+	// gated to any particular tool: any create- or delete-prefixed
+	// operation's NOT_FOUND gets the same treatment, tool-agnostic like the
+	// rest of this classification.
+	//
+	// Delete-prefixed is included too (review finding, SOL-153341): a delete
+	// under a missing parent — e.g. delete-queue against a VPN that no
+	// longer exists — classifies as DesiredStateAlreadyAbsent regardless
+	// (the child at that path genuinely doesn't exist if the parent
+	// doesn't), but without this the resulting message was left as raw
+	// "Cannot enter mode..." CLI jargon sitting next to outcome:
+	// "already_absent". The real safety net is translateParentNotFound's own
+	// regex match below, not this prefix — it only translates when the
+	// description actually matches the broker's "Cannot enter X mode: not
+	// found" shape, so widening the prefix here cannot mistranslate an
+	// ordinary target-missing delete (a different message shape, see
+	// TestClassifyDesiredStateOutcome's "already_absent" fixtures).
+	if isSEMPStatus(err, "NOT_FOUND", 6) &&
+		(strings.HasPrefix(err.Operation, "create") || strings.HasPrefix(err.Operation, "delete")) {
+		if translated := translateParentNotFound(err.Description); translated != "" {
+			return translated
+		}
+	}
+	if err.Description != "" {
+		return sanitizeBrokerText(err.Description)
+	}
+	return fmt.Sprintf("%s returned HTTP %d", err.Operation, err.StatusCode)
+}
+
+// translateParentNotFound rewrites the broker's "Cannot enter X mode: not
+// found" wording (see parentModePattern) into a message that states the
+// missing parent's type in plain language, instead of relaying CLI-mode
+// jargon an agent would otherwise have to pass on to a user verbatim.
+// Returns "" when description doesn't match either known shape, or names a
+// mode word this codebase hasn't seen live yet (parentModeFriendlyNames) —
+// either way the caller falls back to the broker's raw (sanitized) text
+// unchanged rather than guessing a translation.
+func translateParentNotFound(description string) string {
+	match := parentModePattern.FindStringSubmatch(description)
+	if match == nil {
+		return ""
+	}
+	var modeWord, instance string
+	for i, name := range parentModePattern.SubexpNames() {
+		switch name {
+		case "modeNamed", "modeBare":
+			if match[i] != "" {
+				modeWord = match[i]
+			}
+		case "instance":
+			instance = match[i]
+		}
+	}
+	friendly, ok := parentModeFriendlyNames[modeWord]
+	if !ok {
+		return ""
+	}
+	capitalized := strings.ToUpper(friendly[:1]) + friendly[1:]
+	if instance != "" {
+		// Routed through sanitizeBrokerText like every other broker-derived
+		// agent-facing string in this file, even though instance is, today,
+		// just an echo of the caller-supplied name — not broker-internal
+		// data. Keeps this function from being a silent exception to that
+		// otherwise-universal invariant if that ever stops being true.
+		return fmt.Sprintf("%s %q does not exist.", capitalized, sanitizeBrokerText(instance))
+	}
+	return fmt.Sprintf("%s does not exist.", capitalized)
 }
 
 // isRetryable returns true for errors that represent transient conditions where

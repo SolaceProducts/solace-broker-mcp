@@ -508,10 +508,15 @@ func crossOriginProtection(next http.Handler) http.Handler {
 	return protection.Handler(next)
 }
 
+// mcpRoutePath is a constant because two things must agree on it: mux.Handle
+// below, and the tracing entry span's name (`POST /mcp`), which
+// buildMCPEndpoint derives from it.
+const mcpRoutePath = "/mcp"
+
 // buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
 //
 // The layer order, outermost first, is: limitRequestBody → correlation →
-// crossOriginProtection → authedHandler. limitRequestBody's Content-Length
+// tracing → crossOriginProtection → authedHandler. limitRequestBody's Content-Length
 // short-circuit rejects an oversized request with 413 BEFORE correlation runs,
 // so that 413 carries no correlation ID. This is intentional: correlation sits
 // OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body-limit
@@ -526,15 +531,24 @@ func crossOriginProtection(next http.Handler) http.Handler {
 // it, and so the rejection is reported as the 403 it is rather than being
 // masked as a 401 whenever client auth is enabled.
 //
+// The tracing layer (SOL-152421) sits INSIDE correlation, because the entry
+// span stamps the correlation ID and so needs it to exist already, and OUTSIDE
+// cross-origin protection, so a 403 origin rejection lands in the trace rather
+// than a blind spot.
+//
 // When correlationEnabled is false the correlation layer is omitted entirely
-// (correlation.From then returns ""). Cross-origin protection is unconditional:
-// there is no scenario in which disabling it is the right call, so it takes no
-// config flag.
+// (correlation.From then returns ""), and likewise for tracingEnabled — with
+// tracing off the assembled chain is byte-identical to what it was before that
+// story. Cross-origin protection is unconditional: there is no scenario in
+// which disabling it is the right call, so it takes no config flag.
 //
 // The active-requests gauge sits outermost so it counts every /mcp request,
 // including ones rejected below (413/403/401). No-op when tm is nil.
-func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool, tm *metrics.ToolMetrics) http.Handler {
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled, tracingEnabled bool, tm *metrics.ToolMetrics) http.Handler {
 	endpoint := crossOriginProtection(authedHandler)
+	if tracingEnabled {
+		endpoint = tracing.HTTPMiddleware(mcpRoutePath, endpoint)
+	}
 	if correlationEnabled {
 		endpoint = correlation.Middleware(endpoint)
 	}
@@ -776,6 +790,28 @@ func runShutdownHooks(shutdownHooks *hooks.Registry, forceSig <-chan os.Signal) 
 	}
 }
 
+// registerShutdownHooks registers the shutdown flush for each provider that
+// was actually built, so main() has one call site instead of a Register call
+// scattered next to each provider's own construction, and so a wiring test
+// can exercise the registration logic directly (SOL-153965) without running
+// the rest of main()'s startup — network binds, OTLP exporter construction,
+// route wiring — the way resource_wiring_test.go's own doc comment names as
+// exactly the thing it could not do before this seam existed.
+//
+// A nil provider is silently skipped: metricsProvider is nil with
+// OBS_METRICS_ENABLED off (or on build failure), and tracerProvider is nil
+// with OBS_TRACING_ENABLED off. Registration order (metrics, then tracer)
+// matches the order the two providers are built in main(), which is what
+// TestRegisterShutdownHooks_BothProvidersRegistered pins.
+func registerShutdownHooks(reg *hooks.Registry, metricsProvider *metrics.Provider, tracerProvider *tracing.Provider) {
+	if metricsProvider != nil {
+		reg.Register("metrics_provider", metricsProvider.Shutdown)
+	}
+	if tracerProvider != nil {
+		reg.Register("tracer_provider", tracerProvider.Shutdown)
+	}
+}
+
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
 // New SEMPv1 tools should be added here as they land — this is the single
 // source of truth for which v1 tools the server exposes. The handlers flow
@@ -836,10 +872,12 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
+	// No clock skew is passed: DefaultTokenExpirySkew is already deducted from
+	// every token's ExpiresAt when the IdP response is parsed, and the cache
+	// treats ExpiresAt as the true expiry (see cache.CachedCredential).
 	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
-		MaxSize:   defaults.DefaultOAuthCacheMaxSize,
-		ClockSkew: defaults.DefaultTokenExpirySkew,
-		MaxTTL:    defaults.DefaultMaxOAuthTokenTTL,
+		MaxSize: defaults.DefaultOAuthCacheMaxSize,
+		MaxTTL:  defaults.DefaultMaxOAuthTokenTTL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating token cache: %w", err)
@@ -1122,8 +1160,52 @@ func main() {
 		}()
 	}
 
+	// Must precede pool creation: the SEMP recorder must exist before broker
+	// clients are built. nil when metrics are off or the build fails.
+	var metricsProvider *metrics.Provider
+	var toolMetrics *metrics.ToolMetrics
+	var sempMetrics *metrics.SEMPMetrics
+	var metricsBuildErr error
+	if metrics.Enabled(cfg.Observability) {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
+		} else {
+			if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
+				slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
+			} else {
+				toolMetrics = tm
+			}
+			if sm, smErr := metricsProvider.SEMPMetrics(); smErr != nil {
+				slog.Error("SEMP metrics unavailable", slog.String("error", smErr.Error()))
+			} else {
+				sempMetrics = sm
+			}
+		}
+	}
+
+	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
+	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
+	// around the mux by buildRootHandler below) and withRecovery (installed by
+	// RegisterWithServer below). Both reach it as process state rather than
+	// through a parameter; see the package doc on internal/observability/panics
+	// for why. Registered here, immediately after the provider itself is
+	// built and well before tool registration, the mux, or startServer below
+	// — so there is no window in which a request could be served before the
+	// counter exists. With no provider (metrics off, or its build failed)
+	// the counter is never registered and both sites' increments are no-ops.
+	// Recovery itself is unconditional either way, so a failure here costs a
+	// signal, not a safety net.
+	if metricsProvider != nil {
+		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
+			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
+		}
+	}
+
+	// Security counters (SOL-152099); nil means off.
+	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
+
 	// 4. Create broker pool
-	pool := semp.NewBrokerPool(cfg, exchanger)
+	pool := semp.NewBrokerPool(cfg, exchanger, semp.WithSEMPMetrics(sempMetrics))
 	// Release per-broker rate-limiter tickers (and any other client-held
 	// resources) on the normal shutdown path. The defer fires after main()
 	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
@@ -1183,40 +1265,6 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// Build the metrics provider before the manager and the /mcp listener, so the
-	// recorder is wired before any request is served. nil when off or the build
-	// fails (recorder methods are nil-safe); the listener starts later.
-	var metricsProvider *metrics.Provider
-	var toolMetrics *metrics.ToolMetrics
-	var metricsBuildErr error
-	if metrics.Enabled(cfg.Observability) {
-		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
-			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
-		} else if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
-			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
-		} else {
-			toolMetrics = tm
-		}
-	}
-
-	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
-	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
-	// around the mux by buildRootHandler below) and withRecovery (installed by
-	// RegisterWithServer below). Both reach it as process state rather than
-	// through a parameter; see the package doc on internal/observability/panics
-	// for why. Registered here, immediately after the provider itself is
-	// built and well before tool registration, the mux, or startServer below
-	// — so there is no window in which a request could be served before the
-	// counter exists. With no provider (metrics off, or its build failed)
-	// the counter is never registered and both sites' increments are no-ops.
-	// Recovery itself is unconditional either way, so a failure here costs a
-	// signal, not a safety net.
-	if metricsProvider != nil {
-		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
-			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
-		}
-	}
-
 	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a
 	// reliable phase boundary — anything before it is registered, anything
@@ -1227,6 +1275,7 @@ func main() {
 	// door-closing policy.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor,
 		tools.WithToolMetrics(toolMetrics),
+		tools.WithSecurityMetrics(securityMetrics),
 		tools.WithAuditLog(audit.Enabled(cfg.Observability)))
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
@@ -1312,8 +1361,9 @@ func main() {
 	readiness := health.NewReadinessState()
 	mux := buildMux(readiness)
 
-	// The metrics provider flush registers below (SOL-153884); the tracing
-	// (SOL-152420) and audit (SOL-152418) flushes follow once those land.
+	// The metrics provider flush (SOL-153884) and the tracer provider flush
+	// (SOL-152420) both register below, via registerShutdownHooks; the OTLP
+	// metrics-egress flush (Story 46, SOL-152418) follows once that lands.
 	shutdownHooks := hooks.NewRegistry()
 
 	// Create MCP handler
@@ -1328,8 +1378,10 @@ func main() {
 	// The audit hook (SOL-152097) is the one wiring point for auth_success/
 	// auth_failure emission — audit.NewAuthHook reads the same
 	// OBS_AUDIT_LOG_ENABLED flag as tools.WithAuditLog above, so this and the
-	// destructive-op audit trail turn on and off together.
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler, audit.NewAuthHook(audit.Enabled(cfg.Observability)))
+	// destructive-op audit trail turn on and off together. CountingAuthHook
+	// adds mcp_auth_failure_total on the same reason (SOL-152099).
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler,
+		metrics.CountingAuthHook(securityMetrics, audit.NewAuthHook(audit.Enabled(cfg.Observability))))
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -1346,7 +1398,8 @@ func main() {
 	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
 	// limit on the outside so it bounds the request before any layer buffers
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled, toolMetrics))
+	mux.Handle(mcpRoutePath, buildMCPEndpoint(authedHandler, correlationEnabled,
+		tracing.Enabled(cfg.Observability), toolMetrics))
 
 	registerMetadataRoutes(mux, cfg)
 
@@ -1385,10 +1438,10 @@ func main() {
 
 	// Metrics endpoint: start the listener for the provider built above,
 	// registered before SetInitialized so a bind or build failure shows on the
-	// first /readyz check. The provider's flush is a shutdown hook.
+	// first /readyz check. The provider's flush is a shutdown hook, registered
+	// below alongside the tracer provider's (registerShutdownHooks).
 	if metricsProvider != nil {
 		serveMetricsEndpoint(cfg, readiness, metricsProvider)
-		shutdownHooks.Register("metrics_provider", metricsProvider.Shutdown)
 	} else if metricsBuildErr != nil {
 		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
 	}
@@ -1421,9 +1474,8 @@ func main() {
 		// routes that channel into slog with no raw text (see
 		// installOTelDiagnostics), which is the other half of this.
 		slog.Error("tracing unavailable: provider build failed")
-	} else if tracerProvider != nil {
-		shutdownHooks.Register("tracer_provider", tracerProvider.Shutdown)
 	}
+	registerShutdownHooks(shutdownHooks, metricsProvider, tracerProvider)
 
 	// Startup is complete and the serving goroutine has been launched:
 	// SetInitialized flips /readyz to ready. startServer only starts the

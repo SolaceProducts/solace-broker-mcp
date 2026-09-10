@@ -21,11 +21,8 @@ package audit
 
 import (
 	"context"
-	"reflect"
-	"sort"
 	"testing"
 
-	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -166,26 +163,5 @@ func TestNewAuthHook_ConstructorRejection_EmitsDrop(t *testing.T) {
 	}
 	if got := drops[0]["dropped_audit_event_type"]; got != string(EventAuthFailure) {
 		t.Errorf("dropped_audit_event_type = %v, want %q", got, EventAuthFailure)
-	}
-}
-
-// TestAuthFailureReasons_MatchesEventSchemaVocabulary guards against the two
-// closed vocabularies drifting apart: auth.AuthFailureReasons() (what
-// ClassifyAuthFailure returns from, and what SOL-152099 is expected to call
-// for its own counter's label pre-registration) and this package's own
-// authFailureReasons (what NewEvent actually accepts on an auth_failure
-// record). internal/auth cannot import this package to check itself
-// (AuthAuditHook's doc explains the cycle), so the check runs from this side,
-// the same shape internal/tools/audit_error_type_drift_test.go uses for
-// error_type.
-func TestAuthFailureReasons_MatchesEventSchemaVocabulary(t *testing.T) {
-	got := make([]string, 0, len(authFailureReasons))
-	for r := range authFailureReasons {
-		got = append(got, r)
-	}
-	sort.Strings(got)
-	want := auth.AuthFailureReasons()
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("event.go's authFailureReasons = %v, want auth.AuthFailureReasons() = %v — the two closed vocabularies have drifted", got, want)
 	}
 }

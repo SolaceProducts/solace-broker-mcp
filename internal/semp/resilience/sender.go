@@ -26,6 +26,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -155,17 +156,15 @@ type Sender struct {
 	// selects. Shared per-broker with sem and rateLimiter, and not owned here —
 	// semp.BrokerClient.Close stops it.
 	scheduler *Scheduler
+	// sempMetrics, when non-nil, records one sample per attempt via a transport
+	// wrapper (see WithMetrics). nil is the disabled-metrics default.
+	sempMetrics *metrics.SEMPMetrics
+	api         string // protocol version label: "v1" or "v2"
 	// auditLog mirrors tools.ToolManager.auditLog: audit.Enabled(cfg.Observability)
-	// at construction (SOL-152097). False is inert, not degraded — checkRetry's
-	// 401 handling is byte-identical either way, it just also emits a
-	// broker_auth_retry record when true.
+	// at construction (SOL-152097). False is inert, not degraded.
 	auditLog bool
-	// brokerAlias is the broker's configured (display) alias, for the
-	// broker_auth_retry audit record's Broker field. Distinct from brokerURL:
-	// that field is the sanitized connection URL, kept for the existing
-	// logging-context WARNs in checkRetry, while an audit record's Broker
-	// field is documented (docs/observability.md, event.go's Fields.Broker)
-	// as the alias in its display casing, matching every other emission site.
+	// brokerAlias is the operator's configured display alias. Used by the
+	// metrics transport (broker label) and by the audit log (Broker field).
 	brokerAlias string
 }
 
@@ -212,6 +211,24 @@ func WithScheduler(s *Scheduler) Option {
 	return func(d *Sender) { d.scheduler = s }
 }
 
+// WithMetrics records one SEMP sample per attempt against recorder, tagged with
+// the broker alias. A nil recorder leaves recording off, which is the
+// disabled-metrics default, so no transport wrapper is installed and no sample
+// is emitted. The protocol version label is set by WithAPI, because the two
+// clients share this option but report different versions.
+func WithMetrics(recorder *metrics.SEMPMetrics, brokerAlias string) Option {
+	return func(d *Sender) {
+		d.sempMetrics = recorder
+		d.brokerAlias = brokerAlias
+	}
+}
+
+// WithAPI sets the protocol version label ("v1" or "v2"). Each client sets its
+// own; it has no effect when metrics are off.
+func WithAPI(api string) Option {
+	return func(d *Sender) { d.api = api }
+}
+
 // WithAuditLog turns on the broker_auth_retry audit record checkRetry emits
 // on a 401 recovery attempt (SOL-152097). Pass audit.Enabled(cfg.Observability)
 // — the same flag and read site tools.WithAuditLog uses for the destructive-op
@@ -221,14 +238,14 @@ func WithAuditLog(enabled bool) Option {
 	return func(d *Sender) { d.auditLog = enabled }
 }
 
-// WithBrokerAlias sets the broker's configured (display) alias, used only as
-// the broker_auth_retry audit record's Broker field. Every production
-// construction site (semp.NewBrokerClient) supplies this; a Sender built
-// without it simply cannot name a broker on that record — see
-// auditBrokerAuthRetry.
+// WithBrokerAlias sets the broker's configured (display) alias, used by the
+// audit log (broker_auth_retry Broker field) and as a fallback when
+// WithMetrics has not been called. Every production construction site
+// (semp.NewBrokerClient) supplies this.
 func WithBrokerAlias(alias string) Option {
 	return func(d *Sender) { d.brokerAlias = alias }
 }
+
 
 // New creates a Sender configured for a specific broker. It sets up
 // retryablehttp with the retry policy from SEMPConfig and reads pacing from the
@@ -357,6 +374,50 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	for _, opt := range opts {
 		opt(d)
 	}
+
+	// Wrap the transport so each attempt is seen exactly once.
+	//
+	// Two wrappers, outermost first: the attempt-span transport
+	// (newAttemptTransport) always — it owns the attempt counter and the
+	// `semp.attempt` span, SOL-152422 — and inside it metricsTransport only
+	// when WithMetrics supplied a recorder. That order is required, not
+	// stylistic — metricsTransport reads the counter the attempt-span
+	// transport has just bumped, and the order is pinned by the sempv2
+	// metric-label tests.
+	//
+	// The wrappers go on a shallow COPY of the caller's client rather than on
+	// the client itself. The copy is cheap (four fields, none with internal
+	// state) and carries Timeout, Jar and CheckRedirect through unchanged, so
+	// the retry loop behaves identically. What it buys is that New no longer
+	// mutates an object its caller owns:
+	//
+	//   - Two Senders built over one *http.Client each get their own correct
+	//     chain. Mutating in place instead had to skip the second Sender's
+	//     wrapping to avoid double-counting every attempt, which silently
+	//     dropped that Sender's SEMP metrics if only it had WithMetrics — the
+	//     same class of defect (a signal present only because an unrelated
+	//     feature happened to be on) that SOL-152422 exists to fix.
+	//   - A caller that installs its own RoundTripper before calling New keeps
+	//     the client it configured; this composes over it rather than
+	//     rewriting it.
+	//
+	// Production gives each protocol client its own *http.Client anyway
+	// (sempv1.New, sempv2.New), so this is about not depending on that.
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if d.sempMetrics != nil {
+		base = &metricsTransport{
+			base:        base,
+			recorder:    d.sempMetrics,
+			api:         d.api,
+			brokerAlias: d.brokerAlias,
+		}
+	}
+	wrapped := *httpClient
+	wrapped.Transport = newAttemptTransport(base)
+	retryClient.HTTPClient = &wrapped
 
 	return d
 }
@@ -704,12 +765,23 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
 	// caller's idempotency markers (WithRetrySafe / WithRetryUnsafe).
-	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
+	state := &retryState{
 		method:      req.Method,
 		retrySafe:   isRetrySafe(ctx),
 		retryUnsafe: isRetryUnsafe(ctx),
-	})
+	}
+	ctx = context.WithValue(ctx, retryStateKey{}, state)
 	req = req.WithContext(ctx)
+
+	// Backstop for the attempt span's lifecycle (SOL-152422). The
+	// attemptspan.Transport newAttemptTransport builds opens the span and
+	// checkRetry closes it, and on today's retryablehttp every dispatch is
+	// followed by a CheckRetry call, so nothing is left open here — see
+	// closeDanglingAttemptSpan for why that makes this call site unpinnable by
+	// test, and what it bounds if a future library version changes. Deferred
+	// rather than placed after retryClient.Do so it also runs while a panic
+	// unwinds.
+	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)
 	if err != nil {

@@ -172,7 +172,7 @@ The server exposes 25 read-only tools plus 18 write tools (43 total when write t
 
 ### Actions
 
-These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager records every destructive invocation: with `OBS_AUDIT_LOG_ENABLED` on it emits one audit record per call carrying the broker, a hash of the arguments, the outcome, and the caller when one was authenticated (see [Audit Trail](observability.md#audit-trail--interim--all-record-types-except-broker_authz_denied)); with it off, it emits the WARNING line it has always logged.
+These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager records every destructive invocation: with `OBS_AUDIT_LOG_ENABLED` on it emits one `operation` audit record per call carrying the broker, a hash of the arguments, the outcome, and the caller when one was authenticated — not the only audit record a call can produce, since a broker-side (hop-2) authorization denial also emits its own `broker_authz_denied` record alongside it (see [Audit Trail](observability.md#audit-trail--interim--records-implemented-drop-counter-not-yet-wired)); with it off, it emits the WARNING line it has always logged.
 
 **Naming convention.** Action API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. A sub-resource of one of those objects follows the same pattern one level down (`create-queue-subscription`, `delete-queue-subscription`) and has no `update-` tool, since SEMP has no update operation for it — a subscription is immutable; changing one is delete-and-recreate. Action tools run an operational action against a live object; management tools change configuration.
 
@@ -257,11 +257,36 @@ Tool errors include structured fields to help diagnose the problem:
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:
-- **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason.
+- **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason. **Exception: on a `delete-*` tool, this is not an error result at all** — deleting an object that's already gone is treated as the caller's desired state already holding, so the call comes back `isError: false` instead; see [Desired State Already Held](#desired-state-already-held) below.
 - **404** — The request never reached the event broker's SEMP API at all: a misconfigured broker `url`, an incorrect SEMP base path, or a SEMP version mismatch. Check the broker's `url` and SEMP version compatibility; not retried.
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
 - **429** — Rate limiting from a proxy, gateway, or load balancer in front of the event broker. (The event broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
 - **503** — The event broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
+
+### Desired State Already Held
+
+Two cases that look like errors from the event broker are not treated as tool errors: creating
+an object that already exists, and deleting one that's already gone. Both mean the caller's
+desired state already held before the call — an agent replaying its own prior success after a
+slow response, or driving a batch of idempotent creates or deletes, needs to tell "already done"
+apart from "actually broken" without a separate read to reconcile.
+
+Both cases come back `isError: false`, with a different shape than a normal success:
+
+| Field | Meaning |
+|---|---|
+| `outcome` | `"already_exists"` (a `create-*` call, object already present) or `"already_absent"` (a `delete-*` call, object already gone) |
+| `changed` | Always `false` — nothing was created or removed by this call. |
+| `message` | The event broker's own text, in plain language (see below). |
+| `attributes_verified` | Present only on `"already_exists"`. Always `false`: the tool never compares the pre-existing object's configuration against what you asked for, so this confirms an object of that name exists — not that it matches your request. |
+
+A caller that only checks `isError` sees either case as an ordinary success — read `outcome` to
+tell a no-op apart from a fresh create/delete.
+
+`already_absent` also covers a `delete-*` call against an object whose *parent* is already
+gone (for example, deleting a queue in a Message VPN that no longer exists): a child can't
+exist at a path whose parent doesn't, so this is standard idempotent-delete behavior, not a
+special case you need to detect separately.
 
 ### "Session not found" Errors
 

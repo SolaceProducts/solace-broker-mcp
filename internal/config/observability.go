@@ -50,10 +50,11 @@ type ObservabilityConfig struct {
 	TracingEnabled          bool `yaml:"-"`
 	SaturationEventsEnabled bool `yaml:"-"`
 	// AuthFailureCounterEnabled follows MetricsEnabled unless its own env var
-	// (OBS_AUTH_FAILURE_COUNTER_ENABLED) is explicitly set. The auth-failure
-	// counter is a metric, so it makes no sense to emit it while metrics are
-	// off — but an operator can still force it independently if they set the
-	// var directly.
+	// (OBS_AUTH_FAILURE_COUNTER_ENABLED) is explicitly set. It gates both
+	// security counters, mcp_auth_failure_total and mcp_authz_denied_total
+	// (SOL-152099). They are metrics, so it makes no sense to emit them while
+	// metrics are off — but an operator can still force the flag independently
+	// if they set the var directly.
 	AuthFailureCounterEnabled bool `yaml:"-"`
 
 	// YAML tunables. Parsed from YAML (inheriting ${VAR} substitution);

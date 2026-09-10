@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
@@ -32,23 +33,27 @@ import (
 // library. This test exists for the branches those two cannot reach as
 // cheaply (nil, the sentinels, the catch-all) and to pin the exact strings
 // this function currently matches on.
+//
+// want is named as a schema const, not a bare string: this test pins which
+// branch produces which reason, and the const's own wire value is pinned by
+// internal/observability/schema's TestAuthFailureReasons_WireValues.
 func TestClassifyAuthFailure(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		want string
+		want schema.AuthFailureReason
 	}{
-		{"nil classifies as missing", nil, "missing"},
-		{"go-oidc TokenExpiredError", &oidc.TokenExpiredError{}, "expired"},
-		{"wrapped TokenExpiredError", fmt.Errorf("wrap: %w", &oidc.TokenExpiredError{}), "expired"},
-		{"errNoSubject", errNoSubject, "missing"},
-		{"wrapped errNoSubject", fmt.Errorf("wrap: %w", errNoSubject), "missing"},
-		{"go-oidc audience message", errors.New(`oidc: expected audience "want" got ["got"]`), "audience_mismatch"},
-		{"go-oidc signature message", errors.New("failed to verify signature: bad sig"), "signature_invalid"},
-		{"go-oidc issuer mismatch falls to catch-all", errors.New("oidc: id token issued by a different provider"), "invalid_token"},
-		{"go-oidc malformed jwt falls to catch-all", errors.New("oidc: malformed jwt: bad"), "invalid_token"},
-		{"unrelated error falls to catch-all", errVerificationFailed, "invalid_token"},
-		{"errMalformedClaims falls to catch-all", errMalformedClaims, "invalid_token"},
+		{"nil classifies as missing", nil, schema.AuthFailureReasonMissing},
+		{"go-oidc TokenExpiredError", &oidc.TokenExpiredError{}, schema.AuthFailureReasonExpired},
+		{"wrapped TokenExpiredError", fmt.Errorf("wrap: %w", &oidc.TokenExpiredError{}), schema.AuthFailureReasonExpired},
+		{"errNoSubject", errNoSubject, schema.AuthFailureReasonMissing},
+		{"wrapped errNoSubject", fmt.Errorf("wrap: %w", errNoSubject), schema.AuthFailureReasonMissing},
+		{"go-oidc audience message", errors.New(`oidc: expected audience "want" got ["got"]`), schema.AuthFailureReasonAudienceMismatch},
+		{"go-oidc signature message", errors.New("failed to verify signature: bad sig"), schema.AuthFailureReasonSignatureInvalid},
+		{"go-oidc issuer mismatch falls to catch-all", errors.New("oidc: id token issued by a different provider"), schema.AuthFailureReasonInvalidToken},
+		{"go-oidc malformed jwt falls to catch-all", errors.New("oidc: malformed jwt: bad"), schema.AuthFailureReasonInvalidToken},
+		{"unrelated error falls to catch-all", errVerificationFailed, schema.AuthFailureReasonInvalidToken},
+		{"errMalformedClaims falls to catch-all", errMalformedClaims, schema.AuthFailureReasonInvalidToken},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,17 +65,17 @@ func TestClassifyAuthFailure(t *testing.T) {
 }
 
 // TestClassifyAuthFailure_ReturnsOnlyClosedVocabulary pins that every case
-// above returns a member of audit.EventAuthFailure's reason vocabulary — the
-// two are asserted to agree here (a literal string list, not an import of
-// internal/observability/audit, to avoid the import cycle AuthAuditHook's
-// doc explains) rather than trusted to.
+// above returns a member of the closed vocabulary, read from its owner
+// (SOL-154163) rather than restated as a literal here.
+//
+// The named return type does not make this tautological: AuthFailureReason is
+// a string type, so a new case could return AuthFailureReason("weird") and
+// still compile. This is the assertion that a case has to draw from the
+// consts.
 func TestClassifyAuthFailure_ReturnsOnlyClosedVocabulary(t *testing.T) {
-	closedSet := map[string]bool{
-		"invalid_token":     true,
-		"expired":           true,
-		"audience_mismatch": true,
-		"signature_invalid": true,
-		"missing":           true,
+	closedSet := make(map[schema.AuthFailureReason]bool)
+	for _, r := range schema.AuthFailureReasons() {
+		closedSet[r] = true
 	}
 	for _, err := range []error{
 		nil,

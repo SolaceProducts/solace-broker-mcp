@@ -87,7 +87,9 @@ The two responsibilities have **fundamentally different lifecycle complexity**:
 | Metrics: hits, misses, size, pressure, eviction reasons | ❌ | ✅ |
 | Health: backend reachability | ❌ | ✅ |
 
-These columns change **for different reasons**. Changing the RFC version, the IdP error format, or the singleflight strategy touches the Exchanger. Changing the eviction policy, adding a sweeper, swapping in-memory for Redis, adding cache metrics, or tuning expiry skew touches the Cache. **Single Responsibility Principle says: different reasons to change ⇒ different components.**
+These columns change **for different reasons**. Changing the RFC version, the IdP error format, or the singleflight strategy touches the Exchanger. Changing the eviction policy, adding a sweeper, swapping in-memory for Redis, or adding cache metrics touches the Cache. **Single Responsibility Principle says: different reasons to change ⇒ different components.**
+
+> **Superseded by SOL-154165:** expiry skew is *not* one of those cache-owned knobs. It is deducted once by the Exchanger at parse time; tuning it touches `defaults.DefaultTokenExpirySkew`, not the Cache. The three "tuning skew → Cache impl change" claims below are wrong for the same reason — see item 4 under the interface contract.
 
 ### The future SOL-150052 cache will own real lifecycle behavior
 
@@ -159,6 +161,8 @@ type TokenCache interface {
 3. **`Get` returns only fresh tokens.** `found=false` covers both "never stored" and "stored but expired" — caller does not care which. This is the *single most important* line of the contract: it puts freshness entirely behind the interface. Once the caller can't ask "is this expired?", the caller can't make freshness decisions, and the boundary holds.
 
 4. **`Put` accepts a `Token` that carries its own `ExpiresAt`.** The cache reads `ExpiresAt` and applies its own skew/policy. The Exchanger does not compute "now + expires_in - skew" — it just hands off what the IdP told it.
+
+   > **Superseded by SOL-154165.** As built this is inverted: the Exchanger computes `now + expires_in - skew` when it parses the IdP response, and the cache applies **no** skew of its own. Implementing both halves of the sentence above is precisely the defect SOL-154165 fixed — the skew was deducted twice, costing every token 30s of cache lifetime and, at IdP token lifetimes of 60s or below, stopping the cache retaining anything at all. Skew is owned by the producer and deducted exactly once; `cache.CacheConfig` carries no skew field, so a second deduction cannot be wired back in. See the invariant on `cache.CachedCredential.ExpiresAt`. Only skew *ownership* moved — the rest of the boundary argument in this document still holds.
 
 5. **`Delete` is exposed** so a future code path (broker 401, future story) can force eviction. The Exchanger itself does not call `Delete` in v1 — but the contract supports it cleanly.
 

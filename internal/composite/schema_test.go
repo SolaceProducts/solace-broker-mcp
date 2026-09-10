@@ -80,9 +80,38 @@ func TestBuildStrictOutputSchema_FlatStep(t *testing.T) {
 		t.Error("expected rejection when the required identifier field is missing")
 	}
 
-	unexpectedField := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1", "somethingNew": "x"}}}
-	if r := validateAgainst(t, schema, unexpectedField); r.Valid() {
-		t.Error("expected rejection for a field not in ResponseFields (additionalProperties: false)")
+	// SOL-154164: an attribute a newer broker added is tolerated, not rejected.
+	// The item's key set comes from the broker, and this schema is validated
+	// after the mutation has already been applied.
+	newerBrokerAttribute := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1", "somethingNew": "x"}}}
+	if r := validateAgainst(t, schema, newerBrokerAttribute); !r.Valid() {
+		t.Errorf("expected an unknown attribute from a newer broker to be tolerated, got errors: %v", r.Errors())
+	}
+
+	// The envelope's key set is broker-supplied too, so the same tolerance
+	// applies one level up.
+	newerBrokerEnvelopeKey := map[string]any{"queue": map[string]any{
+		"data":       map[string]any{"queueName": "q1"},
+		"warningsNP": []any{"a future envelope key"},
+	}}
+	if r := validateAgainst(t, schema, newerBrokerEnvelopeKey); !r.Valid() {
+		t.Errorf("expected an unknown envelope key from a newer broker to be tolerated, got errors: %v", r.Errors())
+	}
+
+	// Tolerance stops at the step boundary: the step-keyed object is built by
+	// the executor from this tool's own step IDs (collectSteps), so an
+	// unexpected key there is our bug, not broker drift.
+	unknownStepKey := map[string]any{
+		"queue":     map[string]any{"data": map[string]any{"queueName": "q1"}},
+		"otherStep": map[string]any{"data": map[string]any{}},
+	}
+	if r := validateAgainst(t, schema, unknownStepKey); r.Valid() {
+		t.Error("expected rejection for a step key the tool definition doesn't declare")
+	}
+
+	notAnObject := map[string]any{"queue": "not-an-object"}
+	if r := validateAgainst(t, schema, notAnObject); r.Valid() {
+		t.Error("expected rejection when a step's result is not an object at all")
 	}
 
 	typeChanged := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1", "bindCount": "not-a-number"}}}
@@ -116,17 +145,29 @@ func TestBuildStrictOutputSchema_PaginatedStep(t *testing.T) {
 		t.Errorf("expected valid paginated envelope, got errors: %v", r.Errors())
 	}
 
-	badItem := map[string]any{"queues": map[string]any{
+	// SOL-154164: broker-supplied item keys are tolerant of additions.
+	newerBrokerAttribute := map[string]any{"queues": map[string]any{
 		"data":      []any{map[string]any{"queueName": "q1", "unexpected": true}},
 		"truncated": false,
 	}}
-	if r := validateAgainst(t, schema, badItem); r.Valid() {
-		t.Error("expected rejection for an unexpected field inside a paginated item")
+	if r := validateAgainst(t, schema, newerBrokerAttribute); !r.Valid() {
+		t.Errorf("expected an unknown attribute inside a paginated item to be tolerated, got errors: %v", r.Errors())
 	}
 
 	missingTruncated := map[string]any{"queues": map[string]any{"data": []any{}}}
 	if r := validateAgainst(t, schema, missingTruncated); r.Valid() {
 		t.Error("expected rejection when the envelope's own required 'truncated' key is missing")
+	}
+
+	// The paginated wrapper itself is assembled by fetchPaginated, not the
+	// broker, so it stays strict.
+	unknownWrapperKey := map[string]any{"queues": map[string]any{
+		"data":      []any{},
+		"truncated": false,
+		"pageCount": float64(2),
+	}}
+	if r := validateAgainst(t, schema, unknownWrapperKey); r.Valid() {
+		t.Error("expected rejection for an unknown key on the server-built paginated wrapper")
 	}
 }
 
@@ -156,13 +197,14 @@ func TestBuildStrictOutputSchema_FanOutStep(t *testing.T) {
 		t.Errorf("expected valid fan-out envelope, got errors: %v", r.Errors())
 	}
 
-	badItem := map[string]any{"clients": map[string]any{
+	// SOL-154164: broker-supplied item keys are tolerant of additions.
+	newerBrokerAttribute := map[string]any{"clients": map[string]any{
 		"byKey": map[string]any{"vpn-a": map[string]any{
 			"data": map[string]any{"clientName": "c1", "unexpected": true},
 		}},
 	}}
-	if r := validateAgainst(t, schema, badItem); r.Valid() {
-		t.Error("expected rejection for an unexpected field inside a fan-out item's data")
+	if r := validateAgainst(t, schema, newerBrokerAttribute); !r.Valid() {
+		t.Errorf("expected an unknown attribute inside a fan-out item's data to be tolerated, got errors: %v", r.Errors())
 	}
 
 	missingEnvelopeData := map[string]any{"clients": map[string]any{
@@ -170,6 +212,16 @@ func TestBuildStrictOutputSchema_FanOutStep(t *testing.T) {
 	}}
 	if r := validateAgainst(t, schema, missingEnvelopeData); r.Valid() {
 		t.Error("expected rejection when a fan-out item's envelope is missing its required 'data' key")
+	}
+
+	// The byKey/skipped wrapper is assembled by fetchFanOut, not the broker,
+	// so it stays strict.
+	unknownWrapperKey := map[string]any{"clients": map[string]any{
+		"byKey":  map[string]any{},
+		"failed": float64(1),
+	}}
+	if r := validateAgainst(t, schema, unknownWrapperKey); r.Valid() {
+		t.Error("expected rejection for an unknown key on the server-built fan-out wrapper")
 	}
 }
 
@@ -292,11 +344,23 @@ func TestBuildStrictOutputSchema_RealCreateQueue(t *testing.T) {
 		t.Errorf("expected valid, got errors: %v", r.Errors())
 	}
 
-	driftedField := map[string]any{"createQueue": map[string]any{
+	// SOL-154164: a field the embedded spec doesn't declare is what a broker
+	// newer than 10.26.5 legitimately returns, and this schema is checked only
+	// after the create has already been applied. Tolerated.
+	notInTheEmbeddedSpec := map[string]any{"createQueue": map[string]any{
 		"data": map[string]any{"queueName": "orders", "notInTheSpec": "x"},
 	}}
-	if r := validateAgainst(t, schema, driftedField); r.Valid() {
-		t.Error("expected rejection for a field the real spec doesn't declare")
+	if r := validateAgainst(t, schema, notInTheEmbeddedSpec); !r.Valid() {
+		t.Errorf("expected a field only a newer broker declares to be tolerated, got errors: %v", r.Errors())
+	}
+
+	// The typing of the fields the spec does declare still bites: accessType is
+	// a string in the real MsgVpnQueue config schema.
+	retypedRealField := map[string]any{"createQueue": map[string]any{
+		"data": map[string]any{"queueName": "orders", "accessType": float64(1)},
+	}}
+	if r := validateAgainst(t, schema, retypedRealField); r.Valid() {
+		t.Error("expected rejection when a field the real spec declares comes back with the wrong type")
 	}
 }
 

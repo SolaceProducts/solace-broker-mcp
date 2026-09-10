@@ -107,6 +107,30 @@ func TestGoldenSchema(t *testing.T) {
 	// fixed sample seeds it into the fixture.
 	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", "permission_denied")
 
+	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
+	// labels and a 5ms duration keep the fixture stable.
+	sm, err := p.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.Record(context.Background(), SEMPRequest{
+		API:       "v2",
+		Broker:    "test-broker",
+		Operation: "getMsgVpnQueue",
+		Method:    "GET",
+		Status:    "200",
+		Address:   "broker.example.com",
+		Attempt:   1,
+	}, 5*time.Millisecond)
+
+	// Security counters (SOL-152099): registration seeds the auth-failure
+	// series; one denial surfaces the unseeded authz family.
+	sec, err := p.SecurityMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec.RecordAuthzDenied(context.Background(), "test-tool", "not_permitted")
+
 	if err := panics.Register(p.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register() error = %v", err)
 	}
@@ -160,6 +184,32 @@ func scrapeCounterValue(t *testing.T, body string) int {
 	}
 	t.Fatalf("mcp_metrics_scrape_total not found in scrape:\n%s", body)
 	return 0
+}
+
+// TestGoAndProcessFamiliesPresent asserts the standard Go runtime and process
+// metric families are present in a plain-text scrape. Values are not checked —
+// they are environment-dependent. This test exercises New()'s MustRegister call;
+// TestExporterFidelity_SharedRegistry covers the same families on an isolated
+// harness registry and the two are not redundant.
+func TestGoAndProcessFamiliesPresent(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := scrapePlainText(t, p)
+	for _, prefix := range []string{"go_goroutines", "go_gc_", "go_memstats_", "process_"} {
+		found := false
+		s := bufio.NewScanner(strings.NewReader(body))
+		for s.Scan() {
+			if strings.HasPrefix(s.Text(), prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("scrape has no line matching %q", prefix)
+		}
+	}
 }
 
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.

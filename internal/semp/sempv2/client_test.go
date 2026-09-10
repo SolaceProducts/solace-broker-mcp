@@ -32,9 +32,11 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
 func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, *httptest.Server) {
@@ -169,6 +171,158 @@ func testOp(method string, params ...sempv2.Parameter) *sempv2.Operation {
 		Method:     method,
 		Path:       "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}",
 		Parameters: params,
+	}
+}
+
+// newMetricsClient builds a client wired to record SEMP metrics against
+// recorder (nil to leave recording off), against a fresh test server.
+func newMetricsClient(t *testing.T, handler http.HandlerFunc, retries int, recorder *metrics.SEMPMetrics) (*sempv2.HTTPClient, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	brokerCfg := &config.BrokerConfig{URL: server.URL, Auth: config.AuthConfig{Mode: "basic"}}
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0),
+		auth.NewBasicAuthenticator("admin", "secret", jar), jar, resilience.WithMetrics(recorder, "test-broker"))
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
+	return client, server
+}
+
+// scrapeMetrics returns the provider's /metrics body in the default plain-text
+// exposition (no Accept header negotiated).
+func scrapeMetrics(t *testing.T, p *metrics.Provider) string {
+	t.Helper()
+	return scrapeMetricsAccepting(t, p, "").Body.String()
+}
+
+// scrapeMetricsAccepting does one scrape with the given Accept header ("" to
+// send none) and returns the whole recorder, so a caller that cares which
+// representation it got back can inspect Content-Type — which the exemplar
+// tests must, since exemplars ride only the OpenMetrics one.
+func scrapeMetricsAccepting(t *testing.T, p *metrics.Provider, accept string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/metrics", nil)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("scrape status = %d, want 200", rec.Code)
+	}
+	return rec
+}
+
+func testQueueOp(t *testing.T) *sempv2.Operation {
+	t.Helper()
+	return testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+}
+
+var testQueueArgs = map[string]any{"msgVpnName": "default", "queueName": "test-queue"}
+
+// TestClient_Execute_RecordsPerAttempt proves each try is observed once: a 503
+// then a 200 produce two samples, labelled attempt="1"/status="503" and
+// attempt="2"/status="200", both tagged api="v2".
+func TestClient_Execute_RecordsPerAttempt(t *testing.T) {
+	prov, err := metrics.New("vtest", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := prov.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var calls atomic.Int32
+	client, server := newMetricsClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable) // 503 on the first try
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}, 1, sm)
+	defer server.Close()
+
+	if _, err := client.Execute(context.Background(), testQueueOp(t), testQueueArgs); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	body := scrapeMetrics(t, prov)
+	for _, want := range []string{
+		`mcp_semp_request_total{api="v2",attempt="1",broker="test-broker",http_request_method="GET",http_response_status_code="503",operation="testOp",server_address="127.0.0.1"} 1`,
+		`mcp_semp_request_total{api="v2",attempt="2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="testOp",server_address="127.0.0.1"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scrape missing series:\n%s\n--- got ---\n%s", want, body)
+		}
+	}
+}
+
+// TestClient_Execute_NoResponseRecordsEmptyStatus proves a try that gets no
+// response records an empty status rather than a synthetic code.
+func TestClient_Execute_NoResponseRecordsEmptyStatus(t *testing.T) {
+	prov, err := metrics.New("vtest", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := prov.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, server := newMetricsClient(t, func(http.ResponseWriter, *http.Request) {}, 0, sm)
+	server.Close() // refuse the connection so the attempt gets no response
+
+	if _, err := client.Execute(context.Background(), testQueueOp(t), testQueueArgs); err == nil {
+		t.Fatal("Execute() error = nil, want a connection error")
+	}
+
+	body := scrapeMetrics(t, prov)
+	want := `mcp_semp_request_total{api="v2",attempt="1",broker="test-broker",http_request_method="GET",http_response_status_code="",operation="testOp",server_address="127.0.0.1"} 1`
+	if !strings.Contains(body, want) {
+		t.Errorf("scrape missing empty-status series:\n%s\n--- got ---\n%s", want, body)
+	}
+}
+
+// TestClient_Execute_NoMetricsWhenDisabled proves a nil recorder installs no
+// transport wrapper and emits nothing, even though the instrument is registered.
+func TestClient_Execute_NoMetricsWhenDisabled(t *testing.T) {
+	prov, err := metrics.New("vtest", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.SEMPMetrics(); err != nil {
+		t.Fatal(err)
+	}
+
+	client, server := newMetricsClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}, 0, nil)
+	defer server.Close()
+
+	if _, err := client.Execute(context.Background(), testQueueOp(t), testQueueArgs); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if body := scrapeMetrics(t, prov); strings.Contains(body, "mcp_semp_request") {
+		t.Errorf("expected no SEMP series with a nil recorder, got:\n%s", body)
 	}
 }
 

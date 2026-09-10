@@ -253,8 +253,11 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	// ctx. This SpanContext (not the ctx itself) is a plain, immutable value —
 	// re-attaching it later carries no cancellation, matching corrID's own
 	// value-not-context handling. It seeds the shared exchange's span
-	// hierarchy so Story 27's future retry-attempt spans nest under THIS
-	// call's own span above, rather than under nothing.
+	// hierarchy so the `tokenexchange.attempt` spans the retrying HTTP client
+	// creates (SOL-152422) nest under THIS call's own span above, rather than
+	// under nothing. Only the winner's closure runs, so only the winner's span
+	// ever acquires those children — see idpclient's attemptSpanName for that
+	// documented limitation.
 	callerSpanCtx := oteltrace.SpanContextFromContext(ctx)
 
 	start := e.nowFunc()
@@ -412,9 +415,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 // breaker outcome and makes no IdP round-trip, regardless of breaker state.
 //
 // parentSpanCtx is the winning caller's own Exchange span, captured before
-// the singleflight detach (SOL-153333) — threaded through so Story 27's
-// future retry-attempt spans have a real parent to nest under instead of
-// none at all.
+// the singleflight detach (SOL-153333) — threaded through so the per-attempt
+// retry spans (`tokenexchange.attempt`, SOL-152422) have a real parent to nest
+// under instead of none at all.
 func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput, corrID string, parentSpanCtx oteltrace.SpanContext) (*Token, error) {
 	if e.gateCheck() {
 		return nil, &ExchangeError{

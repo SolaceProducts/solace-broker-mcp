@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -61,8 +62,13 @@ type retryStateKey struct{}
 // retryState tracks per-request retry decisions to enforce the retry caps: the
 // "retry once" limits for 401 re-auth (auth401Retried) and non-429/503 5xx
 // (other5xxRetried), plus the maxTransientRetries cap for 429/503
-// (transientRetried). Each Do() call creates its own instance via context, so
-// concurrent requests to the same Sender are safe.
+// (transientRetried). It also carries attempt, the 1-based try counter, and the
+// in-flight attempt span. Each Do() call creates its own instance via context,
+// so concurrent requests to the same Sender are safe.
+//
+// Every field is written and read on the single goroutine driving
+// retryablehttp's Do loop for that request — the transport wrapper, checkRetry
+// and prepareRetry all run there, in sequence — so no field needs a lock.
 type retryState struct {
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)
@@ -72,6 +78,23 @@ type retryState struct {
 	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
 	retryUnsafe      bool   // caller-declared semantic NON-idempotency (see WithRetryUnsafe)
 	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
+	// spanState is the attempt counter and the span parked for the attempt
+	// now in flight, shared with internal/idpclient via the attemptspan
+	// package (SOL-152422; see attempt_span.go). The counter it holds
+	// (spanState.Attempt) is the SAME counter metricsTransport reads for its
+	// `attempt` metric label — see attemptNumber — and is expected to agree
+	// with it exactly, unlike idpclient's separate WithAttemptsCounter, which
+	// also counts redirect hops.
+	spanState attemptspan.State
+}
+
+// closeDanglingAttemptSpan ends an attempt span that was opened but never
+// closed by checkRetry, so it is exported (undecided) rather than dropped.
+// See attemptspan.State.CloseDangling for why this is a backstop and not a
+// normal path. Delegates rather than duplicating: the shared logic lives in
+// the attemptspan package so SEMP and idpclient cannot drift.
+func (s *retryState) closeDanglingAttemptSpan() {
+	s.spanState.CloseDangling()
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -146,6 +169,33 @@ func getRetryState(ctx context.Context) *retryState {
 	return &retryState{}
 }
 
+// getRetryStateOrNil returns the per-request retryState on ctx, or nil when
+// there is none. Unlike getRetryState it does NOT substitute a fresh state:
+// callers that only observe a request (the transport wrapper, the attempt span)
+// must be able to tell "no chain to attribute this to" apart from "a chain
+// whose caps all happen to be at zero".
+func getRetryStateOrNil(ctx context.Context) *retryState {
+	s, _ := ctx.Value(retryStateKey{}).(*retryState)
+	return s
+}
+
+// attemptNumber reports the 1-based try counter for the attempt now in flight.
+// the attemptspan.Transport newAttemptTransport builds is the counter's single
+// owner and bumps it once per attempt (see attempt_span.go); every other
+// reader — metricsTransport's `attempt` label, the attempt span's `attempt`
+// attribute — reads it here so the two can never disagree.
+//
+// Returns 1 when no state is on the context (Sender.Do was bypassed) or the
+// counter has not been bumped: the attempt is real but uncounted, and reporting
+// it as attempt 1 is closer to the truth than reporting attempt 0.
+func attemptNumber(ctx context.Context) int {
+	s := getRetryStateOrNil(ctx)
+	if s == nil || s.spanState.Attempt == 0 {
+		return 1
+	}
+	return s.spanState.Attempt
+}
+
 // checkRetry is the custom retry policy for retryablehttp. It implements:
 //   - POST and PATCH: never retried (non-idempotent — see guard below)
 //   - 401: delegate to Authenticator.HandleAuthFailure — retry once if it recovers
@@ -155,7 +205,24 @@ func getRetryState(ctx context.Context) *retryState {
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
 //   - All other status codes (4xx): no retry
-func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
+//
+// The named returns exist for the deferred endAttemptSpan call below, which
+// closes the attempt span the attempt-span transport opened and tags it with
+// the decision this function actually returns (SOL-152422). Deferring it once
+// here, rather than editing each of the many exits, is what guarantees the span reports the
+// real decision on every path — including the two sentinel-error exits, which a
+// span site reading only the status code would misreport.
+func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (retry bool, checkErr error) {
+	// allowanceSpent records that one of the sub-caps below refused the replay
+	// because its own budget was already used, which is what `retry.exhausted`
+	// reports (see retriesExhausted). A local rather than a field on
+	// retryState: scoped to this one call, so a value set on one attempt can
+	// never be read by the span of a later one.
+	var allowanceSpent bool
+	defer func() {
+		endAttemptSpan(ctx, d.retryClient.RetryMax, resp, retry, allowanceSpent)
+	}()
+
 	// Context cancellation: never retry.
 	if ctx.Err() != nil {
 		return false, ctx.Err()
@@ -262,6 +329,10 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			}
 			return result.Retry, nil
 		}
+		// The once-only 401 re-auth allowance is spent: an attempt was made and
+		// the 401 came back anyway. Distinct from the authenticator declining
+		// the first 401 above, which is "cannot recover", not "budget used".
+		allowanceSpent = true
 		slog.Warn("auth failure: 401 persisted after recovery attempt",
 			slog.String("broker", d.brokerURL))
 		return false, nil
@@ -315,6 +386,7 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			// after retries exhausted", carrying the cap-reached error string) for
 			// this same terminal failure, so a WARN here would double-log every
 			// capped 429/503 — noisy precisely when the broker is overloaded.
+			allowanceSpent = true
 			slog.Debug("not retrying: transient-error retry cap reached",
 				slog.String("broker", d.brokerURL),
 				slog.Int("status", resp.StatusCode),
@@ -338,6 +410,8 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 				slog.Int("status", resp.StatusCode))
 			return true, nil
 		}
+		// The once-only replay for a non-429/503 5xx is spent.
+		allowanceSpent = true
 		return false, nil
 
 	default:

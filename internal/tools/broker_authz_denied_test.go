@@ -31,9 +31,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -214,12 +218,41 @@ func TestBrokerAuthzDenial_AuditLogOff_EmitsNoRecord(t *testing.T) {
 // (mcp_tool_invocation_total's error_type label) reflects the hop-2 denial
 // distinctly from a generic execution_error, via the errorType captured by
 // CallTool's defer.
+// TestBrokerAuthzDenial_RecordsMetricErrorType is the one test that actually
+// pins the tool-RED error_type claim its name makes: earlier, this test
+// wired no ToolMetrics and asserted nothing beyond retryable, so a sabotaged
+// classification (the errorType assignment dropped from CallTool) left it
+// green — caught instead, by a different mechanism, by
+// TestBrokerAuthzDenial_DestructiveCall_EmitsBothRecords and the integration
+// test via audit.NewEvent's schema strictness, not by anything checking the
+// metric itself. Wires a real metrics.Provider and scrapes it, asserting
+// both mcp_tool_invocation_total{error_type="broker_permission_denied"} and
+// mcp_broker_authz_denied_total{reason="permission_denied"} from the one
+// CallTool, pinning the pairing in the direction the integration test does
+// not cover.
 func TestBrokerAuthzDenial_RecordsMetricErrorType(t *testing.T) {
-	mgr := brokerAuthzTestManager(t, false, &sempv1.Error{
-		Kind:       sempv1.ErrorKindPermission,
-		StatusCode: 200,
-		Message:    "Insufficient user privileges",
-	})
+	p, err := metrics.New("v-test", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewToolManager(newTestPool(t), WithAuditLog(false), WithToolMetrics(tm))
+	destructive := newStubHandler("delete-queue")
+	yes := true
+	destructive.annotations = Annotations{Destructive: &yes}
+	destructive.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+		return nil, &sempv1.Error{
+			Kind:       sempv1.ErrorKindPermission,
+			StatusCode: 200,
+			Message:    "Insufficient user privileges",
+		}
+	}
+	mgr.Register(destructive)
+
 	result, err := mgr.CallTool(context.Background(), "delete-queue",
 		map[string]any{"broker": "dev", "msgVpnName": "default"}, Identity{})
 	if err != nil {
@@ -228,6 +261,14 @@ func TestBrokerAuthzDenial_RecordsMetricErrorType(t *testing.T) {
 	sc := result.StructuredContent.(map[string]any)
 	if sc["retryable"] != false {
 		t.Errorf("retryable = %v, want false", sc["retryable"])
+	}
+
+	body := scrape(t, p)
+	if want := `mcp_tool_invocation_total{broker="dev",error_type="broker_permission_denied",outcome="error",tool="delete-queue"} 1`; !strings.Contains(body, want) {
+		t.Errorf("scrape missing %q; the tool-RED metric did not classify this call as a broker permission denial", want)
+	}
+	if want := `mcp_broker_authz_denied_total{broker="dev",reason="permission_denied",tool="delete-queue"} 1`; !strings.Contains(body, want) {
+		t.Errorf("scrape missing %q", want)
 	}
 }
 

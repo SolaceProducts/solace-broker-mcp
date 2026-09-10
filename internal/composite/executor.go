@@ -31,7 +31,13 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/safego"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
+
+// One named tracer per layer (SOL-152421).
+var tracer = otel.Tracer("solace-broker-mcp/composite")
 
 // ExecuteContext holds state during composite tool execution. Each tool
 // invocation gets its own context — not shared across calls. Params holds
@@ -110,7 +116,47 @@ func NewCompositeExecutor(operations map[string]*sempv2.Operation) *CompositeExe
 //
 // It defensively strips the "broker" key from params before building the
 // template context, so YAML templates cannot reference {{.Params.broker}}.
-func (ce *CompositeExecutor) Execute(ctx context.Context, tool CompositeTool, client sempv2.Client, params map[string]any) (map[string]any, error) {
+func (ce *CompositeExecutor) Execute(ctx context.Context, tool CompositeTool, client sempv2.Client, params map[string]any) (result map[string]any, err error) {
+	// The composite-executor span (SOL-152421). The reassigned ctx is what
+	// nests the SEMP spans below under this one.
+	//
+	// No error_type: that twelve-value set is scoped to tool-invocation outcomes
+	// and has no value for a step-orchestration failure — the same reasoning
+	// that exempts tokenexchange.Exchange. The dispatcher span above carries
+	// the classification for the call as a whole.
+	ctx, span := tracer.Start(ctx, "composite.Execute")
+	defer func() {
+		// A panic between tracer.Start and here would otherwise close this
+		// span reporting outcome=success — Go does not populate named returns
+		// on an unwound panic, so err is still nil — pointing the error in the
+		// worst possible direction right as the process goes down. Recovering
+		// only to record the outcome accurately and then re-panicking keeps
+		// this function's panic-propagates contract intact; the deferred
+		// panic(r) runs after span.End() below, so nothing is left unclosed.
+		// Same pattern as tokenexchange.Exchange (SOL-153333).
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panicked (%T)", r)
+			defer panic(r)
+		}
+		if span.IsRecording() {
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+			}
+			span.SetAttributes(
+				attribute.String("tool", tool.Name),
+				attribute.String("outcome", outcome),
+				attribute.Int("composite.steps", len(tool.Steps)),
+			)
+		}
+		if err != nil {
+			// No description, as at the dispatcher: a step error can quote a
+			// broker response fragment, and a span exports offsite.
+			span.SetStatus(codes.Error, "")
+		}
+		span.End()
+	}()
+
 	// Strip broker from params defensively. The handler should already do this,
 	// but the executor ensures it regardless.
 	execParams := make(map[string]any, len(params))

@@ -41,6 +41,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -643,6 +644,18 @@ func TestOperationRecord_reachableErrorTypes(t *testing.T) {
 				// The stub's output schema requires object-valued properties.
 				h.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
 					return &ToolResult{StructuredContent: map[string]any{"step1": "not-an-object"}}, nil
+				}
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "broker_permission_denied happens after the gate", wantErrorType: "broker_permission_denied", wantAudited: true,
+			tool: "delete-queue", args: map[string]any{"broker": "dev", "msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				h.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+					return nil, &sempv2.SEMPError{SEMPCode: sempv2.SEMPCodePermissionDenied, StatusCode: 403, Description: "not authorized"}
 				}
 				mgr.Register(h)
 			},
