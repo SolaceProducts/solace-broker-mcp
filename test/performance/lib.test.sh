@@ -891,33 +891,73 @@ cgroot="$tmp/cgroup"
 mkdir -p "$cgroot/user.slice/app.scope/leaf"
 
 echo "25000 100000" >"$cgroot/user.slice/app.scope/leaf/cpu.max"
-eq "cpu.max on the process's own cgroup is read verbatim" \
-  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" "25000 100000"
+eq "the process's own cpu.max is read verbatim" \
+  "$(perf_cgroup_binding_quota "$cgroot" /user.slice/app.scope/leaf | cut -d' ' -f3-)" "25000 100000"
 eq "and a quota of a quarter core reads 0.25, not 25000" \
   "$(perf_cgroup_quota_cores "25000 100000")" "0.25"
 
-# A limit on an ancestor still binds the process, so the search has to climb
-# rather than stop at a leaf that has no cpu.max of its own.
+# A limit set two levels up still binds a leaf that sets none of its own, so
+# the search has to climb rather than stop where it started. An earlier version
+# of this test derived its fixture from /proc/self/cgroup, which is `/` on this
+# host and on any non-systemd container — leaf and ancestor collapsed into one
+# directory, and it passed against an implementation with no walk in it at all.
 rm "$cgroot/user.slice/app.scope/leaf/cpu.max"
 echo "50000 100000" >"$cgroot/user.slice/cpu.max"
 eq "a quota two levels up is found by walking up" \
-  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" "50000 100000"
+  "$(perf_cgroup_binding_quota "$cgroot" /user.slice/app.scope/leaf | cut -d' ' -f1)" "0.50"
 
-# The nearest one wins: a leaf limit is not overridden by a looser ancestor.
-echo "10000 100000" >"$cgroot/user.slice/app.scope/cpu.max"
-eq "the nearest cgroup with a limit wins over a further ancestor" \
-  "$(perf_cgroup_quota_cores "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)")" "0.10"
-
-rm "$cgroot/user.slice/cpu.max" "$cgroot/user.slice/app.scope/cpu.max"
-eq "no cpu.max anywhere up to the root returns nothing" \
-  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" ""
 eq "a root given with a trailing slash still terminates" \
-  "$(perf_cgroup_cpu_max "$cgroot/" /user.slice)" ""
+  "$(perf_cgroup_binding_quota "$cgroot/" /nowhere)" ""
 
 eq "an unlimited quota reads none"        "$(perf_cgroup_quota_cores "max 100000")" "none"
 eq "a zero period is not divided by"      "$(perf_cgroup_quota_cores "25000 0")"    "unknown"
 eq "an unreadable cpu.max line reads unknown" "$(perf_cgroup_quota_cores "garbage")" "unknown"
 eq "half a core"                          "$(perf_cgroup_quota_cores "50000 100000")" "0.50"
+
+# A cpu.max is two fields. A truncated one holding a single token would
+# otherwise make ${x%% *} and ${x##* } the same token and report a confident
+# 1.00 core, and a bare "max" would report `none` — entitlements nobody
+# measured. The contract for a line that does not parse is `unknown`.
+eq "a truncated one-token cpu.max is not read as a ratio of itself" \
+  "$(perf_cgroup_quota_cores "25000")" "unknown"
+eq "a bare 'max' with no period does not read as unlimited" \
+  "$(perf_cgroup_quota_cores "max")" "unknown"
+eq "three fields is not a cpu.max either" \
+  "$(perf_cgroup_quota_cores "25000 100000 7")" "unknown"
+eq "an empty line reads unknown"          "$(perf_cgroup_quota_cores "")"          "unknown"
+
+echo "== perf_cgroup_binding_quota takes the limit that actually binds"
+
+# v2 CPU limits are hierarchical: a parent's bandwidth bounds its whole
+# subtree, so the nearest cpu.max is not authoritative. Reporting it would
+# overstate a 2-core leaf under a half-core parent by fourfold.
+bq="$tmp/bq"
+mkdir -p "$bq/parent/leaf"
+echo "50000 100000"  >"$bq/parent/cpu.max"       # 0.5 core
+echo "200000 100000" >"$bq/parent/leaf/cpu.max"  # 2 cores, but cannot have them
+eq "a tighter ancestor binds a looser leaf" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f1)" "0.50"
+eq "and the record can name which cgroup binds" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f2)" "/parent"
+
+echo "10000 100000" >"$bq/parent/leaf/cpu.max"   # 0.1 core
+eq "a tighter leaf binds under a looser ancestor" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f1)" "0.10"
+eq "named as the leaf this time" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f2)" "/parent/leaf"
+
+# An unlimited level does not lift a limit set above or below it, and a level
+# whose file we cannot parse is not permission either — both are skipped.
+echo "max 100000" >"$bq/parent/leaf/cpu.max"
+eq "an unlimited leaf still yields to a limited ancestor" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f1)" "0.50"
+echo "garbage" >"$bq/parent/leaf/cpu.max"
+eq "an unparsable leaf is skipped, not read as unlimited" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf | cut -d' ' -f1)" "0.50"
+
+rm "$bq/parent/cpu.max" "$bq/parent/leaf/cpu.max"
+eq "no limit anywhere on the path returns nothing" \
+  "$(perf_cgroup_binding_quota "$bq" /parent/leaf)" ""
 
 # And the composition: the record function maps "found nothing" to `none`,
 # which must not read the same as "could not establish".
@@ -935,6 +975,7 @@ if [[ -n "$self_cg" ]]; then
   PERF_CGROUP_ROOT="$cgroot" perf_record_runtime_cpu "$rec" $$
   eq "a quota reaches the record as cores" "$(field cgroup_cpu_quota_cores)" "0.25"
   eq "with the raw pair beside it"         "$(field cgroup_cpu_max)" "25000 100000"
+  eq "and the cgroup it binds at"          "$(field cgroup_cpu_quota_from)" "$self_cg"
 else
   skip "record-level cgroup composition (this host has no unified cgroup line)"
 fi

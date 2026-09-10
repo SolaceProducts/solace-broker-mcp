@@ -95,6 +95,14 @@ PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
 # a separate awk that fell back to a hardcoded 90, sampled the wrong span in
 # silence.
 duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+# Zero is a legitimate WARMUP and never a legitimate DURATION: `loadgen`
+# rejects a non-positive -duration, and `memsampler -duration 0s` means "run
+# until the process disappears", so a zero would sail through this preflight
+# and hang the run at its final wait. Refuse it here, where refusing is free.
+if (( duration_secs == 0 )); then
+  echo "DURATION must be greater than zero, got: '$DURATION'" >&2
+  exit 2
+fi
 warmup_secs=0
 warmup_args=()
 if [[ -n "$WARMUP" ]]; then
@@ -491,6 +499,10 @@ sampler_pid=$!
 lg_rc=0
 wait "$lg_pid" || lg_rc=$?
 perf_stamp_load_end "$record"
+# Whether the load itself succeeded. Without it a record describes a run that
+# may have ended in errors and says nothing about it, and this box is the only
+# one that knows.
+perf_record_kv "$record" load_rc "$lg_rc"
 
 # Let the samplers flush; they exit on their own via kill -0 / duration.
 wait "$sampler_pid" 2>/dev/null || true

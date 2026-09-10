@@ -105,6 +105,14 @@ PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
 # nothing. A refusal at the door beats a window that quietly describes the
 # wrong span.
 duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+# Zero is a legitimate WARMUP and never a legitimate DURATION: `loadgen`
+# rejects a non-positive -duration, and `memsampler -duration 0s` means "run
+# until the process disappears", so a zero would sail through this preflight
+# and hang the run at its final wait. Refuse it here, where refusing is free.
+if (( duration_secs == 0 )); then
+  echo "DURATION must be greater than zero, got: '$DURATION'" >&2
+  exit 2
+fi
 warmup_secs=0
 warmup_args=()
 if [[ -n "$WARMUP" ]]; then
@@ -269,6 +277,9 @@ peaks_recorded=0
 # Set at the end of the main flow. cleanup() is reached on every path, so this
 # is what tells it whether the peaks it is about to record cover a whole run.
 run_finished=0
+# Initialised here, not at the load phase, because cleanup() reads it and is
+# reached from every path — including the ones that never start a load.
+lg_rc=0
 cleanup() {
   local rc=$?
   set +e
@@ -286,8 +297,17 @@ cleanup() {
     # have reached, and fd_peak is exactly the number a capacity claim gets
     # quoted from. Absence used to be the marker that a run did not finish;
     # now that the field is always written, say so in the record instead.
-    if (( run_finished )); then
+    # Three outcomes, not two. A load that exited non-zero leaves the samplers
+    # running out their clock over an idle server, so the peak is real but the
+    # run is not a measurement — calling that `complete` would let a failed run
+    # be quoted as a whole one. It is not `run_terminated` either: the runner
+    # reached its end. Say which of the two it was.
+    perf_record_kv "$mcp_record" load_rc "$lg_rc"
+    if (( run_finished && lg_rc == 0 )); then
       perf_record_kv "$mcp_record" fd_peak_source complete
+    elif (( run_finished )); then
+      perf_record_kv "$mcp_record" load_failed true
+      perf_record_kv "$mcp_record" fd_peak_source partial
     else
       perf_record_kv "$mcp_record" run_terminated true
       perf_record_kv "$mcp_record" fd_peak_source partial
@@ -458,7 +478,12 @@ echo "== 4. memsampler alongside MCP (pid=$mcp_pid)"
 # load_secs, not DURATION: WARMUP extends the run, so it extends the sampling.
 # A sampler sized on DURATION alone would stop before the load did and clip the
 # tail off the numbers.
-"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "${load_secs}s" \
+# load_secs plus the same tail buffer sampler.sh gets, and for the same
+# reason twice over: loadgen dials all its sessions BEFORE its warmup+duration
+# clock starts, so a window of exactly load_secs ends while load is still
+# running — and the value clipped off the end is fd_peak, the number this
+# sampler exists to record.
+"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "$(( load_secs + 10 ))s" \
   -out "$runs/mem.csv" >"$runs/memsampler.log" 2>&1 &
 mem_pid=$!
 
@@ -504,7 +529,6 @@ if (( warmup_secs > 0 )); then
   perf_record_kv "$mcp_record" stats_start_epoch "$(( load_start_epoch + warmup_secs ))"
   perf_record_kv "$lg_record"  stats_start_epoch "$(( load_start_epoch + warmup_secs ))"
 fi
-lg_rc=0
 "$bin/loadgen" -mcp-url http://localhost:9090 -broker-count "$BROKERS" \
   -clients "$CLIENTS" -duration "$DURATION" ${warmup_args[@]+"${warmup_args[@]}"} -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \

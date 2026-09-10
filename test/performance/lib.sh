@@ -626,50 +626,72 @@ perf_duration_secs() {
   printf '%s\n' "$secs"
 }
 
-# perf_cgroup_cpu_max <root> <cgroup_path> — the `cpu.max` that binds a process
-# in <cgroup_path>, searched from that cgroup upwards to <root>. Echoes the
-# file's contents, or nothing when no ancestor sets one.
-#
-# Split out from perf_record_runtime_cpu so the search is testable with a
-# nested path. It is one of the two parts here that could write a confident
-# wrong number, and a test that derives its fixture from the *test host's* own
-# cgroup cannot exercise it at all on a host whose shell sits at the root —
-# leaf and ancestor collapse to one directory and the walk is never taken.
-#
-# The walk is necessary, not defensive: cpu.max exists only where the cpu
-# controller has been enabled, and a limit set on an ancestor still binds.
-perf_cgroup_cpu_max() {
-  local root=${1%/} dir
-  [[ -z "$root" ]] && root=/
-  dir="$root${2%/}"
-  while :; do
-    if [[ -r "$dir/cpu.max" ]]; then
-      cat "$dir/cpu.max"
-      return 0
-    fi
-    [[ "$dir" == "$root" || "$dir" == "/" ]] && return 0
-    dir=$(dirname "$dir")
-  done
-}
-
 # perf_cgroup_quota_cores <cpu.max contents> — that quota as a core count:
 # `0.25` for "25000 100000", `none` for an unlimited one, `unknown` for a line
 # this cannot read.
 #
-# Cores rather than the raw pair because the raw pair is already recorded next
-# to it, and because a reader comparing two runs wants the number the runtime
-# would have derived, not two integers to divide by hand.
+# The two-field shape is validated before either branch. A truncated file
+# holding just "25000" would otherwise pass `${cpumax%% *}` and `${cpumax##* }`
+# as the same token and report a confident 1.00 core, and a bare "max" would
+# report `none` — both of them entitlements nobody measured. `unknown` is the
+# contract for a line that does not parse.
 perf_cgroup_quota_cores() {
   local cpumax=${1-} quota period
-  quota=${cpumax%% *}
-  period=${cpumax##* }
-  if [[ "$quota" == "max" ]]; then
+  # Exactly two whitespace-separated fields, or it is not a cpu.max.
+  if [[ ! "$cpumax" =~ ^[^[:space:]]+[[:space:]]+[^[:space:]]+$ ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  quota=${cpumax%%[[:space:]]*}
+  period=${cpumax##*[[:space:]]}
+  if [[ "$quota" == "max" && "$period" =~ ^[0-9]+$ ]]; then
     printf 'none\n'
   elif [[ "$quota" =~ ^[0-9]+$ && "$period" =~ ^[0-9]+$ ]] && (( period > 0 )); then
     awk -v q="$quota" -v p="$period" 'BEGIN { printf "%.2f\n", q / p }'
   else
     printf 'unknown\n'
   fi
+}
+
+# perf_cgroup_binding_quota <root> <cgroup_path> — the CPU quota that actually
+# constrains a process in <cgroup_path>, as "<cores> <cgroup> <cpu.max>".
+# Echoes nothing when no cgroup on the path sets one.
+#
+# Every cgroup from the process's own up to the root is read, not just the
+# nearest with a cpu.max, because v2 CPU limits are hierarchical: a parent's
+# bandwidth bounds its whole subtree, so a 2-core leaf under a half-core parent
+# gets half a core. Reporting the nearest file would have overstated that by
+# fourfold — a confident wrong number, which is the one thing this record is
+# built not to produce.
+#
+# The most restrictive wins, and the cgroup that set it is returned alongside,
+# so the record can name what binds rather than leaving the reader to guess
+# which level it came from. An unparsable cpu.max on the path is skipped rather
+# than treated as unlimited: a file we cannot read is not permission.
+perf_cgroup_binding_quota() {
+  local root=${1%/} dir cores best="" best_dir="" best_raw="" raw
+  [[ -z "$root" ]] && root=/
+  dir="$root${2%/}"
+  while :; do
+    if [[ -r "$dir/cpu.max" ]]; then
+      raw=$(cat "$dir/cpu.max")
+      cores=$(perf_cgroup_quota_cores "$raw")
+      if [[ "$cores" != none && "$cores" != unknown ]]; then
+        if [[ -z "$best" ]] || awk -v a="$cores" -v b="$best" 'BEGIN { exit !(a < b) }'; then
+          best=$cores
+          best_raw=$raw
+          # Report the cgroup relative to the root, which is what
+          # /proc/<pid>/cgroup names.
+          best_dir=${dir#"$root"}
+          [[ -z "$best_dir" ]] && best_dir=/
+        fi
+      fi
+    fi
+    [[ "$dir" == "$root" || "$dir" == "/" ]] && break
+    dir=$(dirname "$dir")
+  done
+  [[ -n "$best" ]] && printf '%s %s %s\n' "$best" "$best_dir" "$best_raw"
+  return 0
 }
 
 # perf_record_runtime_cpu <record> <pid> — how much processor the Go runtime in
@@ -736,7 +758,14 @@ perf_record_runtime_cpu() {
   fi
   perf_record_kv "$record" cgroup_path "$cg"
 
-  cpumax=$(perf_cgroup_cpu_max "$cg_root" "$cg")
+  local binding cores from
+  binding=$(perf_cgroup_binding_quota "$cg_root" "$cg")
+  cpumax=""
+  if [[ -n "$binding" ]]; then
+    cores=${binding%% *}
+    from=$(printf '%s' "$binding" | cut -d' ' -f2)
+    cpumax=$(printf '%s' "$binding" | cut -d' ' -f3-)
+  fi
   if [[ -z "$cpumax" ]]; then
     # Reaching the root without finding the file is an answer, not a gap: the
     # v2 root cgroup has no cpu.max by design and imposes no limit, so the
@@ -748,7 +777,11 @@ perf_record_runtime_cpu() {
     return 0
   fi
   perf_record_kv "$record" cgroup_cpu_max "$cpumax"
-  perf_record_kv "$record" cgroup_cpu_quota_cores "$(perf_cgroup_quota_cores "$cpumax")"
+  perf_record_kv "$record" cgroup_cpu_quota_cores "$cores"
+  # Which cgroup on the path actually binds. Equal to cgroup_path when the
+  # process's own cgroup is the tightest; an ancestor otherwise, and that
+  # difference is the whole reason the walk reads every level.
+  perf_record_kv "$record" cgroup_cpu_quota_from "$from"
   return 0
 }
 

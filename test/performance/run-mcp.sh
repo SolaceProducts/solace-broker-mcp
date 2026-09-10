@@ -56,6 +56,14 @@ WARMUP="${WARMUP:-}"
 # Stricter than Go's parser on purpose — see run.sh for why the old two-parser
 # arrangement sampled the wrong span in silence.
 duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+# Zero is a legitimate WARMUP and never a legitimate DURATION: `loadgen`
+# rejects a non-positive -duration, and `memsampler -duration 0s` means "run
+# until the process disappears", so a zero would sail through this preflight
+# and hang the run at its final wait. Refuse it here, where refusing is free.
+if (( duration_secs == 0 )); then
+  echo "DURATION must be greater than zero, got: '$DURATION'" >&2
+  exit 2
+fi
 warmup_secs=0
 if [[ -n "$WARMUP" ]]; then
   warmup_secs=$(perf_duration_secs "$WARMUP") || exit 2
@@ -245,7 +253,11 @@ perf_no_load_window "$record" split-host-load-on-other-box
 top_secs=$load_secs
 
 echo "== 2. memsampler alongside MCP (pid=$mcp_pid)"
-"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "${load_secs}s" \
+# Plus the tail buffer sampler.sh gets. On this box the case is stronger still:
+# the load is driven from the other box, which dials its sessions before its
+# own clock starts, so a window of exactly load_secs reliably ends early — and
+# what it clips is fd_peak, the number Run H exists to measure.
+"$bin/memsampler" -pid "$mcp_pid" -interval 1s -duration "$(( load_secs + 10 ))s" \
   -out "$runs/mem.csv" >"$runs/memsampler.log" 2>&1 &
 mem_pid=$!
 

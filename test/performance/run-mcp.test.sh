@@ -91,6 +91,30 @@ socketserver.TCPServer(('127.0.0.1', 18081), H).serve_forever()" &
 mock_pid=$!
 sleep 1
 
+echo "== the durations that cannot work are refused before anything starts"
+
+# Zero is a legitimate WARMUP and never a legitimate DURATION: loadgen rejects
+# a non-positive -duration, and `memsampler -duration 0s` means "run until the
+# process disappears" — so a zero that got past preflight would hold MCP up
+# forever and hang the run at its final wait, after the expensive setup.
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=0s ./run-mcp.sh >"$work/zero.log" 2>&1 ) || rc=$?
+eq "DURATION=0s exits 2 rather than starting a run that cannot end" "$rc" "2"
+if grep -q "DURATION must be greater than zero" "$work/zero.log"; then
+  ok "and says so, naming the value"
+else
+  bad "the refusal did not name DURATION"
+fi
+
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=1m30s ./run-mcp.sh >"$work/compound.log" 2>&1 ) || rc=$?
+eq "a compound duration the samplers cannot express is refused too" "$rc" "2"
+
+# The knob Box A sets, which this box cannot learn for itself.
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=30s WARMUP=nonsense ./run-mcp.sh >"$work/warmup.log" 2>&1 ) || rc=$?
+eq "and so is a WARMUP that is not a duration" "$rc" "2"
+
 echo "== a run terminated mid-hold still describes itself"
 
 # Two things this launch has to get right, both of them learned the hard way:

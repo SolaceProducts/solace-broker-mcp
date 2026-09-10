@@ -108,7 +108,7 @@ Key env knobs (full list in `run.sh` header):
 | var | default | note |
 |---|---|---|
 | `CLIENTS` | 32 | MCP sessions in parallel |
-| `DURATION` | 60s | a number of `s`, `m` or `h`. Compound and sub-second forms (`1m30s`, `500ms`) are refused: the samplers count in whole seconds, and a duration they cannot express used to be silently replaced with 90 |
+| `DURATION` | 60s | a number of `s`, `m` or `h`, greater than zero. Compound and sub-second forms (`1m30s`, `500ms`) are refused: the samplers count in whole seconds, and a duration they cannot express used to be silently replaced with 90. Zero is refused too — `memsampler -duration 0s` means "run until the process disappears" |
 | `WARMUP` | — | `loadgen -warmup`: time discarded from the **stats** at the head of the run. The run still lasts `WARMUP + DURATION` and the samplers are extended to match. See [Warm-up and mid-run events](#warm-up-and-mid-run-events) |
 | `TOOLS` | all four | `get-broker-status,list-queues,list-rdps,get-rdp-status`; set it to a subset to isolate one tool's cost. Validated in the step-0 preflight, before the mock starts — an unknown tool aborts the run immediately |
 | `LATENCY_MS` | 0 | per-response sleep in mock; use to force per-broker semaphore queueing inside MCP |
@@ -225,7 +225,7 @@ Format is one `key=value` per line with `#` comments, the same shape the
 | runtime | `gomaxprocs_env`, `cgroup_path`, `cgroup_cpu_max`, `cgroup_cpu_quota_cores` — how much processor the Go runtime was entitled to. MCP records only; see [What the runtime fields say](#what-the-runtime-fields-say-and-what-they-deliberately-do-not) |
 | fixtures | `fixtures_manifest_sha256`, `fixtures_files`, `fixtures_captured_at`, `fixtures_capture_commit`, `fixtures_capture_dirty`, `fixtures_vpn`, `fixtures_rdp`, `fixtures_broker_alias` |
 | admission | `semp_max_concurrent_per_broker`, `semp_request_min_interval`, `semp_max_queue_wait`, `semp_fair_scheduling`, each with a `_source` |
-| descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak`, `fd_peak_source`, plus `run_terminated` when the run did not finish |
+| descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak`, `fd_peak_source`, plus `run_terminated` or `load_failed` when the run was not a whole one |
 | workload | `clients`, `duration`, `stats_warmup`, `tools`, `broker_count`, `vpn`, `rdp`, `latency_ms`, `total_rps`, the error-injection knobs |
 | load phase | `load_start_epoch`, `load_end_epoch`, `load_window_source`, and `stats_start_epoch` when `WARMUP` is set |
 
@@ -274,10 +274,19 @@ runtime was entitled to. Without them, two runs on one box with different
 |---|---|
 | `gomaxprocs_env` | `GOMAXPROCS` in the server process's own environment, or `unset` |
 | `cgroup_path` | the process's cgroup (unified hierarchy), or `unknown` |
-| `cgroup_cpu_max` | that cgroup's `cpu.max`, verbatim; the nearest ancestor's when the leaf has none; `none` when nothing up to the root sets one |
+| `cgroup_cpu_max` | the binding `cpu.max`, verbatim; `none` when nothing on the path sets one |
 | `cgroup_cpu_quota_cores` | the same as a core count — `0.25` for `25000 100000` — or `none` |
+| `cgroup_cpu_quota_from` | which cgroup on the path that limit came from |
 
-All three read `unknown` where the harness could not establish them: a cgroup
+**The limit reported is the one that binds, not the nearest.** v2 CPU limits
+are hierarchical — a parent's bandwidth bounds its whole subtree — so every
+cgroup from the process's own up to the root is read and the most restrictive
+wins. A 2-core leaf under a half-core parent gets half a core, and reporting
+the leaf would overstate it fourfold. `cgroup_cpu_quota_from` names the level
+that actually binds; a level whose `cpu.max` does not parse is skipped rather
+than treated as permission.
+
+All four read `unknown` where the harness could not establish them: a cgroup
 v1 or hybrid host, an unreadable `/proc/<pid>/cgroup`, or a `cpu.max` line that
 does not parse. `none` and `unknown` are different answers and are not
 interchangeable — the first says there is no limit, the second says we could
@@ -311,6 +320,13 @@ says which it is: `fd_peak_source=complete` or `fd_peak_source=partial`, the
 latter alongside `run_terminated=true`. This matters most on the split-host MCP
 box, which stamps no load window by design and so has nothing else that would
 distinguish an interrupted record from a whole one.
+
+There are three outcomes, not two, because a load that exits non-zero is not
+the same as a run that was interrupted: the runner reached its end, but the
+samplers spent the rest of their clock over an idle server, so the peak is real
+and the run is not a measurement. That case records `load_failed=true` beside
+`fd_peak_source=partial`, and `load_rc` carries the load generator's exit code
+on every single-host run.
 
 A `SIGKILL`, or an instance stopped out from under the run, still loses both
 fields: nothing shell-side survives that, and the record simply stays short.
