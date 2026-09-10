@@ -17,6 +17,7 @@ package metrics
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
@@ -119,6 +120,54 @@ mcp_broker_unreachable_reason{broker="prod",reason="unreachable"} 0
 	}
 }
 
+func TestBrokerMetrics_Timestamp(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(testVersion, sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.BrokerMetrics(snap(map[string]health.BrokerSnapshot{
+		"prod": {Current: health.StateReachable, LastResult: time.Unix(1700000000, 0)},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	const want = `
+# HELP mcp_broker_last_result_timestamp_seconds Unix timestamp of the most recent SEMP call result for this broker.
+# TYPE mcp_broker_last_result_timestamp_seconds gauge
+mcp_broker_last_result_timestamp_seconds{broker="prod"} 1.7e+09
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_broker_last_result_timestamp_seconds"); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestBrokerMetrics_Timestamp_ZeroAbsent(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(testVersion, sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// LastResult is zero — timestamp series must not be emitted.
+	if _, err := p.BrokerMetrics(snap(map[string]health.BrokerSnapshot{
+		"prod": {Current: health.StateReachable},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	mfs, err := p.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == "mcp_broker_last_result_timestamp_seconds" && len(mf.GetMetric()) > 0 {
+			t.Errorf("expected no timestamp series for zero LastResult, got %v", mf)
+		}
+	}
+}
+
 func TestBrokerMetrics_AbsentBeforeFirstCall(t *testing.T) {
 	t.Parallel()
 
@@ -130,15 +179,18 @@ func TestBrokerMetrics_AbsentBeforeFirstCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	absent := map[string]bool{
+		"mcp_broker_reachable":                      true,
+		"mcp_broker_unreachable_reason":              true,
+		"mcp_broker_last_result_timestamp_seconds":   true,
+	}
 	mfs, err := p.registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, mf := range mfs {
-		if mf.GetName() == "mcp_broker_reachable" || mf.GetName() == "mcp_broker_unreachable_reason" {
-			if len(mf.GetMetric()) > 0 {
-				t.Errorf("expected no broker metrics before first call, got %v", mf)
-			}
+		if absent[mf.GetName()] && len(mf.GetMetric()) > 0 {
+			t.Errorf("expected no %s before first call, got %v", mf.GetName(), mf)
 		}
 	}
 }

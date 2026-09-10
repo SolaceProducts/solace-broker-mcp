@@ -752,41 +752,43 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 // On failure after retries, returns a RetriesExhaustedError or a wrapped error.
 // When the request cannot be admitted within semp.max_queue_wait it returns a
 // BrokerBusyError and never reaches the broker (see admit).
+// brokerSignalStatus extracts the HTTP status to report from the terminal
+// outcome of a Do call. Returns (status, true) for real broker signals and
+// (0, false) for non-broker outcomes: admission failures, caller-context
+// cancellations, and unknown error shapes. callerCtx must be the context
+// passed into Do before the retry-budget inner context is created.
+func brokerSignalStatus(callerCtx context.Context, resp *http.Response, err error) (int, bool) {
+	var busy *BrokerBusyError
+	if errors.As(err, &busy) {
+		return 0, false
+	}
+	if resp != nil {
+		return resp.StatusCode, true
+	}
+	if err != nil {
+		var exhausted *RetriesExhaustedError
+		if errors.As(err, &exhausted) {
+			return exhausted.StatusCode, true
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			if callerCtx.Err() != nil {
+				return 0, false // caller's own context expired
+			}
+			return 0, true // internal timeout (retry budget or http.Client.Timeout)
+		}
+		return 0, false // unknown error (e.g. request-wrapping failure)
+	}
+	return 0, false
+}
+
 func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
-	// Capture the caller's context before Do reassigns ctx to the retry-budget
-	// inner context below. The defer uses callerCtx to distinguish a caller
-	// cancellation (not a broker signal) from an internal timeout (broker signal).
+	// Capture before Do may reassign ctx to the retry-budget inner context.
 	callerCtx := ctx
 	if d.resultHook != nil {
 		defer func() {
-			// BrokerBusyError: admission rejected before any HTTP — not a broker signal.
-			var busy *BrokerBusyError
-			if errors.As(err, &busy) {
-				return
+			if status, ok := brokerSignalStatus(callerCtx, resp, err); ok {
+				d.resultHook(d.brokerAlias, status)
 			}
-			status := 0
-			if resp != nil {
-				status = resp.StatusCode
-			} else if err != nil {
-				var exhausted *RetriesExhaustedError
-				if errors.As(err, &exhausted) {
-					// Retries ran against the broker — always a broker signal.
-					// exhausted.StatusCode is 0 for transport failures (timeout,
-					// connection refused), which Classify maps to unreachable.
-					status = exhausted.StatusCode
-				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-					if callerCtx.Err() != nil {
-						// Caller's own context expired — not a broker signal.
-						return
-					}
-					// Internal timeout (retry budget or http.Client.Timeout) — classify
-					// as unreachable (status 0).
-				} else {
-					// Unknown error type (e.g. request-wrapping failure).
-					return
-				}
-			}
-			d.resultHook(d.brokerAlias, status)
 		}()
 	}
 
