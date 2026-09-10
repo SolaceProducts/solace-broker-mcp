@@ -9,6 +9,15 @@
 # Env overrides (same names as run.sh so the two scripts share vocabulary):
 #   CLIENTS      loadgen -clients                (default 200)
 #   DURATION     loadgen -duration               (default 60s)
+#   WARMUP       loadgen -warmup                 (default unset = no warmup).
+#                Time discarded from the STATS at the head of the run. The run
+#                still drives load for WARMUP + DURATION and this box's
+#                samplers are extended to match — but Box B's are not, because
+#                the two boxes share no channel: give run-mcp.sh a DURATION of
+#                at least WARMUP + DURATION or its samplers stop before the
+#                load does. Use it for a run with a mid-run event: only the
+#                summary percentiles are emitted, so a run that injects
+#                latency partway through cannot be re-windowed afterwards.
 #   TOOLS        loadgen -tools                  (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   BROKERS      loadgen -broker-count           (default 50)
 #   BROKERS_CSV  loadgen -brokers <csv>          (default empty = use BROKERS).
@@ -61,6 +70,8 @@ source "$here/lib.sh"
 
 CLIENTS="${CLIENTS:-200}"
 DURATION="${DURATION:-60s}"
+# Unset by default, so an existing invocation behaves exactly as it did.
+WARMUP="${WARMUP:-}"
 TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 # Record whether BROKERS came from the environment before the default lands,
 # so the BROKERS_CSV conflict check below can tell "caller set 50" from
@@ -73,6 +84,31 @@ TOTAL_RPS="${TOTAL_RPS:-0}"
 RUN_TAG="${RUN_TAG:-${CLIENTS}c}"
 NO_MOCK="${NO_MOCK:-0}"
 PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
+
+# Validated before anything starts. loadgen would reject a malformed duration
+# itself, but only after the mock, the wait for Box B and the fidelity gate
+# have been paid for — and on this box that is minutes, not seconds.
+# DURATION and WARMUP both size sampler windows, so both are resolved to whole
+# seconds here, once, and a value that cannot be resolved stops the run before
+# the mock, the wait for Box B and the fidelity gate have been paid for.
+# Stricter than Go's own parser — see run.sh for why the old arrangement, with
+# a separate awk that fell back to a hardcoded 90, sampled the wrong span in
+# silence.
+duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+warmup_secs=0
+warmup_args=()
+if [[ -n "$WARMUP" ]]; then
+  warmup_secs=$(perf_duration_secs "$WARMUP") || exit 2
+  # A zero warmup is the same run as no warmup, so it is normalised to one
+  # rather than recorded as a warmup with no stats window beside it.
+  if (( warmup_secs > 0 )); then
+    warmup_args=(-warmup "$WARMUP")
+  else
+    WARMUP=""
+  fi
+fi
+# The load lasts warmup + duration, so every window over it must too.
+load_secs=$(( duration_secs + warmup_secs ))
 
 # loadgen rejects -brokers and -broker-count together; catch it here instead,
 # where the message can name the environment variables the caller actually set.
@@ -186,15 +222,9 @@ fi
 # names would drift the first time a tool is added.
 "$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
 
-# Convert Go duration to seconds for the sampler's -duration arg.
-sample_secs=$(awk -v d="$DURATION" 'BEGIN {
-  if (match(d, /^([0-9.]+)s$/, m)) { print int(m[1]); exit }
-  if (match(d, /^([0-9.]+)m$/, m)) { print int(m[1]*60); exit }
-  if (match(d, /^([0-9.]+)h$/, m)) { print int(m[1]*3600); exit }
-  print 90
-}')
-# Give the sampler a small buffer so it captures loadgen's teardown too.
-sample_secs=$(( sample_secs + 10 ))
+# Resolved at the top, from the same parser the run record and Box B use.
+# Plus a small buffer so the sampler captures loadgen's teardown too.
+sample_secs=$(( load_secs + 10 ))
 
 # The run record for this box. One per box, never a merged one: the two halves
 # of a split-host run have different rigs, and merging them would need a
@@ -208,6 +238,10 @@ perf_record_comment "$record" "workload"
 perf_record_kv "$record" mcp_url "$mcp_url"
 perf_record_kv "$record" clients "$CLIENTS"
 perf_record_kv "$record" duration "$DURATION"
+# What the stats exclude, not what the load skipped: the run still drives load
+# for the whole of WARMUP + DURATION. `none` rather than an empty value, which
+# would read as a measured zero.
+perf_record_kv "$record" stats_warmup "${WARMUP:-none}"
 perf_record_kv "$record" tools "$TOOLS"
 perf_record_kv "$record" broker_count "$BROKERS"
 # Only when an explicit alias list was pinned; an empty field would read as a
@@ -424,10 +458,18 @@ fi
 # report CPU over the load phase instead of over a window that also contains
 # the idle stretch the fidelity gate ran in. Never inferred from the samples.
 perf_stamp_load_start "$record"
+# With a warmup, the load window and the window the stats describe are not the
+# same span. Record the second one so CPU can be read over the span the
+# percentiles actually cover rather than over one that also contains the
+# traffic they exclude.
+if (( warmup_secs > 0 )); then
+  lw_load_start=$(awk -F= '/^load_start_epoch=/ {print $2; exit}' "$record")
+  perf_record_kv "$record" stats_start_epoch "$(( lw_load_start + warmup_secs ))"
+fi
 
-echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION, tools=$TOOLS, $broker_note${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
+echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION${WARMUP:+ after $WARMUP warmup}, tools=$TOOLS, $broker_note${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
 "$bin/loadgen" -mcp-url "$mcp_url" "${broker_args[@]}" \
-  -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
+  -clients "$CLIENTS" -duration "$DURATION" ${warmup_args[@]+"${warmup_args[@]}"} -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
   "${extra_args[@]}" \
   > >(tee "$runs/loadgen.log") 2>&1 &
@@ -466,4 +508,12 @@ lw_start=$(awk -F= '/^load_start_epoch=/ {print $2; exit}' "$record")
 lw_end=$(awk -F= '/^load_end_epoch=/ {print $2; exit}' "$record")
 echo "to window the MCP box's CPU on this run's load phase:"
 echo "  ./summary.sh <box-b-run-dir> $lw_start $lw_end"
+# With a warmup, the load phase and the span the percentiles describe are
+# different windows, and the second is the one that matches the numbers a
+# mid-run-event run is quoted from.
+if (( warmup_secs > 0 )); then
+  lw_stats=$(awk -F= '/^stats_start_epoch=/ {print $2; exit}' "$record")
+  echo "to window it on the span the stats cover (after the ${WARMUP} warmup):"
+  echo "  ./summary.sh <box-b-run-dir> $lw_stats $lw_end"
+fi
 exit "$lg_rc"

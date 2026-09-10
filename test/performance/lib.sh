@@ -303,6 +303,30 @@ perf_record_rig() {
   return 0
 }
 
+# perf_tree_dirty <dir> — `true` when the checkout has uncommitted changes to
+# tracked files, `false` when it does not; rc=1 when <dir> is not a checkout.
+#
+# `--untracked-files=no` is the whole point of this existing. `git status`
+# reports the entire repository regardless of the directory it is pointed at,
+# so without it an untracked file anywhere in the tree — a scratch note, a
+# downloaded toolchain, an editor backup — flips the flag. That is not
+# hypothetical: this read `true` for every capture of a 120-run campaign whose
+# tree carried no tracked modification at all, and a provenance flag that is
+# always on is worse than no flag, because it trains the reader to ignore it.
+#
+# The cost of ignoring untracked files is real and worth stating: a fixture
+# regenerated but never `git add`ed reads clean. For the question the flag
+# answers — "was the tracked code at the recorded commit?" — that is the right
+# trade, but both callers repeat the caveat where they write the field.
+#
+# One helper for both callers on purpose. The defect it fixes existed twice,
+# in two files, written the same wrong way; a second copy would drift again.
+perf_tree_dirty() {
+  local out
+  out=$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null) || return 1
+  [[ -n "$out" ]] && printf 'true\n' || printf 'false\n'
+}
+
 # perf_record_code <record> <repo_root> <bin_dir> <binary>... — what was built.
 #
 # The commit alone does not identify what ran: a run from a dirty tree is not
@@ -315,11 +339,10 @@ perf_record_code() {
   perf_record_comment "$record" "code"
   if commit=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null); then
     perf_record_kv "$record" commit "$commit"
-    if [[ -n "$(git -C "$repo_root" status --porcelain 2>/dev/null)" ]]; then
-      dirty=true
-    else
-      dirty=false
-    fi
+    # Tracked changes only — see perf_tree_dirty. An untracked file in the
+    # tree is not a difference between this run and the commit it names; a
+    # regenerated-but-unadded fixture is the blind spot that buys.
+    dirty=$(perf_tree_dirty "$repo_root") || dirty=unknown
     perf_record_kv "$record" commit_dirty "$dirty"
   else
     # A tarball deploy with no .git. Say so rather than leaving the reader to
@@ -534,6 +557,198 @@ perf_record_proc_nofile() {
     perf_record_kv "$record" nofile_effective_soft unknown
     perf_record_kv "$record" nofile_effective_hard unknown
   fi
+  return 0
+}
+
+# perf_record_assert_fields <record> <field>... — warn loudly when a record is
+# closed without a field it should carry. rc=1 when any is missing.
+#
+# Named fields, never a line count. A count breaks on the next field anyone
+# adds and on every comment line, and "a record that is short by one" is
+# precisely what no reader notices: a 48-line record looks complete unless you
+# count it against another one.
+#
+# Warns rather than aborts. By the time a record is closed the measurement is
+# already in the CSVs, and turning a provenance gap into a non-zero exit would
+# discard a completed run over a missing line. The caller decides what to do
+# with rc=1; the runners deliberately let it stand as a warning.
+perf_record_assert_fields() {
+  local record=$1; shift
+  local f
+  local missing=()
+  for f in "$@"; do
+    grep -q "^$f=" "$record" 2>/dev/null || missing+=("$f")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "!! incomplete run record ${record##*/}: missing ${missing[*]}" >&2
+    return 1
+  fi
+  return 0
+}
+
+# perf_duration_secs <duration> — a Go duration string as whole seconds,
+# rounded up. rc=1 with a message on anything else.
+#
+# Rounded up because every caller sizes a sampler window with the result, and a
+# window that ends before the load does clips the tail off the load-phase
+# figures — the diluted number the run record exists to stop people quoting.
+#
+# Deliberately stricter than Go's own parser, which also takes "1m30s" and
+# "500ms". The samplers here count in whole seconds, so a duration they cannot
+# express is better refused at the door than silently truncated. Pure bash and
+# awk arithmetic: no gawk-only 3-argument match(), because this file is sourced
+# by the self-test on developer laptops where awk is mawk.
+perf_duration_secs() {
+  local v=${1-} n unit secs
+  if [[ "$v" =~ ^([0-9]+(\.[0-9]+)?)(s|m|h)$ ]]; then
+    n=${BASH_REMATCH[1]}
+    unit=${BASH_REMATCH[3]}
+  else
+    echo "duration must be a number of s, m or h (e.g. 30s, 1.5m), got: '$v'" >&2
+    return 1
+  fi
+  # The epsilon is not cosmetic: 1.1 * 3600 is 3960.0000000000005 in floating
+  # point, so a bare `s == int(s)` rounds 1.1h up to 3961 seconds.
+  #
+  # The upper bound stops a fat-fingered value becoming a number that wraps
+  # when the caller adds to it: `$(( 1e20 + 10 ))` is negative-adjacent
+  # nonsense, and no window this harness sizes is longer than a day.
+  secs=$(awk -v n="$n" -v u="$unit" 'BEGIN {
+    mult = (u == "h" ? 3600 : (u == "m" ? 60 : 1))
+    s = n * mult
+    if (s > 86400) { print "over"; exit }
+    print (s <= int(s) + 1e-9) ? int(s) : int(s) + 1
+  }')
+  if [[ "$secs" == over ]]; then
+    echo "duration must be 24h or less, got: '$v'" >&2
+    return 1
+  fi
+  printf '%s\n' "$secs"
+}
+
+# perf_cgroup_cpu_max <root> <cgroup_path> — the `cpu.max` that binds a process
+# in <cgroup_path>, searched from that cgroup upwards to <root>. Echoes the
+# file's contents, or nothing when no ancestor sets one.
+#
+# Split out from perf_record_runtime_cpu so the search is testable with a
+# nested path. It is one of the two parts here that could write a confident
+# wrong number, and a test that derives its fixture from the *test host's* own
+# cgroup cannot exercise it at all on a host whose shell sits at the root —
+# leaf and ancestor collapse to one directory and the walk is never taken.
+#
+# The walk is necessary, not defensive: cpu.max exists only where the cpu
+# controller has been enabled, and a limit set on an ancestor still binds.
+perf_cgroup_cpu_max() {
+  local root=${1%/} dir
+  [[ -z "$root" ]] && root=/
+  dir="$root${2%/}"
+  while :; do
+    if [[ -r "$dir/cpu.max" ]]; then
+      cat "$dir/cpu.max"
+      return 0
+    fi
+    [[ "$dir" == "$root" || "$dir" == "/" ]] && return 0
+    dir=$(dirname "$dir")
+  done
+}
+
+# perf_cgroup_quota_cores <cpu.max contents> — that quota as a core count:
+# `0.25` for "25000 100000", `none` for an unlimited one, `unknown` for a line
+# this cannot read.
+#
+# Cores rather than the raw pair because the raw pair is already recorded next
+# to it, and because a reader comparing two runs wants the number the runtime
+# would have derived, not two integers to divide by hand.
+perf_cgroup_quota_cores() {
+  local cpumax=${1-} quota period
+  quota=${cpumax%% *}
+  period=${cpumax##* }
+  if [[ "$quota" == "max" ]]; then
+    printf 'none\n'
+  elif [[ "$quota" =~ ^[0-9]+$ && "$period" =~ ^[0-9]+$ ]] && (( period > 0 )); then
+    awk -v q="$quota" -v p="$period" 'BEGIN { printf "%.2f\n", q / p }'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+# perf_record_runtime_cpu <record> <pid> — how much processor the Go runtime in
+# <pid> was entitled to, as separately sourced facts.
+#
+# The record already says everything about the machine (cores_logical,
+# cores_physical, cpu_model, instance_type) and nothing about how much of it
+# the runtime will use. Two runs on one box with different GOMAXPROCS produce
+# records identical in every field, which defeats the purpose the record exists
+# for.
+#
+# Three facts, never one derived "effective GOMAXPROCS", for two reasons:
+#
+#   * Go 1.25 — what go.mod requires — derives GOMAXPROCS from the cgroup CPU
+#     limit when there is one. A field that fell back to nproc would therefore
+#     be confidently wrong in exactly the containerised case this exists to
+#     detect: deploy/kubernetes/deployment.yaml sets requests.cpu 100m and no
+#     CPU limit, so a pod falls back to the node's core count and runs with 64
+#     Ps on a 64-core node while entitled to a tenth of a core.
+#   * Go 1.25 also updates GOMAXPROCS as cgroup limits change, so no single
+#     value read at startup is the whole story anyway.
+#
+# So: record what can be read, name where each part came from, and leave the
+# derivation to the reader — the same rule the admission settings follow.
+#
+# cgroup v2 only (unified hierarchy, `0::<path>` in /proc/<pid>/cgroup). The
+# rig hosts are cgroup2fs throughout; a v1 or hybrid host writes `unknown`
+# rather than guessing at a layout it did not read.
+perf_record_runtime_cpu() {
+  local record=$1 pid=$2
+  local env_val cg cpumax
+  perf_record_comment "$record" "runtime CPU entitlement (GOMAXPROCS is derived from these, not recorded as one value)"
+
+  # As the process was actually launched, from its own environment — not this
+  # shell's, which can differ across a re-exec, and not the value some later
+  # reader assumes.
+  if [[ -r "/proc/$pid/environ" ]]; then
+    # `|| true`, and the redirect's own error silenced: the readability check
+    # above and the open below are two moments, and a process that exits
+    # between them makes the redirect fail — which, inside a command
+    # substitution feeding an assignment, aborts the whole run under `set -e`.
+    # Every other best-effort probe here is guarded the same way; this one is
+    # in the main flow of two runners, right after the health check.
+    env_val=$( { tr '\0' '\n' <"/proc/$pid/environ" || true; } 2>/dev/null \
+               | awk -F= '$1 == "GOMAXPROCS" { print substr($0, index($0, "=") + 1); exit }')
+    # `unset` is a third value alongside the record's two absences, and it is a
+    # measured answer rather than either of them: the variable was looked for
+    # and was not there, which is what makes the runtime fall back.
+    perf_record_kv "$record" gomaxprocs_env "$(perf_or_unknown "${env_val:-unset}")"
+  else
+    perf_record_kv "$record" gomaxprocs_env unknown
+  fi
+
+  # PERF_CGROUP_ROOT is a test seam and nothing else: the self-test builds a
+  # synthetic hierarchy under a temp dir. Unset in every real run, where the
+  # root is the mount point and the mount type is checked.
+  local cg_root=${PERF_CGROUP_ROOT:-/sys/fs/cgroup}
+  cg=$(awk -F: '$1 == "0" { print $3; exit }' "/proc/$pid/cgroup" 2>/dev/null) || true
+  if [[ -z "$cg" ]] || { [[ -z "${PERF_CGROUP_ROOT:-}" ]] && [[ "$(stat -fc %T "$cg_root" 2>/dev/null)" != cgroup2fs ]]; }; then
+    perf_record_kv "$record" cgroup_path unknown
+    perf_record_kv "$record" cgroup_cpu_max unknown
+    perf_record_kv "$record" cgroup_cpu_quota_cores unknown
+    return 0
+  fi
+  perf_record_kv "$record" cgroup_path "$cg"
+
+  cpumax=$(perf_cgroup_cpu_max "$cg_root" "$cg")
+  if [[ -z "$cpumax" ]]; then
+    # Reaching the root without finding the file is an answer, not a gap: the
+    # v2 root cgroup has no cpu.max by design and imposes no limit, so the
+    # runtime sized itself from the visible core count that cores_logical
+    # already records. The mount-type check above is what separates this from
+    # "we looked in the wrong place".
+    perf_record_kv "$record" cgroup_cpu_max none
+    perf_record_kv "$record" cgroup_cpu_quota_cores none
+    return 0
+  fi
+  perf_record_kv "$record" cgroup_cpu_max "$cpumax"
+  perf_record_kv "$record" cgroup_cpu_quota_cores "$(perf_cgroup_quota_cores "$cpumax")"
   return 0
 }
 

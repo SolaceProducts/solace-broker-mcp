@@ -52,17 +52,30 @@ shift
 # code. It is also what lets the load-phase window find `epoch` without this
 # script knowing how wide the file is.
 
-# window_from_record <record> — echo "<start> <end>" from a run record, or
-# nothing when it did not stamp a window.
+# window_from_record <record> — echo "<start> <end> <kind>" from a run record,
+# or nothing when it did not stamp a window.
+#
+# `stats_start_epoch` wins over `load_start_epoch` when it is there. It is only
+# written for a run with a WARMUP, and it marks where the load generator's
+# statistics window opens — which is not where the load opens. Reporting CPU
+# over the load phase while loadgen prints percentiles over the stats window
+# puts two figures for two different spans under one heading, with nothing
+# saying they differ; the whole point of a warmup is that the opening stretch
+# is excluded, so the CPU has to exclude it too.
 window_from_record() {
   awk -F= '
-    /^load_start_epoch=/ { s = $2 }
-    /^load_end_epoch=/   { e = $2 }
-    END { if (s != "" && e != "") print s, e }
+    /^load_start_epoch=/  { s = $2 }
+    /^stats_start_epoch=/ { ss = $2 }
+    /^load_end_epoch=/    { e = $2 }
+    END {
+      if (e == "") exit
+      if (ss != "")     print ss, e, "stats"
+      else if (s != "") print s, e, "load"
+    }
   ' "$1"
 }
 
-load_start="" load_end="" window_source=""
+load_start="" load_end="" window_source="" window_kind=""
 
 # Reject an unrecognised flag rather than letting it fall through to the bare
 # epoch branch. A typo'd `--window-form` used to be read as an epoch: `date`
@@ -90,7 +103,7 @@ if [[ "${1:-}" == "--window-from" ]]; then
   fi
   for rec in "${cands[@]}"; do
     [[ -r "$rec" ]] || continue
-    read -r load_start load_end <<<"$(window_from_record "$rec")"
+    read -r load_start load_end window_kind <<<"$(window_from_record "$rec")"
     if [[ -n "$load_start" && -n "$load_end" ]]; then
       window_source="$rec"
       break
@@ -139,7 +152,7 @@ fi
 if [[ -z "$window_source" ]]; then
   for rec in "$runs"/run-record.*; do
     [[ -r "$rec" ]] || continue
-    read -r load_start load_end <<<"$(window_from_record "$rec")"
+    read -r load_start load_end window_kind <<<"$(window_from_record "$rec")"
     if [[ -n "$load_start" && -n "$load_end" ]]; then
       window_source="$rec"
       break
@@ -147,6 +160,8 @@ if [[ -z "$window_source" ]]; then
   done
 fi
 
+# An explicitly given pair of epochs is whatever the operator says it is; the
+# labelling above only claims a kind when a record supplied one.
 if [[ -n "$window_source" && -z "$load_start" ]]; then
   window_source=""
 fi
@@ -278,9 +293,21 @@ info_mem() {
 
 echo "runs dir: $runs"
 if [[ -n "$load_start" && -n "$load_end" ]]; then
-  printf 'load phase: %s..%s (%ds)\n' \
-    "$(date -d "@$load_start" +%H:%M:%S)" "$(date -d "@$load_end" +%H:%M:%S)" \
-    "$(( load_end - load_start ))"
+  # Name which window this is. A reader comparing this figure with loadgen's
+  # percentiles needs to know whether the two cover the same span.
+  if [[ "$window_kind" == "stats" ]]; then
+    # Same 12-character label width as "load phase:", so the provenance line
+    # below stays aligned under either heading.
+    printf 'stats span: %s..%s (%ds)\n' \
+      "$(date -d "@$load_start" +%H:%M:%S)" "$(date -d "@$load_end" +%H:%M:%S)" \
+      "$(( load_end - load_start ))"
+    printf '            the span loadgen'"'"'s percentiles cover: the load phase\n'
+    printf '            minus the warmup this run excluded from its stats.\n'
+  else
+    printf 'load phase: %s..%s (%ds)\n' \
+      "$(date -d "@$load_start" +%H:%M:%S)" "$(date -d "@$load_end" +%H:%M:%S)" \
+      "$(( load_end - load_start ))"
+  fi
   # Name the record, and its role and start time when it has them, so a
   # windowed figure in an archived report stays traceable to the run that
   # measured the window.

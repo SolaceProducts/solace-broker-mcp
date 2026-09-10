@@ -729,6 +729,224 @@ else
 fi
 eq "the requested value is recorded verbatim" "$PERF_NOFILE_REQUESTED" "4096"
 
+# --- perf_tree_dirty ---------------------------------------------------------
+
+echo "== perf_tree_dirty answers about tracked files only"
+
+# The defect this replaced: `git status --porcelain` with no
+# --untracked-files=no reports the whole repository, so a scratch file
+# anywhere in the tree pinned the flag to `true` forever. It went unnoticed
+# because the only coverage read a manifest with a hardcoded value, never the
+# computation — so the fixtures here are a real checkout, not a canned string.
+repo="$tmp/tree"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email t@example.com
+git -C "$repo" config user.name  Test
+echo tracked >"$repo/tracked.txt"
+git -C "$repo" add tracked.txt
+git -C "$repo" -c commit.gpgsign=false commit -qm initial
+
+eq "a clean checkout is false" "$(perf_tree_dirty "$repo")" "false"
+
+echo scratch >"$repo/untracked-note.md"
+eq "an untracked file does NOT flip it — the defect this fixes" \
+  "$(perf_tree_dirty "$repo")" "false"
+
+echo modified >>"$repo/tracked.txt"
+eq "a tracked modification DOES flip it" "$(perf_tree_dirty "$repo")" "true"
+
+git -C "$repo" checkout -q -- tracked.txt
+eq "and it goes back to false once the modification is reverted" \
+  "$(perf_tree_dirty "$repo")" "false"
+
+rc=0; perf_tree_dirty "$tmp" >/dev/null 2>&1 || rc=$?
+eq "a directory that is not a checkout returns rc=1, not a guess" "$rc" "1"
+
+# The run record's own field, end to end: perf_record_code is the caller that
+# writes commit_dirty, and the untracked file is still sitting in the tree.
+rec="$tmp/rec-dirty"
+: >"$rec"
+perf_record_code "$rec" "$repo" "$tmp/no-such-bin"
+eq "commit_dirty=false with an untracked file present" "$(field commit_dirty)" "false"
+echo modified >>"$repo/tracked.txt"
+: >"$rec"
+perf_record_code "$rec" "$repo" "$tmp/no-such-bin"
+eq "commit_dirty=true on a tracked modification" "$(field commit_dirty)" "true"
+git -C "$repo" checkout -q -- tracked.txt
+
+# capture_dirty is the second site, and it is the one that actually misreported
+# a whole campaign — so assert it through the script that writes it rather than
+# only through the shared helper.
+cap="$tmp/capture"
+mkdir -p "$cap/mock-semp/canned" "$cap/fidelity/golden"
+cp "$here/fixtures-manifest.sh" "$here/lib.sh" "$cap/"
+echo '{}' >"$cap/mock-semp/canned/a.json"
+echo '{}' >"$cap/fidelity/golden/b.json"
+git -C "$cap" init -q
+git -C "$cap" config user.email t@example.com
+git -C "$cap" config user.name  Test
+git -C "$cap" add -A
+git -C "$cap" -c commit.gpgsign=false commit -qm capture
+echo scratch >"$cap/.gotools-stand-in"
+( cd "$cap" && ./fixtures-manifest.sh write >/dev/null 2>&1 ) \
+  || bad "fixtures-manifest.sh write failed — the assertions below read a stale manifest"
+eq "capture_dirty=false with an untracked file in the capture checkout" \
+  "$(awk '/^# capture_dirty: / {print $3; exit}' "$cap/fixtures.manifest")" "false"
+echo modified >>"$cap/mock-semp/canned/a.json"
+( cd "$cap" && ./fixtures-manifest.sh write >/dev/null 2>&1 ) \
+  || bad "fixtures-manifest.sh write failed on the dirty tree"
+eq "capture_dirty=true when a tracked fixture was modified" \
+  "$(awk '/^# capture_dirty: / {print $3; exit}' "$cap/fixtures.manifest")" "true"
+
+# --- perf_duration_secs ------------------------------------------------------
+
+echo "== perf_duration_secs takes what the samplers can express, and refuses the rest"
+
+eq "seconds"        "$(perf_duration_secs 60s)"   "60"
+eq "minutes"        "$(perf_duration_secs 2m)"    "120"
+eq "hours"          "$(perf_duration_secs 1h)"    "3600"
+eq "fractional minutes"  "$(perf_duration_secs 1.5m)" "90"
+# Rounded up, never down: the result sizes a sampler window, and a window that
+# ends before the load does clips the tail off the load-phase figures.
+eq "a fractional second rounds up"  "$(perf_duration_secs 0.5s)" "1"
+eq "1.1s rounds up to 2"            "$(perf_duration_secs 1.1s)" "2"
+
+# Floating-point multiplication makes 1.1 * 3600 = 3960.0000000000005, so a
+# bare equality check against int() rounds this up by a whole second.
+eq "1.1h is 3960, not 3961"          "$(perf_duration_secs 1.1h)" "3960"
+eq "the bound itself is accepted"    "$(perf_duration_secs 24h)"  "86400"
+# An absurd value must be refused rather than resolved to a number that wraps
+# when the runners add their sampler buffer to it.
+for over_dur in 25h 1000000s 99999999999999999999s; do
+  rc=0
+  perf_duration_secs "$over_dur" >/dev/null 2>&1 || rc=$?
+  eq "a duration past the 24h bound ('$over_dur') is refused" "$rc" "1"
+done
+
+# Deliberately stricter than Go's parser. A bare number and a millisecond
+# duration are both things Go's flag would take (or reject much later, after
+# the expensive part of a run has been paid for).
+for bad_dur in 90 30ms 1m30s "" abc "60 s" -5s; do
+  rc=0
+  perf_duration_secs "$bad_dur" >/dev/null 2>&1 || rc=$?
+  eq "an unusable duration ('$bad_dur') is rejected at the door" "$rc" "1"
+done
+
+# --- perf_record_assert_fields ----------------------------------------------
+
+echo "== perf_record_assert_fields names what is missing"
+
+rec="$tmp/rec-assert"
+: >"$rec"
+perf_record_kv "$rec" fd_peak 4512
+rc=0; msg=$(perf_record_assert_fields "$rec" fd_peak threads_peak 2>&1) || rc=$?
+eq "a short record returns rc=1" "$rc" "1"
+contains "and names the field that is absent" "$msg" "threads_peak"
+lacks "without naming the one that is present" "$msg" "fd_peak "
+perf_record_kv "$rec" threads_peak 40
+rc=0; perf_record_assert_fields "$rec" fd_peak threads_peak >/dev/null 2>&1 || rc=$?
+eq "a complete record returns rc=0" "$rc" "0"
+
+# The match is anchored to the start of a line and includes the `=`, which is
+# the only thing separating this from the line-counting approach its docblock
+# rejects: a comment mentioning a field is not that field.
+rec="$tmp/rec-assert-anchor"
+: >"$rec"
+perf_record_comment "$rec" "fd_peak not available on this host"
+rc=0; perf_record_assert_fields "$rec" fd_peak >/dev/null 2>&1 || rc=$?
+eq "a comment naming the field does not satisfy the assertion" "$rc" "1"
+
+# --- perf_record_runtime_cpu -------------------------------------------------
+
+echo "== perf_record_runtime_cpu records the entitlement, never a derived GOMAXPROCS"
+
+# A child with GOMAXPROCS set: read from the process's own environment, which
+# is the only place that says what the runtime was actually launched with.
+GOMAXPROCS=7 sleep 30 &
+gmp_pid=$!
+sleep 0.3
+rec="$tmp/rec-gomaxprocs"
+: >"$rec"
+perf_record_runtime_cpu "$rec" "$gmp_pid"
+eq "GOMAXPROCS is read from the process's own environ" "$(field gomaxprocs_env)" "7"
+kill "$gmp_pid" 2>/dev/null || true
+
+rec="$tmp/rec-runtime-self"
+: >"$rec"
+perf_record_runtime_cpu "$rec" $$
+eq "a process with no GOMAXPROCS set records 'unset', not a guessed core count" \
+  "$(field gomaxprocs_env)" "unset"
+lacks "and no effective GOMAXPROCS is derived — the reader is left to do it" \
+  "$(cat "$rec")" "gomaxprocs_effective"
+
+# The walk-up and the quota arithmetic are the two parts that could write a
+# confident wrong number, and neither is observable on a rig host that has no
+# quota. They are tested through the pure helpers with an explicit nested path:
+# an earlier version of this test derived its fixture from /proc/self/cgroup,
+# which is `/` on this host and on any non-systemd container — so "leaf" and
+# "ancestor" collapsed to one directory, and the test passed against an
+# implementation with no walk in it at all.
+cgroot="$tmp/cgroup"
+mkdir -p "$cgroot/user.slice/app.scope/leaf"
+
+echo "25000 100000" >"$cgroot/user.slice/app.scope/leaf/cpu.max"
+eq "cpu.max on the process's own cgroup is read verbatim" \
+  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" "25000 100000"
+eq "and a quota of a quarter core reads 0.25, not 25000" \
+  "$(perf_cgroup_quota_cores "25000 100000")" "0.25"
+
+# A limit on an ancestor still binds the process, so the search has to climb
+# rather than stop at a leaf that has no cpu.max of its own.
+rm "$cgroot/user.slice/app.scope/leaf/cpu.max"
+echo "50000 100000" >"$cgroot/user.slice/cpu.max"
+eq "a quota two levels up is found by walking up" \
+  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" "50000 100000"
+
+# The nearest one wins: a leaf limit is not overridden by a looser ancestor.
+echo "10000 100000" >"$cgroot/user.slice/app.scope/cpu.max"
+eq "the nearest cgroup with a limit wins over a further ancestor" \
+  "$(perf_cgroup_quota_cores "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)")" "0.10"
+
+rm "$cgroot/user.slice/cpu.max" "$cgroot/user.slice/app.scope/cpu.max"
+eq "no cpu.max anywhere up to the root returns nothing" \
+  "$(perf_cgroup_cpu_max "$cgroot" /user.slice/app.scope/leaf)" ""
+eq "a root given with a trailing slash still terminates" \
+  "$(perf_cgroup_cpu_max "$cgroot/" /user.slice)" ""
+
+eq "an unlimited quota reads none"        "$(perf_cgroup_quota_cores "max 100000")" "none"
+eq "a zero period is not divided by"      "$(perf_cgroup_quota_cores "25000 0")"    "unknown"
+eq "an unreadable cpu.max line reads unknown" "$(perf_cgroup_quota_cores "garbage")" "unknown"
+eq "half a core"                          "$(perf_cgroup_quota_cores "50000 100000")" "0.50"
+
+# And the composition: the record function maps "found nothing" to `none`,
+# which must not read the same as "could not establish".
+self_cg=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup 2>/dev/null || true)
+if [[ -n "$self_cg" ]]; then
+  mkdir -p "$cgroot$self_cg"
+  rec="$tmp/rec-noquota"
+  : >"$rec"
+  PERF_CGROUP_ROOT="$cgroot" perf_record_runtime_cpu "$rec" $$
+  eq "no quota anywhere reads 'none', not 'unknown'" \
+    "$(field cgroup_cpu_quota_cores)" "none"
+  echo "25000 100000" >"$cgroot$self_cg/cpu.max"
+  rec="$tmp/rec-quota"
+  : >"$rec"
+  PERF_CGROUP_ROOT="$cgroot" perf_record_runtime_cpu "$rec" $$
+  eq "a quota reaches the record as cores" "$(field cgroup_cpu_quota_cores)" "0.25"
+  eq "with the raw pair beside it"         "$(field cgroup_cpu_max)" "25000 100000"
+else
+  skip "record-level cgroup composition (this host has no unified cgroup line)"
+fi
+
+# A pid that no longer exists: both halves unreadable, and the record says so
+# rather than describing this shell's own entitlement.
+rec="$tmp/rec-nopid"
+: >"$rec"
+perf_record_runtime_cpu "$rec" 999999
+eq "a vanished pid records unknown for the environment" "$(field gomaxprocs_env)" "unknown"
+eq "and unknown for the cgroup"  "$(field cgroup_cpu_quota_cores)" "unknown"
+
 echo
 if (( skip )); then
   echo "$pass passed, $fail failed, $skip skipped"

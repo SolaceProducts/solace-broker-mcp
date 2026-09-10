@@ -41,6 +41,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# lib.sh is functions-only (perf_*), so sourcing it here costs nothing and
+# keeps capture_dirty and the run record's commit_dirty on one implementation.
+# shellcheck source=lib.sh
+source "$here/lib.sh"
 manifest="$here/fixtures.manifest"
 fixture_dirs=(mock-semp/canned fidelity/golden)
 
@@ -90,7 +94,12 @@ cmd_write() {
     # different commits can differ in what the tools select, so a run record
     # that names the fixture set should be able to name the code that made it.
     echo "# capture_commit: $(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
-    echo "# capture_dirty: $( [[ -n "$(git -C "$here" status --porcelain 2>/dev/null)" ]] && echo true || echo false )"
+    # Tracked changes only. perf_tree_dirty carries the reasoning and the
+    # blind spot this buys: a fixture regenerated but never `git add`ed reads
+    # clean here. The alternative — counting untracked files — pinned this
+    # flag to `true` on any host that had ever left a scratch file in the
+    # tree, which is how it came to mean nothing.
+    echo "# capture_dirty: $(perf_tree_dirty "$here" || echo unknown)"
     echo "# broker_alias: ${BROKER_ALIAS:-unknown}"
     echo "# vpn: ${VPN:-unknown}"
     echo "# rdp: ${RDP_NAME:-unknown}"
