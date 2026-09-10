@@ -29,6 +29,7 @@ import (
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 )
 
@@ -116,9 +117,36 @@ func TestGoldenSchema(t *testing.T) {
 		Attempt:   1,
 	}, 5*time.Millisecond)
 
+	// Security counters (SOL-152099): registration seeds the auth-failure
+	// series; one denial surfaces the unseeded authz family.
+	sec, err := p.SecurityMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec.RecordAuthzDenied(context.Background(), "test-tool", "not_permitted")
+
 	if err := panics.Register(p.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register() error = %v", err)
 	}
+
+	// Broker reachability gauges (SOL-152088): seed one reachable and one failed
+	// broker with fixed timestamps so the one-hot 0 series is captured in the golden.
+	if _, err := p.BrokerMetrics(func() map[string]health.BrokerSnapshot {
+		return map[string]health.BrokerSnapshot{
+			"broker-a": {
+				Current:    health.StateReachable,
+				LastResult: time.Unix(1700000000, 0),
+			},
+			"broker-b": {
+				Current:     health.StateUnreachable,
+				SeenReasons: []health.BrokerState{health.StateCredentialInvalid, health.StateUnreachable},
+				LastResult:  time.Unix(1700000001, 0),
+			},
+		}
+	}); err != nil {
+		t.Fatalf("BrokerMetrics() error = %v", err)
+	}
+
 	got := mcpFamilies(scrapePlainText(t, p))
 
 	golden := filepath.Join("testdata", "metrics_golden.txt")

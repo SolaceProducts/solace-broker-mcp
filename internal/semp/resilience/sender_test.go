@@ -153,6 +153,85 @@ func jsonOK(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
 }
 
+// TestBrokerSignalStatus covers all terminal paths of brokerSignalStatus: the
+// five cases the ResultHook depends on for correct broker reachability tracking.
+func TestBrokerSignalStatus(t *testing.T) {
+	t.Parallel()
+
+	liveCtx := context.Background()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	makeResp := func(status int) *http.Response {
+		return &http.Response{StatusCode: status, Body: http.NoBody}
+	}
+
+	tests := []struct {
+		name       string
+		callerCtx  context.Context
+		resp       *http.Response
+		err        error
+		wantStatus int
+		wantReport bool
+	}{
+		{
+			name:       "success 200",
+			callerCtx:  liveCtx,
+			resp:       makeResp(200), //nolint:bodyclose // brokerSignalStatus only reads StatusCode; body is NoBody
+			wantStatus: 200,
+			wantReport: true,
+		},
+		{
+			name:       "RetriesExhaustedError with final status",
+			callerCtx:  liveCtx,
+			err:        &RetriesExhaustedError{StatusCode: 503, Attempts: 3},
+			wantStatus: 503,
+			wantReport: true,
+		},
+		{
+			name:       "transport failure status 0",
+			callerCtx:  liveCtx,
+			err:        &RetriesExhaustedError{StatusCode: 0, Attempts: 1, Err: context.DeadlineExceeded},
+			wantStatus: 0,
+			wantReport: true,
+		},
+		{
+			name:       "admission shedding BrokerBusyError",
+			callerCtx:  liveCtx,
+			err:        &BrokerBusyError{Stage: AdmissionStageConcurrency},
+			wantStatus: 0,
+			wantReport: false,
+		},
+		{
+			name:       "caller context cancelled",
+			callerCtx:  cancelledCtx,
+			err:        context.Canceled,
+			wantStatus: 0,
+			wantReport: false,
+		},
+		{
+			name:       "internal timeout retry budget — caller context still live",
+			callerCtx:  liveCtx,
+			err:        context.DeadlineExceeded,
+			wantStatus: 0,
+			wantReport: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotStatus, gotReport := brokerSignalStatus(tc.callerCtx, tc.resp, tc.err)
+			if gotReport != tc.wantReport {
+				t.Errorf("report: got %v, want %v", gotReport, tc.wantReport)
+			}
+			if gotStatus != tc.wantStatus {
+				t.Errorf("status: got %d, want %d", gotStatus, tc.wantStatus)
+			}
+		})
+	}
+}
+
 // TestSender_New_SanitizesBrokerURLForLogging pins that New sanitizes
 // brokerURL once at construction — the highest-leverage of the sites this
 // hardens, since every retry/failure log line in retry.go and sender.go

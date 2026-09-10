@@ -46,9 +46,9 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
-| Distributed tracing | **[Interim — request-path spans wired, per-attempt spans pending]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, and each SEMP call are live behind `OBS_TRACING_ENABLED`. Per-*attempt* spans and the retry attributes are still pending (Story 27). See [Distributed Tracing](#distributed-tracing--interim-request-path-spans-wired). |
+| Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
 
@@ -96,7 +96,7 @@ not rename what is already there.
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.1**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.3**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -116,18 +116,24 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
 > `mcp_semp_request_duration_seconds`, the OTLP export-health counters,
-> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the
-> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume
-> any other metric below is not yet emitted._
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)),
+> `mcp_auth_failure_total` and `mcp_authz_denied_total` (see
+> [Authentication Failures](#authentication-failures--implemented) and
+> [Authorization Denials](#authorization-denials--implemented)), the
+> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)),
+> and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and
+> `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
+> Assume any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
-format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
-counter (`mcp_auth_failure_total`) is recorded has its own flag,
-`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, but an
-operator can set it independently, so the counter can be suppressed while the rest of the
-surface is on, or kept while the rest is off. The flag governs recording only. What is
-exposed when it is forced on while `OBS_METRICS_ENABLED` is false is a property of the
-`/metrics` endpoint and is settled by `OBS_METRICS_ENABLED`, not by this schema.
+format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
+(`mcp_auth_failure_total` and `mcp_authz_denied_total`) are recorded has its own flag,
+`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, so with
+nothing set the counters are on exactly when metrics are. An explicit `false` suppresses both
+while the rest of the surface stays on; their series are then absent, not zero. An explicit
+`true` while `OBS_METRICS_ENABLED` is `false` has nothing to register against — there is no
+exporter and no `/metrics` listener — so the server logs a `WARN` naming the flag at startup
+and records nothing.
 
 The `mcp_*` instruments can additionally be **pushed over OTLP**, behind its own flag,
 `OBS_METRICS_OTLP_ENABLED`. The `go_*`/`process_*` collectors are scrape-only and are
@@ -183,14 +189,17 @@ wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bi
 loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
 version, schema versions, and — once tools run — tool names already public in
 `docs/tools-reference.md`, broker aliases, broker hostnames via `server_address` on the SEMP
-metrics, and usage timing), but the listener is absent entirely unless `OBS_METRICS_ENABLED`
-is set.
+metrics, and usage timing), with two exceptions: `mcp_auth_failure_total{reason}` exposes a
+readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_total{tool}`
+tells a reader which tools authorization is refusing. Treat restricting the listener as the
+default posture, not optional hardening. The listener is absent entirely unless
+`OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
 The core Rate / Errors / Duration signal for every tool call that reaches its handler. A call
 refused by tool authorization never reaches one, so it is absent here and counted by
-`mcp_authz_denied_total` instead.
+`mcp_authz_denied_total` instead (when that counter is enabled; see below).
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -237,6 +246,15 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...). `attempt` is on the
   **counter only**: the histogram omits it so its bucket series are not multiplied by the
   retry cap. Retry-storm detection reads the counter.
+- **No operator-visible change (SOL-152422):** `attempt` already reflected the real try
+  number before this release — the metrics transport owned the counter and bumped it on
+  every attempt, with or without tracing. This release moves ownership of that counter to
+  the new `semp.attempt` span, and the metric now reads it rather than bumping it. The
+  values on the wire are unchanged; what changed is that the metric's `attempt` label and
+  the span's `attempt` attribute are now backed by the same counter and cannot drift
+  against each other. (A *tracing-only* deployment, metrics off, is where a naive design
+  could have gone wrong — a span-local counter would have read `1` on every attempt — and
+  that hazard is the one this design avoids, not a regression that shipped.)
 - **The duration is the time to the response's first byte for one attempt.** It excludes the
   MCP-side admission wait (rate limiting and the in-flight cap) and the response-body read,
   and it excludes retry backoff between attempts — so it is broker round-trip latency, not
@@ -266,24 +284,29 @@ broker state, not per attempt.
 |---|---|---|---|
 | `mcp_broker_reachable` | Gauge (`1`/`0`) | `broker` | Solace |
 | `mcp_broker_unreachable_reason` | Gauge (`1`/`0`) | `broker`, `reason` | Solace |
+| `mcp_broker_last_result_timestamp_seconds` | Gauge (Unix seconds) | `broker` | Solace |
 
 - `mcp_broker_reachable` is set passively from the result of real calls; it is not a
-  heartbeat. A broker is reported unreachable only after a real call fails, so a broker
-  outage shows up here as a metric to alert on, not as a failed pod.
-- `reason` is a closed set: `credential_invalid` (a 401 from the broker), `unreachable`
-  (connection refused, DNS failure, or I/O timeout), `broker_error` (any other non-2xx).
-- `mcp_broker_unreachable_reason` is **one-hot per broker**: at most one `reason` series
-  per broker is `1` at any moment, and every other `reason` for that broker is explicitly
-  `0`. All reasons for a broker are published once it has been seen, so a series never
-  disappears mid-incident and `max by (reason)` cannot straddle two causes. A broker that
-  is reachable has every `reason` at `0`.
-- Alert on `mcp_broker_reachable == 0` and use this gauge only to attribute the cause;
-  `mcp_broker_unreachable_reason == 1` is deliberately redundant with it rather than a
-  second, separately-timed source of truth.
+  heartbeat. A broker that has not received any call since pod start is absent from this
+  gauge — use `absent(mcp_broker_reachable{broker="..."})` alongside `== 0` in reachability
+  alerts to catch both cases.
+- `reason` vocabulary: `credential_invalid` (HTTP 401 or 403), `unreachable` (connection
+  refused, DNS failure, or I/O timeout), `broker_error_NNN` (5xx or 429, where NNN is the
+  HTTP status code, e.g. `broker_error_503`). Other 4xx responses (404, 400, 409, …) classify
+  as `reachable` because the broker answered. `broker_error_NNN` cardinality is bounded by
+  the finite set of HTTP status codes.
+- `mcp_broker_unreachable_reason` is **one-hot per broker**: every reason ever recorded for a
+  broker is always present in the scrape — `1` for the current reason, `0` for all prior ones.
+  This guarantees series never disappear mid-incident and `max by (reason)` never straddles
+  two causes. Alert on `mcp_broker_reachable == 0`; use this gauge only to attribute the cause.
+- `mcp_broker_last_result_timestamp_seconds` records when the broker's most recent SEMP call
+  completed. Use `time() - mcp_broker_last_result_timestamp_seconds > 900` to alert on brokers
+  that have gone silent (no traffic, so reachability is unknown).
 
-**Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
+**Cardinality:** `|broker|` for the first and third metrics; `|broker| x |reason|` for the
+second, where `|reason|` grows only on distinct HTTP error status codes seen per broker.
 
-### Authentication Failures
+### Authentication Failures — [Implemented]
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -297,16 +320,24 @@ broker state, not per attempt.
   | `expired` | The token's `exp` claim has passed. |
   | `audience_mismatch` | The token's audience does not match what this server expects. |
   | `signature_invalid` | A token-signing or JWKS-rotation failure, distinct from a malformed token. |
-  | `missing` | No `Authorization` header was presented at all, or a token that verified fully but omitted the required `sub` claim (an IdP misconfiguration, not an absent caller) — both land here rather than getting a sixth value. |
+  | `missing` | No `Authorization` header was presented at all, or a token that verified fully but omitted the required `sub` claim (an IdP misconfiguration, not an absent caller) — both land here rather than getting a sixth value. Any credential-less request that reaches `/mcp` counts here, including a CORS preflight or a health check pointed at the wrong path, since the SDK rejects those with a 401 too. |
 
 - The values are deliberately coarse so no token content is ever exposed as a label.
 - There is no `broker` label. Authentication happens at the HTTP boundary, before any broker
   is selected, so there is no broker in scope to name. Use the resource attributes on
   `target_info` to attribute failures to a server instance.
+- All five `reason` series are seeded at zero when the counter is registered, so they are
+  present from the first scrape and `increase(mcp_auth_failure_total[5m]) > 0` fires on a
+  process's first rejected token — after a key rotation, the first `signature_invalid` is the
+  sample that matters. A flat zero means "no failures", not "no data".
+  `absent(mcp_auth_failure_total)` means the counter is not registered: metrics are off,
+  `OBS_AUTH_FAILURE_COUNTER_ENABLED` was set to `false`, or the counter was never wired.
+- Recorded behind `OBS_AUTH_FAILURE_COUNTER_ENABLED` (see the flag note at the top of
+  [Metrics](#metrics--planned-with-exceptions)); the same flag governs `mcp_authz_denied_total`.
 
 **Cardinality:** `|reason|` (five values).
 
-### Authorization Denials
+### Authorization Denials — [Implemented]
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -317,8 +348,11 @@ broker state, not per attempt.
   stream cannot disagree.
 - `tool` **is** a label here, unlike on `mcp_auth_failure_total`. Authorization runs after the
   tool is known, so the tool name is in scope and is the first thing you need on a denial.
-- Emitted only where tool authorization is enabled. With it off, the series is absent rather
-  than zero.
+- Emitted only where tool authorization is enabled, and behind the same
+  `OBS_AUTH_FAILURE_COUNTER_ENABLED` flag as `mcp_auth_failure_total`. With either off, the
+  series is absent rather than zero. Unlike `mcp_auth_failure_total`, nothing is pre-seeded: a
+  series appears on the first denial for a given `tool` and `reason`, so `absent()` is not a
+  usable alert here — alert on `increase()` instead.
 
 **Cardinality:** `|tool| x 2`.
 
@@ -404,7 +438,7 @@ flags, not just one. The counters are always registered in-process while tracing
 to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
 metrics off keeps the totals in-process only — reported solely by the periodic
 `event=otel_self_stats` INFO log (see [Distributed
-Tracing](#distributed-tracing--interim-request-path-spans-wired)) — so an alert on
+Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
 (`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
@@ -856,23 +890,22 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Interim: request-path spans wired]
+## Distributed Tracing — [Interim: request-path and per-attempt spans wired]
 
-> _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421). The tracer provider, OTLP
-> export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
+> _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421, SOL-152422). The tracer provider,
+> OTLP export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
 > (Story 25). Story 26 (SOL-152421) adds the request-path spans — the HTTP boundary, the tool
 > dispatcher, the composite executor, and one span per SEMP call — and installs the W3C Trace
-> Context propagator, so a trace started by your AI agent now continues unbroken into this
-> server. Enabling the flag today therefore exports a real four-or-more-span trace per tool
-> call, not a single-span root. Trace exemplars linking the latency histogram buckets to these
-> traces are live as well (Story 47, SOL-152419) — see
-> [Trace Exemplars](#trace-exemplars--implemented). **Still pending:** per-*attempt* SEMP spans
-> and the `retry.decision` / `retry.exhausted` attributes (Story 27, SOL-152422) — the
-> `semp.request` span shipped today covers a whole retry chain, so a call that retried three
-> times is one span, not three. Span names
-> beyond `tokenexchange.Exchange` and `semp.attempt`, and span kinds, remain open items for
-> pilot input (item 4) — the names shipped in Story 26 are listed under
-> [Spans](#spans) and can still change on your feedback._
+> server. Story 27 (SOL-152422) adds the per-*attempt* spans below those: one `semp.attempt`
+> per SEMP try and one `tokenexchange.attempt` per IdP try, each carrying the
+> `retry.decision` the retry policy actually made and `retry.exhausted` on the attempt where
+> the allowance ran out. A call that retried three times is now three attempt spans under one
+> `semp.request`, not one opaque span. Enabling the flag today therefore exports a real
+> five-or-more-span trace per tool call, not a single-span root. Trace exemplars linking the
+> latency histogram buckets to these traces are live as well (Story 47, SOL-152419) — see
+> [Trace Exemplars](#trace-exemplars--implemented). Span names and span kinds remain open items
+> for pilot input (item 4) — the names shipped so far are listed under [Spans](#spans) and can
+> still change on your feedback._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -900,6 +933,10 @@ A successful end-to-end tool call produces four spans in one trace, nested in th
 | `composite.Execute` | Internal | composite-tool execution (absent for a native SEMPv1 tool) |
 | `semp.request` | Client | SEMP call to the broker, **covering its whole retry chain** |
 
+Plus one `semp.attempt` span under `semp.request` per attempt that call made — one on a call
+that succeeded first time, three on a call that took three tries (Story 27, SOL-152422; see
+below).
+
 The entry span's name follows the OTel HTTP server convention `{method} {route}`, and its HTTP
 attributes come from `otelhttp`'s own semantic-convention implementation. The other three follow
 the `<package>.<Function>` shape `tokenexchange.Exchange` established.
@@ -912,18 +949,30 @@ entry-span duration. So `GET` is filtered out and you will see no span for that 
 requests travel over `POST`, which is what the entry span covers; a `DELETE` session teardown is
 short-lived and is traced.
 
-Two further named spans:
+Three further named spans:
 
 - `tokenexchange.Exchange`: one per call to the OAuth token exchange (Story 50, SOL-153333) —
   a cache hit, a singleflight follower, and the singleflight winner triggering a live IdP round
   trip each get their own span. Child of the `semp.request` span whose `AddAuth` triggered it.
-- `semp.attempt`: one per SEMP request *attempt* (Story 27, SOL-152422, not yet landed). This
-  is the span that will distinguish a call that succeeded first time from one that succeeded on
-  its third attempt. Until it lands, `semp.request` is the finest SEMP granularity available,
-  and a retry is invisible in the trace — check `mcp_semp_request_total`, whose `attempt` label
-  counts them (SOL-152093, emitted today), or the
-  Sender's own log lines. **`semp.request` is deliberately not named `semp.attempt`:** naming a
-  whole retry chain "attempt" would mislabel it and leave Story 27 no name to use.
+- `semp.attempt` (Client): one per SEMP request *attempt* (Story 27, SOL-152422), child of the
+  `semp.request` span covering that chain. This is the span that distinguishes a call that
+  succeeded first time from one that succeeded on its third attempt: read `attempt`,
+  `http.response.status_code`, `retry.decision` and `retry.exhausted` down the siblings and the
+  shape of a retry storm is legible at a glance. **`semp.request` is deliberately not named
+  `semp.attempt`:** naming a whole retry chain "attempt" would mislabel it.
+- `tokenexchange.attempt` (Client): one per HTTP attempt of a live IdP token exchange
+  (Story 27, SOL-152422), child of the `tokenexchange.Exchange` span of the caller that
+  actually ran the exchange. **Two limitations to know about, both consequences of the
+  exchange running detached from any one caller so that a cancellation cannot abort work
+  others are waiting on:**
+  - A **deduped caller sees no attempt spans.** Concurrent identical exchanges collapse into
+    one IdP round trip, and the attempts hang off the winner's span. A follower's
+    `tokenexchange.Exchange` span has no attempt children; follow its
+    `singleflight_role="follower"`, its `winner_trace_id` / `winner_span_id`, or its span
+    `Link` to reach the trace that holds them.
+  - `correlation_id` **on these spans is the winner's**, so it identifies the request that
+    triggered the exchange, not necessarily the request you are looking at. This is weaker
+    than the SEMP path, where every attempt carries that request's own ID.
 
 Span names, and span kinds, remain open items in this review (see
 [Open Items for This Review](#open-items-for-this-review), item 4) — including the four above.
@@ -962,8 +1011,10 @@ distinction is the point, since they have different causes and different remedie
 | `semp.version` | `v1` or `v2`, on `semp.request` | Solace |
 | `semp.operation` | The SEMPv2 operationId (e.g. `getMsgVpnQueue`), on `semp.request` for v2 only — SEMPv1 has no operationId | Solace |
 | `composite.steps` | Declared step count, on `composite.Execute` | Solace |
-| `retry.decision` | The retry decision on a SEMP attempt | Solace |
-| `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
+| `attempt` | The 1-based try number, on `semp.attempt` and `tokenexchange.attempt`. On `semp.attempt` it is the **same value as the `attempt` label** on `mcp_semp_request_total`, read from one counter so the two cannot drift; the token-exchange attempts have no counterpart metric | Solace |
+| `http.response.status_code` | The status that attempt got, on `semp.attempt` and `tokenexchange.attempt`. Absent — never zero — when the attempt got no response at all (a connection error) | Solace |
+| `retry.decision` | Whether the retry policy chose to retry after this attempt, on `semp.attempt` and `tokenexchange.attempt`. **This is the decision the server acted on, not a re-reading of the status code**, so it can legitimately be `false` on a 503: a request the caller declared non-idempotent, or one on a non-idempotent method, is never replayed. A `true` alongside `retry.exhausted` means the policy wanted to retry and had nothing left | Solace |
+| `retry.exhausted` | `true` on the final attempt when a retry allowance ran out; absent otherwise. It means one thing: the policy stopped because something it was counting was already spent. On `semp.attempt` that covers all four allowances — the configured `semp.retries`, the internal 429/503 sub-cap (which fires well below `semp.retries`, and is how a real broker-overload episode usually ends), the once-only replay of a non-429/503 5xx, and the once-only 401 re-auth. **Absent when nothing ran out**, even though the call still failed: a replay the policy refused because the caller declared the request non-idempotent, a context that ended, a status never retried at all, or an auth mode that could not recover the first 401. Those need a different remedy from a bigger budget, which is why they are distinguishable. **On `tokenexchange.attempt` it means only that the IdP client's configured retry count (`MaxRetries`) was spent** — that path has no sub-cap, no non-idempotency guard, and no 401 re-auth allowance, so the four SEMP allowances and the four SEMP exclusions above do not apply. Raise the IdP retry setting, not `semp.retries` | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
 | `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
 | `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
@@ -980,6 +1031,13 @@ system couples the two, since the span writes an attribute and the metric writes
 label from a different call site, so the two can drift while each surface still looks healthy
 on its own. `correlation_id` is span-only by design: it is per-request, and as a metric label
 it would be unbounded.
+
+**The two attempt spans deliberately carry no `outcome`.** An attempt is not a call: a 503 that
+was retried and then succeeded is a normal step of a healthy call, so tagging it
+`outcome: error` would place an error span under a successful `semp.request` on every retried
+call and inflate any error view a backend builds from that filter. `retry.decision` and
+`http.response.status_code` describe an attempt; the call's outcome is on the parent span. For
+the same reason their span status is left `Unset`.
 
 **Which spans carry which.** Every span in the table above **except the entry span** carries
 `outcome`. `POST /mcp` is produced by `otelhttp` and carries the HTTP semantic-convention
@@ -1474,9 +1532,9 @@ the review.
    concrete to react to, not because they are frozen: renaming a span is cheap now and expensive
    after the freeze. If your trace backend or trace-based SLOs key off specific span names or
    `SpanKind` values, tell us what you expect. Two specifics we would most like checked: whether
-   `semp.request` covering a whole retry chain (with per-attempt `semp.attempt` spans nested
-   inside it once Story 27 lands) matches how you would query retries, and whether you expect
-   `tools.CallTool` to be `Internal` or `Server`.
+   `semp.request` covering a whole retry chain, with per-attempt `semp.attempt` spans nested
+   inside it (Story 27, now shipped), matches how you would query retries, and whether you
+   expect `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
    Does that split match how your SIEM queries distinguish failures, and do the twelve
@@ -1487,9 +1545,9 @@ the review.
    from `missing_claim` and `not_permitted`, plus a matching
    `mcp_authz_denied_total{tool,reason}` counter. Does that two-value `reason` set match how
    your access reviews classify a refusal, or do you distinguish cases we have merged? And is
-   the single-predicate query the shape you need? One caveat worth knowing: no shipped build
-   emits this record yet, so denial history begins at the release that first does and cannot
-   be back-filled.
+   the single-predicate query the shape you need? One caveat worth knowing: denial history
+   begins at the release that first emitted the record (SOL-152097) and the counter
+   (SOL-152099) and cannot be back-filled.
 ### Decided Since the First Draft
 
 Three items that appeared as open questions in earlier drafts are now settled, so you do not

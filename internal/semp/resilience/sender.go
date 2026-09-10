@@ -166,6 +166,8 @@ type Sender struct {
 	// brokerAlias is the operator's configured display alias. Used by the
 	// metrics transport (broker label) and by the audit log (Broker field).
 	brokerAlias string
+	// resultHook, when non-nil, fires after every real SEMP call.
+	resultHook ResultHook
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -244,6 +246,15 @@ func WithAuditLog(enabled bool) Option {
 // (semp.NewBrokerClient) supplies this.
 func WithBrokerAlias(alias string) Option {
 	return func(d *Sender) { d.brokerAlias = alias }
+}
+
+// ResultHook fires after each real SEMP call. httpStatus is 0 when no HTTP
+// response was received. Admission failures and context cancellations are filtered out.
+type ResultHook func(brokerAlias string, httpStatus int)
+
+// WithResultHook installs a hook that fires after every real SEMP call. A nil hook is a no-op.
+func WithResultHook(h ResultHook) Option {
+	return func(d *Sender) { d.resultHook = h }
 }
 
 
@@ -375,21 +386,49 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		opt(d)
 	}
 
-	// Wrap the transport so each attempt is recorded once. Off unless WithMetrics
-	// supplied a recorder. httpClient is the same pointer held by retryClient, so
-	// swapping its transport here takes effect for every attempt.
+	// Wrap the transport so each attempt is seen exactly once.
+	//
+	// Two wrappers, outermost first: the attempt-span transport
+	// (newAttemptTransport) always — it owns the attempt counter and the
+	// `semp.attempt` span, SOL-152422 — and inside it metricsTransport only
+	// when WithMetrics supplied a recorder. That order is required, not
+	// stylistic — metricsTransport reads the counter the attempt-span
+	// transport has just bumped, and the order is pinned by the sempv2
+	// metric-label tests.
+	//
+	// The wrappers go on a shallow COPY of the caller's client rather than on
+	// the client itself. The copy is cheap (four fields, none with internal
+	// state) and carries Timeout, Jar and CheckRedirect through unchanged, so
+	// the retry loop behaves identically. What it buys is that New no longer
+	// mutates an object its caller owns:
+	//
+	//   - Two Senders built over one *http.Client each get their own correct
+	//     chain. Mutating in place instead had to skip the second Sender's
+	//     wrapping to avoid double-counting every attempt, which silently
+	//     dropped that Sender's SEMP metrics if only it had WithMetrics — the
+	//     same class of defect (a signal present only because an unrelated
+	//     feature happened to be on) that SOL-152422 exists to fix.
+	//   - A caller that installs its own RoundTripper before calling New keeps
+	//     the client it configured; this composes over it rather than
+	//     rewriting it.
+	//
+	// Production gives each protocol client its own *http.Client anyway
+	// (sempv1.New, sempv2.New), so this is about not depending on that.
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	if d.sempMetrics != nil {
-		base := httpClient.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		httpClient.Transport = &metricsTransport{
+		base = &metricsTransport{
 			base:        base,
 			recorder:    d.sempMetrics,
 			api:         d.api,
 			brokerAlias: d.brokerAlias,
 		}
 	}
+	wrapped := *httpClient
+	wrapped.Transport = newAttemptTransport(base)
+	retryClient.HTTPClient = &wrapped
 
 	return d
 }
@@ -713,7 +752,46 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 // On failure after retries, returns a RetriesExhaustedError or a wrapped error.
 // When the request cannot be admitted within semp.max_queue_wait it returns a
 // BrokerBusyError and never reaches the broker (see admit).
-func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+// brokerSignalStatus extracts the HTTP status to report from the terminal
+// outcome of a Do call. Returns (status, true) for real broker signals and
+// (0, false) for non-broker outcomes: admission failures, caller-context
+// cancellations, and unknown error shapes. callerCtx must be the context
+// passed into Do before the retry-budget inner context is created.
+func brokerSignalStatus(callerCtx context.Context, resp *http.Response, err error) (int, bool) {
+	var busy *BrokerBusyError
+	if errors.As(err, &busy) {
+		return 0, false
+	}
+	if resp != nil {
+		return resp.StatusCode, true
+	}
+	if err != nil {
+		var exhausted *RetriesExhaustedError
+		if errors.As(err, &exhausted) {
+			return exhausted.StatusCode, true
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			if callerCtx.Err() != nil {
+				return 0, false // caller's own context expired
+			}
+			return 0, true // internal timeout (retry budget or http.Client.Timeout)
+		}
+		return 0, false // unknown error (e.g. request-wrapping failure)
+	}
+	return 0, false
+}
+
+func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
+	// Capture before Do may reassign ctx to the retry-budget inner context.
+	callerCtx := ctx
+	if d.resultHook != nil {
+		defer func() {
+			if status, ok := brokerSignalStatus(callerCtx, resp, err); ok {
+				d.resultHook(d.brokerAlias, status)
+			}
+		}()
+	}
+
 	admitted, err := d.admit(ctx)
 	if err != nil {
 		return nil, err
@@ -737,12 +815,23 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
 	// caller's idempotency markers (WithRetrySafe / WithRetryUnsafe).
-	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
+	state := &retryState{
 		method:      req.Method,
 		retrySafe:   isRetrySafe(ctx),
 		retryUnsafe: isRetryUnsafe(ctx),
-	})
+	}
+	ctx = context.WithValue(ctx, retryStateKey{}, state)
 	req = req.WithContext(ctx)
+
+	// Backstop for the attempt span's lifecycle (SOL-152422). The
+	// attemptspan.Transport newAttemptTransport builds opens the span and
+	// checkRetry closes it, and on today's retryablehttp every dispatch is
+	// followed by a CheckRetry call, so nothing is left open here — see
+	// closeDanglingAttemptSpan for why that makes this call site unpinnable by
+	// test, and what it bounds if a future library version changes. Deferred
+	// rather than placed after retryClient.Do so it also runs while a panic
+	// unwinds.
+	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)
 	if err != nil {
@@ -752,7 +841,7 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		return nil, fmt.Errorf("wrapping request: %w", err)
 	}
 
-	resp, err := d.retryClient.Do(retryReq)
+	resp, err = d.retryClient.Do(retryReq)
 
 	// Decided exactly once, here, at the request's true terminal point —
 	// after every attempt this call made, not from inside checkRetry (SOL-152097;

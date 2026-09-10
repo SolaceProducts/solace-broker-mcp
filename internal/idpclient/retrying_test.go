@@ -323,7 +323,7 @@ func TestNewRetryingHTTPClient_ConnectionErrorRetries(t *testing.T) {
 }
 
 // stubRoundTripper is a test RoundTripper that returns a canned response
-// without touching the network. Used to unit-test attemptsRecorder in
+// without touching the network. Used to unit-test attemptCountTransport in
 // isolation from server / retry-loop scaffolding.
 type stubRoundTripper struct{ calls int }
 
@@ -335,7 +335,7 @@ func (s *stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 // roundTripAndClose invokes the recorder and closes any returned body,
 // so `bodyclose` doesn't flag the call site. The stubRoundTripper only
 // hands back http.NoBody so this is a no-op at runtime.
-func roundTripAndClose(t *testing.T, rec *attemptsRecorder, req *http.Request) {
+func roundTripAndClose(t *testing.T, rec *attemptCountTransport, req *http.Request) {
 	t.Helper()
 	resp, err := rec.RoundTrip(req)
 	if err != nil {
@@ -350,7 +350,7 @@ func roundTripAndClose(t *testing.T, rec *attemptsRecorder, req *http.Request) {
 // against a naive `*c++` that would panic when nothing was attached.
 func TestAttemptsRecorder_NilSafe(t *testing.T) {
 	inner := &stubRoundTripper{}
-	rec := &attemptsRecorder{inner: inner}
+	rec := &attemptCountTransport{inner: inner}
 
 	// Plain ctx — no WithAttemptsCounter.
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example", nil)
@@ -365,7 +365,7 @@ func TestAttemptsRecorder_NilSafe(t *testing.T) {
 // pin the increment behavior without needing the retry loop.
 func TestAttemptsRecorder_IncrementsWhenAttached(t *testing.T) {
 	inner := &stubRoundTripper{}
-	rec := &attemptsRecorder{inner: inner}
+	rec := &attemptCountTransport{inner: inner}
 
 	ctx, attempts := WithAttemptsCounter(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://example", nil)

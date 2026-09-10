@@ -12,16 +12,17 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-08; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-10; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch, again
-2026-09-03 (#373), and again 2026-09-08 (#383), each time re-pinning the same
-five actions. Every license in the following tables was read from the
-component's own license file or from the GitHub API for its source
-repository, at the ref in use rather than at the default branch. None was
-inferred from a package name or carried over from another row. See
-[Rebuilding This File](#rebuilding-this-file) for how to regenerate it.
+2026-09-03 (#373), again 2026-09-08 (#383), and again 2026-09-10 (#397),
+each time re-pinning the same five actions. Every license in the following
+tables was read from the component's own license file or from the GitHub
+API for its source repository, at the ref in use rather than at the default
+branch. None was inferred from a package name or carried over from another
+row. See [Rebuilding This File](#rebuilding-this-file) for how to
+regenerate it.
 
 Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI
 when this file stops matching what the repository actually uses. See
@@ -179,8 +180,8 @@ note spells out.
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `37fe631` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.3.0/LICENSE) |
 | `docker/setup-qemu-action` | `96fe6ef` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.2.0/LICENSE) |
-| `github/codeql-action/analyze` | `db488dd` | v4.37.8 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.8/LICENSE) |
-| `github/codeql-action/init` | `db488dd` | v4.37.8 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.8/LICENSE) |
+| `github/codeql-action/analyze` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
+| `github/codeql-action/init` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `softprops/action-gh-release` | `3d0d988` | v3.0.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.2/LICENSE) |
 
@@ -193,19 +194,25 @@ unusual.
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
-All five come from one repository, pinned to a single commit.
+All six come from one repository. Five share a single pin; `update-manifest.yaml`
+is pinned separately, for the reason below the table.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6527948` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6527948` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `6527948` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6527948` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `7b54c55` | Solace |
 
-`6527948` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-09-08 by the Dependabot
-`github-actions` group update (#383); the prior pin was `ba836c7`.
+`7b54c55` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-09-10 by the Dependabot
+`github-actions` group update (#397); the prior pin was `6527948`.
+
+`7b54c55` is a branch commit on that same repository. It sits apart from the
+group only because `update-manifest.yaml` postdates `6527948` and so could not be
+pinned there; expect the next group update to collapse the two.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
@@ -217,7 +224,7 @@ resolve a reusable workflow from an internal repository in another organization.
 `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
 went when DATAGO-147232 moved FOSSA and Prisma scanning off the Vault-backed
 reusable workflow onto the preceding composite actions. This table previously held
-that one row; it now holds five, and the whole preceding third-party table changed
+that one row; it now holds six, and the whole preceding third-party table changed
 from tags to SHA pins in the same change. None of it was reflected here until
 this update, which is what SOL-152951 is about.
 

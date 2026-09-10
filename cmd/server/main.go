@@ -1186,6 +1186,8 @@ func main() {
 	var toolMetrics *metrics.ToolMetrics
 	var sempMetrics *metrics.SEMPMetrics
 	var metricsBuildErr error
+	// brokerTracker is always active; gauges are only registered when metrics are enabled.
+	brokerTracker := health.NewBrokerTracker()
 	if metrics.Enabled(cfg.Observability) {
 		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res, cfg.Observability); metricsBuildErr != nil {
 			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
@@ -1199,6 +1201,9 @@ func main() {
 				slog.Error("SEMP metrics unavailable", slog.String("error", smErr.Error()))
 			} else {
 				sempMetrics = sm
+			}
+			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
+				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
 		}
 		warnIfOTLPEndpointUnset(cfg.Observability)
@@ -1222,8 +1227,14 @@ func main() {
 		}
 	}
 
+	// Security counters (SOL-152099); nil means off.
+	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
+
 	// 4. Create broker pool
-	pool := semp.NewBrokerPool(cfg, exchanger, semp.WithSEMPMetrics(sempMetrics))
+	pool := semp.NewBrokerPool(cfg, exchanger,
+		semp.WithSEMPMetrics(sempMetrics),
+		semp.WithBrokerResultHook(brokerTracker.RecordBrokerResult),
+	)
 	// Release per-broker rate-limiter tickers (and any other client-held
 	// resources) on the normal shutdown path. The defer fires after main()
 	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
@@ -1293,6 +1304,7 @@ func main() {
 	// door-closing policy.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor,
 		tools.WithToolMetrics(toolMetrics),
+		tools.WithSecurityMetrics(securityMetrics),
 		tools.WithAuditLog(audit.Enabled(cfg.Observability)))
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
@@ -1395,8 +1407,10 @@ func main() {
 	// The audit hook (SOL-152097) is the one wiring point for auth_success/
 	// auth_failure emission — audit.NewAuthHook reads the same
 	// OBS_AUDIT_LOG_ENABLED flag as tools.WithAuditLog above, so this and the
-	// destructive-op audit trail turn on and off together.
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler, audit.NewAuthHook(audit.Enabled(cfg.Observability)))
+	// destructive-op audit trail turn on and off together. CountingAuthHook
+	// adds mcp_auth_failure_total on the same reason (SOL-152099).
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler,
+		metrics.CountingAuthHook(securityMetrics, audit.NewAuthHook(audit.Enabled(cfg.Observability))))
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)

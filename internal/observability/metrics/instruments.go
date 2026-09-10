@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -251,4 +252,67 @@ func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Durati
 
 	s.requests.Add(ctx, 1, metric.WithAttributes(append(base, attribute.String("attempt", strconv.Itoa(r.Attempt)))...))
 	s.duration.Record(ctx, dur.Seconds(), metric.WithAttributes(base...))
+}
+
+// SecurityMetrics holds the two security counters (SOL-152099):
+// mcp_auth_failure_total{reason} and mcp_authz_denied_total{tool,reason}.
+// Every method is nil-safe, so a disabled server (nil) records nothing.
+//
+// The auth-failure counter carries no tool or broker label because
+// authentication fails before either is selected. Cardinality is |reason| for
+// the first and |tool| x 2 for the second.
+type SecurityMetrics struct {
+	authFailures metric.Int64Counter
+	authzDenials metric.Int64Counter
+}
+
+// NewSecurityMetrics registers both counters and seeds every
+// schema.AuthFailureReasons() series at zero so increase() fires on a process's
+// first failure (see panics.Register for the rationale). mcp_authz_denied_total
+// is not seeded: its tool dimension is only known at registration, and the
+// series is documented as absent where tool authorization is off.
+func NewSecurityMetrics(meter metric.Meter) (*SecurityMetrics, error) {
+	authFailures, err := meter.Int64Counter(
+		"mcp.auth.failure",
+		metric.WithDescription("Number of credentials rejected at the HTTP boundary, by reason."))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_auth_failure_total: %w", err)
+	}
+
+	authzDenials, err := meter.Int64Counter(
+		"mcp.authz.denied",
+		metric.WithDescription("Number of tool calls refused by tool authorization, by tool and reason."))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_authz_denied_total: %w", err)
+	}
+
+	s := &SecurityMetrics{authFailures: authFailures, authzDenials: authzDenials}
+	ctx := context.Background()
+	for _, reason := range schema.AuthFailureReasons() {
+		s.authFailures.Add(ctx, 0, metric.WithAttributes(attribute.String("reason", string(reason))))
+	}
+	return s, nil
+}
+
+// RecordAuthFailure counts one rejected credential. Typed to the vocabulary so
+// the only string widening is CountingAuthHook's, at the interface boundary.
+// No-op on a nil receiver.
+func (s *SecurityMetrics) RecordAuthFailure(ctx context.Context, reason schema.AuthFailureReason) {
+	if s == nil {
+		return
+	}
+	s.authFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", string(reason))))
+}
+
+// RecordAuthzDenied counts one tool call refused by tool authorization. reason
+// is one of the decision_reason constants in internal/tools/authorization.go.
+// No-op on a nil receiver.
+func (s *SecurityMetrics) RecordAuthzDenied(ctx context.Context, tool, reason string) {
+	if s == nil {
+		return
+	}
+	s.authzDenials.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("tool", tool),
+		attribute.String("reason", reason),
+	))
 }

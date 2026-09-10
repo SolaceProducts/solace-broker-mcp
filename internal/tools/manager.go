@@ -50,6 +50,8 @@ type ToolManager struct {
 	// false the manager behaves exactly as it did before SOL-152096: the
 	// destructive-operation WARN, and no audit record.
 	auditLog bool
+	// securityMetrics is nil when the security counters are off; all uses are nil-safe.
+	securityMetrics *metrics.SecurityMetrics
 }
 
 // ManagerOption configures a ToolManager at construction. Variadic so the
@@ -62,6 +64,12 @@ type ManagerOption func(*ToolManager)
 // uses of the recorder are nil-safe.
 func WithToolMetrics(tm *metrics.ToolMetrics) ManagerOption {
 	return func(m *ToolManager) { m.metrics = tm }
+}
+
+// WithSecurityMetrics wires the mcp_authz_denied_total recorder (SOL-152099),
+// which RegisterWithServer hands to withAuthorization. nil means off.
+func WithSecurityMetrics(sm *metrics.SecurityMetrics) ManagerOption {
+	return func(m *ToolManager) { m.securityMetrics = sm }
 }
 
 // WithAuditLog turns audit-record emission on for destructive tool calls.

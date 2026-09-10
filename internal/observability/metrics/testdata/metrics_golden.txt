@@ -1,3 +1,25 @@
+# HELP mcp_auth_failure_total Number of credentials rejected at the HTTP boundary, by reason.
+# TYPE mcp_auth_failure_total counter
+mcp_auth_failure_total{reason="audience_mismatch"} 0
+mcp_auth_failure_total{reason="expired"} 0
+mcp_auth_failure_total{reason="invalid_token"} 0
+mcp_auth_failure_total{reason="missing"} 0
+mcp_auth_failure_total{reason="signature_invalid"} 0
+# HELP mcp_authz_denied_total Number of tool calls refused by tool authorization, by tool and reason.
+# TYPE mcp_authz_denied_total counter
+mcp_authz_denied_total{reason="not_permitted",tool="test-tool"} 1
+# HELP mcp_broker_last_result_timestamp_seconds Unix timestamp of the most recent SEMP call result for this broker.
+# TYPE mcp_broker_last_result_timestamp_seconds gauge
+mcp_broker_last_result_timestamp_seconds{broker="broker-a"} 1.7e+09
+mcp_broker_last_result_timestamp_seconds{broker="broker-b"} 1.700000001e+09
+# HELP mcp_broker_reachable 1 when the broker's last SEMP call succeeded, 0 otherwise.
+# TYPE mcp_broker_reachable gauge
+mcp_broker_reachable{broker="broker-a"} 1
+mcp_broker_reachable{broker="broker-b"} 0
+# HELP mcp_broker_unreachable_reason 1 for the active failure reason; 0 for all other reasons seen for this broker.
+# TYPE mcp_broker_unreachable_reason gauge
+mcp_broker_unreachable_reason{broker="broker-b",reason="credential_invalid"} 0
+mcp_broker_unreachable_reason{broker="broker-b",reason="unreachable"} 1
 # HELP mcp_build_info Server build info; always 1, labelled with the version.
 # TYPE mcp_build_info gauge
 mcp_build_info{version="v1.2.3-test"} 1
@@ -13,7 +35,7 @@ mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.1",metrics_schema="1.1"} 1
+mcp_schema_version{audit_schema="1.1",metrics_schema="1.3"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1

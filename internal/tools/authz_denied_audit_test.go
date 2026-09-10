@@ -58,7 +58,7 @@ func TestAuthzDenied_MissingClaim_EmitsAuditRecord(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "delete-queue"),
 		"delete-queue",
-		"groups", true,
+		"groups", true, nil,
 		callToolNext(mgr))
 	req := requestMissingGroupsClaim()
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-missing-claim"), req)
@@ -105,7 +105,7 @@ func TestAuthzDenied_NotPermitted_EmitsAuditRecord(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
-		"groups", true,
+		"groups", true, nil,
 		callToolNext(mgr))
 	req := requestWithGroupsAndCorrelation([]string{"Contractors"})
 	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-not-permitted"), req)
@@ -148,7 +148,7 @@ func TestAuthzDenied_AllowedCallWithSameNext_ProducesOperationRecord(t *testing.
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "delete-queue"),
 		"delete-queue",
-		"groups", true,
+		"groups", true, nil,
 		callToolNext(mgr))
 	req := requestWithGroups([]string{"Ops"})
 	ctx := ctxWithPrincipal(context.Background(), req)
@@ -174,7 +174,7 @@ func TestAuthzDenied_Allow_EmitsNoAuditRecord(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"groups", true,
+		"groups", true, nil,
 		newRecordingHandler().handler())
 	req := requestWithGroups([]string{"Ops"})
 	ctx := ctxWithPrincipal(context.Background(), req)
@@ -197,7 +197,7 @@ func TestAuthzDenied_AuditDisabled_emitsNoRecord(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
-		"groups", false,
+		"groups", false, nil,
 		newRecordingHandler().handler())
 	req := requestWithGroups([]string{"Contractors"})
 	ctx := ctxWithPrincipal(context.Background(), req)
