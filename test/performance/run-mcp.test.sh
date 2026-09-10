@@ -33,8 +33,18 @@ eq()  { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1"$'\n'"        got:  [$
 # The stub MCP binds 9090 and the stub mock 18081, the same ports a real run
 # uses. Bail out rather than fight a run already in progress — a test that
 # killed someone's campaign to prove a point would be a poor trade.
-if held=$(perf_first_held_port 9090 18081); then
+# Three outcomes, not two. rc=0 is "a port is held", rc=1 is "both free", and
+# rc=2 is "ss is missing, so I cannot tell" — and on that last host run-mcp.sh
+# fails closed before it writes a record, so treating it as all-clear turns an
+# unsupported environment into a test failure. lib.test.sh skips there; so does
+# this.
+port_rc=0
+held=$(perf_first_held_port 9090 18081) || port_rc=$?
+if (( port_rc == 0 )); then
   echo "port $held is in use — is a run in progress? Not running this test." >&2
+  exit 0
+elif (( port_rc == 2 )); then
+  echo "ss (iproute2) not found, so the ports cannot be checked — skipping." >&2
   exit 0
 fi
 

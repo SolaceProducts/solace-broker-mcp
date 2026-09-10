@@ -807,14 +807,24 @@ eq "seconds"        "$(perf_duration_secs 60s)"   "60"
 eq "minutes"        "$(perf_duration_secs 2m)"    "120"
 eq "hours"          "$(perf_duration_secs 1h)"    "3600"
 eq "fractional minutes"  "$(perf_duration_secs 1.5m)" "90"
-# Rounded up, never down: the result sizes a sampler window, and a window that
-# ends before the load does clips the tail off the load-phase figures.
-eq "a fractional second rounds up"  "$(perf_duration_secs 0.5s)" "1"
-eq "1.1s rounds up to 2"            "$(perf_duration_secs 1.1s)" "2"
+# A fractional notation is fine when it lands on a whole second — the harness
+# counts in them — and refused when it does not. Rounding into one looked
+# harmless while the result only sized a window, but the same value positions
+# `stats_start_epoch`, and an epoch is a point: a rounded WARMUP would place
+# the statistics window somewhere loadgen did not open it.
+eq "a fractional minute that lands whole is fine" "$(perf_duration_secs 1.1m)" "66"
+eq "and so does half a minute"                    "$(perf_duration_secs 0.5m)" "30"
+for frac_dur in 0.5s 1.1s 1.01m 0.5001h; do
+  rc=0
+  perf_duration_secs "$frac_dur" >/dev/null 2>&1 || rc=$?
+  eq "a duration that cannot be expressed in whole seconds ('$frac_dur') is refused" "$rc" "1"
+done
 
 # Floating-point multiplication makes 1.1 * 3600 = 3960.0000000000005, so a
 # bare equality check against int() rounds this up by a whole second.
-eq "1.1h is 3960, not 3961"          "$(perf_duration_secs 1.1h)" "3960"
+# 1.1 * 3600 is 3960.0000000000005 in floating point, so a bare integrality
+# check would reject this exactly-representable duration as fractional.
+eq "1.1h is 3960, and is not mistaken for fractional" "$(perf_duration_secs 1.1h)" "3960"
 eq "the bound itself is accepted"    "$(perf_duration_secs 24h)"  "86400"
 # An absurd value must be refused rather than resolved to a number that wraps
 # when the runners add their sampler buffer to it.
@@ -834,6 +844,47 @@ for bad_dur in 90 30ms 1m30s "" abc "60 s" -5s; do
 done
 
 # --- perf_record_assert_fields ----------------------------------------------
+
+# The label on the per-process line has to follow the heading. When a warmup
+# excludes part of the load, a CPU figure labelled `load-phase` under a
+# `stats span:` heading claims to cover an interval it deliberately does not.
+echo "== summary.sh labels the per-process line with the window it used"
+
+mkdir -p "$tmp/run-stats"
+make_sampler_csv "$tmp/run-stats/sampler.csv"
+{
+  echo "role=loadgen"
+  echo "load_start_epoch=$((BASE + 30))"
+  echo "load_end_epoch=$((BASE + 55))"
+} >"$tmp/run-stats/run-record.loadgen"
+got=$("$here/summary.sh" "$tmp/run-stats" 2>/dev/null)
+contains "without a warmup the heading is the load phase" "$got" "load phase:"
+contains "and the per-process line says load-phase"       "$got" "load-phase  avg="
+
+echo "stats_start_epoch=$((BASE + 30))" >>"$tmp/run-stats/run-record.loadgen"
+got=$("$here/summary.sh" "$tmp/run-stats" 2>/dev/null)
+contains "with one, the heading becomes the stats span" "$got" "stats span:"
+contains "and the per-process line follows it"          "$got" "stats-span  avg="
+lacks "so nothing still claims to cover the load phase" "$got" "load-phase  avg="
+
+# A window read out of a record gets the same checks a typed one gets: a record
+# can be truncated mid-write or hand-edited, and an unchecked value reaches
+# `date -d` and arithmetic.
+echo "== summary.sh validates a window it reads from a record"
+
+mkdir -p "$tmp/run-badwin"
+make_sampler_csv "$tmp/run-badwin/sampler.csv"
+printf 'role=x\nload_start_epoch=abc\nload_end_epoch=%d\n' "$((BASE + 55))" \
+  >"$tmp/run-badwin/run-record.mcp"
+got=$("$here/summary.sh" "$tmp/run-badwin" 2>&1)
+contains "a non-integer epoch in a record is refused, not passed to date" "$got" "not integer seconds"
+lacks "and no load-phase figure is printed from it" "$got" "load-phase  avg="
+
+printf 'role=x\nload_start_epoch=%d\nload_end_epoch=%d\n' "$((BASE + 55))" "$((BASE + 30))" \
+  >"$tmp/run-badwin/run-record.mcp"
+got=$("$here/summary.sh" "$tmp/run-badwin" 2>&1)
+contains "a reversed pair is refused rather than reported as an empty window" \
+  "$got" "is not before end"
 
 echo "== perf_record_assert_fields names what is missing"
 

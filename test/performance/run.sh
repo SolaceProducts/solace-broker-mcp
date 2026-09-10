@@ -52,8 +52,10 @@
 #                to be released before giving up (default 60)
 #   NOFILE       descriptor limit to request (default 1048576; falls back to the
 #                hard limit, and both are recorded)
-#   RIG_NOTE     free-text note about this host, recorded verbatim in the run
-#                record
+#   RIG_NOTE     free-text note about this host. Control characters are
+#                flattened, `=` becomes `:` and the value is capped at 200
+#                characters so the record stays parseable — the substitutions
+#                are reported on stderr.
 
 set -euo pipefail
 
@@ -85,9 +87,27 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # mock alias. VPN must match the capture and is resolved from
 # fixtures.manifest after the preflight below — hardcoding a default here is
 # how it drifted from regen-golden.sh's.
-BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+# Derived from the prefix, so setting BROKER_PREFIX alone cannot leave the
+# fidelity gate dialling an alias the generated config does not contain.
+BROKER_ALIAS="${BROKER_ALIAS:-${BROKER_PREFIX}-01}"
 CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+# The generator's -prefix and loadgen's -broker-prefix have to agree, and until
+# now only the generator had a knob: a config generated with `-prefix mock`
+# gave MCP aliases mock-01... while loadgen kept asking for broker-01..., so
+# every lookup missed. Both defaults are `broker`, so an existing invocation is
+# unchanged.
+BROKER_PREFIX="${BROKER_PREFIX:-broker}"
 BROKERS="${BROKERS:-50}"
+
+# The mock binds BROKERS ports from 18081 and its control endpoint at the fixed
+# 19000, so a count of 920 or more makes a broker land on the control port —
+# they race, and /_mock/config goes to whichever won. gen-mock-config.sh
+# already refuses this range; the runners have to as well, because a config
+# generated for a smaller count can still be driven with a larger BROKERS.
+if (( BROKERS > 919 )); then
+  echo "BROKERS must be 919 or fewer: 18081 + $BROKERS - 1 would reach the mock's control port 19000" >&2
+  exit 2
+fi
 PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
 
 # Validated before anything starts. loadgen would reject a malformed duration
@@ -530,6 +550,7 @@ if (( warmup_secs > 0 )); then
   perf_record_kv "$lg_record"  stats_start_epoch "$(( load_start_epoch + warmup_secs ))"
 fi
 "$bin/loadgen" -mcp-url http://localhost:9090 -broker-count "$BROKERS" \
+  -broker-prefix "$BROKER_PREFIX" \
   -clients "$CLIENTS" -duration "$DURATION" ${warmup_args[@]+"${warmup_args[@]}"} -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
   | tee "$runs/loadgen.log" || lg_rc=$?

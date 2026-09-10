@@ -27,8 +27,10 @@
 #                  sweep point before giving up (default 60)
 #   NOFILE         descriptor limit to request for the server (default 1048576;
 #                  falls back to the hard limit, and both are recorded)
-#   RIG_NOTE       free-text note about this host, recorded verbatim in the run
-#                  record. For a box that cannot describe itself.
+#   RIG_NOTE       free-text note about this host. Control characters are
+#                  flattened, `=` becomes `:` and the value is capped at 200
+#                  characters so the record stays parseable — the substitutions
+#                  are reported on stderr.
 
 set -euo pipefail
 
@@ -267,7 +269,12 @@ top_pid=$!
 
 echo "== 4. holding MCP+samplers for ${top_secs}s — drive loadgen from Box A now"
 echo "     ss check (before load):"
-ss -tn state established 2>/dev/null | awk -v h="$MOCK_HOST" '$0 ~ h {n++} END {print "     established conns to " h ": " (n+0)}'
+# `|| true`: this is a diagnostic, not a check. Under `pipefail` a missing ss
+# would fail the pipeline and abort the run — which would make the documented
+# `PORT_WAIT_SECS=0` escape hatch for a box without iproute2 not actually work
+# on this runner.
+{ ss -tn state established 2>/dev/null || true; } \
+  | awk -v h="$MOCK_HOST" '$0 ~ h {n++} END {print "     established conns to " h ": " (n+0)}'
 
 wait "$mem_pid" 2>/dev/null || true
 wait "$top_pid" 2>/dev/null || true

@@ -594,8 +594,9 @@ perf_record_assert_fields() {
 # figures — the diluted number the run record exists to stop people quoting.
 #
 # Deliberately stricter than Go's own parser, which also takes "1m30s" and
-# "500ms". The samplers here count in whole seconds, so a duration they cannot
-# express is better refused at the door than silently truncated. Pure bash and
+# "500ms". This harness counts in whole seconds — sampler windows are sized in
+# them and `stats_start_epoch` is one — so a duration that cannot be expressed
+# in them is refused at the door rather than silently rounded into one. Pure bash and
 # awk arithmetic: no gawk-only 3-argument match(), because this file is sourced
 # by the self-test on developer laptops where awk is mawk.
 perf_duration_secs() {
@@ -607,8 +608,16 @@ perf_duration_secs() {
     echo "duration must be a number of s, m or h (e.g. 30s, 1.5m), got: '$v'" >&2
     return 1
   fi
+  # A duration is accepted only when it lands on a whole second. Rounding into
+  # one looked harmless — it sizes a sampler window, where a second either way
+  # is nothing — but the same resolved value also positions `stats_start_epoch`,
+  # and an epoch is a point, not a span: WARMUP=0.5s would place the statistics
+  # window half a second away from where loadgen actually opened it, silently.
+  # Fractional inputs that *do* land whole are fine (1.5m is 90s exactly), so
+  # this rejects the ones that cannot be represented rather than the notation.
+  #
   # The epsilon is not cosmetic: 1.1 * 3600 is 3960.0000000000005 in floating
-  # point, so a bare `s == int(s)` rounds 1.1h up to 3961 seconds.
+  # point, so a bare `s == int(s)` would reject 1.1h as fractional.
   #
   # The upper bound stops a fat-fingered value becoming a number that wraps
   # when the caller adds to it: `$(( 1e20 + 10 ))` is negative-adjacent
@@ -617,12 +626,17 @@ perf_duration_secs() {
     mult = (u == "h" ? 3600 : (u == "m" ? 60 : 1))
     s = n * mult
     if (s > 86400) { print "over"; exit }
-    print (s <= int(s) + 1e-9) ? int(s) : int(s) + 1
+    if (s - int(s) > 1e-9 && int(s) + 1 - s > 1e-9) { print "fractional"; exit }
+    printf "%d\n", (s + 1e-9)
   }')
-  if [[ "$secs" == over ]]; then
-    echo "duration must be 24h or less, got: '$v'" >&2
-    return 1
-  fi
+  case "$secs" in
+    over)
+      echo "duration must be 24h or less, got: '$v'" >&2
+      return 1 ;;
+    fractional)
+      echo "duration must be a whole number of seconds, got: '$v'" >&2
+      return 1 ;;
+  esac
   printf '%s\n' "$secs"
 }
 

@@ -108,7 +108,7 @@ Key env knobs (full list in `run.sh` header):
 | var | default | note |
 |---|---|---|
 | `CLIENTS` | 32 | MCP sessions in parallel |
-| `DURATION` | 60s | a number of `s`, `m` or `h`, greater than zero. Compound and sub-second forms (`1m30s`, `500ms`) are refused: the samplers count in whole seconds, and a duration they cannot express used to be silently replaced with 90. Zero is refused too — `memsampler -duration 0s` means "run until the process disappears" |
+| `DURATION` | 60s | a duration this harness can express exactly: a positive number of `s`, `m` or `h` landing on a whole second. `1.5m` (90s) is fine; `0.5s`, `1m30s` and `500ms` are refused, as is `0s` — `memsampler -duration 0s` means "run until the process disappears". Windows are sized in whole seconds and `stats_start_epoch` *is* one, so a value that had to be rounded would place the statistics window somewhere the load generator did not |
 | `WARMUP` | — | `loadgen -warmup`: time discarded from the **stats** at the head of the run. The run still lasts `WARMUP + DURATION` and the samplers are extended to match. See [Warm-up and mid-run events](#warm-up-and-mid-run-events) |
 | `TOOLS` | all four | `get-broker-status,list-queues,list-rdps,get-rdp-status`; set it to a subset to isolate one tool's cost. Validated in the step-0 preflight, before the mock starts — an unknown tool aborts the run immediately |
 | `LATENCY_MS` | 0 | per-response sleep in mock; use to force per-broker semaphore queueing inside MCP |
@@ -118,10 +118,11 @@ Key env knobs (full list in `run.sh` header):
 | `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
 | `VPN` | from `fixtures.manifest` | fidelity `-vpn`; defaults to the VPN the goldens were captured against. Set it only to override |
 | `RDP` | from `fixtures.manifest` | fidelity/loadgen `-rdp`; the RDP the capture pinned. The mock serves `get-rdp-status` for that RDP only |
-| `BROKERS` | 50 | mock broker count and `loadgen -broker-count`. Above 50 the committed config runs out of aliases — generate one with `gen-mock-config.sh` |
+| `BROKERS` | 50 | mock broker count and `loadgen -broker-count`, 919 max (18081 + 920 - 1 would collide with the mock's control port 19000). Above 50 the committed config runs out of aliases — generate one with `gen-mock-config.sh` |
+| `BROKER_PREFIX` | `broker` | alias prefix, passed to `loadgen -broker-prefix`. Must match the `-prefix` a generated config was built with, or every broker lookup misses. `BROKER_ALIAS` defaults to `<prefix>-01` |
 | `PORT_WAIT_SECS` | 60 | how long to wait for a port a previous run still holds |
 | `NOFILE` | 1048576 | descriptor limit to request; falls back to the hard limit. Both requested and granted are recorded |
-| `RIG_NOTE` | — | free-text note about this host, recorded verbatim in the run record |
+| `RIG_NOTE` | — | free-text note about this host. Recorded with control characters flattened to spaces, `=` replaced with `:` (both reported on stderr) and the value capped at 200 characters, so the record stays parseable by the documented `awk -F=` reader |
 
 ## Split-host run
 
@@ -153,7 +154,8 @@ firing loadgen.
 | `DURATION` | 60s | `loadgen -duration`; a number of `s`, `m` or `h` — see the `run.sh` table |
 | `WARMUP` | — | `loadgen -warmup`: time discarded from the **stats** at the head of the run. Extends this box's samplers, but **not Box B's** — see [Warm-up and mid-run events](#warm-up-and-mid-run-events) |
 | `TOOLS` | all four | `loadgen -tools`; `get-broker-status,list-queues,list-rdps,get-rdp-status`, or a subset to isolate one tool's cost. Validated in the step-0 preflight, so a typo fails before the mock binds and before the wait for Box B |
-| `BROKERS` | 50 | `loadgen -broker-count` |
+| `BROKERS` | 50 | `loadgen -broker-count`, 919 max — see the `run.sh` table |
+| `BROKER_PREFIX` | `broker` | `loadgen -broker-prefix`; must match a generated config's `-prefix` |
 | `TOTAL_RPS` | 0 | `loadgen -total-rps` (0 = unlimited); paces aggregate req/s to break the release-barrier convoy |
 | `LATENCY_MS` | 0 | `mock-semp -default-latency-ms`; >0 piles requests on MCP's per-broker semaphore |
 | `RUN_TAG` | `${CLIENTS}c` | tag appended to the runs dir |
@@ -166,7 +168,7 @@ firing loadgen.
 | `RDP` | from `fixtures.manifest` | fidelity/loadgen `-rdp`; the RDP the capture pinned |
 | `PORT_WAIT_SECS` | 60 | how long to wait for a mock port (or `:19000`) a previous run still holds |
 | `NOFILE` | 1048576 | descriptor limit to request; falls back to the hard limit. This is the box that needs it — one outbound socket per `CLIENTS` session |
-| `RIG_NOTE` | — | free-text note about this host, recorded verbatim in the run record |
+| `RIG_NOTE` | — | free-text note about this host. Recorded with control characters flattened to spaces, `=` replaced with `:` (both reported on stderr) and the value capped at 200 characters, so the record stays parseable by the documented `awk -F=` reader |
 
 `run-mcp.sh` (Box B) takes `PORT_WAIT_SECS`, `NOFILE`, `RIG_NOTE` and `WARMUP`
 too, with the same meanings and defaults, alongside its own `MOCK_HOST`,

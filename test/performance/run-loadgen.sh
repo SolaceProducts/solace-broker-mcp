@@ -55,8 +55,10 @@
 #                  the hard limit, and both are recorded). At high client counts
 #                  this box needs the most of it: every loadgen session is one
 #                  outbound socket here and one inbound socket on the MCP box.
-#   RIG_NOTE       free-text note about this host, recorded verbatim in the run
-#                  record
+#   RIG_NOTE       free-text note about this host. Control characters are
+#                  flattened, `=` becomes `:` and the value is capped at 200
+#                  characters so the record stays parseable — the substitutions
+#                  are reported on stderr.
 
 set -euo pipefail
 
@@ -77,7 +79,23 @@ TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 # so the BROKERS_CSV conflict check below can tell "caller set 50" from
 # "nobody set anything".
 brokers_explicit="${BROKERS+set}"
+# The generator's -prefix and loadgen's -broker-prefix have to agree, and until
+# now only the generator had a knob: a config generated with `-prefix mock`
+# gave MCP aliases mock-01... while loadgen kept asking for broker-01..., so
+# every lookup missed. Both defaults are `broker`, so an existing invocation is
+# unchanged.
+BROKER_PREFIX="${BROKER_PREFIX:-broker}"
 BROKERS="${BROKERS:-50}"
+
+# The mock binds BROKERS ports from 18081 and its control endpoint at the fixed
+# 19000, so a count of 920 or more makes a broker land on the control port —
+# they race, and /_mock/config goes to whichever won. gen-mock-config.sh
+# already refuses this range; the runners have to as well, because a config
+# generated for a smaller count can still be driven with a larger BROKERS.
+if (( BROKERS > 919 )); then
+  echo "BROKERS must be 919 or fewer: 18081 + $BROKERS - 1 would reach the mock's control port 19000" >&2
+  exit 2
+fi
 BROKERS_CSV="${BROKERS_CSV:-}"
 LATENCY_MS="${LATENCY_MS:-0}"
 TOTAL_RPS="${TOTAL_RPS:-0}"
@@ -128,7 +146,7 @@ if [[ -n "$BROKERS_CSV" ]]; then
   broker_args=(-brokers "$BROKERS_CSV")
   broker_note="brokers=$BROKERS_CSV"
 else
-  broker_args=(-broker-count "$BROKERS")
+  broker_args=(-broker-count "$BROKERS" -broker-prefix "$BROKER_PREFIX")
   broker_note="broker-count=$BROKERS"
 fi
 ERROR_RATE="${ERROR_RATE:-0}"
@@ -139,7 +157,9 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # mock alias. VPN must match the capture and is resolved from
 # fixtures.manifest after the preflight below — hardcoding a default here is
 # how it drifted from regen-golden.sh's.
-BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+# Derived from the prefix, so setting BROKER_PREFIX alone cannot leave the
+# fidelity gate dialling an alias the generated config does not contain.
+BROKER_ALIAS="${BROKER_ALIAS:-${BROKER_PREFIX}-01}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-loadgen-$RUN_TAG"
 mkdir -p "$runs"
 record="$runs/run-record.loadgen"

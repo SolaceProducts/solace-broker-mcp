@@ -76,6 +76,10 @@ window_from_record() {
 }
 
 load_start="" load_end="" window_source="" window_kind=""
+# The per-process lines carry this, so a figure is never labelled as covering
+# the load phase when the window it was computed over deliberately excludes
+# part of it. Kept the same width as "load-phase" so the columns still line up.
+window_label="load-phase"
 
 # Reject an unrecognised flag rather than letting it fall through to the bare
 # epoch branch. A typo'd `--window-form` used to be read as an epoch: `date`
@@ -166,6 +170,22 @@ if [[ -n "$window_source" && -z "$load_start" ]]; then
   window_source=""
 fi
 
+# A window read out of a record gets the same checks a window typed on the
+# command line gets. A record is a file, and a file can be truncated mid-write
+# or hand-edited — and an unchecked value from one reaches `date -d` and
+# arithmetic, where text produces stderr noise and a whole-run report that
+# still exits 0, and a reversed pair produces a confident "no samples inside
+# the stamped window". Refusing to trust the record is cheaper than either.
+if [[ -n "$load_start" && -n "$load_end" ]]; then
+  if ! [[ "$load_start" =~ ^[0-9]+$ && "$load_end" =~ ^[0-9]+$ ]]; then
+    echo "ignoring the window in ${window_source:-the run record}: epochs are not integer seconds ($load_start, $load_end)" >&2
+    load_start="" load_end="" window_source="" window_kind="" window_label="load-phase"
+  elif (( load_start >= load_end )); then
+    echo "ignoring the window in ${window_source:-the run record}: start ($load_start) is not before end ($load_end)" >&2
+    load_start="" load_end="" window_source="" window_kind="" window_label="load-phase"
+  fi
+fi
+
 # A record_version this script does not know is a warning, not a failure: the
 # fields it reads are looked up by name, so an added field is harmless. Saying
 # so beats a silent misread if the schema ever changes meaning.
@@ -197,6 +217,7 @@ roll() {
   local from="${6:-0}" to="${7:-0}"
   [[ -r "$csv" ]] || return 0
   awk -F, -v bf="$box_field" -v rf="$rss_field" -v mem="$mem_total" -v L="$label" \
+      -v wlabel="$window_label" \
           -v from="${from:-0}" -v to="${to:-0}" '
     NR==1 {
       for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i); ix[$i] = i }
@@ -267,10 +288,10 @@ roll() {
              L, box_min, box_sum/n, box_max
       if (windowable) {
         if (w_n > 0)
-          printf "  %-5s cpu:  load-phase  avg=%5.1f%%   max=%5.1f%%   (%d of %d samples, %s..%s)\n",
-                 L, w_sum/w_n, w_max, w_n, n, w_first, w_last
+          printf "  %-5s cpu:  %-12savg=%5.1f%%   max=%5.1f%%   (%d of %d samples, %s..%s)\n",
+                 L, wlabel, w_sum/w_n, w_max, w_n, n, w_first, w_last
         else
-          printf "  %-5s cpu:  load-phase  no samples inside the stamped window\n", L
+          printf "  %-5s cpu:  %-12sno samples inside the stamped window\n", L, wlabel
       }
       if (mem > 0)
         printf "  %-5s mem:  min=%5.2f%%   avg=%5.2f%%   max=%5.2f%%   (out of 100%% box, %.1f GB total)\n",
@@ -295,6 +316,7 @@ echo "runs dir: $runs"
 if [[ -n "$load_start" && -n "$load_end" ]]; then
   # Name which window this is. A reader comparing this figure with loadgen's
   # percentiles needs to know whether the two cover the same span.
+  [[ "$window_kind" == "stats" ]] && window_label="stats-span"
   if [[ "$window_kind" == "stats" ]]; then
     # Same 12-character label width as "load phase:", so the provenance line
     # below stays aligned under either heading.
