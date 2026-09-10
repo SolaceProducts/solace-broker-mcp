@@ -51,12 +51,11 @@ length bullet below. Match the conventions here, do not impose a generic style:
 - Keep a Changelog categories, in this order: **Added**, **Changed**, **Deprecated**,
   **Removed**, **Fixed**, **Security**. Added/Changed/Removed/Fixed are the common
   ones; use Deprecated and Security when the change is genuinely one (see Step 3).
-- Each entry is **one list item (bullet) per logical change**. Target one or two
-  sentences (~50 words); reserve a full paragraph for a breaking change that needs
-  old behavior, new behavior, and a migration path. **This is a deliberate change
-  from what the file currently shows.** The `[0.6.0]`–`[0.8.0]` entries run to a
-  median of 93–191 words — do not match their length. The older blocks (`[0.1.0]`
-  through `[0.5.0]`, medians 4–21) are the target.
+- Each entry is **one list item (bullet) per logical change**. Most land in 15–30
+  words; ~50 words is the ceiling, reserved for a breaking change that needs old
+  behavior, new behavior, and a migration path. **This is a deliberate change from
+  what the file currently shows.** The `[0.6.0]`–`[0.8.0]` entries run to a median
+  of 93–191 words — do not match their length.
 - Say what changed and what breaks. **Why** it changed belongs in the commit message,
   and **how** it works belongs in a code comment; an entry that runs long is usually
   carrying one of those. A reader of this file is updating their queries, dashboards,
@@ -132,14 +131,15 @@ rather than as shipped, after a later revision moved it.
 - **Every identifier the entry names must exist as written** — log message, field,
   config key, flag, tool name. Grep each one. A name that no longer exists sends a
   reader looking for something that was renamed mid-branch.
-- **Nothing observable in the diff may be silently omitted.** Re-read the branch
-  diff (`git diff main...HEAD`, from Step 1) for
-  changed strings and fields and confirm each is either covered or deliberately out
-  of scope. Where an entry claims a category — "the old messages are replaced" —
-  list **all** of them: a partial list reads as complete, which is worse than a
-  vague sentence.
+- **Nothing observable in the diff may be silently omitted.** Re-read the Step 1
+  change set for changed strings and fields and confirm each is either covered or
+  deliberately out of scope. Where an entry claims a category — "the old messages
+  are replaced" — list **all** of them: a partial list reads as complete, which is
+  worse than a vague sentence.
 - If an identifier is not found, correct it from the tree; if you cannot resolve it,
   flag it to the human rather than guessing.
+- If either check changed the entry, re-print the diff — the human must see the
+  corrected version, not the one from Step 5.
 
 Then stop for human review.
 
@@ -148,9 +148,8 @@ Then stop for human review.
 - Never place secrets, tokens, or credentials in an example.
 - Never invent a SOL ticket number — use the `SOL-????.` placeholder and flag it.
 - One bullet per logical change; omit pure test/refactor/docs churn.
-- An entry describes the branch's whole diff against `main`, not any single commit.
-  If commits land after the entry is drafted, **re-derive and rewrite** — `git diff
-  main...HEAD` for the files and `git log main..HEAD` for the commits, as in Step 1 —
+- An entry describes the whole Step 1 change set, not any single commit. If commits
+  land after the entry is drafted, **re-derive and rewrite** — redo Step 1 in full —
   rather than patching the existing text. Patching assumes you already know what
   those commits changed, which is the assumption Step 1 exists to avoid.
 - If nothing user- or operator-visible changed, say so and write nothing.
