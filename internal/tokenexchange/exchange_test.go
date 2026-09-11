@@ -60,6 +60,11 @@ func successJSON(accessToken string, expiresIn int64) string {
 		accessToken, URNTokenTypeAccessToken, expiresIn)
 }
 
+func successJSONWithoutExpiry(accessToken string) string {
+	return fmt.Sprintf(`{"access_token":%q,"token_type":"Bearer","issued_token_type":%q}`,
+		accessToken, URNTokenTypeAccessToken)
+}
+
 // validInput returns an ExchangeInput suitable for most tests.
 func validInput() ExchangeInput {
 	return ExchangeInput{
@@ -1638,6 +1643,81 @@ func TestExchange_CacheHitShortCircuitsIdP(t *testing.T) {
 	}
 }
 
+func TestExchange_MissingExpiresInFallbackCachesAndReuses(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSONWithoutExpiry(fmt.Sprintf("tok-%d", n)))
+	}))
+	defer srv.Close()
+
+	p := validParams(t)
+	p.TokenURL = srv.URL
+	p.TokenExpiryFallback = time.Hour
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	first, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	second, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("second Exchange: %v", err)
+	}
+
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times, want 1 (fallback-derived token should be cached)", got)
+	}
+	if first.Value != second.Value {
+		t.Errorf("token values differ: first=%q second=%q", first.Value, second.Value)
+	}
+	if !first.ExpiresAt.Equal(second.ExpiresAt) {
+		t.Errorf("ExpiresAt differs: first=%v second=%v", first.ExpiresAt, second.ExpiresAt)
+	}
+}
+
+func TestExchange_ShortFallbackReturnsTokenButDoesNotCache(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSONWithoutExpiry("short-lived"))
+	}))
+	defer srv.Close()
+
+	p := validParams(t)
+	p.TokenURL = srv.URL
+	p.TokenExpiryFallback = defaults.DefaultTokenExpirySkew
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	input := validInput()
+	tok, err := e.Exchange(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if tok == nil {
+		t.Fatal("token = nil, want a successfully parsed token")
+	}
+
+	key := computeDeduplicationKey(input.DedupKeyInput())
+	gr, err := e.cache.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("cache.Get: %v", err)
+	}
+	if gr.Status != cache.GetMiss {
+		t.Errorf("cache status = %v, want GetMiss for fallback at expiry skew", gr.Status)
+	}
+}
+
 // TestExchange_CacheMissStoresResult verifies the write half of the cache
 // contract: a successful IdP exchange lands in the cache under the same key
 // the next Get will use. If Put breaks silently, the cache is a no-op and
@@ -2189,9 +2269,9 @@ func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 		// expiresIn drives which branch runs. A lifetime at or under
 		// defaults.DefaultTokenExpirySkew leaves the parsed ExpiresAt in the
 		// past, so the derived TTL is non-positive and the cache refuses the
-		// write; anything comfortably above it stores normally. expires_in
-		// must stay positive either way — a non-positive one is rejected by
-		// response validation before Put is ever reached.
+		// write; anything comfortably above it stores normally. These cases
+		// deliberately use positive expires_in values; the zero-with-fallback
+		// path is covered separately.
 		expiresIn int64
 		wantMsg   string
 		wantLevel slog.Level
