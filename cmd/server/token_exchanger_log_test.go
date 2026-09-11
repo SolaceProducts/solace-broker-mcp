@@ -19,9 +19,51 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
+
+func TestNewTokenExchanger_LogsConfiguredExpiryFallback(t *testing.T) {
+	// NOT parallel: this test swaps the process-global logger.
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+
+	fallback := time.Hour
+	cfg := &config.BrokerOAuthConfig{
+		TokenURL: "https://idp.example.com/token",
+		ClientID: "mcp-client",
+		ClientAuth: config.BrokerClientAuth{
+			ClientSecretBasic: &config.ClientSecretAuth{Secret: "test-secret"},
+		},
+		GrantType:           config.GrantTypeTokenExchange,
+		AudienceParam:       config.AudienceParamAudience,
+		TokenExpiryFallback: &fallback,
+	}
+
+	exchanger, err := newTokenExchanger(cfg)
+	if err != nil {
+		t.Fatalf("newTokenExchanger: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := exchanger.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, `"msg":"token exchanger created for broker OAuth"`) {
+		t.Fatalf("startup log not captured: %s", out)
+	}
+	if !strings.Contains(out, `"expiry_fallback_configured":true`) {
+		t.Errorf("expected expiry_fallback_configured=true: %s", out)
+	}
+	if !strings.Contains(out, `"expiry_fallback":3600000000000`) {
+		t.Errorf("expected one-hour expiry_fallback duration: %s", out)
+	}
+}
 
 func TestNewTokenExchanger_LogsUnconfiguredExpiryFallback(t *testing.T) {
 	// NOT parallel: this test swaps the process-global logger.
