@@ -3,10 +3,11 @@ services:
     image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
     environment:
       - CONFIG_FILE=/etc/mcp-server/config.yaml
-      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN:-change-me}
+      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN}
+      - BROKER_URL=${BROKER_URL}
+      - BROKER_USERNAME=${BROKER_USERNAME}
+      - BROKER_PASSWORD=${BROKER_PASSWORD}
       - OBS_TRACING_ENABLED=true
-      - OBS_METRICS_ENABLED=true
-      - OBS_METRICS_OTLP_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
     volumes:

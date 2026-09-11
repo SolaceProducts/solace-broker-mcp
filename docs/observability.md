@@ -1313,7 +1313,7 @@ COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 \
 
 #### Point the MCP server at the collector
 
-Set two environment variables on the MCP server deployment:
+Set the following environment variables on the MCP server deployment:
 
 ```
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -1358,8 +1358,9 @@ commented out and can be swapped in for the Tempo default.
 
 #### Ingesting OTLP metrics directly into Prometheus (no collector)
 
-Once `OBS_METRICS_OTLP_ENABLED=true` lands (SOL-152418), the server will push metrics over
-OTLP as well as serving the Prometheus scrape endpoint. Ingesting those push metrics directly
+With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP
+as well as serving the Prometheus scrape endpoint. Ingesting those push
+metrics directly
 into Prometheus (without a collector in the middle) requires four things that are easy to miss:
 
 1. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.

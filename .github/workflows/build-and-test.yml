@@ -221,9 +221,11 @@ jobs:
           fi
 
       - name: Validate OTel collector K8s manifests
+        # go install pins to a specific module version and the Go checksum database
+        # verifies the download — no separate SHA check needed. Consistent with
+        # the Go toolchain already installed above.
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | tar xz -C /usr/local/bin kubeconform
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
           kubeconform -summary deploy/otel-collector/kubernetes/
 
   e2e-basic-mcp:

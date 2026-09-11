@@ -6,10 +6,12 @@ mcp_client_auth:
   mode: static
   dev_token: "${MCP_DEV_TOKEN}"
 
+# Replace with the URL of your broker's SEMP management port.
+# Example: https://broker.example.com:943
 brokers:
-  demo:
-    url: "http://localhost:8080"
+  my-broker:
+    url: "${BROKER_URL}"
     auth:
       mode: basic
-      username: "admin"
-      password: "admin"
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
