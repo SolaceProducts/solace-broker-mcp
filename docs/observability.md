@@ -102,19 +102,54 @@ against a stated test rather than re-argued each release.
 | Flag | Default | Why, and what would change it |
 |---|---|---|
 | `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
-| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. Flips when the schema review is complete **and** the names are frozen. The schema review (Story 41) is done; the names-frozen half is the piece still outstanding. |
+| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes. |
 | `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
-| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Flips when the schema review is complete **and** the end-to-end identity chain is in place. The identity chain landed with OAuth token exchange; the schema review is the remaining half. |
+| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. It now flips when the Solace SDLC security review of the audit schema passes **and** `mcp_audit_events_dropped_total` is emitted — a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent. |
 | `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
-| `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is met — see `observability.saturation_threshold_ms`. It stays off pending the metric form of the signal, so operators are not opted into per-request log volume to get it. |
+| `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is satisfied — see `observability.saturation_threshold_ms`. It now flips when the metric form of this signal replaces the log lines, so operators are not opted into per-request log volume to get it. |
 | `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows `OBS_METRICS_ENABLED` | A counter that `/metrics` does not expose has no consumer. Set it explicitly to override in either direction. |
 
 Panic recovery is not a flag: it is unconditional. `/livez` and `/readyz` are unconditional
 for the same reason — the check is cheap and commits us to nothing.
 
-No flag's v1 default changes before GA: `OBS_SATURATION_EVENTS_ENABLED`'s original condition
-is met, but it stays off under a new one rather than flipping (above); every other
-default-off flag is still waiting on its stated condition.
+No flag's v1 default changes before GA. Three of them — metrics, audit, and saturation — have
+satisfied the condition they originally carried, and each stays off under the replacement
+condition named above rather than flipping. Tracing and OTLP push are opt-in permanently.
+
+### Schema Review Record
+
+**Outcome: reviewed internally with feedback incorporated, then circulated twice for wider
+review with no objections returned. The names ship as drafted.**
+
+The review ran in two phases ahead of the GA freeze.
+
+**Phase 1, internal review (from 2026-07-20).** The first draft drew substantive feedback
+from Solace engineering and field leadership, and it changed this schema. Each item below is
+checkable against the current document:
+
+| Feedback | What changed |
+|---|---|
+| Do not align exclusively to one telemetry vendor path | Metrics are designed for **two egresses**, Prometheus scrape and OTLP push, from one instrument set. The OTLP push half is not in this build; see the [Metrics](#metrics--planned-with-exceptions) section. |
+| Add `mcp_schema_version` and `mcp_build_info` | Both are in the schema and **emitted today**. |
+| Carry a broker identifier on metrics | `broker` is a label on the tool RED metrics, the SEMP metrics, and the broker reachability gauges. It is deliberately absent where no broker is in scope at the measurement point, such as authentication failures and authorization denials, which are decided before a broker is selected. |
+| Enrich `mcp_auth_failure_total` | It carries `reason`, across the five documented authentication-failure reasons. |
+| A two-month window before locking the schema is too limiting | The compatibility commitment is **bounded, not absolute**: additive within a MAJOR, with an announced deprecation path. It replaced an earlier unqualified "never rename". See [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy). |
+| The failure-event enum design needs scrutiny | `error_type` was promoted to a first-class shared label across metrics, logs, audit, and spans, so the four surfaces cannot disagree about why a call failed, and a test now asserts the vocabularies agree. |
+
+**Phase 2, wider solicitation (2026-07-27 and 2026-08-18).** Two further rounds went out over
+roughly seven weeks, the second asking named field and sales-engineering stakeholders to
+carry the brief and schema to key customers, on the explicit reasoning that changing the
+schema after GA is disruptive. **Neither round drew a response.**
+
+Read phase 2 as the absence of an objection rather than as positive confirmation: no response
+from a named customer operator came back, so nothing here records an operator having built a
+dashboard or a SIEM query against these names and found them workable. The fallback is
+deliberate. Names follow OpenTelemetry semantic conventions wherever conventions exist, and
+the compatibility policy above is bounded rather than absolute.
+
+**Feedback is still welcome and still worth sending**; see
+[How to Give Feedback](#how-to-give-feedback). What the freeze changes is the cost of acting
+on it, not our willingness to.
 
 ---
 
