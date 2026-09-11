@@ -116,6 +116,9 @@ type Params struct {
 	// AudienceParam selects the wire format for the per-broker audience.
 	// V1: AudienceParamAudience.
 	AudienceParam AudienceFormat
+	// TokenExpiryFallback is used only when a successful IdP response omits
+	// expires_in or returns zero. Zero preserves fail-closed behavior.
+	TokenExpiryFallback time.Duration
 	// HTTPClient is the IdP-bound HTTP client; production builds it via
 	// idpclient.NewRetryingHTTPClient (transparent 5xx / connection-error
 	// retries) which composes NewHTTPClient (SOL-150219 timeout bound).
@@ -225,10 +228,11 @@ func (i ExchangeInput) LogValue() slog.Value {
 	)
 }
 
-// Token is the result of a successful token exchange. Value is the
-// exchanged bearer token; ExpiresAt is computed from the IdP-reported
-// expires_in minus a 30-second skew so callers have a safe "use-by"
-// instant rather than a fragile duration.
+// Token is the result of a successful token exchange. Value is the exchanged
+// bearer token; ExpiresAt is computed from the selected lifetime — a positive
+// IdP expires_in, or the configured fallback when the IdP omits it — minus a
+// 30-second skew so callers have a safe "use-by" instant rather than a fragile
+// duration.
 //
 // That skew is deducted here and nowhere else (SOL-154165). Every
 // consumer — the token cache included — treats ExpiresAt as the true

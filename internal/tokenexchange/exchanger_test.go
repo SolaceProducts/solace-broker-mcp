@@ -107,6 +107,35 @@ func TestNew_MaxHonoredRetryAfterNegativeRejected(t *testing.T) {
 	}
 }
 
+func TestNew_TokenExpiryFallbackNegativeRejected(t *testing.T) {
+	p := validParams(t)
+	p.TokenExpiryFallback = -time.Second
+
+	ex, err := New(p)
+	if err == nil {
+		t.Fatal("expected error for negative TokenExpiryFallback")
+	}
+	if ex != nil {
+		t.Errorf("expected nil Exchanger on error, got %#v", ex)
+	}
+	if !strings.Contains(err.Error(), "TokenExpiryFallback") {
+		t.Errorf("error message should mention TokenExpiryFallback, got: %v", err)
+	}
+}
+
+func TestNew_TokenExpiryFallbackZeroAccepted(t *testing.T) {
+	p := validParams(t)
+	p.TokenExpiryFallback = 0
+
+	ex, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if ex == nil {
+		t.Fatal("expected non-nil Exchanger")
+	}
+}
+
 // TestNew_MaxHonoredRetryAfterZeroAccepted confirms zero is still legal —
 // it is the documented "use defaultMaxHonoredRetryAfter" sentinel, not an
 // error, only negative values are rejected.
@@ -141,6 +170,7 @@ func TestNew_HappyPath(t *testing.T) {
 // the foundation of the concurrency safety story (Decision 8).
 func TestNew_FieldsAreCopied(t *testing.T) {
 	p := validParams(t)
+	p.TokenExpiryFallback = time.Hour
 	ex, err := New(p)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -150,6 +180,7 @@ func TestNew_FieldsAreCopied(t *testing.T) {
 	p.TokenURL = "https://changed.example.com/token"
 	p.ClientID = "changed"
 	p.ClientSecret = "changed"
+	p.TokenExpiryFallback = 2 * time.Hour
 
 	if ex.tokenURL == p.TokenURL {
 		t.Error("Exchanger.tokenURL aliased to caller's Params after mutation")
@@ -159,5 +190,8 @@ func TestNew_FieldsAreCopied(t *testing.T) {
 	}
 	if ex.clientSecret == p.ClientSecret {
 		t.Error("Exchanger.clientSecret aliased to caller's Params after mutation")
+	}
+	if ex.tokenExpiryFallback != time.Hour {
+		t.Errorf("Exchanger.tokenExpiryFallback = %v, want original 1h", ex.tokenExpiryFallback)
 	}
 }
