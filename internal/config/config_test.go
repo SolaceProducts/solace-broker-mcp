@@ -3628,6 +3628,7 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 		secretClientID     = "mcp-client-id-VALUE"
 		secretClientSecret = "SECRET_CLIENT_SECRET_VAL"
 	)
+	expiryFallback := time.Hour
 
 	cfg := BrokerOAuthConfig{
 		TokenURL: "https://idp.example.com/token",
@@ -3635,8 +3636,9 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 		ClientAuth: BrokerClientAuth{
 			ClientSecretBasic: &ClientSecretAuth{Secret: secretClientSecret},
 		},
-		GrantType:     GrantTypeTokenExchange,
-		AudienceParam: AudienceParamAudience,
+		GrantType:           GrantTypeTokenExchange,
+		AudienceParam:       AudienceParamAudience,
+		TokenExpiryFallback: &expiryFallback,
 	}
 
 	var buf bytes.Buffer
@@ -3652,6 +3654,21 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	}
 	if !strings.Contains(out, "idp_token_endpoint") || !strings.Contains(out, secretClientID) {
 		t.Errorf("expected idp_token_endpoint and mcp_server_client_id in log output: %s", out)
+	}
+	if !strings.Contains(out, `"expiry_fallback_configured":true`) || !strings.Contains(out, `"expiry_fallback":3600000000000`) {
+		t.Errorf("expected configured expiry fallback in log output: %s", out)
+	}
+
+	buf.Reset()
+	cfg.TokenExpiryFallback = nil
+	slog.Info("broker_oauth", slog.Any("cfg", cfg))
+
+	out = buf.String()
+	if !strings.Contains(out, `"expiry_fallback_configured":false`) {
+		t.Errorf("expected unconfigured expiry fallback in log output: %s", out)
+	}
+	if strings.Contains(out, `"expiry_fallback":`) {
+		t.Errorf("expiry_fallback must be absent when unconfigured: %s", out)
 	}
 }
 

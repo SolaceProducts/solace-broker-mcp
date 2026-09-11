@@ -688,7 +688,7 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	// not return the response.
 	status := resp.StatusCode
 
-	tok, err := e.parseIdPResponse(resp, e.nowFunc())
+	parsed, err := e.parseIdPResponse(resp, e.nowFunc())
 	if err != nil {
 		return nil, err
 	}
@@ -700,10 +700,11 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	slog.DebugContext(ctx, "identity provider issued broker token",
 		slog.String("broker", input.BrokerAlias),
 		slog.Int("http_status", status),
-		slog.Int("attempts", idpclient.AttemptsFromContext(ctx)))
+		slog.Int("attempts", idpclient.AttemptsFromContext(ctx)),
+		slog.Bool("used_fallback", parsed.usedFallback))
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).
-	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Audience, tok.Value)
-	return tok, nil
+	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Audience, parsed.Value)
+	return parsed.Token, nil
 }

@@ -165,14 +165,16 @@ func TestEventTypes_everyTypeHasALevel(t *testing.T) {
 //
 // The count is asserted as len(ErrorTypes()), never as a literal in the
 // assertion, so a value added to the vocabulary without being added here fails
-// loudly. Ticket text has claimed ten, then eleven; the shipped code computes
-// twelve, across four logToolResult call sites. See
-// internal/tools/audit_error_type_drift_test.go, which walks those sites' AST
-// and fails if the two sets ever diverge again.
+// loudly. Ticket text has claimed ten, then eleven; the shipped code computed
+// twelve, across four logToolResult call sites, until SOL-153332 (Story 49)
+// added broker_permission_denied for a hop-2 authorization denial, making
+// thirteen. See internal/tools/audit_error_type_drift_test.go, which walks
+// those sites' AST and fails if the two sets ever diverge again.
 func TestErrorTypes_closedVocabulary(t *testing.T) {
 	t.Parallel()
 	want := []string{
-		"bad_request", "broker_init_error", "execution_error", "marshal_error",
+		"bad_request", "broker_init_error", "broker_permission_denied",
+		"execution_error", "marshal_error",
 		"missing_broker", "nil_result", "not_found", "output_validation_error",
 		"panic", "unknown_broker", "unknown_tool", "validation_error",
 	}
@@ -462,7 +464,7 @@ func TestNewEvent_errorTypeVocabularyIsClosed(t *testing.T) {
 			t.Errorf("error_type = %v, want %q", got, et)
 		}
 	}
-	for _, bad := range []string{"timeout", "Panic", "execution error", "broker_permission_denied"} {
+	for _, bad := range []string{"timeout", "Panic", "execution error", "broker_authz_denied"} {
 		f := validOperation()
 		f.Outcome = OutcomeError
 		f.ErrorType = bad
@@ -920,7 +922,7 @@ func renderApplicabilityFingerprint() string {
 // TestApplicabilityByType_isVersioned, read the failure's "got" block, and
 // paste it in here. This test cannot make the additive-vs-breaking judgment
 // for you; it only proves a human made one, by pinning both together.
-const wantApplicabilityFingerprint = `schema_version=1.1
+const wantApplicabilityFingerprint = `schema_version=1.2
 audit_drop: outcome=forbidden error_type=forbidden reason=forbidden tool=optional arguments_hash=forbidden broker=optional timing=forbidden identity=forbidden dropped_event_type=optional
 auth_failure: outcome=forbidden error_type=forbidden reason=required tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
 auth_success: outcome=forbidden error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden

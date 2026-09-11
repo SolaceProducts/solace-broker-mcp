@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
@@ -31,7 +32,7 @@ import (
 // returns both so a test can drive invocations and scrape the result.
 func newMetricsManager(t *testing.T) (*ToolManager, *metrics.Provider) {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

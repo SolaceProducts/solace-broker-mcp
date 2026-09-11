@@ -9,6 +9,15 @@
 # Env overrides (same names as run.sh so the two scripts share vocabulary):
 #   CLIENTS      loadgen -clients                (default 200)
 #   DURATION     loadgen -duration               (default 60s)
+#   WARMUP       loadgen -warmup                 (default unset = no warmup).
+#                Time discarded from the STATS at the head of the run. The run
+#                still drives load for WARMUP + DURATION and this box's
+#                samplers are extended to match — but Box B's are not, because
+#                the two boxes share no channel: give run-mcp.sh a DURATION of
+#                at least WARMUP + DURATION or its samplers stop before the
+#                load does. Use it for a run with a mid-run event: only the
+#                summary percentiles are emitted, so a run that injects
+#                latency partway through cannot be re-windowed afterwards.
 #   TOOLS        loadgen -tools                  (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   BROKERS      loadgen -broker-count           (default 50)
 #   BROKERS_CSV  loadgen -brokers <csv>          (default empty = use BROKERS).
@@ -40,26 +49,92 @@
 #                  fixtures.manifest at capture time — set only to override)
 #   RDP            fidelity/loadgen -rdp (default: the RDP recorded in
 #                  fixtures.manifest; the mock serves get-rdp-status for it only)
+#   PORT_WAIT_SECS how long to wait for a port held by a previous sweep point to
+#                  be released before giving up (default 60)
+#   NOFILE         descriptor limit to request (default 1048576; falls back to
+#                  the hard limit, and both are recorded). At high client counts
+#                  this box needs the most of it: every loadgen session is one
+#                  outbound socket here and one inbound socket on the MCP box.
+#   RIG_NOTE       free-text note about this host. Control characters are
+#                  flattened, `=` becomes `:` and the value is capped at 200
+#                  characters so the record stays parseable — the substitutions
+#                  are reported on stderr.
 
 set -euo pipefail
 
 mcp_url="${1:?usage: $0 <mcp-url>   e.g.  $0 http://198.51.100.31:9090}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bin="$here/bin"
+repo_root="$(cd "$here/../.." && pwd)"
+
+# shellcheck source=lib.sh
+source "$here/lib.sh"
 
 CLIENTS="${CLIENTS:-200}"
 DURATION="${DURATION:-60s}"
+# Unset by default, so an existing invocation behaves exactly as it did.
+WARMUP="${WARMUP:-}"
 TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 # Record whether BROKERS came from the environment before the default lands,
 # so the BROKERS_CSV conflict check below can tell "caller set 50" from
 # "nobody set anything".
 brokers_explicit="${BROKERS+set}"
+# The generator's -prefix and loadgen's -broker-prefix have to agree, and until
+# now only the generator had a knob: a config generated with `-prefix mock`
+# gave MCP aliases mock-01... while loadgen kept asking for broker-01..., so
+# every lookup missed. Both defaults are `broker`, so an existing invocation is
+# unchanged.
+BROKER_PREFIX="${BROKER_PREFIX:-broker}"
 BROKERS="${BROKERS:-50}"
+
+# The mock binds BROKERS ports from 18081 and its control endpoint at the fixed
+# 19000, so a count of 920 or more makes a broker land on the control port —
+# they race, and /_mock/config goes to whichever won. gen-mock-config.sh
+# already refuses this range; the runners have to as well, because a config
+# generated for a smaller count can still be driven with a larger BROKERS.
+if (( BROKERS > 919 )); then
+  echo "BROKERS must be 919 or fewer: 18081 + $BROKERS - 1 would reach the mock's control port 19000" >&2
+  exit 2
+fi
 BROKERS_CSV="${BROKERS_CSV:-}"
 LATENCY_MS="${LATENCY_MS:-0}"
 TOTAL_RPS="${TOTAL_RPS:-0}"
 RUN_TAG="${RUN_TAG:-${CLIENTS}c}"
 NO_MOCK="${NO_MOCK:-0}"
+PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
+
+# Validated before anything starts. loadgen would reject a malformed duration
+# itself, but only after the mock, the wait for Box B and the fidelity gate
+# have been paid for — and on this box that is minutes, not seconds.
+# DURATION and WARMUP both size sampler windows, so both are resolved to whole
+# seconds here, once, and a value that cannot be resolved stops the run before
+# the mock, the wait for Box B and the fidelity gate have been paid for.
+# Stricter than Go's own parser — see run.sh for why the old arrangement, with
+# a separate awk that fell back to a hardcoded 90, sampled the wrong span in
+# silence.
+duration_secs=$(perf_duration_secs "$DURATION") || exit 2
+# Zero is a legitimate WARMUP and never a legitimate DURATION: `loadgen`
+# rejects a non-positive -duration, and `memsampler -duration 0s` means "run
+# until the process disappears", so a zero would sail through this preflight
+# and hang the run at its final wait. Refuse it here, where refusing is free.
+if (( duration_secs == 0 )); then
+  echo "DURATION must be greater than zero, got: '$DURATION'" >&2
+  exit 2
+fi
+warmup_secs=0
+warmup_args=()
+if [[ -n "$WARMUP" ]]; then
+  warmup_secs=$(perf_duration_secs "$WARMUP") || exit 2
+  # A zero warmup is the same run as no warmup, so it is normalised to one
+  # rather than recorded as a warmup with no stats window beside it.
+  if (( warmup_secs > 0 )); then
+    warmup_args=(-warmup "$WARMUP")
+  else
+    WARMUP=""
+  fi
+fi
+# The load lasts warmup + duration, so every window over it must too.
+load_secs=$(( duration_secs + warmup_secs ))
 
 # loadgen rejects -brokers and -broker-count together; catch it here instead,
 # where the message can name the environment variables the caller actually set.
@@ -70,9 +145,17 @@ if [[ -n "$BROKERS_CSV" ]]; then
   fi
   broker_args=(-brokers "$BROKERS_CSV")
   broker_note="brokers=$BROKERS_CSV"
+  # Count what this instance actually drives. BROKERS keeps its default of 50
+  # on this path — the mutual-exclusion check above forbids setting it — so
+  # recording it here would state a number that corresponds to nothing,
+  # loudest in the split-population case this path exists for, where NO_MOCK=1
+  # means the 50 is not even the size of a mock this box owns.
+  # Empty entries are not counted: "a,,b" pins two aliases, not three.
+  broker_count=$(perf_alias_count "$BROKERS_CSV")
 else
-  broker_args=(-broker-count "$BROKERS")
+  broker_args=(-broker-count "$BROKERS" -broker-prefix "$BROKER_PREFIX")
   broker_note="broker-count=$BROKERS"
+  broker_count=$BROKERS
 fi
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
@@ -82,9 +165,12 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # mock alias. VPN must match the capture and is resolved from
 # fixtures.manifest after the preflight below — hardcoding a default here is
 # how it drifted from regen-golden.sh's.
-BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+# Derived from the prefix, so setting BROKER_PREFIX alone cannot leave the
+# fidelity gate dialling an alias the generated config does not contain.
+BROKER_ALIAS="${BROKER_ALIAS:-${BROKER_PREFIX}-01}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-loadgen-$RUN_TAG"
 mkdir -p "$runs"
+record="$runs/run-record.loadgen"
 
 required_bins=(loadgen fidelity)
 [[ "$NO_MOCK" != "1" ]] && required_bins+=(mock-semp)
@@ -95,12 +181,43 @@ for b in "${required_bins[@]}"; do
   fi
 done
 
-if [[ "$NO_MOCK" != "1" ]] && ss -tln 2>/dev/null | grep -q ":18081 "; then
-  echo "port 18081 already in use — mock-semp may already be running:" >&2
-  ss -tlnp 2>/dev/null | grep ":18081 " >&2
-  echo "kill it, or re-run with NO_MOCK=1 to reuse the existing mock." >&2
+# A non-numeric or zero BROKERS would build an empty port list and hand
+# mock-semp a -listen-count it rejects several steps later. Catch it here,
+# where the message can name the variable.
+if ! [[ "$BROKERS" =~ ^[0-9]+$ ]] || (( BROKERS < 1 )); then
+  echo "BROKERS must be a positive integer, got: $BROKERS" >&2
   exit 2
 fi
+
+# Wait for the ports this box needs rather than aborting on a held one. A
+# back-to-back sweep point was lost that way. Bounded, and the failure names
+# the port it waited on; starting anyway would have the run talk to the
+# previous point's mock.
+#
+# The mock's whole port range is covered, not just 18081, plus its control
+# port: a previous point with a larger BROKERS leaves the tail of the range
+# bound while 18081 is already free, and the run would then 404 on exactly the
+# brokers whose ports were missing.
+#
+# "Free" means no listener, not no socket — a TIME_WAIT socket does not block a
+# bind with SO_REUSEADDR. See perf_first_held_port.
+if [[ "$NO_MOCK" != "1" ]]; then
+  mock_ports=()
+  for (( p = 18081; p < 18081 + BROKERS; p++ )); do mock_ports+=("$p"); done
+  if ! perf_wait_ports_free "$PORT_WAIT_SECS" 19000 "${mock_ports[@]}"; then
+    echo "   (or re-run with NO_MOCK=1 to reuse the existing mock)" >&2
+    exit 2
+  fi
+fi
+
+# Raise the descriptor limit before loadgen or the mock start, so both inherit
+# it. This is the box that needs it: every one of CLIENTS sessions is an
+# outbound socket here, and the mock holds the matching inbound one, so a
+# 2000-client run needs several thousand descriptors on this host alone. It was
+# never raised anywhere in the suite before, which left the ceiling varying
+# with the operator's login shell — invisible in the results.
+perf_raise_nofile "${NOFILE:-1048576}"
+echo "== 0a. descriptor limit: requested $PERF_NOFILE_REQUESTED, granted $PERF_NOFILE_GRANTED"
 
 # Fixture preflight. The canned responses and goldens are lab captures kept
 # out of git, so "absent" is the normal state of a fresh clone — fail here
@@ -141,15 +258,49 @@ fi
 # names would drift the first time a tool is added.
 "$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
 
-# Convert Go duration to seconds for the sampler's -duration arg.
-sample_secs=$(awk -v d="$DURATION" 'BEGIN {
-  if (match(d, /^([0-9.]+)s$/, m)) { print int(m[1]); exit }
-  if (match(d, /^([0-9.]+)m$/, m)) { print int(m[1]*60); exit }
-  if (match(d, /^([0-9.]+)h$/, m)) { print int(m[1]*3600); exit }
-  print 90
-}')
-# Give the sampler a small buffer so it captures loadgen's teardown too.
-sample_secs=$(( sample_secs + 10 ))
+# Resolved at the top, from the same parser the run record and Box B use.
+# Plus a small buffer so the sampler captures loadgen's teardown too.
+sample_secs=$(( load_secs + 10 ))
+
+# The run record for this box. One per box, never a merged one: the two halves
+# of a split-host run have different rigs, and merging them would need a
+# channel between the boxes that this harness deliberately does not have. The
+# halves are collected together when the run directories are archived.
+perf_record_begin "$record" loadgen "$runs"
+perf_record_rig "$record"
+perf_record_code "$record" "$repo_root" "$bin" loadgen mock-semp fidelity
+perf_record_fixtures "$record" "$here"
+perf_record_comment "$record" "workload"
+# Userinfo stripped: the record is archived and shared, and a scheme://user:pass@
+# authority is worth nothing as provenance. See perf_redact_userinfo.
+perf_record_kv "$record" mcp_url "$(perf_redact_userinfo "$mcp_url")"
+perf_record_kv "$record" clients "$CLIENTS"
+perf_record_kv "$record" duration "$DURATION"
+# What the stats exclude, not what the load skipped: the run still drives load
+# for the whole of WARMUP + DURATION. `none` rather than an empty value, which
+# would read as a measured zero.
+perf_record_kv "$record" stats_warmup "${WARMUP:-none}"
+perf_record_kv "$record" tools "$TOOLS"
+# The number of aliases this loadgen drives — not the size of the mock, which
+# is a different quantity whenever BROKERS_CSV pins a subset.
+perf_record_kv "$record" broker_count "$broker_count"
+# Only when an explicit alias list was pinned; an empty field would read as a
+# value rather than as "this run used the generated broker-01..N list".
+[[ -n "$BROKERS_CSV" ]] && perf_record_kv "$record" brokers_csv "$BROKERS_CSV"
+perf_record_kv "$record" vpn "$VPN"
+perf_record_kv "$record" rdp "$RDP"
+perf_record_kv "$record" latency_ms "$LATENCY_MS"
+perf_record_kv "$record" total_rps "$TOTAL_RPS"
+perf_record_kv "$record" error_rate "$ERROR_RATE"
+perf_record_kv "$record" error_count "$ERROR_COUNT"
+perf_record_kv "$record" error_statuses "$ERROR_STATUSES"
+perf_record_kv "$record" no_mock "$NO_MOCK"
+# How many ports the mock on this box binds. Only when this box runs one:
+# under NO_MOCK=1 the mock belongs to someone else and its size is not ours to
+# state. Equal to broker_count unless BROKERS_CSV pinned a subset.
+[[ "$NO_MOCK" != "1" ]] && perf_record_kv "$record" mock_broker_ports "$BROKERS"
+perf_record_kv "$record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$record" nofile_granted "$PERF_NOFILE_GRANTED"
 
 mock_pid= lg_pid= sampler_pid= mock_top_pid=
 # kill_tree signals a pid (and its process group if reachable) and returns.
@@ -346,9 +497,23 @@ else
   inject_note="no error injection"
 fi
 
-echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION, tools=$TOOLS, $broker_note${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
+# Stamp the load window. This box drives the load, so it is the one that knows
+# when the load phase began and ended — and the stamp is what lets summary.sh
+# report CPU over the load phase instead of over a window that also contains
+# the idle stretch the fidelity gate ran in. Never inferred from the samples.
+perf_stamp_load_start "$record"
+# With a warmup, the load window and the window the stats describe are not the
+# same span. Record the second one so CPU can be read over the span the
+# percentiles actually cover rather than over one that also contains the
+# traffic they exclude.
+if (( warmup_secs > 0 )); then
+  lw_load_start=$(awk -F= '/^load_start_epoch=/ {print $2; exit}' "$record")
+  perf_record_kv "$record" stats_start_epoch "$(( lw_load_start + warmup_secs ))"
+fi
+
+echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION${WARMUP:+ after $WARMUP warmup}, tools=$TOOLS, $broker_note${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
 "$bin/loadgen" -mcp-url "$mcp_url" "${broker_args[@]}" \
-  -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
+  -clients "$CLIENTS" -duration "$DURATION" ${warmup_args[@]+"${warmup_args[@]}"} -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
   "${extra_args[@]}" \
   > >(tee "$runs/loadgen.log") 2>&1 &
@@ -367,8 +532,13 @@ echo "== 5. loadgen-sampler (~${sample_secs}s at 5s intervals)"
   > "$runs/loadgen-sampler.log" 2>&1 &
 sampler_pid=$!
 
-wait "$lg_pid"
-lg_rc=$?
+lg_rc=0
+wait "$lg_pid" || lg_rc=$?
+perf_stamp_load_end "$record"
+# Whether the load itself succeeded. Without it a record describes a run that
+# may have ended in errors and says nothing about it, and this box is the only
+# one that knows.
+perf_record_kv "$record" load_rc "$lg_rc"
 
 # Let the samplers flush; they exit on their own via kill -0 / duration.
 wait "$sampler_pid" 2>/dev/null || true
@@ -377,4 +547,21 @@ wait "$mock_top_pid" 2>/dev/null || true
 echo "== done (loadgen rc=$lg_rc)"
 echo
 "$here/summary.sh" "$runs" || true
+echo "run record: $record"
+echo
+# The MCP box cannot stamp its own load window (no channel between the boxes),
+# so hand the operator the exact command that windows Box B's numbers on the
+# window this box measured. Both run directories are archived together.
+lw_start=$(awk -F= '/^load_start_epoch=/ {print $2; exit}' "$record")
+lw_end=$(awk -F= '/^load_end_epoch=/ {print $2; exit}' "$record")
+echo "to window the MCP box's CPU on this run's load phase:"
+echo "  ./summary.sh <box-b-run-dir> $lw_start $lw_end"
+# With a warmup, the load phase and the span the percentiles describe are
+# different windows, and the second is the one that matches the numbers a
+# mid-run-event run is quoted from.
+if (( warmup_secs > 0 )); then
+  lw_stats=$(awk -F= '/^stats_start_epoch=/ {print $2; exit}' "$record")
+  echo "to window it on the span the stats cover (after the ${WARMUP} warmup):"
+  echo "  ./summary.sh <box-b-run-dir> $lw_stats $lw_end"
+fi
 exit "$lg_rc"

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -222,7 +223,7 @@ func newDescribeSempSchemaSession(t *testing.T, logBuf *bytes.Buffer, clientMidd
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(oldLogger) })
 
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

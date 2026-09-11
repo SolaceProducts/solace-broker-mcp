@@ -95,11 +95,11 @@ const (
 	URNTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token" // #nosec G101 -- public RFC 8693 token-type URN, not a credential.
 )
 
-// Params are the construction-time inputs to New. Every field except
-// HTTPClient is sourced from validated config (broker_oauth.*) and is
-// trusted by the constructor — the config validator has already enforced
-// non-empty values and allowlist membership at startup. HTTPClient is
-// runtime-wired and is the only field New rejects when invalid.
+// Params are the construction-time inputs to New. YAML-sourced fields
+// (broker_oauth.*) are enforced by the config validator at startup.
+// HTTPClient and Cache are runtime-wired. New rejects a nil HTTPClient
+// or Cache, a negative TokenExpiryFallback or MaxHonoredRetryAfter, and
+// a CircuitBreaker that fails Validate.
 type Params struct {
 	// TokenURL is the IdP token endpoint (broker_oauth.idp_token_endpoint).
 	TokenURL string
@@ -116,6 +116,9 @@ type Params struct {
 	// AudienceParam selects the wire format for the per-broker audience.
 	// V1: AudienceParamAudience.
 	AudienceParam AudienceFormat
+	// TokenExpiryFallback is used only when a successful IdP response omits
+	// expires_in or returns zero. Zero preserves fail-closed behavior.
+	TokenExpiryFallback time.Duration
 	// HTTPClient is the IdP-bound HTTP client; production builds it via
 	// idpclient.NewRetryingHTTPClient (transparent 5xx / connection-error
 	// retries) which composes NewHTTPClient (SOL-150219 timeout bound).
@@ -225,10 +228,11 @@ func (i ExchangeInput) LogValue() slog.Value {
 	)
 }
 
-// Token is the result of a successful token exchange. Value is the
-// exchanged bearer token; ExpiresAt is computed from the IdP-reported
-// expires_in minus a 30-second skew so callers have a safe "use-by"
-// instant rather than a fragile duration.
+// Token is the result of a successful token exchange. Value is the exchanged
+// bearer token; ExpiresAt is computed from the selected lifetime — a positive
+// IdP expires_in, or the configured fallback when the IdP omits expires_in,
+// returns null, or returns zero — minus a 30-second skew so callers have a
+// safe "use-by" instant rather than a fragile duration.
 //
 // That skew is deducted here and nowhere else (SOL-154165). Every
 // consumer — the token cache included — treats ExpiresAt as the true

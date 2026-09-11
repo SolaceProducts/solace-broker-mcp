@@ -22,11 +22,16 @@ import (
 
 // ObservabilityConfig holds the feature flags and tunables for the
 // observability capabilities (correlation IDs, metrics, audit log, tracing,
-// saturation events, auth-failure counter). The flags are loaded and surfaced
-// here; correlation IDs are now wired into the request path (SOL-151279), while
-// metrics, audit, tracing, and saturation remain surfaced-only until their
-// stories consume them. (Panic recovery is unconditional and is no longer a
-// flag on this struct.)
+// saturation events, auth-failure counter). Every flag here now gates a real
+// consumer: correlation IDs in the request path (SOL-151279), the metrics
+// provider and /metrics listener (cmd/server/main.go), the audit log on the
+// tool and SEMP paths (internal/tools, internal/semp), the tracer provider,
+// and the saturation signal on the broker admission path (internal/semp/pool.go).
+// (Panic recovery is unconditional and is no longer a flag on this struct.)
+//
+// The v1 defaults and the written flip-condition behind each one are recorded
+// in docs/observability.md, "Flag Defaults at GA". Change a default there and
+// here together, and update the default-assertion table in observability_test.go.
 //
 // Two distinct loading channels, deliberately split:
 //
@@ -49,6 +54,14 @@ type ObservabilityConfig struct {
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
 	SaturationEventsEnabled bool `yaml:"-"`
+	// MetricsOTLPEnabled turns on the OTLP push egress alongside the Prometheus
+	// scrape (SOL-152418, Story 46): both read from the same meter provider, so
+	// enabling this adds a second consumer of the existing instruments rather
+	// than a second set of them. Meaningless with MetricsEnabled off — the
+	// meter provider is the shared root, so validateMetricsOTLPCoherence
+	// rejects that combination at config load rather than silently doing
+	// nothing.
+	MetricsOTLPEnabled bool `yaml:"-"`
 	// AuthFailureCounterEnabled follows MetricsEnabled unless its own env var
 	// (OBS_AUTH_FAILURE_COUNTER_ENABLED) is explicitly set. It gates both
 	// security counters, mcp_auth_failure_total and mcp_authz_denied_total
@@ -100,6 +113,7 @@ const (
 	envObsTracingEnabled            = "OBS_TRACING_ENABLED"
 	envObsSaturationEventsEnabled   = "OBS_SATURATION_EVENTS_ENABLED"
 	envObsAuthFailureCounterEnabled = "OBS_AUTH_FAILURE_COUNTER_ENABLED"
+	envObsMetricsOTLPEnabled        = "OBS_METRICS_OTLP_ENABLED"
 )
 
 // applyObservabilityEnv populates the capability flags on cfg from the OBS_*
@@ -115,6 +129,7 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false, "observability")
 	o.TracingEnabled = envBool(envObsTracingEnabled, false, "observability")
 	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false, "observability")
+	o.MetricsOTLPEnabled = envBool(envObsMetricsOTLPEnabled, false, "observability")
 
 	// Auth-failure counter follows metrics unless its own var is explicitly
 	// set. LookupEnv distinguishes "unset" (follow metrics) from "set to

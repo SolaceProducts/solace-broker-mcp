@@ -55,7 +55,7 @@ func TestRegisterShutdownHooks_BothProvidersRegistered(t *testing.T) {
 		t.Fatalf("resource: %v", err)
 	}
 
-	mp, err := metrics.New("v1.2.3", res)
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRegisterShutdownHooks_OnlyMetricsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resource: %v", err)
 	}
-	mp, err := metrics.New("v1.2.3", res)
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}

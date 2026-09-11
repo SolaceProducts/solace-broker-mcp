@@ -103,7 +103,7 @@ brokers:
 
 Configured under the top-level `broker_oauth` key. Required when any event broker uses `auth.mode: oauth` — obtains the event-broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider (IdP).
 
-`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JSON Web Token (JWT) as its `subject_token`, so an event broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at configuration load** with an `mcp_client_auth.mode must be oauth` error naming the affected event broker(s). The `broker_oauth:` block itself is likewise required once any event broker uses `auth.mode: oauth` — omitting it fails configuration load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails configuration load naming that field.
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JSON Web Token (JWT) as its `subject_token`, so an event broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at configuration load** with an `mcp_client_auth.mode must be oauth` error naming the affected event broker(s). The `broker_oauth:` block itself is likewise required once any event broker uses `auth.mode: oauth` — omitting it fails configuration load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table other than `token_expiry_fallback`, `circuit_breaker`, and `retry_after` is required; an empty or unsupported value fails configuration load naming that field.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -114,6 +114,7 @@ Configured under the top-level `broker_oauth` key. Required when any event broke
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
 | `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at configuration load. |
 | `audience_parameter_name` | — | **Required.** Which request parameter carries each event broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at configuration load. |
+| `token_expiry_fallback` | omitted (fail closed) | Optional positive duration used only when a successful IdP response omits `expires_in`, returns `null`, or returns `0`. A positive IdP value always wins; a negative or unsafe value is still rejected. When both the response lifetime and this setting are absent, token exchange fails. Any positive duration passes configuration validation, but after the server subtracts its 30-second safety margin, a fallback of `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit Breaker](#circuit-breaker). |
 | `retry_after` | omitted (default cap) | Optional. See [Retry-After Gate](#retry-after-gate). |
 
@@ -132,6 +133,7 @@ broker_oauth:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: "audience"
+  # token_expiry_fallback: 1h  # optional; omit = fail-closed when the IdP is silent
 
 brokers:
   prod:
@@ -140,6 +142,8 @@ brokers:
       mode: oauth
       audience: "solace-broker-prod"
 ```
+
+**Configured is not the same as used.** Once at startup, when the Hop 2 exchanger is created, the server logs one INFO line — `token exchanger created for broker OAuth` — carrying `expiry_fallback_configured` (and `expiry_fallback` with the duration when the setting is present). That line says the fallback is armed, not that the IdP ever omitted `expires_in`. Whether an exchange actually used it is visible only at `log_level: debug`: each live exchange logs `identity provider issued broker token` with `used_fallback` — `true` only when the fallback supplied the lifetime, `false` when the IdP returned a positive `expires_in`. A cache hit performs no exchange and so emits no such line, and an exchange that fails closed (no fallback configured, no usable `expires_in`) returns an error rather than this line.
 
 ### Circuit Breaker
 
