@@ -159,23 +159,36 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 		}
 	}
 
-	if sr.ExpiresIn <= 0 {
+	if sr.ExpiresIn < 0 {
 		return nil, &ExchangeError{
 			Sentinel: ErrInvalidResponse,
-			Message:  "token exchange invalid response: IdP success response missing or non-positive expires_in — the IdP must return expires_in in token-exchange responses (configure token lifetimes on the IdP client)",
+			Message:  "token exchange invalid response: IdP success response contains negative expires_in",
 		}
 	}
 
-	// Prevents time.Duration overflow (int64 nanoseconds, max ~292 years).
-	if sr.ExpiresIn > maxExpiresInSeconds {
-		return nil, &ExchangeError{
-			Sentinel: ErrInvalidResponse,
-			Message:  fmt.Sprintf("token exchange invalid response: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", sr.ExpiresIn),
+	var lifetime time.Duration
+	if sr.ExpiresIn == 0 {
+		if e.tokenExpiryFallback == 0 {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  "token exchange invalid response: IdP success response missing or zero expires_in — configure token lifetimes on the IdP client or set broker_oauth.token_expiry_fallback",
+			}
 		}
+		lifetime = e.tokenExpiryFallback
+	} else {
+		// Prevents time.Duration overflow (int64 nanoseconds, max ~292 years).
+		if sr.ExpiresIn > maxExpiresInSeconds {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  fmt.Sprintf("token exchange invalid response: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", sr.ExpiresIn),
+			}
+		}
+		lifetime = time.Duration(sr.ExpiresIn) * time.Second
 	}
 
-	// TODO(Commit C): log WARN when sr.ExpiresIn <= int64(defaults.DefaultTokenExpirySkew.Seconds())
-	// — token is effectively expired at issuance, likely IdP misconfiguration.
+	// TODO(Commit C): log WARN when lifetime <= defaults.DefaultTokenExpirySkew
+	// — token is effectively expired at issuance, likely IdP or fallback
+	// misconfiguration.
 	//
 	// Extend that warning to cover roughly 2x the skew, not just <= 1x
 	// (SOL-154165). Below 1x the token is unusable and the cache's
@@ -186,7 +199,7 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 	// wrong reason: the double deduction refused the write outright, so a
 	// 60s-token IdP produced a WARN per call. Fixing the cache removed the
 	// noise and the only signal with it; this is where the signal belongs,
-	// since it is a property of the IdP's response, not of the cache.
+	// since it is a property of the selected token lifetime, not of the cache.
 
 	return &Token{
 		Value: sr.AccessToken,
@@ -195,7 +208,7 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 		// cache included — treats it as the true expiry and deducts nothing
 		// further (SOL-154165; see cache.CachedCredential's invariant).
 		// TODO(Commit E): replace direct default with e.tokenExpirySkew struct field
-		ExpiresAt: now.Add(time.Duration(sr.ExpiresIn)*time.Second - defaults.DefaultTokenExpirySkew),
+		ExpiresAt: now.Add(lifetime - defaults.DefaultTokenExpirySkew),
 	}, nil
 }
 
