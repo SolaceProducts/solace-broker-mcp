@@ -38,6 +38,14 @@ type successResponse struct {
 	ExpiresIn       int64  `json:"expires_in"`
 }
 
+// parsedSuccess carries the token plus exchange-local provenance needed by
+// observability. The provenance deliberately does not become part of Token's
+// public contract or enter the cache.
+type parsedSuccess struct {
+	*Token
+	usedFallback bool
+}
+
 // errorResponse parses RFC 6749 §5.2 error bodies. Only the "error"
 // code is used — "error_description" is deliberately ignored because
 // IdPs sometimes echo unsafe content that must never reach our logs.
@@ -56,7 +64,7 @@ type errorResponse struct {
 //   - 4xx (other) + OAuth error JSON → ErrExchangeRejected (wraps error code)
 //   - 4xx (other) + non-OAuth body → ErrInvalidResponse (possible proxy/WAF interception)
 //   - 5xx / network-level → ErrExchangeTransport
-func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token, error) {
+func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*parsedSuccess, error) {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
@@ -116,7 +124,7 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 	}
 }
 
-func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error) {
+func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*parsedSuccess, error) {
 	var sr successResponse
 	if err := json.Unmarshal(body, &sr); err != nil {
 		return nil, &ExchangeError{
@@ -159,23 +167,38 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 		}
 	}
 
-	if sr.ExpiresIn <= 0 {
+	if sr.ExpiresIn < 0 {
 		return nil, &ExchangeError{
 			Sentinel: ErrInvalidResponse,
-			Message:  "token exchange invalid response: IdP success response missing or non-positive expires_in — the IdP must return expires_in in token-exchange responses (configure token lifetimes on the IdP client)",
+			Message:  fmt.Sprintf("token exchange invalid response: IdP returned negative expires_in %d — configure a positive token lifetime on the IdP client", sr.ExpiresIn),
 		}
 	}
 
-	// Prevents time.Duration overflow (int64 nanoseconds, max ~292 years).
-	if sr.ExpiresIn > maxExpiresInSeconds {
-		return nil, &ExchangeError{
-			Sentinel: ErrInvalidResponse,
-			Message:  fmt.Sprintf("token exchange invalid response: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", sr.ExpiresIn),
+	var lifetime time.Duration
+	usedFallback := false
+	if sr.ExpiresIn == 0 {
+		if e.tokenExpiryFallback == 0 {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  "token exchange invalid response: IdP success response missing or zero expires_in — configure token lifetimes on the IdP client or set broker_oauth.token_expiry_fallback",
+			}
 		}
+		lifetime = e.tokenExpiryFallback
+		usedFallback = true
+	} else {
+		// Prevents time.Duration overflow (int64 nanoseconds, max ~292 years).
+		if sr.ExpiresIn > maxExpiresInSeconds {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  fmt.Sprintf("token exchange invalid response: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", sr.ExpiresIn),
+			}
+		}
+		lifetime = time.Duration(sr.ExpiresIn) * time.Second
 	}
 
-	// TODO(Commit C): log WARN when sr.ExpiresIn <= int64(defaults.DefaultTokenExpirySkew.Seconds())
-	// — token is effectively expired at issuance, likely IdP misconfiguration.
+	// TODO(Commit C): log WARN when lifetime <= defaults.DefaultTokenExpirySkew
+	// — token is effectively expired at issuance, likely IdP or fallback
+	// misconfiguration.
 	//
 	// Extend that warning to cover roughly 2x the skew, not just <= 1x
 	// (SOL-154165). Below 1x the token is unusable and the cache's
@@ -186,16 +209,19 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 	// wrong reason: the double deduction refused the write outright, so a
 	// 60s-token IdP produced a WARN per call. Fixing the cache removed the
 	// noise and the only signal with it; this is where the signal belongs,
-	// since it is a property of the IdP's response, not of the cache.
+	// since it is a property of the selected token lifetime, not of the cache.
 
-	return &Token{
-		Value: sr.AccessToken,
-		// This is the ONE place the expiry skew is deducted. ExpiresAt leaves
-		// here as a conservative use-by instant, and every consumer — the token
-		// cache included — treats it as the true expiry and deducts nothing
-		// further (SOL-154165; see cache.CachedCredential's invariant).
-		// TODO(Commit E): replace direct default with e.tokenExpirySkew struct field
-		ExpiresAt: now.Add(time.Duration(sr.ExpiresIn)*time.Second - defaults.DefaultTokenExpirySkew),
+	return &parsedSuccess{
+		Token: &Token{
+			Value: sr.AccessToken,
+			// This is the ONE place the expiry skew is deducted. ExpiresAt leaves
+			// here as a conservative use-by instant, and every consumer — the token
+			// cache included — treats it as the true expiry and deducts nothing
+			// further (SOL-154165; see cache.CachedCredential's invariant).
+			// TODO(Commit E): replace direct default with e.tokenExpirySkew struct field
+			ExpiresAt: now.Add(lifetime - defaults.DefaultTokenExpirySkew),
+		},
+		usedFallback: usedFallback,
 	}, nil
 }
 

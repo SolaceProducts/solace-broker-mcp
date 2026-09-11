@@ -56,6 +56,13 @@ const (
 	ErrorTypeNotFound              ErrorType = "not_found"
 	ErrorTypeOutputValidationError ErrorType = "output_validation_error"
 	ErrorTypeMarshalError          ErrorType = "marshal_error"
+	// ErrorTypeBrokerPermissionDenied marks a hop-2 (broker-side) authorization
+	// denial: SEMPv1's ErrorKindPermission or SEMPv2's error code 72, classified
+	// at the tools layer (SOL-153332, Story 49). Distinct from
+	// ErrorTypeExecutionError so a compliance reviewer can tell "the broker
+	// refused the exchanged identity" apart from every other handler failure
+	// without inspecting the SEMP error body.
+	ErrorTypeBrokerPermissionDenied ErrorType = "broker_permission_denied"
 	// ErrorTypeOther is the sentinel Record coerces any value outside the closed
 	// set to, so an unexpected string can never mint a new series.
 	ErrorTypeOther ErrorType = "other"
@@ -85,6 +92,7 @@ var allErrorTypes = []ErrorType{
 	ErrorTypeNotFound,
 	ErrorTypeOutputValidationError,
 	ErrorTypeMarshalError,
+	ErrorTypeBrokerPermissionDenied,
 	ErrorTypeOther,
 }
 
@@ -113,13 +121,17 @@ var knownErrorTypes = func() map[ErrorType]bool {
 	return m
 }()
 
-// ToolMetrics holds the per-tool RED instruments: an invocation counter, a
-// duration histogram, and an unlabelled in-flight gauge. Every method is
-// nil-safe, so a disabled server (nil) records nothing.
+// ToolMetrics holds the per-tool RED instruments — an invocation counter, a
+// duration histogram, and an unlabelled in-flight gauge — plus one counter
+// that is not itself a RED instrument, mcp_broker_authz_denied_total
+// (SOL-153332, Story 49; see NewToolMetrics for why it lives here rather than
+// on SecurityMetrics). Every method is nil-safe, so a disabled server (nil)
+// records nothing.
 type ToolMetrics struct {
-	invocations    metric.Int64Counter
-	duration       metric.Float64Histogram
-	activeRequests metric.Int64UpDownCounter
+	invocations       metric.Int64Counter
+	duration          metric.Float64Histogram
+	activeRequests    metric.Int64UpDownCounter
+	brokerAuthzDenied metric.Int64Counter
 }
 
 // NewToolMetrics registers the RED instruments. The exporter derives the
@@ -149,7 +161,31 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 		return nil, fmt.Errorf("register mcp_http_active_requests: %w", err)
 	}
 
-	return &ToolMetrics{invocations: invocations, duration: duration, activeRequests: activeRequests}, nil
+	// mcp_broker_authz_denied_total (SOL-153332, Story 49): a hop-2 counterpart
+	// to hop-1's mcp_authz_denied_total, counting a broker-side permission
+	// denial rather than an MCP-server-side one. Registered here, gated only by
+	// OBS_METRICS_ENABLED (this instrument's meter), rather than on
+	// SecurityMetrics: that struct's whole-struct nil gate additionally follows
+	// OBS_AUTH_FAILURE_COUNTER_ENABLED (cmd/server/security_metrics.go), a
+	// narrower, independently-settable flag SOL-152099 scoped to exactly two
+	// counters (mcp_auth_failure_total, mcp_authz_denied_total) — moving this
+	// counter there would let that flag silently gate a signal never in its
+	// documented scope, contradicting this story's own committed contract that
+	// mcp_broker_authz_denied_total is gated by OBS_METRICS_ENABLED alone.
+	brokerAuthzDenied, err := meter.Int64Counter(
+		"mcp.broker.authz_denied",
+		metric.WithDescription("Number of tool calls denied by broker-side (hop-2) authorization."),
+		metric.WithUnit("1"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_broker_authz_denied_total: %w", err)
+	}
+
+	return &ToolMetrics{
+		invocations:       invocations,
+		duration:          duration,
+		activeRequests:    activeRequests,
+		brokerAuthzDenied: brokerAuthzDenied,
+	}, nil
 }
 
 // Record observes one invocation on the counter and histogram with matching
@@ -187,6 +223,47 @@ func (t *ToolMetrics) DecActive(ctx context.Context) {
 		return
 	}
 	t.activeRequests.Add(ctx, -1)
+}
+
+// DenialReason is the closed set mcp_broker_authz_denied_total's reason label
+// can carry (SOL-153332, Story 49). Mirrors ErrorType: a bare string here
+// would let a value threaded from a SEMP description, or a second reason
+// added later without updating the coercion, mint an unbounded series —
+// exactly what ErrorType's own closed-set handling exists to prevent.
+type DenialReason string
+
+const (
+	// DenialReasonPermissionDenied is the only reason a hop-2 denial carries
+	// today: the broker refused the exchanged identity.
+	DenialReasonPermissionDenied DenialReason = "permission_denied"
+	// DenialReasonOther is the sentinel RecordBrokerAuthzDenied coerces any
+	// value outside knownDenialReasons to, so an unexpected string can never
+	// mint a new series.
+	DenialReasonOther DenialReason = "other"
+)
+
+// knownDenialReasons is the closed set RecordBrokerAuthzDenied validates
+// against.
+var knownDenialReasons = map[DenialReason]bool{
+	DenialReasonPermissionDenied: true,
+}
+
+// RecordBrokerAuthzDenied increments mcp_broker_authz_denied_total for one
+// hop-2 (broker-side) authorization denial (SOL-153332, Story 49). No-op on a
+// nil receiver — metrics disabled records nothing, same as every other method
+// here.
+func (t *ToolMetrics) RecordBrokerAuthzDenied(ctx context.Context, tool, broker string, reason DenialReason) {
+	if t == nil {
+		return
+	}
+	if !knownDenialReasons[reason] {
+		reason = DenialReasonOther
+	}
+	t.brokerAuthzDenied.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("tool", tool),
+		attribute.String("broker", broker),
+		attribute.String("reason", string(reason)),
+	))
 }
 
 // SEMPMetrics holds the two SEMP instruments: a request counter and a duration
@@ -261,6 +338,14 @@ func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Durati
 // The auth-failure counter carries no tool or broker label because
 // authentication fails before either is selected. Cardinality is |reason| for
 // the first and |tool| x 2 for the second.
+//
+// mcp_broker_authz_denied_total (SOL-153332, Story 49) is NOT here despite
+// being the same shape of signal (a security denial counter): it is gated
+// only by OBS_METRICS_ENABLED, while this struct's whole-struct nil gate
+// additionally follows OBS_AUTH_FAILURE_COUNTER_ENABLED, a narrower,
+// independently-settable flag SOL-152099 scoped to exactly the two counters
+// above (cmd/server/security_metrics.go). Moving it here would let that flag
+// silently also gate a signal outside its documented scope. See ToolMetrics.
 type SecurityMetrics struct {
 	authFailures metric.Int64Counter
 	authzDenials metric.Int64Counter

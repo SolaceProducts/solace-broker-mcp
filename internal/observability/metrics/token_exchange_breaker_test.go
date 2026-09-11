@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
@@ -47,7 +48,7 @@ func TestTokenExchangeBreakerMetrics_OneHot(t *testing.T) {
 		t.Run(active, func(t *testing.T) {
 			t.Parallel()
 
-			p, err := New(testVersion, sdkresource.Default())
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +75,7 @@ func TestTokenExchangeBreakerMetrics_OneHot(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_TransitionUpdatesGauge(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestTokenExchangeBreakerMetrics_TransitionUpdatesGauge(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_AbsentWhenDisabled(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestTokenExchangeBreakerMetrics_AbsentWhenDisabled(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_SnapshotOncePerCollection(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

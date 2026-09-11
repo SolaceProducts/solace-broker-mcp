@@ -87,7 +87,7 @@ const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-r
 // TestExecute_RecordsSEMPMetric proves a v1 call records one attempt tagged
 // api="v1", operation="SEMPv1", method POST, with the attempt number and status.
 func TestExecute_RecordsSEMPMetric(t *testing.T) {
-	prov, err := metrics.New("vtest", sdkresource.Default())
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

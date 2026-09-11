@@ -376,6 +376,32 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
 	if handleErr != nil {
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
+
+		// Hop-2 (broker-side) authorization denial (SOL-153332, Story 49):
+		// classified here, at the tools layer, because this is where tool,
+		// broker, and ctx (principal, correlation) are all in scope — the
+		// protocol client layer that returns these errors has none of them.
+		// broker_authz_denied is emitted unconditionally (destructive or not);
+		// the coexisting operation record follows CallTool's existing
+		// destructive-only gate below via auditArgsHash, so a non-destructive
+		// call produces only the broker_authz_denied record. Checked ahead of
+		// the desired-state classification below since the two test disjoint
+		// SEMP codes (permission-denied vs. already-exists/not-found), so
+		// order between them has no effect on which fires today — but this
+		// ordering, not the reverse, is the safe one if that ever stops being
+		// true: the desired-state branch sets toolErr back to nil and reports
+		// success, so a denial classified after it would emit a
+		// broker_authz_denied record for a call the caller was just told
+		// succeeded.
+		if isBrokerAuthzDenial(handleErr) {
+			errorType = metrics.ErrorTypeBrokerPermissionDenied
+			m.metrics.RecordBrokerAuthzDenied(ctx, name, canonicalBrokerLabel(m.pool, brokerAlias), brokerAuthzDeniedReasonPermission)
+			if m.auditLog {
+				emitBrokerAuthzDeniedAudit(ctx, name, brokerAlias)
+			}
+			return m.buildErrorResult(toolErr, brokerAlias), nil
+		}
+
 		// SOL-153341: ALREADY_EXISTS on a create and NOT_FOUND on a delete
 		// both mean the desired state already holds — for an idempotent
 		// workflow that's success, not failure. Checked before the generic
@@ -563,6 +589,81 @@ func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, star
 			slog.String("broker", broker),
 			slog.String("detail", err.Error()))
 		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOperation, Tool: tool, Broker: broker})
+		return
+	}
+	audit.Emit(ctx, event)
+}
+
+// brokerAuthzDeniedReasonPermission is the only reason value a hop-2 denial
+// can carry today (SOL-153332, Story 49) — audit's own brokerAuthzDeniedReasons
+// vocabulary (internal/observability/audit/event.go) has exactly this one
+// member. Kept as a local constant rather than exported from audit because
+// audit's vocabulary maps are package-private; the two must still agree,
+// which TestEmitBrokerAuthzDeniedAudit_ReasonMatchesAuditVocabulary pins.
+const brokerAuthzDeniedReasonPermission = "permission_denied"
+
+// isBrokerAuthzDenial reports whether err is a hop-2 (broker-side)
+// authorization denial: SEMPv1's ErrorKindPermission (parsed from the
+// <permission-error> envelope element) or SEMPv2's meta.error.code equal to
+// sempv2.SEMPCodePermissionDenied. Checked via errors.As so a wrapped error
+// still matches — handleErr above arrives wrapped in a "%w" as it crosses
+// into toolErr, but that wrapping happens AFTER this check runs, against the
+// raw handler error.
+//
+// Deliberately a bare numeric-code comparison, not isSEMPStatus (errors.go):
+// that helper prefers the broker's SEMPStatus string when one is present, but
+// no capture of a real broker's code-72 response exists anywhere in this repo
+// to say what that string actually is. The one lead — a struct-field comment
+// on sempv2.SEMPError.SEMPCode — paraphrases it as "UNAUTHORIZED", but that is
+// a rough gloss, not a captured payload, and test/integration's own
+// broker_authz_denied_test.go mock server sends "FORBIDDEN" for the same code
+// — a value with no more authority, since that mock's response body is a
+// hand-written test fixture, not a real broker capture either. Rather than
+// pick between two unverified guesses, classification here relies only on the
+// numeric code, which does have solid standing in this codebase independent
+// of this change: internal/tools/errors.go's translatedErrorCodes map has
+// carried a 72 -> permission-denied hint since well before this file existed.
+//
+// The one predicate both this classification and the agent-facing message
+// (buildErrorMessage's own permission-denial branch, errors.go) check against
+// the same constant, so "this is a broker permission denial" is spelled once
+// rather than agreeing by accident at two independent call sites.
+func isBrokerAuthzDenial(err error) bool {
+	var sempv1Err *sempv1.Error
+	if errors.As(err, &sempv1Err) && sempv1Err.Kind == sempv1.ErrorKindPermission {
+		return true
+	}
+	var sempv2Err *sempv2.SEMPError
+	if errors.As(err, &sempv2Err) && sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied {
+		return true
+	}
+	return false
+}
+
+// emitBrokerAuthzDeniedAudit builds and emits the broker_authz_denied audit
+// record for a hop-2 denial (SOL-153332, Story 49). Called unconditionally on
+// a match — destructive or not — unlike emitOperationAudit, which only fires
+// for a destructive call. The two coexist rather than one suppressing the
+// other, because by the time the broker refuses, execution (Handle) has
+// already been called.
+//
+// Identity is not passed in, for the same reason as emitOperationAudit:
+// audit.NewEvent reads the principal from ctx.
+func emitBrokerAuthzDeniedAudit(ctx context.Context, tool, broker string) {
+	event, err := audit.NewEvent(ctx, audit.Fields{
+		Type:   audit.EventBrokerAuthzDenied,
+		Reason: brokerAuthzDeniedReasonPermission,
+		Tool:   tool,
+		Broker: broker,
+	})
+	if err != nil {
+		// Same reasoning as emitOperationAudit's drop path: err.Error() names
+		// only field names and closed-vocabulary values, never argument data.
+		slog.ErrorContext(ctx, "audit: broker_authz_denied record rejected by the schema constructor; recording a drop",
+			slog.String("tool", tool),
+			slog.String("broker", broker),
+			slog.String("detail", err.Error()))
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventBrokerAuthzDenied, Tool: tool, Broker: broker})
 		return
 	}
 	audit.Emit(ctx, event)

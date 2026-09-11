@@ -28,6 +28,7 @@ import (
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
@@ -83,8 +84,12 @@ func mcpFamilies(body string) string {
 // internal/observability/panics because its call sites reach it as process state
 // rather than through a provider; the golden file is still the contract for how
 // it appears on the wire.
+//
+// mcp_broker_authz_denied_total (SOL-153332, Story 49) is a ToolMetrics
+// instrument like the tool-RED counters above, so it is seeded here the same
+// way: one fixed sample.
 func TestGoldenSchema(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +105,10 @@ func TestGoldenSchema(t *testing.T) {
 	tm.Record(context.Background(), "test-tool", "test-broker", "success", "", 5*time.Millisecond)
 	tm.IncActive(context.Background())
 	tm.DecActive(context.Background())
+	// mcp_broker_authz_denied_total (SOL-153332, Story 49): same
+	// only-renders-after-observed rule as the tool-RED instruments above, so a
+	// fixed sample seeds it into the fixture.
+	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", "permission_denied")
 
 	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
 	// labels and a 5ms duration keep the fixture stable.
@@ -180,7 +189,7 @@ func TestGoldenSchema(t *testing.T) {
 // TestScrapeCounterIncrements proves mcp_metrics_scrape_total rises by one per
 // served scrape, so support can confirm Prometheus is actually scraping.
 func TestScrapeCounterIncrements(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +225,7 @@ func scrapeCounterValue(t *testing.T, body string) int {
 // TestExporterFidelity_SharedRegistry covers the same families on an isolated
 // harness registry and the two are not redundant.
 func TestGoAndProcessFamiliesPresent(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +247,7 @@ func TestGoAndProcessFamiliesPresent(t *testing.T) {
 
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.
 func TestProviderAccessors(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +268,7 @@ func TestProviderAccessors(t *testing.T) {
 // loss this parameter exists to prevent. A caller with no opinion on
 // identity must pass sdkresource.Default() explicitly, not nil.
 func TestNew_NilResourceIsRejected(t *testing.T) {
-	if _, err := New(testVersion, nil); err == nil {
+	if _, err := New(testVersion, nil, config.ObservabilityConfig{}); err == nil {
 		t.Fatal("New(_, nil) error = nil, want an error")
 	}
 }

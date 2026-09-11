@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 )
@@ -233,7 +234,7 @@ func activeRequestsSeries(t *testing.T, p *metrics.Provider) (float64, bool) {
 // here use.
 func newChainToolMetrics(t *testing.T) (*metrics.ToolMetrics, *metrics.Provider) {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
