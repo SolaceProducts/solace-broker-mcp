@@ -35,6 +35,7 @@
 | Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
 | Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
 | Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
+| Alert when the IdP token-exchange breaker is open | [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented) |
 | Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) · [Canonical Audit Queries](#canonical-audit-queries) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
@@ -81,7 +82,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — records implemented, drop counter not yet wired]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is now emitted. The `mcp_audit_events_dropped_total` counter is the one piece not yet wired. See [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -193,7 +194,7 @@ So a name you would change is worth flagging now. See
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.6**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.7**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.2**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -321,24 +322,22 @@ here can be reconciled.
 > `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
-> `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters
-> (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total`),
-> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)),
-> `mcp_auth_failure_total` and `mcp_authz_denied_total` (see
-> [Authentication Failures](#authentication-failures--implemented) and
-> [Authorization Denials](#authorization-denials--implemented)), the
-> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)),
-> and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and
-> `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
-> Assume any other metric below is not yet emitted._
->
-> **One metric group below is documented but not emitted by any build yet**, and is marked as
-> such where it is defined: the OTLP **metrics** export-health pair
-> `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total{reason}` (see [OTLP
-> Export Health](#otlp-export-health)). Its series are **absent, not zero**, so an `absent()`
-> alert on it fires today for the mundane reason that the instrument does not exist.
-> `mcp_broker_authz_denied_total{tool,broker,reason}` (see [Broker-Side Authorization
-> Denials](#broker-side-authorization-denials)) is emitted as of SOL-153332.
+> `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs
+> (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and
+> `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP
+> Export Health](#otlp-export-health)), `mcp_panic_recovered_total` (see [Panic
+> Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and
+> `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented)
+> and [Authorization Denials](#authorization-denials--implemented)),
+> `mcp_broker_authz_denied_total` (see [Broker-Side Authorization
+> Denials](#broker-side-authorization-denials)), `mcp_broker_reachable`,
+> `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds`
+> (see [Broker Reachability](#broker-reachability)), and
+> `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit
+> Breaker State](#token-exchange-circuit-breaker-state--implemented)), plus the
+> `go_*`/`process_*` runtime collectors (see [Go Runtime and Process
+> Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is
+> not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
@@ -520,6 +519,39 @@ broker state, not per attempt.
 
 **Cardinality:** `|broker|` for the first and third metrics; `|broker| x |reason|` for the
 second, where `|reason|` grows only on distinct HTTP error status codes seen per broker.
+
+### Token-Exchange Circuit Breaker State — [Implemented]
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_token_exchange_circuit_breaker_state` | Gauge (`1`/`0`) | `breaker`, `state` | Solace |
+
+- `state` is the closed set `closed`, `open`, `half-open`. Every scrape emits all three
+  series for `breaker="idp-token-exchange"`: `1` for the current materialized state and
+  `0` for the other two. The three values sum to `1` per server process.
+- The gauge is process-local. Replicas can legitimately disagree; preserve the Prometheus
+  target identity when alerting instead of summing replicas and comparing the result to `1`.
+- Alert on
+  `mcp_token_exchange_circuit_breaker_state{state="open"} == 1` to detect a breaker that
+  has tripped and has not yet demonstrated recovery through half-open probes.
+- gobreaker materializes `open` → `half-open` lazily when the next live token exchange
+  reaches it. Elapsed `open_state_duration` alone does not change stored state. With no
+  cache-miss exchange — including during cache hits or Retry-After gating — the gauge can
+  remain `open` after the timeout, even though the next exchange will admit a recovery probe
+  rather than reject it. The gauge reports breaker state, not IdP health or whether the next
+  request will be rejected.
+- Scraping is passive: the metric reads a state snapshot maintained by transition callbacks.
+  It never calls gobreaker's `State()` method, because that method can itself materialize the
+  lazy half-open transition and change request behavior.
+- The family is absent when metrics are disabled, Hop-2 OAuth is inactive, or the circuit
+  breaker is explicitly disabled with `circuit_breaker.enabled: false`. Absence does not mean
+  closed. Omitting the `circuit_breaker` block keeps the breaker enabled with defaults, so the
+  family is present.
+- A transition that opens and recovers between scrapes may not be sampled. The existing WARN
+  state-change log remains the complete transition record.
+
+**Cardinality:** exactly three series per server process while the process-wide breaker is
+active.
 
 ### Authentication Failures — [Implemented]
 

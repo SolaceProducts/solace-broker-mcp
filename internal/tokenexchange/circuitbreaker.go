@@ -36,7 +36,7 @@ const breakerName = "idp-token-exchange"
 // consecutiveFailures is a local, not an Exchanger field — only the two
 // closures built here ever touch it, so a wider home would only widen its
 // blast radius for no benefit. See newReadyToTrip for why it exists.
-func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.CircuitBreaker[*Token] {
+func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig, breakerState *atomic.Int64) *gobreaker.CircuitBreaker[*Token] {
 	var consecutiveFailures atomic.Uint32
 	return gobreaker.NewCircuitBreaker[*Token](gobreaker.Settings{
 		Name:          breakerName,
@@ -47,8 +47,41 @@ func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.Circuit
 		ReadyToTrip:   newReadyToTrip(cfg, &consecutiveFailures),
 		IsSuccessful:  newCountingIsBreakerSuccess(&consecutiveFailures),
 		IsExcluded:    isBreakerExcluded,
-		OnStateChange: newLogBreakerStateChange(&consecutiveFailures),
+		OnStateChange: newBreakerStateChange(&consecutiveFailures, breakerState),
 	})
+}
+
+// BreakerSnapshot is a passive, point-in-time view of the process-wide token
+// exchange breaker. State uses the same vocabulary as gobreaker's transition
+// log: closed, open, or half-open.
+type BreakerSnapshot struct {
+	Name  string
+	State string
+}
+
+// BreakerStateSnapshot returns the last state materialized by gobreaker.
+// It deliberately reads the callback-maintained atomic instead of calling
+// breaker.State(): State() can lazily advance an expired open breaker to
+// half-open, fire OnStateChange, and start a new generation. A metrics scrape
+// must observe the breaker, never drive it.
+//
+// The bool is false when the breaker is disabled.
+func (e *Exchanger) BreakerStateSnapshot() (BreakerSnapshot, bool) {
+	if e == nil || e.breaker == nil {
+		return BreakerSnapshot{}, false
+	}
+	var state string
+	switch e.breakerState.Load() {
+	case int64(gobreaker.StateClosed):
+		state = gobreaker.StateClosed.String()
+	case int64(gobreaker.StateOpen):
+		state = gobreaker.StateOpen.String()
+	case int64(gobreaker.StateHalfOpen):
+		state = gobreaker.StateHalfOpen.String()
+	default:
+		state = "unknown"
+	}
+	return BreakerSnapshot{Name: breakerName, State: state}, true
 }
 
 // newReadyToTrip builds the trip predicate. Two independent rules: a
@@ -104,11 +137,13 @@ func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error)
 	}
 }
 
-// newLogBreakerStateChange builds the OnStateChange callback. It runs UNDER
+// newBreakerStateChange builds the OnStateChange callback. It runs UNDER
 // the breaker's internal mutex (gobreaker v2.4.0 fires it from afterRequest
-// with cb.mutex held), so keep it to cheap logging only — no blocking work,
-// no State()/Counts() calls (those re-take the lock; the atomic Load below
-// does not). WARN because transitions are operationally important.
+// with cb.mutex held), so keep it to an atomic store and the existing log —
+// no State()/Counts() calls (those re-take the lock). The store comes first:
+// gobreaker has already committed the transition, so a blocking or panicking
+// log handler must not leave the passive snapshot behind it. WARN because
+// transitions are operationally important.
 //
 // consecutive_failures tells the operator which rule opened the breaker: on
 // closed→open it equals the threshold when the consecutive rule fired, and
@@ -125,8 +160,9 @@ func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error)
 // timeout — attributing either to that one request's ID would send an
 // operator to the wrong trace. Breaker transitions are keyed by the breaker
 // name instead.
-func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name string, from, to gobreaker.State) {
+func newBreakerStateChange(consecutiveFailures *atomic.Uint32, breakerState *atomic.Int64) func(name string, from, to gobreaker.State) {
 	return func(name string, from, to gobreaker.State) {
+		breakerState.Store(int64(to))
 		slog.Warn("token exchange circuit breaker state change",
 			slog.String("breaker", name),
 			slog.String("from", from.String()),

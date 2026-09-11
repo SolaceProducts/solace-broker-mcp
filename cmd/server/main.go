@@ -1201,6 +1201,14 @@ func main() {
 			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
 				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
+			// The snapshot reports the breaker disabled when it is configured
+			// off, and the collection callback then observes nothing, so the
+			// metric family stays absent rather than reporting a false state.
+			if exchanger != nil {
+				if _, cbmErr := metricsProvider.TokenExchangeBreakerMetrics(exchanger.BreakerStateSnapshot); cbmErr != nil {
+					slog.Error("token exchange circuit breaker metrics unavailable", slog.String("error", cbmErr.Error()))
+				}
+			}
 		}
 		warnIfOTLPEndpointUnset(cfg.Observability)
 	}

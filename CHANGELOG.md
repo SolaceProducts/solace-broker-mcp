@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `mcp_token_exchange_circuit_breaker_state{breaker,state}` one-hot gauge exposes each process's materialized IdP token-exchange breaker state for alerting (`metrics_schema` 1.6→1.7). It is absent when Hop-2, metrics, or the breaker is disabled. Tracked under SOL-152284.
 - OAuth startup now logs one complete Protected Resource Metadata registration snapshot under `registered OAuth protected resource metadata endpoint`, including the advertised resource, sanitized `issuers`, supported scopes and bearer methods, the 401 `resource_metadata` URL, and every local PRM path. This gives operators a first troubleshooting check for OAuth discovery without changing the PRM document, `WWW-Authenticate` header, or registered routes; static and disabled modes emit no such line. `docs/authentication.md` documents the grep and field map. The issuer field is deliberately named `issuers`, not `authorization_servers`, because the logging redaction safety net treats keys containing `authorization` as credential-bearing. Tracked under SOL-154210.
 
 ## [0.9.0] - 2026-09-11

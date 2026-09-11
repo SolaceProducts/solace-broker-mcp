@@ -38,7 +38,7 @@ mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.2",metrics_schema="1.6"} 1
+mcp_schema_version{audit_schema="1.2",metrics_schema="1.7"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1
@@ -58,6 +58,11 @@ mcp_semp_request_duration_seconds_count{api="v2",broker="test-broker",http_reque
 # HELP mcp_semp_request_total Number of SEMP request attempts.
 # TYPE mcp_semp_request_total counter
 mcp_semp_request_total{api="v2",attempt="1",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
+# HELP mcp_token_exchange_circuit_breaker_state 1 for the token-exchange circuit breaker's current materialized state; 0 for the other states.
+# TYPE mcp_token_exchange_circuit_breaker_state gauge
+mcp_token_exchange_circuit_breaker_state{breaker="idp-token-exchange",state="closed"} 1
+mcp_token_exchange_circuit_breaker_state{breaker="idp-token-exchange",state="half-open"} 0
+mcp_token_exchange_circuit_breaker_state{breaker="idp-token-exchange",state="open"} 0
 # HELP mcp_tool_invocation_duration_seconds Duration of tool invocation in seconds
 # TYPE mcp_tool_invocation_duration_seconds histogram
 mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.001"} 0

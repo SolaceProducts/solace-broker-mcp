@@ -29,9 +29,10 @@ import (
 // instance per process, shared by all per-request goroutines.
 //
 // INVARIANT: every field is written once in New() and never mutated
-// afterward, except gatedUntil (an atomic.Int64, safe by construction — see
-// raiseGate). Do not assign to any OTHER field from any method; the race
-// detector enforces this at test time.
+// afterward, except group (concurrency-safe by type) and the gatedUntil and
+// breakerState atomics (safe by construction — see raiseGate and
+// BreakerStateSnapshot). Do not assign to any OTHER field from any method;
+// the race detector enforces this at test time.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -56,6 +57,10 @@ type Exchanger struct {
 	// for tests that don't opt in) — Exchange then calls the IdP directly
 	// while retries still apply.
 	breaker *gobreaker.CircuitBreaker[*Token]
+	// breakerState mirrors the last state materialized by gobreaker. It is
+	// updated only by OnStateChange and read by BreakerStateSnapshot so
+	// observability never calls gobreaker's state-mutating State method.
+	breakerState atomic.Int64
 	// gatedUntil (nowFunc().UnixNano(); 0 = not gated) is a shared,
 	// process-wide backoff set on an exhausted 429 chain (see
 	// classifyRetryOutcome) and checked in runProtectedExchange. Deliberately
@@ -99,17 +104,15 @@ func New(p Params) (*Exchanger, error) {
 		return nil, errors.New("tokenexchange: MaxHonoredRetryAfter must not be negative")
 	}
 
-	// Build the breaker up front so a bad config fails startup rather than
-	// surfacing on the first exchange. Nil config leaves breaker nil (disabled).
-	var breaker *gobreaker.CircuitBreaker[*Token]
+	// Validate the breaker up front so bad config fails startup rather than
+	// surfacing on the first exchange. Nil config leaves it disabled.
 	if p.CircuitBreaker != nil {
 		if err := p.CircuitBreaker.Validate(); err != nil {
 			return nil, err
 		}
-		breaker = newTokenExchangeCircuitBreaker(*p.CircuitBreaker)
 	}
 
-	return &Exchanger{
+	exchanger := &Exchanger{
 		tokenURL:            p.TokenURL,
 		clientID:            p.ClientID,
 		clientAuthMethod:    p.ClientAuthMethod,
@@ -132,8 +135,15 @@ func New(p Params) (*Exchanger, error) {
 		),
 		cache:   p.Cache,
 		nowFunc: time.Now,
-		breaker: breaker,
 		// Zero resolves to the shipped default at the point of use (clampRetryAfter).
 		maxHonoredRetryAfter: p.MaxHonoredRetryAfter,
-	}, nil
+	}
+	if p.CircuitBreaker != nil {
+		// OnStateChange is not called for gobreaker's initial closed state.
+		// Seed the exact atomic captured by the callback before publishing the
+		// Exchanger; sync/atomic values must not be copied after first use.
+		exchanger.breakerState.Store(int64(gobreaker.StateClosed))
+		exchanger.breaker = newTokenExchangeCircuitBreaker(*p.CircuitBreaker, &exchanger.breakerState)
+	}
+	return exchanger, nil
 }
