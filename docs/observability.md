@@ -102,7 +102,7 @@ against a stated test rather than re-argued each release.
 | Flag | Default | Why, and what would change it |
 |---|---|---|
 | `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
-| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. Flips when the schema review is complete and the names are frozen. |
+| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. Flips when the schema review is complete **and** the names are frozen. The schema review (Story 41) is done; the names-frozen half is the piece still outstanding. |
 | `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
 | `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Flips when the schema review is complete **and** the end-to-end identity chain is in place. The identity chain landed with OAuth token exchange; the schema review is the remaining half. |
 | `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
@@ -111,6 +111,10 @@ against a stated test rather than re-argued each release.
 
 Panic recovery is not a flag: it is unconditional. `/livez` and `/readyz` are unconditional
 for the same reason — the check is cheap and commits us to nothing.
+
+No flag's v1 default changes before GA: `OBS_SATURATION_EVENTS_ENABLED`'s original condition
+is met, but it stays off under a new one rather than flipping (above); every other
+default-off flag is still waiting on its stated condition.
 
 ---
 
