@@ -1920,14 +1920,15 @@ not the application's.** In particular, **`/readyz` is not a memory-pressure sig
 reports the server's own initialization state and will happily return 200 from a pod moments
 from being OOM-killed. Nothing in process is watching the heap, and nothing is meant to be.
 
-**Set `GOMEMLIMIT` to 75% of `limits.memory`.** The Go runtime never reads a cgroup *memory*
-limit — it reads the cgroup CPU limit for `GOMAXPROCS`, but with `GOMEMLIMIT` unset its heap
-target is driven by `GOGC` off the live heap with **no ceiling at all**, so the process has no
-reason to collect garbage it could collect and RSS settles far above what the pod needs. A
-`limits.memory` the runtime has not been told about is a cap it cannot aim below.
+**Wherever you cap this process's memory, set `GOMEMLIMIT` to 75% of the cap** — here, of
+`limits.memory`. The Go runtime never reads a cgroup *memory* limit. It reads the cgroup CPU
+limit for `GOMAXPROCS`, which is what makes the omission easy to miss, but with `GOMEMLIMIT`
+unset its heap target is driven by `GOGC` off the live heap with **no ceiling at all**, so the
+process has no reason to collect garbage it could collect and RSS settles far above what the
+pod needs. A cap the runtime has not been told about is a cap it cannot aim below.
 `deploy/kubernetes/deployment.yaml` therefore ships `GOMEMLIMIT: "384MiB"` alongside
 `limits.memory: 512Mi`; raise the two together and keep the ratio. The rule is stated against
-`limits.memory` because that is the number an operator sets.
+the cap rather than against measured heap because the cap is the number an operator sets.
 
 Two properties of the setting matter when you change it. `GOMEMLIMIT` is a **soft** limit: the
 runtime spends more GC CPU to stay under it and, if it cannot, exceeds it rather than failing
@@ -1937,6 +1938,23 @@ holds on the process's behalf; the 25% reserve is what those cost, and that over
 roughly fixed rather than proportional, so at a much larger `limits.memory` the ratio is
 conservative. Note the spelling: Go's suffix is `MiB`, not Kubernetes' `Mi`, and a value the
 runtime cannot parse is fatal at startup — the pod crash-loops rather than falling back.
+
+**Outside Kubernetes the rule is the same, because the mechanism is.** A container started
+with `docker run --memory=512m`, or a Compose service with `mem_limit`, gets the same kind of
+cgroup limit this manifest sets, and the runtime does not read that one either — so cap the
+memory and you owe the process a `GOMEMLIMIT` at 75% of it, exactly as here. Nothing in the
+image supplies one: the Dockerfile deliberately sets no default, since it cannot know what
+you will cap it at. The `docker run` example in the [README](../README.md) sets no memory
+limit at all, and so needs no `GOMEMLIMIT` — but the two go together the moment you add one.
+
+**On bare metal or a VM, leave it unset.** There is no cgroup and no per-process cap to
+mirror, so there is no denominator for the rule: total host RAM is the wrong base as soon as
+anything else runs on the box. Unset is the right default there. If you do want to bound the
+process — co-tenanting it with something whose memory matters more, say — `GOMEMLIMIT` is the
+way, but the figure is yours to choose against what else the host runs, and setting it below
+what the workload actually needs buys a GC that burns CPU holding a line nobody drew. That
+shows up as a latency and throughput regression with no error anywhere, which is why this is
+not a setting to apply by default on a host that has no cap.
 
 The shipped 512Mi covers **2,000 concurrent sessions at the default
 `semp.request_min_interval`, with `GOMEMLIMIT` set** — all three conditions, not just the

@@ -31,7 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GOMEMLIMIT` by design rather than climbing, `docs/observability.md` also corrects the
   monitoring advice that pointed at distance-to-limit as the leading indicator, and notes that
   Go's byte suffix is `MiB` rather than Kubernetes' `Mi` — an unparseable value is fatal at
-  startup, so a mis-spelled edit crash-loops the pod rather than being ignored.
+  startup, so a mis-spelled edit crash-loops the pod rather than being ignored. The rule is
+  documented against *any* memory cap rather than only Kubernetes', because the mechanism is
+  the same one: a container run with `docker run --memory` or a Compose `mem_limit` gets the
+  same kind of cgroup limit the runtime does not read, and the README's Docker section now
+  says so. The image itself ships no `GOMEMLIMIT` default — it cannot know what you will cap
+  it at — and on bare metal or a VM the setting is documented as deliberately unset: there is
+  no cap to mirror, so no denominator for the rule, and a limit set below what the workload
+  needs buys a GC that burns CPU to hold it.
 - `docs/observability.md` no longer claims that the 512Mi ceiling over a 128Mi request "leaves
   headroom" for the session map and buffered SEMP responses. That sentence was unconditioned;
   the sizing it described holds only at the default `semp.request_min_interval`, only at the
