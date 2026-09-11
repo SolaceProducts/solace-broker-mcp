@@ -1191,10 +1191,11 @@ recovered-panic ERROR — carry the correlation ID of the request that initiated
 under its own ID. So if a request's ID turns up no identity-provider lines, that request rode
 an exchange another request started: pivot to the `broker` attribute plus the time window
 around the request's own completion line. A failed exchange surfaces through each caller's own
-error handling rather than a per-caller line from the exchange itself. Two lines never carry a
-correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
-on a window of failures, not on any one request — filter on its `breaker` attribute instead)
-and the startup configuration WARN, which runs before any request exists.
+error handling rather than a per-caller line from the exchange itself. Three lines never carry
+a correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
+on a window of failures, not on any one request — filter on its `breaker` attribute instead),
+the startup configuration WARN, and the `registered OAuth protected resource metadata endpoint`
+INFO; both startup lines run before any request exists.
 
 ---
 

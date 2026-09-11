@@ -753,6 +753,7 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 - Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
 - Check that the `resource_url` matches the URL the client is connecting to
+- Check the `registered OAuth protected resource metadata endpoint` startup log first; the curl checks below remain valid for verifying the live endpoint.
 - Verify the PRM endpoint returns valid metadata. Both paths return the same document:
   ```bash
   curl http://localhost:9090/.well-known/oauth-protected-resource
