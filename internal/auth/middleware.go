@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -31,7 +30,6 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 // NewAuthMiddleware wires the auth backend selected by mcp_client_auth.mode.
@@ -68,13 +66,8 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
 	}
 
-	// Construct the metadata URL at the server root.
-	// Config validation ensures ResourceURL is well-formed if set.
-	var metadataURL string
-	if cfg.MCPClientAuth.ResourceURL != "" {
-		parsedURL, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
-		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
-	}
+	// Reads AdvertisedPRM; do not format resource_metadata here.
+	prm := NewAdvertisedPRM(AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer})
 
 	// RequireBearerToken's own verify() rejects on four conditions after our
 	// TokenVerifier has returned — nil TokenInfo, a missing required scope,
@@ -84,7 +77,7 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 	// (nil, nil), and both set a non-zero Expiration. Keep it that way, or
 	// the auth_failure record and mcp_auth_failure_total under-count.
 	middleware := sdkauth.RequireBearerToken(verifier, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: metadataURL,
+		ResourceMetadataURL: prm.ResourceMetadataURL(),
 	})
 
 	// Hop 1: RequireBearerToken validates the token (signature, issuer, audience, expiry).
@@ -327,22 +320,7 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 	}, nil
 }
 
-// NewProtectedResourceMetadataHandler creates an HTTP handler that serves
-// OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.
-// This endpoint enables MCP clients to discover the authorization server
-// and initiate browser-based OAuth flows (Authorization Code + PKCE).
-// Only served under mcp_client_auth.mode == "oauth"; returns nil otherwise.
+// NewProtectedResourceMetadataHandler returns the configured RFC 9728 handler.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
-	if cfg.MCPClientAuth.Mode != config.AuthModeOAuth {
-		return nil
-	}
-
-	metadata := &oauthex.ProtectedResourceMetadata{
-		Resource:               cfg.MCPClientAuth.ResourceURL,
-		AuthorizationServers:   []string{cfg.MCPClientAuth.Issuer},
-		ScopesSupported:        []string{"openid"},
-		BearerMethodsSupported: []string{"header"},
-	}
-
-	return sdkauth.ProtectedResourceMetadataHandler(metadata)
+	return NewAdvertisedPRM(AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer}).Handler()
 }
