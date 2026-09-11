@@ -3658,6 +3658,18 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	if !strings.Contains(out, `"expiry_fallback_configured":true`) || !strings.Contains(out, `"expiry_fallback":3600000000000`) {
 		t.Errorf("expected configured expiry fallback in log output: %s", out)
 	}
+
+	buf.Reset()
+	cfg.TokenExpiryFallback = nil
+	slog.Info("broker_oauth", slog.Any("cfg", cfg))
+
+	out = buf.String()
+	if !strings.Contains(out, `"expiry_fallback_configured":false`) {
+		t.Errorf("expected unconfigured expiry fallback in log output: %s", out)
+	}
+	if strings.Contains(out, `"expiry_fallback":`) {
+		t.Errorf("expiry_fallback must be absent when unconfigured: %s", out)
+	}
 }
 
 // listenAddressYAML assembles a config exercising listen_address against a given

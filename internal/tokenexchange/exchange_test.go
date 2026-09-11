@@ -2681,6 +2681,82 @@ func findMsg(recs []map[string]any, msg string) map[string]any {
 	return nil
 }
 
+func TestExchange_IssuedLogReportsFallbackUsage(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	tests := []struct {
+		name             string
+		responseBody     string
+		wantUsedFallback bool
+		wantErr          bool
+	}{
+		{
+			name:             "missing expiry uses configured fallback",
+			responseBody:     successJSONWithoutExpiry("fallback-tok"),
+			wantUsedFallback: true,
+		},
+		{
+			name:             "zero expiry uses configured fallback",
+			responseBody:     successJSON("zero-expiry-tok", 0),
+			wantUsedFallback: true,
+		},
+		{
+			name:             "positive IdP expiry wins over configured fallback",
+			responseBody:     successJSON("idp-expiry-tok", 3600),
+			wantUsedFallback: false,
+		},
+		{
+			name:         "negative IdP expiry is rejected",
+			responseBody: successJSON("negative-expiry-tok", -7),
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tc.responseBody)
+			}))
+			defer srv.Close()
+
+			p := validParams(t)
+			p.TokenURL = srv.URL
+			p.TokenExpiryFallback = time.Hour
+			e, err := New(p)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			input := validInput()
+			input.BrokerAlias = strings.ReplaceAll(tc.name, " ", "-")
+			_, err = e.Exchange(context.Background(), input)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidResponse) {
+					t.Fatalf("Exchange error = %v, want ErrInvalidResponse", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Exchange: %v", err)
+			}
+
+			issued := findMsg(forBroker(logs.records(t), input.BrokerAlias), "identity provider issued broker token")
+			if tc.wantErr {
+				if issued != nil {
+					t.Fatalf("issued-token success log present on parse failure: %v", issued)
+				}
+				return
+			}
+			if issued == nil {
+				t.Fatal("issued-token success log not captured")
+			}
+			if got, ok := issued["used_fallback"].(bool); !ok || got != tc.wantUsedFallback {
+				t.Errorf("used_fallback = %v (bool=%v), want %v", issued["used_fallback"], ok, tc.wantUsedFallback)
+			}
+		})
+	}
+}
+
 // panickingCache wraps a real TokenCache and panics on Put, forcing a panic
 // inside the singleflight closure (the only place the recovery net covers).
 type panickingCache struct {

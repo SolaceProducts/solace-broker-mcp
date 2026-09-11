@@ -681,6 +681,12 @@ func TestParseSuccessBody_NegativeExpiresInRejectedEvenWithFallback(t *testing.T
 	if !strings.Contains(err.Error(), "negative expires_in") {
 		t.Errorf("err.Error() = %q, want it to contain \"negative expires_in\"", err.Error())
 	}
+	if !strings.Contains(err.Error(), "-1") {
+		t.Errorf("err.Error() = %q, want it to include the rejected value -1", err.Error())
+	}
+	if !strings.Contains(err.Error(), "configure a positive token lifetime") {
+		t.Errorf("err.Error() = %q, want it to include a remediation", err.Error())
+	}
 }
 
 // T15: expires_in at exactly maxExpiresInSeconds is accepted; one over that

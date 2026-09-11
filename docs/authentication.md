@@ -293,7 +293,7 @@ brokers:
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant Type](#grant-type). |
 | `broker_oauth.audience_parameter_name` | Which request parameter carries the per-event-broker audience value — see [Audience Parameter Name](#audience-parameter-name). |
-| `broker_oauth.token_expiry_fallback` | Optional positive duration used only when the IdP omits `expires_in`, returns `null`, or returns `0`. Omit it to preserve fail-closed behavior. Any positive duration passes configuration validation, but `30s` or less returns an immediately stale token that is not cached. |
+| `broker_oauth.token_expiry_fallback` | Optional positive duration used only when the IdP omits `expires_in`, returns `null`, or returns `0`. Omit it to preserve fail-closed behavior. Any positive duration passes configuration validation, but `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this event broker. |
 | `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This event broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the event broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails configuration load). |
 
@@ -324,6 +324,8 @@ One optional field controls handling of IdPs that omit token lifetime, and two o
 - `broker_oauth.token_expiry_fallback` — supplies a lifetime only when the IdP returns no usable `expires_in`; a positive IdP value always takes precedence. Values of `30s` or less pass configuration validation but return an immediately stale token that is not cached.
 - `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional.
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
+
+> **Configured vs. used.** Creating the Hop 2 exchanger logs one INFO line, `token exchanger created for broker OAuth`, with `expiry_fallback_configured` (plus `expiry_fallback` when the setting is present) — that reports the fallback is armed, not that the IdP ever omitted `expires_in`. To see whether a fallback lifetime was actually applied, run at `log_level: debug` and read `used_fallback` on the `identity provider issued broker token` line, emitted once per live exchange; a cache hit produces none, and a fail-closed exchange returns an error instead.
 
 ### TLS for the MCP Server's Own Listener
 
