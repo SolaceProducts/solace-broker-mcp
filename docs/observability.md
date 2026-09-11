@@ -1195,7 +1195,8 @@ error handling rather than a per-caller line from the exchange itself. Three lin
 a correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
 on a window of failures, not on any one request — filter on its `breaker` attribute instead),
 the startup configuration WARN, and the `registered OAuth protected resource metadata endpoint`
-INFO; both startup lines run before any request exists.
+INFO; both startup lines run before any request exists. Operators troubleshooting OAuth discovery
+should read that INFO in [authentication.md](authentication.md#browser-login-window-does-not-appear).
 
 ---
 

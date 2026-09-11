@@ -32,7 +32,7 @@ These must never appear in log output, in any environment:
 | Tool error | tool name, broker alias, error_type, http_status |
 | Broker connection created | broker alias, URL |
 | Config loaded | broker_count, port |
-| OAuth protected resource metadata endpoint registered | resource, issuers, scopes_supported, bearer_methods_supported, resource_metadata_url, prm_paths |
+| OAuth protected resource metadata endpoint registered | resource, issuers (PRM JSON `authorization_servers`), scopes_supported, bearer_methods_supported, resource_metadata_url, prm_paths |
 
 **Important:** At startup, log the broker alias list (`[]string`) — never the broker config map. The config map contains `AuthConfig` which holds credentials.
 

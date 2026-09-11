@@ -61,7 +61,7 @@ The slog wrapper already omits `correlation_id` when `correlation.From(ctx)` is 
 
 - `docs/internal/secure-logging-rules.md`: the Always-Log table owns the required slog keys for this event.
 - `docs/observability.md`: this registration INFO has no `correlation_id` because it runs at startup, outside a request.
-- `docs/authentication.md`: the startup log is the first troubleshooting check; the existing curl check remains valid.
+- `docs/authentication.md`: operator how-to (grep + field map) lives in the Browser Login troubleshooting section; curl remains the live-endpoint check.
 
 ## Why this is the product
 

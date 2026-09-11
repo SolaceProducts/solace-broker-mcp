@@ -751,15 +751,26 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 ### Browser Login Window Does Not Appear
 
-- Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
-- Check that the `resource_url` matches the URL the client is connecting to
-- Check the `registered OAuth protected resource metadata endpoint` startup log first; the curl checks below remain valid for verifying the live endpoint.
-- Verify the PRM endpoint returns valid metadata. Both paths return the same document:
+- Grep this process's logs for `registered OAuth protected resource metadata endpoint` (oauth startup only). That INFO is the snapshot of what this process advertised:
+  - `resource` — PRM JSON `resource` (`mcp_client_auth.resource_url`)
+  - `issuers` — PRM JSON `authorization_servers` (slog key is `issuers` because `authorization` in a log key is redacted)
+  - `scopes_supported` / `bearer_methods_supported` — rest of the JSON (today `openid` / `header`)
+  - `resource_metadata_url` — exact URL on 401 `WWW-Authenticate` `resource_metadata` (bare well-known; no `/mcp` suffix)
+  - `prm_paths` — GET paths on this process that return that JSON
+
+  Example (`mcp_client_auth.resource_url` `http://localhost:9090/mcp`):
+  ```json
+  {"time":"2026-09-11T13:43:10.924146-07:00","level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"http://localhost:9090/mcp","issuers":["https://auth.example.com"],"scopes_supported":["openid"],"bearer_methods_supported":["header"],"resource_metadata_url":"http://localhost:9090/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
+  ```
+- If that line is missing, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
+- Verify the live PRM endpoint returns the same document. Both paths return the same JSON:
   ```bash
   curl http://localhost:9090/.well-known/oauth-protected-resource
   curl http://localhost:9090/.well-known/oauth-protected-resource/mcp
   ```
   The bare path is what `WWW-Authenticate` advertises on a 401. The `/mcp`-suffixed path is the RFC 9728 §3.1 canonical path used by clients that construct it directly (for example, the Automatic OAuth discovery feature in Solace Agent Mesh).
+- Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
+- Check that the `resource_url` matches the URL the client is connecting to
 
 ### "Allowed Client Scopes rejected request to client-registration service"
 
