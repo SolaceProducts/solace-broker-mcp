@@ -2,8 +2,13 @@
 
 > **Status: Draft for pilot review.** This document is the proposed metric, audit, and
 > trace schema for the Broker MCP Server. It is published for review **before** the names
-> freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
-> the time to change a name is now. See [How to Give Feedback](#how-to-give-feedback).
+> freeze at GA, so the time to change a name is now. After GA the schema is **additive-only
+> within a MAJOR version**: names are added freely, and a rename or removal happens only at a
+> MAJOR bump, after an announced deprecation with at least two minor releases of notice,
+> dual-emitting where dual emission is possible. That is a migration path, not a promise never
+> to change — see
+> [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) and
+> [How to Give Feedback](#how-to-give-feedback).
 >
 > **Most of the metrics and trace surface is not emitted by the current build.** See the
 > [Implementation Status](#implementation-status) table for what is live; anything marked
@@ -22,10 +27,40 @@
 > [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only).
 > The metric form remains roadmap.
 
+## Start Here
+
+| If you are here to… | Go to |
+|---|---|
+| Find out what is actually live today | [Implementation Status](#implementation-status) |
+| Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
+| Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
+| Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
+| Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) · [Canonical Audit Queries](#canonical-audit-queries) |
+| Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
+| Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
+| Check this works with your existing stack | [Vendor Neutrality](#vendor-neutrality) |
+| Deploy to Kubernetes | [Deployment Topology and Resource Policy](#deployment-topology-and-resource-policy--implemented) |
+| See what is still open, and what we already decided | [Open Items for This Review](#open-items-for-this-review) · [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review) |
+| Map this to PCI DSS, SOC 2, SOX, or ISO 27001 | [Standards This Schema Supports](#standards-this-schema-supports) |
+| Understand load shedding and saturation | [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only) |
+
+**Not in this document yet.** These are deliberately listed as plain text, not links, because
+they do not exist to link to. Each names the story that lands it:
+
+- Tracing setup and the reference OTel collector deployment, with a tested-backend matrix —
+  lands with Story 40 (SOL-152423).
+- Operator runbook by failure mode — lands with Story 36 (SOL-152098).
+- Reference SLO sheet — lands with Story 38.
+
 The Broker MCP Server is designed to emit three observability signals:
 
 - **Metrics**, on a Prometheus `/metrics` endpoint, for dashboards and alerts.
-- **An audit trail**, one JSON event per state-changing operation, for compliance evidence.
+- **An audit trail**, one JSON event per **destructive** tool call that reaches execution, for
+  compliance evidence. Note "destructive", not "state-changing": object creation is not
+  audited today, and a call that fails broker resolution or argument validation writes no
+  record either — see
+  [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) for both
+  gaps.
 - **Distributed traces**, exported over OTLP, for end-to-end request diagnosis.
 
 One correlation ID threads each request through logs, traces, and audit records, so they
@@ -46,7 +81,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` — the metrics pair is **not** emitted yet, see [OTLP Export Health](#otlp-export-health)), `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)). `mcp_broker_authz_denied_total` is documented but **not** emitted yet (see [Broker-Side Authorization Denials](#broker-side-authorization-denials--not-yet-emitted)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -75,8 +110,10 @@ Specifically:
 
 Send comments through your Solace pilot channel or to the contacts in the observability
 brief. The review window runs up to the GA freeze. Anything we do not hear back on ships as
-drafted; because the schema is additive-only, we can always add fields later, we just will
-not rename what is already there.
+drafted. Adding a field later is always cheap. Renaming one after the freeze is not: it costs
+you a deprecation cycle and a dashboard migration, even though we commit to giving you both.
+So a name you would change is worth flagging now. See
+[Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy).
 
 ---
 
@@ -103,8 +140,117 @@ Two independent versions are published, so your queries can pin to a version and
 
 Versioning is `MAJOR.MINOR`. A **minor** bump is additive and backward compatible (a new
 metric, a new audit field, a new `outcome` value). A **major** bump is reserved for a
-breaking change (a rename or removal), which the additive-only commitment is designed to
-avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`.
+breaking change (a rename or removal), which happens only after the deprecation cycle below.
+Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`.
+
+### Compatibility and Deprecation Policy
+
+The commitment is **additive-only within a MAJOR version**, not "never rename". A name can
+change. It cannot change without notice, and it cannot change out from under a dashboard you
+have not had time to migrate.
+
+| Change | Version effect | What you get |
+|---|---|---|
+| A new metric, audit field, or a new value in a closed set | MINOR bump | Nothing to do. Existing queries keep working. |
+| A new **label** on an existing metric | MINOR bump | Existing selectors and `sum by (...)` keep working. A `without()`/`ignoring()` aggregation or a default one-to-one `rate(a)/rate(b)` match can silently change, because a new label changes the series identity those collapse or match on — see the note below. |
+| Renaming or removing a metric name or an audit field | MAJOR bump, and only after the cycle below | An announcement, then at least two minor releases emitting both the old and the new form side by side, **untouched** — the old artifact is unaffected, so a dashboard or SIEM rule pinned to it keeps working exactly as before. |
+| Renaming a **label key** | MAJOR bump, and only after the cycle below | An announcement, then at least two minor releases carrying both the old and the new key on every sample. This is a weaker guarantee than the row above: dual emission is possible, but adding the new key still changes the series identity of the metric consumers already query, so — same hazard as the MINOR row above — a `without()`/`ignoring()` aggregation or default vector match against it can silently change during the window. Where an untouched old series matters, ship the new key on a new metric name instead. |
+| Renaming or removing a **value** in a closed set (`outcome`, `error_type`, `reason`, `audit_event_type`) | MAJOR bump, and only after the cycle below | An announcement and at least two minor releases of notice. **Not** dual emission — see the carve-out below. |
+
+**A label change — new or renamed — changes series identity, which some queries do not survive.**
+`mcp_tool_invocation_total{broker="b1"}` and `mcp_tool_invocation_total{broker="b1",
+event_broker="b1"}` are different series. A plain selector or a `sum by (broker)` still
+matches either shape fine. But `sum without (broker) (...)`, `ignoring(broker)`, and a default
+one-to-one `rate(a_total[5m]) / rate(b_total[5m])` all require identical label sets, so the
+added label silently stops them matching or stops them collapsing the way they used to — no
+error, just a different number. A `rate()`/`increase()` window that spans the moment the label
+is added or removed sees the old series go stale and a new one start, which can transiently
+skew both. This is exposition-valid — the Prometheus/OpenMetrics text format does not require
+one label-name set per metric family, and this server's OTel-based exporter does not enforce
+one either — it is a query-correctness hazard, not a wire-format one, and it is why a
+label-key rename cannot promise the same "the old stays untouched" guarantee a name rename
+can.
+
+**The deprecation cycle, in order:**
+
+1. **Announce.** The deprecation lands in `CHANGELOG.md` and is marked in this document,
+   naming the old form, the new form, and the earliest release in which the old one may
+   disappear.
+2. **Two minor releases of notice, dual-emitting where dual emission is possible.** For a
+   metric name or an audit field, both the old and the new are emitted side by side,
+   untouched, for the whole window, so a dashboard or SIEM rule written against either keeps
+   working and you can verify the new query against live data before cutting over. For a
+   label key, both keys are emitted on every sample, which still lets you verify the new query
+   before cutover but — per the series-identity note above — does not leave the old series as
+   untouched as a name rename does.
+3. **Remove at a MAJOR bump.** The old form is removed only in a major version of the affected
+   schema (`metrics_schema` or `audit_schema`), never in a minor.
+
+**Carve-out: a closed-set value cannot be dual-emitted, so it gets notice instead.** A record
+carries exactly one `error_type` and a sample exactly one `outcome`. There is no way to emit
+the old and the new value "alongside" each other: on a single-valued field it is impossible,
+and on a metric it would split one series into two and silently double every `sum()` written
+against it. So a value rename gets the announcement and the same two-minor-release notice
+window, during which the old value keeps being emitted unchanged and the new one is documented
+and reserved, then the switch happens in one step at the MAJOR bump. Plan a value rename as a
+cutover, not as a migration you can run both sides of.
+
+`audit_event_type` is in this bucket for a different reason, worth stating because the
+impossibility argument above does not reach it. It is the record **discriminator**, not a
+field on a record, so dual-emitting it would mean two whole records per event rather than two
+values in one field — technically possible. It still gets notice-then-cutover, because
+dual-emitting the discriminator doubles **every** audit record for the whole window, not only
+`operation` records, doubling volume and retention on the one signal you pay a SIEM to
+store — a much larger cost than the [Audit
+Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) coverage gaps
+this schema already tolerates.
+
+**The two schemas version independently, except where a vocabulary is shared.** A metrics
+rename does not normally force an audit-schema major bump, and a SIEM rule pinned to
+`audit_schema_version` is unaffected by it.
+
+The test for the exception is **"is this closed set rendered by more than one signal?"**, not
+which package it happens to live in. Three sets are shared today:
+
+| Shared closed set | Rendered by |
+|---|---|
+| `outcome` | the metric label, the audit record, the `tool invoked` log field, and the span attribute |
+| `error_type` | the metric label, the audit record, and the span attribute |
+| The five `auth_failure` reasons | the `auth_failure` audit record and `mcp_auth_failure_total{reason}` |
+
+Renaming a value in any of these is **one coupled breaking change that bumps both majors
+together**. Being able to carry one predicate across metrics, audit, and traces untranslated
+is the point of a shared vocabulary; letting the two schemas move independently there would
+reintroduce exactly the disagreement it exists to prevent. A set only one signal renders —
+the `authz_denied` and `broker_authz_denied` reason sets, for example — bumps only its own
+schema.
+
+Two surfaces sit outside this commitment, and say so where they are documented: the
+`go_*` / `process_*` collectors, which are upstream Prometheus conventions rather than
+Solace-defined schema (see [Go Runtime and Process
+Metrics](#go-runtime-and-process-metrics)), and the interim log lines under [Load and
+Saturation Visibility](#load-and-saturation-visibility--interim--logs-only), which are
+diagnostic output that the eventual metric form replaces.
+
+### How OTel Instrument Names Render on `/metrics`
+
+The server registers OpenTelemetry instruments; the Prometheus exporter derives the published
+name from the instrument name and its unit. Five rules cover every `mcp_*` name the exporter
+publishes. (The `go_*` / `process_*` collectors do not pass through the exporter and keep their
+upstream names unchanged — see [Go Runtime and Process
+Metrics](#go-runtime-and-process-metrics).)
+
+| Rule | Effect |
+|---|---|
+| `.` becomes `_` | The instrument `mcp.tool.invocation` publishes as `mcp_tool_invocation`. |
+| Counters gain `_total` | `mcp.tool.invocation` (a counter) publishes as `mcp_tool_invocation_total`. |
+| A unit becomes a suffix | The instrument `mcp.tool.invocation.duration`, unit `s`, publishes as `mcp_tool_invocation_duration_seconds`. Unit `1` is **silent on a counter but appends `_ratio` on a gauge**, which is why the two info gauges (`mcp_build_info`, `mcp_schema_version`) are registered with no unit at all rather than with unit `1`. |
+| Resource attributes go to `target_info`, not to every series | See [Resource Attributes](#resource-attributes--implemented) for how to join to it. |
+| **No `otel_scope_*` labels** | The exporter is constructed with `WithoutScopeInfo()`, so `otel_scope_name` and `otel_scope_version` appear on **no** series. They are on by default in the OTel Prometheus exporter, and suppressing them keeps the published label set exactly the label set documented here. Pinned by two tests: `TestExporterFidelity_ScopeInfoSuppressed` proves the option does what it claims in both directions, and `TestGoldenSchema` (`internal/observability/metrics/provider_test.go`) scrapes a real provider, so the production exporter cannot lose the option without failing. |
+
+The names in this document are the **published** names, after these rules. You never need to
+apply them yourself; they are stated so that a name you see on the wire and a name you read
+here can be reconciled.
 
 ---
 
@@ -115,7 +261,8 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
-> `mcp_semp_request_duration_seconds`, the OTLP export-health counters,
+> `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters
+> (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total`),
 > `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)),
 > `mcp_auth_failure_total` and `mcp_authz_denied_total` (see
 > [Authentication Failures](#authentication-failures--implemented) and
@@ -124,6 +271,15 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and
 > `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
 > Assume any other metric below is not yet emitted._
+>
+> **Two metric groups below are documented but not emitted by any build yet**, and are marked
+> as such where they are defined: the OTLP **metrics** export-health pair
+> `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total{reason}` (see [OTLP
+> Export Health](#otlp-export-health)) and `mcp_broker_authz_denied_total{tool,broker,reason}`
+> (see [Broker-Side Authorization
+> Denials](#broker-side-authorization-denials--not-yet-emitted)). Their series are **absent,
+> not zero**, so an `absent()` alert on either fires today for the mundane reason that the
+> instrument does not exist.
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
@@ -144,6 +300,13 @@ environment; see [Decided Since the First Draft](#decided-since-the-first-draft)
 Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fails config
 load with an explicit error rather than emitting nothing quietly, because both egresses
 share one meter provider.
+
+> **`OBS_METRICS_OTLP_ENABLED` does not exist in the current build.** The whole of the
+> preceding paragraph, the config-load check included, is the design shipping with Story 46
+> (SOL-152418). Today the variable is simply unread: setting it changes nothing, no push
+> happens, and the server starts clean rather than reporting an error — so a clean startup is
+> **not** evidence that push is on. The scrape endpoint (`OBS_METRICS_ENABLED`) is the only
+> metrics egress in this build.
 
 ### Server and Scrape Health
 
@@ -337,6 +500,52 @@ second, where `|reason|` grows only on distinct HTTP error status codes seen per
 
 **Cardinality:** `|tool| x 2`.
 
+Note the scope: this counter is **hop 1 only** — this server refusing an authenticated caller
+the tool they asked for. A refusal by the *broker* is a different counter, next.
+
+### Broker-Side Authorization Denials — [Not yet emitted]
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_broker_authz_denied_total` | Counter | `tool`, `broker`, `reason` | Solace |
+
+> **Not emitted yet.** The name, its label set, and its `reason` vocabulary are part of this
+> schema and safe to write a rule against today; the emission site ships with Story 49
+> (SOL-153332), alongside the `broker_authz_denied` audit record this counter mirrors. Until
+> then the series is **absent, not zero**. This matches the treatment the audit record itself
+> gets — see [Authentication Events](#authentication-events).
+
+- `reason` is a closed set of one today: `permission_denied`. Same value as the
+  `broker_authz_denied` audit record, taken from the same decision, so the metric and the
+  audit stream cannot disagree — the same coupling `mcp_authz_denied_total` has to
+  `authz_denied` at hop 1.
+- **`broker` is a label here, and deliberately is not one on `mcp_authz_denied_total`.** This
+  is the asymmetry to understand before you write a dashboard against both:
+
+  | | Where the decision is made | `broker` label |
+  |---|---|---|
+  | `mcp_authz_denied_total` (hop 1) | This server, before dispatch | **No** — the only broker value in scope is the caller's unvalidated alias |
+  | `mcp_broker_authz_denied_total` (hop 2) | The broker, after dispatch | **Yes** — a real broker made the decision, so naming which one is the first thing you need |
+
+  The precise reason, since it is easy to state wrongly: a hop-1 denial *does* have the
+  caller's `broker` argument in hand, but authorization is composed **outside** the tool
+  manager and so has no broker pool to canonicalize that argument against. The only value it
+  could label with is the raw string the caller typed — unbounded, untrusted input, which as a
+  metric label would hand any caller control over this counter's cardinality. That is the same
+  reasoning that keeps the raw alias off the `broker` span attribute. Hop 2 has no such
+  problem: the call already resolved to a configured broker, and that broker is what refused,
+  so a denial that is a policy gap on one broker and correct on another is only
+  distinguishable with the label.
+- Behind `OBS_METRICS_ENABLED`, like the rest of the scrape surface. Nothing is pre-seeded, so
+  `absent()` is not a usable alert — alert on `increase()`.
+
+**Cardinality:** `|tool| x |broker| x 1`.
+
+**A hop-2 denial does not suppress the call's other signals.** Execution had already started
+by the time the broker refused, so the same call also produces an `mcp_tool_invocation_total`
+sample with `outcome=error` and — for a destructive tool — an `operation` audit record.
+Counting denials means summing this counter, not counting calls.
+
 ### Audit Pipeline Health
 
 | Metric | Type | Labels | Basis |
@@ -406,25 +615,55 @@ increment is a no-op.
 
 ### OTLP Export Health
 
+Self-observation for the OTLP exporters. There are **two pairs, at two different maturities**,
+and the difference matters if you are about to point an alert at one of them.
+
+**The span pair — [Implemented].**
+
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_otel_spans_exported_total` | Counter | none | Solace |
 | `mcp_otel_spans_dropped_total` | Counter | `reason` | Solace |
+
+**The metrics pair — [Not yet emitted, designed].**
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
 | `mcp_otel_metrics_exported_total` | Counter | none | Solace |
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-Self-observation for the two OTLP exporters, but the span pair's reach depends on **both**
-flags, not just one. The counters are always registered in-process while tracing is enabled
-(`OBS_TRACING_ENABLED`); they reach this scrape surface only when a meter provider also exists
-to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
-metrics off keeps the totals in-process only — reported solely by the periodic
-`event=otel_self_stats` INFO log (see [Distributed
+> **The metrics pair is not emitted by the current build.** It is the self-observation
+> counterpart of OTLP metrics push, which ships with Story 46 (SOL-152418), and it is
+> registered only when that push is enabled (`OBS_METRICS_OTLP_ENABLED`). Both names and their
+> `reason` vocabulary are part of this schema and safe to write a rule against, but until
+> Story 46 lands the series are **absent, not zero** — an `absent()` alert on either fires
+> today for the mundane reason that the instrument does not exist. Alert on the span pair
+> below, and add the metrics pair when you enable push. This is the same treatment
+> [`broker_authz_denied`](#audit-trail--interim--all-record-types-except-broker_authz_denied)
+> and `mcp_audit_events_dropped_total` get: documented ahead of emission, marked as such.
+
+**The span pair's reach depends on both flags, not just one.** The counters are always
+registered in-process while tracing is enabled (`OBS_TRACING_ENABLED`); they reach this scrape
+surface only when a meter provider also exists to register them against, i.e. only when
+`OBS_METRICS_ENABLED` is **also** on. Tracing on with metrics off keeps the totals in-process
+only — reported solely by the periodic `event=otel_self_stats` INFO log (see [Distributed
 Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
-healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
-(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
-see [Metrics](#metrics--planned-with-exceptions)). `reason` is a closed set on both: `queue_full`,
-`export_timeout`, `export_error`, `shutdown`.
+healthy rather than as "not exposed here."
+
+**The metrics pair's own flag is different: it is OTLP metrics push**
+(`OBS_METRICS_OTLP_ENABLED`), not `OBS_METRICS_ENABLED`, which governs the scrape surface alone
+(see [Metrics](#metrics--planned-with-exceptions)). So the two pairs can legitimately be in
+different states in one process: spans exporting and their counters live, with the metrics
+pair absent because push is off.
+
+`reason` draws from the same closed set on both pairs — `queue_full`, `export_timeout`,
+`export_error`, `shutdown` — but the *vocabulary* being shared does not mean every value is
+live on both. `queue_full` is already reserved-but-inert on the span pair (next paragraph), and
+the design for the metrics pair expects only `export_timeout` and `export_error` to be
+reachable there: a periodic reader has no queue to overflow, and an incomplete shutdown flush
+happens after the scrape surface it would be read from is already gone. Treat the set as the
+bound on what a `reason` label can ever contain, not as a list of values you will observe.
 
 **`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
 SDK's batch span processor drops queue-overflow spans against an internal counter with no
@@ -544,10 +783,32 @@ metrics, this is expected — scrape `/metrics` to get them.
 > SOL-153332. Write your SIEM rules against the schema; expect that one record type to start
 > appearing rather than to change shape._
 
-One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
-`delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
-not audited. Authentication lifecycle events are also emitted (see [Authentication Events](#authentication-events)). The stream is
-enabled with `OBS_AUDIT_LOG_ENABLED`.
+One JSON event is emitted per **destructive** tool call (for example `disconnect-client`,
+`delete-queue`, `delete-message-vpn`), at completion, with the outcome known. Read-only calls
+are not audited. Authentication lifecycle events are also emitted (see [Authentication
+Events](#authentication-events)). The stream is enabled with `OBS_AUDIT_LOG_ENABLED`.
+
+> **The trigger is the `destructiveHint` annotation, not "did this change state".** Know the
+> gap before you rely on this stream as your complete record of change. The emitter branches
+> on a tool's `destructive` annotation (`internal/tools/manager.go`), and the `create-*` tools
+> are annotated `destructive: false` because creating an object is additive. So these seven
+> tools change broker state and emit **no** `operation` record:
+>
+> `create-message-vpn`, `create-queue`, `create-queue-subscription`, `create-topic-endpoint`,
+> `create-rdp`, `clear-queue-stats`, `clear-client-stats`.
+>
+> An access review that needs object *creation* covered cannot get it from the audit stream
+> today; join to the `tool invoked` operational log line for those tools instead. Widening the
+> audit trigger from "destructive" to "all write tools" is a change to this schema's coverage,
+> not to its shape, and is not made here.
+
+> **The second gap: a call has to clear broker resolution and argument validation before it is
+> audited.** The record is built only once the arguments hash is computable, which happens
+> after the broker is resolved and the arguments pass schema validation. An unknown tool, a
+> missing or unresolved broker, or a validation failure returns its error normally but writes
+> no `operation` record — the call never reached the destructive gate. Unlike the annotation
+> gap above, this is not a coverage decision; it is a call that never started, so there is
+> nothing yet to audit.
 
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
 audit sub-stream to a dedicated SIEM index.
@@ -559,7 +820,8 @@ records. A recovered panic still produces one, carrying `outcome: error`,
 already have changed the broker, so its absence must never read as "nothing was attempted".
 
 **"One record per call" bounds the `operation` type, not the total.** A call the broker
-denies at hop 2 produces its `operation` record *and* a `broker_authz_denied` record
+denies at hop 2 on a **destructive** tool produces its `operation` record *and* a
+`broker_authz_denied` record
 (SOL-153332), because execution had already started. Match on `audit_event_type` rather than
 counting records per `correlation_id`.
 
@@ -596,7 +858,7 @@ records means your log level, not your flag.
 | `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.1`) |
 
-**`audit_event_type`** is a closed set of seven: `operation` (a state-changing tool call),
+**`audit_event_type`** is a closed set of seven: `operation` (a destructive tool call),
 `auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`, `broker_auth_retry`,
 and `audit_drop`.
 
@@ -646,9 +908,10 @@ outside the table, so two emission sites cannot produce two shapes of the same r
 - **`authz_denied` and `broker_authz_denied` are the two hops of the same question.**
   `authz_denied` is this server refusing an authenticated caller the tool they asked for.
   `broker_authz_denied` is the broker refusing the exchanged identity, so it also names the
-  `broker` that refused — the only column in which the two rows differ. A hop-2 denial
-  **coexists** with the call's `operation` record rather than suppressing it, because
-  execution had already started by the time the broker refused.
+  `broker` that refused — the only column in which the two rows differ. On a destructive tool
+  a hop-2 denial **coexists** with the call's `operation` record rather than suppressing it,
+  because execution had already started by the time the broker refused. On a non-destructive
+  tool there is no `operation` record to coexist with, so the denial stands alone.
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written.
   It carries no principal, `outcome`, or `arguments_hash` — there is no surviving record for it
   to describe, and it must never become a second place raw arguments could leak. It carries
@@ -668,7 +931,7 @@ GA, so the rule is stated here for any field added before then.
 with a dot in it. A record carries `"principal": { "sub": "..." }`. It is the schema's only
 nested field; every other field is flat and snake_case. The nesting is deliberate: it leaves
 room for a second member without renaming a field, which is what makes deferring
-`preferred_username` (open item 3) a reversible choice. Collectors that flatten nested
+`preferred_username` ([Q-013](#decided-since-the-first-draft)) a reversible choice. Collectors that flatten nested
 objects render it as `principal.sub` regardless, which is why the preceding tables use the
 dotted form.
 
@@ -678,7 +941,9 @@ to end through token exchange, so the broker's own SEMP log records the same use
 claim set propagated for that exchange is `sub`, `scope`, `client_id`, `iss`, `jti`; of these,
 only `sub` is written to the audit event. A human-readable username (`preferred_username`) is
 **deliberately omitted in v1**: it is directly identifying PII that would land in an
-append-only store. Adding it later is a pure addition (see open item 3).
+append-only store. This is a settled decision, not an open question — see
+[Q-013](#decided-since-the-first-draft) for the reasoning and for what would change it.
+Adding the field later is a pure addition under a minor bump.
 
 **`arguments_hash`.** Lowercase hex SHA-256 (FIPS 180-4) over the
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON Canonicalization Scheme (JCS) form of
@@ -745,10 +1010,13 @@ rather than a hand-rolled canonicaliser, deliberately. Number serialisation, Uni
 handling, and recursive key ordering are where a home-grown implementation goes subtly wrong,
 and the failure mode is a hash your tooling cannot reproduce and our tests would not catch.
 
-**The schema is additive-only within a major version.** Fields are added, never renamed or
-removed, and closed sets (`audit_event_type`, `outcome`, `error_type`, `reason`) only grow.
-An additive change bumps the minor `audit_schema_version`; anything else bumps the major. Pin
-your queries to `audit_schema_version` and a new field will not break them.
+**The audit schema is additive-only within a MAJOR version.** Within a major version fields
+are added, and the closed sets (`audit_event_type`, `outcome`, `error_type`, `reason`) only
+grow. An additive change bumps the minor `audit_schema_version`. A rename or removal bumps the
+major, and only after the announce-then-dual-emit cycle in [Compatibility and Deprecation
+Policy](#compatibility-and-deprecation-policy) — you get at least two minor releases carrying
+both the old and the new form before the old one can go. Pin your queries to
+`audit_schema_version` and a new field will not break them.
 
 ### Authentication Events
 
@@ -802,23 +1070,131 @@ separation-of-duties measure. `reason` tells you why without disclosing the call
 entitlements to whoever reads the audit stream.
 
 **Broker-side denial has its own record type: `broker_authz_denied`.** Authorization is
-checked twice on a state-changing call. Hop 1 is this server deciding whether the caller may
-use the tool. Hop 2 is the broker deciding whether the exchanged human identity may perform
-the SEMP operation, and a refusal there emits `audit_event_type: broker_authz_denied`
-carrying `tool`, `broker`, the principal, and a single-value closed `reason` set:
+checked twice on any call that reaches the broker, destructive or read-only. Hop 1 is this
+server deciding whether the caller may use the tool. Hop 2 is the broker deciding whether the
+exchanged human identity may perform the SEMP operation, and a refusal there emits
+`audit_event_type: broker_authz_denied` carrying `tool`, `broker`, the principal, and a
+single-value closed `reason` set:
 
 | `reason` | Meaning |
 |---|---|
 | `permission_denied` | The broker refused the exchanged identity the SEMP operation behind this tool. |
 
 The two hops read differently in a query, deliberately. A hop-1 denial means nothing was
-attempted. A hop-2 denial means the call *ran* and the broker stopped it, so it comes with an
-`operation` record of its own carrying `outcome: error`. **Do not write a query that assumes
-one audit record per call** — a hop-2 denial produces two, and both are correct. Match on
-`audit_event_type` instead of counting.
+attempted. A hop-2 denial means the call *ran* and the broker stopped it, so on a destructive
+tool it comes with an `operation` record of its own carrying `outcome: error`. **Do not write
+a query that assumes one audit record per call** — a hop-2 denial on a destructive tool
+produces two, and both are correct. (On a non-destructive tool it produces one, since that
+tool never writes an `operation` record at all.) Match on `audit_event_type` instead of
+counting.
 
 > **Not emitted yet.** The record type is part of the schema and the constructor accepts it,
 > so a SIEM rule can be written against it today. The emission site ships with SOL-153332.
+> Its metric counterpart, `mcp_broker_authz_denied_total`, is documented under [Broker-Side
+> Authorization Denials](#broker-side-authorization-denials--not-yet-emitted) and ships in the
+> same story.
+
+### Canonical Audit Queries
+
+Four queries cover most of what an access review, a SOC 2 walkthrough, or a security
+investigation asks of this stream. Each is given as a field predicate over records already
+routed by `event="audit"`, because that is the one filter every shipper applies; translate the
+predicate into your own SIEM's syntax. A Splunk SPL rendering is shown for the first as a
+worked example of the translation.
+
+**Pin every rule to `audit_schema_version`, as [Schema Versioning](#schema-versioning) already
+tells you to.** The four queries below do it explicitly, with the current version as a
+placeholder **you must set to your deployment's actual `audit_schema` before the rule goes
+live, and update when it bumps.** A pinned query that stops matching after an upgrade has
+detected schema drift, which is the point. But a rule copied fresh *after* the bump, with no
+before-and-after to notice, is different: it returns zero rows on every run and looks like a
+clean estate rather than a stale pin — check the pinned version against the deployment's
+actual `audit_schema_version` before concluding anything from an empty result, especially on
+query 1, where zero rows reads as "no privileged changes" to whoever is running the review. An
+unpinned query is worse in the other direction: it keeps matching and silently spans two
+contracts.
+
+**1. Destructive-operation review — who changed what.**
+
+```
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="operation"
+  → group by principal.sub
+  → report tool, broker, outcome, timestamp_utc, correlation_id
+```
+
+In Splunk SPL:
+
+```
+index=<your_audit_index> event="audit" audit_schema_version="1.1" audit_event_type="operation"
+| stats count, values(tool) as tools, values(broker) as brokers, values(outcome) as outcomes,
+    values(timestamp_utc) as timestamps, values(correlation_id) as correlation_ids
+    by principal.sub
+```
+
+Every **destructive** tool call, successful or failed, attributed to the human principal that
+made it. Two limits to state before a reviewer treats this as a complete record of change:
+
+- **It is not every state change.** The `create-*` tools and the `clear-*-stats` tools are
+  annotated non-destructive and emit no `operation` record, so this query returns zero object
+  creations. See the coverage note under [Audit
+  Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied).
+- **`principal.sub` is absent** in a deployment running `mcp_client_auth.mode: disabled`, and
+  resolving it to a named human is your IdP's job — see
+  [Q-013](#decided-since-the-first-draft).
+
+**2. Rejected credentials — who could not get in.**
+
+```
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="auth_failure"
+  → group by reason
+```
+
+`reason` is the five-value closed set (`invalid_token`, `expired`, `audience_mismatch`,
+`signature_invalid`, `missing`). Two volume notes before you build a rule on this: it fires
+once per rejected request to `/mcp`, not once per destructive call, and `reason="missing"` can
+be driven by any unauthenticated caller with no rate limit of its own (see [Authentication
+Events](#authentication-events)).
+
+**3. Denied privileged attempts, hop 1 — this server refused the tool.**
+
+```
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="authz_denied"
+  → group by reason, tool
+```
+
+`reason` is `missing_claim` or `not_permitted`. These calls never reached a handler, so there
+is no `operation` record and no tool-invocation metric sample for them.
+
+**4. Denied privileged attempts, hop 2 — the broker refused the operation.**
+
+```
+event="audit" AND audit_schema_version="1.1" AND audit_event_type="broker_authz_denied"
+  → group by reason, tool, broker
+```
+
+`reason` is `permission_denied`. Unlike hop 1, the call ran: expect a coexisting `operation`
+record on the same `correlation_id` for a destructive tool.
+
+> **Query 4 returns nothing today.** `broker_authz_denied` is designed and schema-accepted but
+> not yet emitted (Story 49, SOL-153332). Write the rule now so it starts working when the
+> story lands; do not read its silence as evidence of no broker-side denials.
+
+#### A complete refusal picture needs queries 3 and 4 together
+
+Authorization is checked at two hops, and each hop has its own record type. **A reviewer who
+runs only query 3 silently misses every broker-side denial** — the query returns cleanly, with
+no indication that a second class of refusal exists and was not counted. That is the failure
+mode worth guarding against, because it looks like a complete answer.
+
+| Question | Query |
+|---|---|
+| Was anyone refused a tool by this server? | 3 |
+| Was anyone refused an operation by a broker? | 4 |
+| Was anyone refused anything? | 3 **and** 4 |
+
+The two are not redundant and neither subsumes the other. A caller can be fully authorized at
+hop 1 and refused at hop 2, which is the case a hop-1-only review is blindest to: the MCP
+server's own policy says yes, and the broker says no.
 
 ### Audit Delivery
 
@@ -1291,8 +1667,8 @@ Notes:
   separate signal: the `authz_denied` audit event and the `mcp_authz_denied_total` metric,
   whose closed `reason` set (`missing_claim`, `not_permitted`) is authorization throughout.
   A call denied at hop 1 produces no `operation` record at all. A call denied by the *broker*
-  at hop 2 is different: it produces a `broker_authz_denied` record **and** an `operation`
-  record, because execution had already started. See
+  at hop 2 is different: it produces a `broker_authz_denied` record **and**, on a destructive
+  tool, an `operation` record, because execution had already started. See
   [Authentication Events](#authentication-events).
 - **Load-shedding / saturation is not an `outcome` value** either; it is a separate signal.
   It ships today as log lines (see
@@ -1486,14 +1862,13 @@ the review.
 2. ~~**The no-response case on SEMP metrics.**~~ **Decided.** `http_response_status_code`
    is the empty string when no response arrives. Story 41 can revisit if pilots need the
    failure reason as its own label.
-3. **`principal.preferred_username`.** **Decided for v1: we omit it.** The audit event carries
-   the opaque `sub` only. A readable username helps access reviews, but it places directly
-   identifying PII in an append-only store, which conflicts with erasure obligations under
-   GDPR and PIPL. Adding the field later is a pure addition this schema permits; removing it
-   later would need a major version. So we have taken the reversible option.
-   **What we still want from you:** can your access review resolve `sub` to a human at review
-   time, including for a deprovisioned user? If it cannot, say so and we will add
-   `principal.preferred_username` in a later minor.
+3. **Can your access review resolve `principal.sub` to a human?** The `sub`-only identity
+   decision itself is settled — see [Q-013](#decided-since-the-first-draft). What is still
+   genuinely open is whether that is workable for you: at review time, can your tooling
+   resolve an opaque OIDC subject to a named person, **including for a user who has since been
+   deprovisioned**? If it cannot, say so and we will add `principal.preferred_username` in a
+   later minor. This is the one question that would change the answer, which is why it stays
+   here rather than moving with the decision.
 4. **Trace span names and span kinds.** Story 26 has now shipped four names —
    `POST /mcp` (Server), `tools.CallTool` (Internal), `composite.Execute` (Internal), and
    `semp.request` (Client) — listed under [Spans](#spans). They ship so you have something
@@ -1518,15 +1893,29 @@ the review.
    (SOL-152099) and cannot be back-filled.
 ### Decided Since the First Draft
 
-Three items that appeared as open questions in earlier drafts are now settled, so you do not
-need to spend review time on them:
+Four items that appeared as open questions in earlier drafts are now settled, so you do not
+need to spend review time on them. Where a decision has a cross-reference tag (`Q-nnn`), that
+tag is stable and safe to cite in your own review notes.
 
+- **Q-013 — audit identity is `principal.sub` only, and no readable username.** The audit
+  event records the opaque OIDC subject of the human user, and deliberately **not**
+  `preferred_username`. A readable username helps an access review, but it is directly
+  identifying PII landing in an append-only store, which conflicts with erasure obligations
+  under GDPR and PIPL. The decision is the reversible one in both directions that matter:
+  adding `principal.preferred_username` later is a pure addition this schema permits under a
+  minor bump, while removing it later would need a major version and a deprecation cycle. The
+  `principal` field is a nested object precisely so a second member can be added without
+  renaming anything — see [Event Fields](#event-fields). One related question is still open
+  and stays in [Open Items](#open-items-for-this-review) as item 3: whether your access review
+  can resolve `sub` to a human, including for a deprovisioned user.
 - **`server_address` and `broker` on SEMP metrics: we keep both.** They answer different
   questions. `server_address` is the OTel-conventional host, which is what correlates this
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
 - **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes--implemented).
-- **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`.** We considered activating
+- **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`** (the *decision* is
+  settled; the flag itself ships with Story 46, SOL-152418, and is unread in the current
+  build — see [Metrics](#metrics--planned-with-exceptions)). We considered activating
   push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
   what your collectors already configure. We rejected it: that variable is frequently set
   cluster-wide for other services, so an upgrade could silently start egressing telemetry from
@@ -1541,15 +1930,17 @@ need to spend review time on them:
 > _Status: **[Interim]**. This ships as structured **log lines**, not as metrics. The
 > `mcp_saturation_total` counter and the occupancy gauge described in
 > [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)
-> are still roadmap. Nothing in this section appears on `/metrics`, because no meter
-> provider or OpenTelemetry dependency exists yet to feed these instruments onto that endpoint._
+> are still roadmap. Nothing in this section appears on `/metrics`: the saturation instruments
+> themselves have not been written. (The meter provider and the OpenTelemetry dependency now
+> exist — an earlier draft said otherwise, written before Story 14 landed — so the remaining
+> work is the instruments, not the pipeline.)_
 
 Support and SRE needed one question answered quickly: when a customer says "MCP feels
 slow", is the server pacing or shedding requests to protect a broker, or is something else
-slow? The metric form of that answer depends on a metrics pipeline this build does not
-have — no meter provider, no OpenTelemetry dependency, no saturation instruments — and
-standing one up here would duplicate work already in flight under SOL-150254. So the
-signal ships as logs now and moves to metrics when that pipeline lands.
+slow? When this shipped, the metric form of that answer depended on a metrics pipeline the
+build did not have, and standing one up here would have duplicated work already in flight
+under SOL-150254. So the signal ships as logs. The pipeline has since landed; what is still
+missing is the saturation instruments themselves, tracked under SOL-150254.
 
 Both lines are gated on `OBS_SATURATION_EVENTS_ENABLED` (default off). Neither is a stable
 interface: they are diagnostic output, and the metric that replaces them is where the
@@ -1638,6 +2029,56 @@ will get their own review before they ship.
 - Broker connection-pool gauges.
 - A SEMP retry-outcome counter.
 - Cancellation and progress signals (which populate the reserved `cancelled` outcome).
+
+---
+
+## Vendor Neutrality
+
+Nothing here requires a Solace-supplied backend, and nothing here is a Solace-proprietary
+telemetry format. The wire formats are the open ones your existing stack already speaks.
+
+| Signal | Format | Transport | Status |
+|---|---|---|---|
+| Metrics | OpenTelemetry, plus **Prometheus text exposition additionally** for scrape-based stacks | `/metrics` scrape endpoint (`OBS_METRICS_ENABLED`) | Live |
+| Metrics | The same OpenTelemetry instruments | OTLP push (`OBS_METRICS_OTLP_ENABLED`) | Ships with Story 46 (SOL-152418); not in the current build |
+| Traces | OpenTelemetry | OTLP over gRPC (`OBS_TRACING_ENABLED`) | Live |
+| Audit trail | Structured JSON on stderr, tagged `"event": "audit"` | Your log shipper, to any sink you route it to | Live |
+
+Three things follow, and each is a commitment rather than an accident of the current build:
+
+- **Metrics are designed for two egresses, not one.** OTLP push suits an OTLP-native APM; the
+  Prometheus scrape endpoint suits a scrape-based stack with no collector in the path. Both
+  observe one instrument set, so the two cannot disagree, and neither is a second-class path.
+  The scrape endpoint is live today; push ships with Story 46. Two things stay asymmetric even
+  then: the `go_*`/`process_*` collectors are scrape-only, and push is a separate flag — see
+  [Metrics](#metrics--planned-with-exceptions) and [Go Runtime and Process
+  Metrics](#go-runtime-and-process-metrics).
+- **No Solace-proprietary telemetry format appears anywhere.** No custom exporter, no
+  Solace-specific wire protocol, no agent you have to install. Where OpenTelemetry publishes
+  a semantic convention we adopt it (see [Conventions](#conventions)); where it does not, we
+  use a documented Solace-*named* metric or field, carried over the standard transport like
+  every other one.
+- **Grafana is a reference implementation, not a requirement.** This document mentions Grafana
+  because it is the most common way to consume these signals, and a reference dashboard is
+  planned (Story 37, SOL-152092). Nothing in the schema depends on it. Trace exemplars are the
+  one place a dashboard feature is described, and they are an OpenMetrics feature any
+  conforming backend can read — see [Trace Exemplars](#trace-exemplars--implemented).
+
+**Backends in scope.** The four we design and check against are Prometheus with Grafana,
+Grafana Tempo, Jaeger, and Datadog. Be precise about what "check against" means today, because
+the two levels are different:
+
+| Backend | What is verified today |
+|---|---|
+| Prometheus (with Grafana) | The scrape surface itself is pinned by test: golden-file exposition output, OpenMetrics negotiation, exemplar emission, and the suppressed `otel_scope_*` labels. Grafana is then an ordinary Prometheus data source. |
+| Grafana Tempo, Jaeger, Datadog | Reached over standard OTLP, with no backend-specific code path in this server. Verified at the protocol level, not yet as an end-to-end matrix per backend. |
+
+**A per-backend tested matrix, and a reference OTel collector deployment to sit in front of
+it, land with Story 40 (SOL-152423).** Until then, treat the second row as "should work
+because the format is standard" rather than as an attested integration. That list is a
+starting point, not a compatibility boundary: any backend that ingests OTLP or scrapes
+Prometheus text exposition should work, and we would rather hear about one that does not than
+have you assume it is unsupported.
 
 ---
 
