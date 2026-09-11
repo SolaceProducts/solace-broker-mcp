@@ -333,10 +333,11 @@ const DefaultRetryMinInterval = 3 * time.Second
 // the story spec and Terraform default.
 const DefaultRetryMaxInterval = 30 * time.Second
 
-// DefaultTokenExpirySkew is subtracted from the IdP-reported expires_in
-// when computing a token's ExpiresAt. The result is a conservative
-// "use-by" instant — callers (and the cache) never present a token that
-// might expire mid-flight to the broker.
+// DefaultTokenExpirySkew is subtracted from the selected token lifetime — a
+// positive IdP expires_in, or broker_oauth.token_expiry_fallback when the IdP
+// omits expires_in, returns null, or returns zero — when computing ExpiresAt.
+// The result is a conservative "use-by" instant, so callers (and the cache)
+// never present a token that might expire mid-flight to the broker.
 //
 // Subtracted EXACTLY ONCE, in internal/tokenexchange when the IdP response
 // is parsed. Every downstream component — the token cache above all — is a
@@ -349,10 +350,10 @@ const DefaultRetryMaxInterval = 30 * time.Second
 // Reasoning: a broker-bound SEMP request takes well under 1 second in
 // the common case; 30s gives ~30× headroom for slow networks or
 // queued requests while wasting at most 30s of a token's lifetime.
-// Trade-off: a token with expires_in ≤ 30 is returned with an
-// ExpiresAt in the past, so callers (and the cache) will consider it
-// immediately stale. Accepted — such short-lived tokens are an IdP
-// misconfiguration for machine-to-machine flows.
+// Trade-off: a selected lifetime ≤ 30s returns a token with an ExpiresAt at or
+// before now, so callers (and the cache) consider it immediately stale.
+// Accepted — such a short IdP lifetime or configured fallback is unsuitable
+// for machine-to-machine flows.
 const DefaultTokenExpirySkew = 30 * time.Second
 
 // DefaultOAuthCacheMaxSize is the maximum number of entries in the in-memory
@@ -366,9 +367,10 @@ const DefaultTokenExpirySkew = 30 * time.Second
 const DefaultOAuthCacheMaxSize = 10000
 
 // DefaultMaxOAuthTokenTTL caps the maximum TTL of any entry in the OAuth token
-// cache. Handles two edge cases: IdPs that omit expires_in (RFC 8693 makes it
-// RECOMMENDED, not mandatory) and IdPs that return absurdly large expires_in
-// values (e.g., 100 years).
+// cache. Bounds cache residency independently of the token lifetime selected
+// by token exchange. It cannot handle an omitted expires_in by itself because
+// the exchanger must first produce an ExpiresAt; operators whose IdP omits
+// expires_in can configure broker_oauth.token_expiry_fallback.
 //
 // Decided: 24 hours.
 // Reasoning: enterprise IdPs typically issue tokens valid for minutes to hours.

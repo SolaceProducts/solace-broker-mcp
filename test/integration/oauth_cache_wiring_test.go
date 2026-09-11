@@ -30,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
@@ -54,6 +55,19 @@ func idpHitCounter(callCount *atomic.Int32) http.HandlerFunc {
 	}
 }
 
+func idpHitCounterWithoutExpiry(callCount *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		n := callCount.Add(1)
+		body := map[string]any{
+			"access_token":      fmt.Sprintf("cache-tok-%d", n),
+			"token_type":        "Bearer",
+			"issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
+	}
+}
+
 // sempV1OKReply is the minimal successful SEMPv1 envelope: an <rpc-reply>
 // carrying an inner <rpc> element and a code="ok" <execute-result>.
 const sempV1OKReply = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
@@ -67,8 +81,21 @@ const sempV1OKReply = `<rpc-reply><rpc><show><version/></show></rpc><execute-res
 // miss, or the deduplication key differs between Put and Get), the IdP counter
 // climbs to 2 and this test fails.
 func TestOAuthCache_TwoRequestsSameBearerHitIdPOnce(t *testing.T) {
+	assertTwoRequestsSameBearerHitIdPOnce(t, idpHitCounter, 0)
+}
+
+func TestOAuthCache_MissingExpiresInFallbackHitIdPOnce(t *testing.T) {
+	assertTwoRequestsSameBearerHitIdPOnce(t, idpHitCounterWithoutExpiry, time.Hour)
+}
+
+func assertTwoRequestsSameBearerHitIdPOnce(
+	t *testing.T,
+	handler func(*atomic.Int32) http.HandlerFunc,
+	tokenExpiryFallback time.Duration,
+) {
+	t.Helper()
 	var idpHits atomic.Int32
-	fakeIdP := httptest.NewTLSServer(idpHitCounter(&idpHits))
+	fakeIdP := httptest.NewTLSServer(handler(&idpHits))
 	defer fakeIdP.Close()
 
 	var brokerHits atomic.Int32
@@ -83,14 +110,15 @@ func TestOAuthCache_TwoRequestsSameBearerHitIdPOnce(t *testing.T) {
 
 	tc := cachetest.Default(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
-		TokenURL:         fakeIdP.URL,
-		ClientID:         "mcp-server",
-		ClientAuthMethod: tokenexchange.ClientSecretBasic,
-		ClientSecret:     "fake-secret",
-		GrantType:        tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:    tokenexchange.AudienceParamAudience,
-		HTTPClient:       fakeIdP.Client(),
-		Cache:            tc,
+		TokenURL:            fakeIdP.URL,
+		ClientID:            "mcp-server",
+		ClientAuthMethod:    tokenexchange.ClientSecretBasic,
+		ClientSecret:        "fake-secret",
+		GrantType:           tokenexchange.GrantTypeTokenExchange,
+		AudienceParam:       tokenexchange.AudienceParamAudience,
+		TokenExpiryFallback: tokenExpiryFallback,
+		HTTPClient:          fakeIdP.Client(),
+		Cache:               tc,
 	})
 	if err != nil {
 		t.Fatalf("tokenexchange.New: %v", err)

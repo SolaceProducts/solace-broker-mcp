@@ -68,11 +68,21 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		ClientSecret:         secret,
 		GrantType:            grantType,
 		AudienceParam:        audienceParam,
+		TokenExpiryFallback:  resolveTokenExpiryFallback(cfg.TokenExpiryFallback),
 		HTTPClient:           httpClient,
 		Cache:                tokenCache,
 		CircuitBreaker:       breakerCfg,
 		MaxHonoredRetryAfter: resolveMaxHonoredRetryAfter(cfg.RetryAfter),
 	})
+}
+
+// resolveTokenExpiryFallback maps an omitted operator setting to zero, the
+// runtime sentinel that preserves fail-closed handling of missing expires_in.
+func resolveTokenExpiryFallback(fallback *time.Duration) time.Duration {
+	if fallback == nil {
+		return 0
+	}
+	return *fallback
 }
 
 // resolveMaxHonoredRetryAfter: omitted returns zero, which clampRetryAfter

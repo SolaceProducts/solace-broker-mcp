@@ -39,7 +39,10 @@ type Exchanger struct {
 	clientSecret     string
 	grantType        GrantType
 	audienceParam    AudienceFormat
-	httpClient       *http.Client
+	// tokenExpiryFallback is used only when the IdP omits expires_in or
+	// returns zero. Zero preserves fail-closed behavior.
+	tokenExpiryFallback time.Duration
+	httpClient          *http.Client
 	// chainDeadline bounds the whole retry chain (attempts + backoffs)
 	// on a detached context in Exchange. Per-attempt bound lives on
 	// httpClient.Timeout (production wires NewRetryingHTTPClient, which
@@ -66,9 +69,11 @@ type Exchanger struct {
 
 // New constructs an Exchanger from Params. The config validator
 // (internal/config.validateBrokerOAuthConfig) has already enforced
-// every non-runtime field at startup, so this constructor only checks
-// runtime-wired dependencies the validator cannot see — specifically
-// that HTTPClient is non-nil.
+// YAML-level fields at startup. This constructor still checks
+// runtime-wired dependencies and values a direct Params caller can
+// get wrong: HTTPClient and Cache must be non-nil; TokenExpiryFallback
+// and MaxHonoredRetryAfter must not be negative; a non-nil
+// CircuitBreaker must pass Validate.
 //
 // Tests that build Params{...} directly without going through FromConfig
 // are responsible for supplying valid enum values; bad values surface at
@@ -80,6 +85,9 @@ func New(p Params) (*Exchanger, error) {
 	}
 	if p.Cache == nil {
 		return nil, errors.New("tokenexchange: Cache is required")
+	}
+	if p.TokenExpiryFallback < 0 {
+		return nil, errors.New("tokenexchange: TokenExpiryFallback must not be negative")
 	}
 	// Zero is the documented "use defaultMaxHonoredRetryAfter" sentinel; a
 	// negative value has no meaning and would otherwise be silently absorbed
@@ -102,13 +110,14 @@ func New(p Params) (*Exchanger, error) {
 	}
 
 	return &Exchanger{
-		tokenURL:         p.TokenURL,
-		clientID:         p.ClientID,
-		clientAuthMethod: p.ClientAuthMethod,
-		clientSecret:     p.ClientSecret,
-		grantType:        p.GrantType,
-		audienceParam:    p.AudienceParam,
-		httpClient:       p.HTTPClient,
+		tokenURL:            p.TokenURL,
+		clientID:            p.ClientID,
+		clientAuthMethod:    p.ClientAuthMethod,
+		clientSecret:        p.ClientSecret,
+		grantType:           p.GrantType,
+		audienceParam:       p.AudienceParam,
+		tokenExpiryFallback: p.TokenExpiryFallback,
+		httpClient:          p.HTTPClient,
 		// Chain deadline is derived from the retry knobs so all timing
 		// decisions compose coherently: changing MaxRetries or WaitMax
 		// via package defaults updates the chain bound automatically.

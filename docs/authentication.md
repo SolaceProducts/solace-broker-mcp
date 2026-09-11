@@ -276,6 +276,7 @@ broker_oauth:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: "audience"
+  # token_expiry_fallback: 1h  # optional; omit = fail-closed when the IdP is silent
 
 brokers:
   prod:
@@ -292,6 +293,7 @@ brokers:
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant Type](#grant-type). |
 | `broker_oauth.audience_parameter_name` | Which request parameter carries the per-event-broker audience value — see [Audience Parameter Name](#audience-parameter-name). |
+| `broker_oauth.token_expiry_fallback` | Optional positive duration used only when the IdP omits `expires_in`, returns `null`, or returns `0`. Omit it to preserve fail-closed behavior. Any positive duration passes configuration validation, but `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this event broker. |
 | `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This event broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the event broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails configuration load). |
 
@@ -317,10 +319,13 @@ audience_parameter_name: "audience"
 
 `audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at configuration load with `broker_oauth.audience_parameter_name "scope" is not supported in this version (must be one of [audience])`. If your IdP requires one of those styles, event broker OAuth is not yet usable against it in this version.
 
-Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
+One optional field controls handling of IdPs that omit token lifetime, and two optional sub-blocks tune runtime resilience — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
+- `broker_oauth.token_expiry_fallback` — supplies a lifetime only when the IdP returns no usable `expires_in`; a positive IdP value always takes precedence. Values of `30s` or less pass configuration validation but return an immediately stale token that is not cached.
 - `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional.
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
+
+> **Configured vs. used.** Creating the Hop 2 exchanger logs one INFO line, `token exchanger created for broker OAuth`, with `expiry_fallback_configured` (plus `expiry_fallback` when the setting is present) — that reports the fallback is armed, not that the IdP ever omitted `expires_in`. To see whether a fallback lifetime was actually applied, run at `log_level: debug` and read `used_fallback` on the `identity provider issued broker token` line, emitted once per live exchange; a cache hit produces none, and a fail-closed exchange returns an error instead.
 
 ### TLS for the MCP Server's Own Listener
 
@@ -694,7 +699,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
    │              │              │
 ```
 
-> **Cache key and lifetime.** The cache is keyed on the (agent identity, event broker alias) pair, derived from the agent's Hop 1 `subject_token` — the same agent talking to two different event brokers gets two independently cached tokens, and two different agents talking to the same event broker never share one. An entry lives until the token it holds expires; there is no separate cache TTL setting. Concurrent tool calls that miss the cache for the same (agent, event broker) pair at the same time are collapsed into a single IdP round-trip — only one exchange happens, and every caller shares its result. On an event broker `401`, the SEMP transport evicts that pair's cached token and retries once with a freshly exchanged one (see [CHANGELOG](../CHANGELOG.md)); a persistently rejected credential still surfaces as a `401` after that single retry, not a loop.
+> **Cache key and lifetime.** The cache is keyed on the (agent identity, event broker alias) pair, derived from the agent's Hop 1 `subject_token` — the same agent talking to two different event brokers gets two independently cached tokens, and two different agents talking to the same event broker never share one. An entry's residency is the lesser of its remaining usable lifetime and the server's fixed 24-hour cache ceiling; there is no operator-configurable cache TTL setting today. The token lifetime comes from a positive IdP `expires_in`, or from `broker_oauth.token_expiry_fallback` only when the IdP omits that value, returns `null`, or returns `0`; without either, exchange fails closed. Concurrent tool calls that miss the cache for the same (agent, event broker) pair at the same time are collapsed into a single IdP round-trip — only one exchange happens, and every caller shares its result. On an event broker `401`, the SEMP transport evicts that pair's cached token and retries once with a freshly exchanged one (see [CHANGELOG](../CHANGELOG.md)); a persistently rejected credential still surfaces as a `401` after that single retry, not a loop.
 
 > **What a cache miss can fail with.** Step 9c is subject to the circuit breaker, the `Retry-After` gate, and the exchange retry loop described in [Step 2b](#step-2b-configure-broker-oauth-hop-2) — a sustained IdP outage or a still-throttling IdP fails the tool call immediately at 9c rather than reaching the event broker at all, distinct from an event-broker-side `401`/`403`.
 

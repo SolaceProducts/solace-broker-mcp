@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // trackingBody is an io.ReadCloser that records whether Close was called.
@@ -579,10 +581,9 @@ func TestParseSuccessBody_IssuedTokenTypeSkippedForNonTokenExchangeGrant(t *test
 	}
 }
 
-// T14: expires_in must be a positive integer. A missing (zero value), explicit
-// zero, or negative value returns ErrInvalidResponse with "missing or
-// non-positive expires_in".
-func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.T) {
+// T14: An absent, null, or zero expires_in remains fail-closed when the
+// operator did not configure a fallback.
+func TestParseSuccessBody_ExpiresInMissingWithoutFallbackReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -590,8 +591,8 @@ func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.
 		body string
 	}{
 		{"absent", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`},
+		{"null", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":null}`},
 		{"zero", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":0}`},
-		{"negative", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":-1}`},
 	}
 
 	for _, tc := range tests {
@@ -613,10 +614,78 @@ func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.
 			if !errors.Is(err, ErrInvalidResponse) {
 				t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
 			}
-			if !strings.Contains(err.Error(), "missing or non-positive expires_in") {
-				t.Errorf("err.Error() = %q, want it to contain \"missing or non-positive expires_in\"", err.Error())
+			if !strings.Contains(err.Error(), "missing or zero expires_in") {
+				t.Errorf("err.Error() = %q, want it to contain \"missing or zero expires_in\"", err.Error())
+			}
+			if !strings.Contains(err.Error(), "broker_oauth.token_expiry_fallback") {
+				t.Errorf("err.Error() = %q, want it to name broker_oauth.token_expiry_fallback", err.Error())
 			}
 		})
+	}
+}
+
+func TestParseSuccessBody_ExpiresInMissingUsesConfiguredFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"absent", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`},
+		{"null", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":null}`},
+		{"zero", `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":0}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := validParams(t)
+			p.TokenExpiryFallback = time.Hour
+			e, err := New(p)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			tok, err := e.parseSuccessBody([]byte(tc.body), now)
+
+			if err != nil {
+				t.Fatalf("parseSuccessBody: %v", err)
+			}
+			wantExpiresAt := now.Add(time.Hour - defaults.DefaultTokenExpirySkew)
+			if !tok.ExpiresAt.Equal(wantExpiresAt) {
+				t.Errorf("ExpiresAt = %v, want %v", tok.ExpiresAt, wantExpiresAt)
+			}
+		})
+	}
+}
+
+func TestParseSuccessBody_NegativeExpiresInRejectedEvenWithFallback(t *testing.T) {
+	t.Parallel()
+	p := validParams(t)
+	p.TokenExpiryFallback = time.Hour
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	body := `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":-1}`
+
+	tok, err := e.parseSuccessBody([]byte(body), time.Now())
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "negative expires_in") {
+		t.Errorf("err.Error() = %q, want it to contain \"negative expires_in\"", err.Error())
+	}
+	if !strings.Contains(err.Error(), "-1") {
+		t.Errorf("err.Error() = %q, want it to include the rejected value -1", err.Error())
+	}
+	if !strings.Contains(err.Error(), "configure a positive token lifetime") {
+		t.Errorf("err.Error() = %q, want it to include a remediation", err.Error())
 	}
 }
 
@@ -625,7 +694,9 @@ func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.
 func TestParseSuccessBody_ExpiresInOverflowGuard(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams(t))
+	p := validParams(t)
+	p.TokenExpiryFallback = time.Hour
+	e, err := New(p)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -653,6 +724,65 @@ func TestParseSuccessBody_ExpiresInOverflowGuard(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds the safe arithmetic limit") {
 		t.Errorf("err.Error() = %q, want it to contain \"exceeds the safe arithmetic limit\"", err.Error())
+	}
+}
+
+func TestParseSuccessBody_PositiveExpiresInWinsOverFallback(t *testing.T) {
+	t.Parallel()
+	p := validParams(t)
+	p.TokenExpiryFallback = 2 * time.Hour
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	body := `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":3600}`
+
+	tok, err := e.parseSuccessBody([]byte(body), now)
+
+	if err != nil {
+		t.Fatalf("parseSuccessBody: %v", err)
+	}
+	wantExpiresAt := now.Add(time.Hour - defaults.DefaultTokenExpirySkew)
+	if !tok.ExpiresAt.Equal(wantExpiresAt) {
+		t.Errorf("ExpiresAt = %v, want IdP-derived %v", tok.ExpiresAt, wantExpiresAt)
+	}
+}
+
+func TestParseSuccessBody_ShortFallbackReturnsTokenAtOrPastExpiry(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		fallback time.Duration
+	}{
+		{name: "below skew", fallback: time.Second},
+		{name: "equal to skew", fallback: defaults.DefaultTokenExpirySkew},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := validParams(t)
+			p.TokenExpiryFallback = tc.fallback
+			e, err := New(p)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			body := `{"access_token":"tok","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`
+
+			tok, err := e.parseSuccessBody([]byte(body), now)
+
+			if err != nil {
+				t.Fatalf("parseSuccessBody: %v", err)
+			}
+			wantExpiresAt := now.Add(tc.fallback - defaults.DefaultTokenExpirySkew)
+			if !tok.ExpiresAt.Equal(wantExpiresAt) {
+				t.Errorf("ExpiresAt = %v, want %v", tok.ExpiresAt, wantExpiresAt)
+			}
+			if tok.ExpiresAt.After(now) {
+				t.Errorf("ExpiresAt = %v, want at or before %v", tok.ExpiresAt, now)
+			}
+		})
 	}
 }
 

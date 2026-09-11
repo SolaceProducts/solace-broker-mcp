@@ -105,13 +105,14 @@ type ServerConfig struct {
 // their respective allowlists (validGrantTypes, validAudienceParams). No
 // defaults — operators acknowledge each protocol choice explicitly.
 type BrokerOAuthConfig struct {
-	TokenURL       string                   `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
-	ClientID       string                   `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
-	ClientAuth     BrokerClientAuth         `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
-	GrantType      string                   `yaml:"grant_type"`              // required; must be in validGrantTypes
-	AudienceParam  string                   `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
-	CircuitBreaker *IdPCircuitBreakerConfig `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
-	RetryAfter     *IdPRetryAfterConfig     `yaml:"retry_after"`             // optional; nil → shipped default cap (SOL-152285)
+	TokenURL            string                   `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
+	ClientID            string                   `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
+	ClientAuth          BrokerClientAuth         `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
+	GrantType           string                   `yaml:"grant_type"`              // required; must be in validGrantTypes
+	AudienceParam       string                   `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
+	TokenExpiryFallback *time.Duration           `yaml:"token_expiry_fallback"`   // optional; used only when the IdP omits or returns zero expires_in
+	CircuitBreaker      *IdPCircuitBreakerConfig `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
+	RetryAfter          *IdPRetryAfterConfig     `yaml:"retry_after"`             // optional; nil → shipped default cap (SOL-152285)
 }
 
 // IdPCircuitBreakerConfig, its BreakerEnabled helper, validation, and the
@@ -244,18 +245,23 @@ var validAudienceParams = []string{
 // is in a non-canonical state at log time, the method field is logged as "".
 func (b BrokerOAuthConfig) LogValue() slog.Value {
 	method, _ := b.ClientAuth.selectedMethod()
-	return slog.GroupValue(
+	attrs := []slog.Attr{
 		slog.String("idp_token_endpoint", SanitizeURLString(b.TokenURL)),
 		slog.String("mcp_server_client_id", b.ClientID),
 		slog.String("mcp_server_client_auth_method", method),
 		slog.String("grant_type", b.GrantType),
 		slog.String("audience_parameter_name", b.AudienceParam),
+		slog.Bool("expiry_fallback_configured", b.TokenExpiryFallback != nil),
 		// Whether the breaker is on is operationally important and non-secret.
 		// Only the enabled state is surfaced here; the resolved threshold values
 		// are not currently logged (the breaker emits state transitions and a
 		// disabled-escape-hatch WARN, but not its config).
 		slog.Bool("circuit_breaker_enabled", b.BreakerEnabled()),
-	)
+	}
+	if b.TokenExpiryFallback != nil {
+		attrs = append(attrs, slog.Duration("expiry_fallback", *b.TokenExpiryFallback))
+	}
+	return slog.GroupValue(attrs...)
 }
 
 // LogValue for BrokerClientAuth — exposes only the resolved method name, never
@@ -1371,8 +1377,9 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 //  2. If the broker_oauth block is configured but no broker uses oauth mode,
 //     log a WARN. This is operator-visible noise, not a fatal error — the
 //     block may be staged in advance of switching brokers to oauth mode.
-//  3. If the broker_oauth block is configured, every field is required and
-//     idp_token_endpoint must be a valid URL (https in production mode).
+//  3. If the broker_oauth block is configured, its protocol and client-auth
+//     fields are required and idp_token_endpoint must be a valid URL (https
+//     in production mode). Operational tuning fields remain optional.
 //
 // Returns the accumulated errors as a slice for the caller (validate) to
 // errors.Join.
@@ -1435,6 +1442,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	// fields are checked below in the per-method validators.
 	errs = append(errs, validateBrokerClientAuth(cfg.BrokerOAuth.ClientAuth)...)
 
+	errs = append(errs, validateTokenExpiryFallback(cfg.BrokerOAuth.TokenExpiryFallback)...)
 	errs = append(errs, validateIdPCircuitBreaker(cfg.BrokerOAuth.CircuitBreaker)...)
 	errs = append(errs, validateIdPRetryAfter(cfg.BrokerOAuth.RetryAfter)...)
 
