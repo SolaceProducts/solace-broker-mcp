@@ -35,6 +35,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
 // Provider is the single metrics root. It owns one client_golang registry, the
@@ -62,6 +63,10 @@ type Provider struct {
 	brokerMetricsOnce sync.Once
 	brokerMetrics     *BrokerMetrics
 	brokerMetricsErr  error
+
+	tokenExchangeBreakerMetricsOnce sync.Once
+	tokenExchangeBreakerMetrics     *TokenExchangeBreakerMetrics
+	tokenExchangeBreakerMetricsErr  error
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -234,6 +239,18 @@ func (p *Provider) BrokerMetrics(brokerStates func() map[string]health.BrokerSna
 		p.brokerMetrics, p.brokerMetricsErr = NewBrokerMetrics(p.Meter(instrumentScope), brokerStates)
 	})
 	return p.brokerMetrics, p.brokerMetricsErr
+}
+
+// TokenExchangeBreakerMetrics returns the process-wide token-exchange breaker
+// state gauge, registering it once on first call.
+func (p *Provider) TokenExchangeBreakerMetrics(
+	snapshot func() (tokenexchange.BreakerSnapshot, bool),
+) (*TokenExchangeBreakerMetrics, error) {
+	p.tokenExchangeBreakerMetricsOnce.Do(func() {
+		p.tokenExchangeBreakerMetrics, p.tokenExchangeBreakerMetricsErr =
+			NewTokenExchangeBreakerMetrics(p.Meter(instrumentScope), snapshot)
+	})
+	return p.tokenExchangeBreakerMetrics, p.tokenExchangeBreakerMetricsErr
 }
 
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a

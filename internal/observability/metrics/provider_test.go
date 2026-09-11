@@ -30,6 +30,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
 // update regenerates the golden fixture. Regenerating is a deliberate,
@@ -144,6 +145,17 @@ func TestGoldenSchema(t *testing.T) {
 		}
 	}); err != nil {
 		t.Fatalf("BrokerMetrics() error = %v", err)
+	}
+
+	// Token-exchange circuit-breaker state (SOL-152284): the closed startup
+	// snapshot captures the complete three-series one-hot contract.
+	if _, err := p.TokenExchangeBreakerMetrics(func() (tokenexchange.BreakerSnapshot, bool) {
+		return tokenexchange.BreakerSnapshot{
+			Name:  "idp-token-exchange",
+			State: "closed",
+		}, true
+	}); err != nil {
+		t.Fatalf("TokenExchangeBreakerMetrics() error = %v", err)
 	}
 
 	got := mcpFamilies(scrapePlainText(t, p))
