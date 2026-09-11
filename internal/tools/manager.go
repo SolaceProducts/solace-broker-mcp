@@ -242,7 +242,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// span has to report the same cause the log line and the metric do.
 	// Reversed, the span reports nothing while both of them say `panic`.
 	// Pinned by the panic case of
-	// TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall.
+	// TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall.
 	//
 	// canonicalBrokerLabel, not the raw alias, for the same two reasons the
 	// metric uses it — see endDispatchSpan.

@@ -11,6 +11,14 @@
 # tool/s because MCP's per-broker semaphore + request_min_interval throttle
 # every client onto one broker's queue.
 #
+# For a run above 50 brokers, generate a config instead of editing this one:
+#
+#   ./gen-mock-config.sh -n 200 -o broker-config.gen200.yaml
+#   CONFIG_FILE=./broker-config.gen200.yaml ./run-mcp.sh
+#
+# The generator emits exactly the alias scheme loadgen generates and derives
+# the ports from the mock's -listen-start, so the two cannot drift.
+#
 # MOCK_HOST is required (MCP hard-fails on unset ${VAR}).
 #   - Single-host smoke: MOCK_HOST=localhost.
 #   - Split-host demo:   MOCK_HOST=<Box A LAN IP>, MCP runs on Box B.
@@ -34,10 +42,12 @@ mcp_client_auth:
 semp:
   max_concurrent_per_broker: 10
   request_timeout_duration: 1m
-  # Pacer disabled so the load run measures MCP's real ceiling rather
-  # than the per-broker throttle. Production configs typically keep this
-  # around 100ms to be polite to real appliances.
-  request_min_interval: 1ms
+  # Pacer off so the load run measures MCP's real ceiling rather than the
+  # per-broker throttle. Only 0s turns it off: any positive value builds a
+  # real ticker per broker, so the "disabled" this line used to claim at 1ms
+  # was a 1000/s-per-broker pacer, not an absent one. Production configs
+  # typically keep this around 100ms to be polite to real appliances.
+  request_min_interval: 0s
   retries: 10
   retry_min_interval: 3s
   retry_max_interval: 30s

@@ -12,6 +12,12 @@
 # Also writes a <out>.info sidecar with host details so per-process CPU% and
 # memory numbers can be read against the total.
 #
+# The last column is the sample's epoch seconds. summary.sh needs it to window
+# the CSV on the load phase the runner stamped into the run record: t_sec is
+# relative to this script's own start, and the `wall` HH:MM:SS column has no
+# date, so neither can be compared with a stamp taken by another process. It is
+# appended last so every existing column index is unchanged.
+#
 # Usage: ./sampler.sh <out.csv> [interval_sec] [duration_sec]
 #   interval defaults to 5s, duration to 90s.
 #
@@ -109,7 +115,7 @@ prev_t=$(awk 'BEGIN{srand(); print systime()}')
 
 echo "sampling MCP=${mcp_pid:-NA} mock=${mock_pid:-NA} every ${interval}s for ${duration}s → $out"
 echo "host info → $info"
-echo "t_sec,wall,mcp_cpu,mcp_cpu_pct_of_box,mcp_rss_kb,mcp_pss_kb,mcp_uss_kb,mock_cpu,mock_cpu_pct_of_box,mock_rss_kb,mock_pss_kb,mock_uss_kb,loadavg1,sys_mem_used_kb" > "$out"
+echo "t_sec,wall,mcp_cpu,mcp_cpu_pct_of_box,mcp_rss_kb,mcp_pss_kb,mcp_uss_kb,mock_cpu,mock_cpu_pct_of_box,mock_rss_kb,mock_pss_kb,mock_uss_kb,loadavg1,sys_mem_used_kb,epoch" > "$out"
 
 start=$SECONDS
 sleep "$interval"
@@ -150,6 +156,6 @@ while (( SECONDS - start <= duration )); do
   [[ "$mcp_new_j" != "_" ]] && prev_mcp_j="$mcp_new_j"
   [[ "$mock_new_j" != "_" ]] && prev_mock_j="$mock_new_j"
 
-  echo "$t,$wall,$mcp_cpu,$mcp_box,$mcp_rss,$mcp_pss,$mcp_uss,$mock_cpu,$mock_box,$mock_rss,$mock_pss,$mock_uss,$loadavg,$sys_mem" | tee -a "$out"
+  echo "$t,$wall,$mcp_cpu,$mcp_box,$mcp_rss,$mcp_pss,$mcp_uss,$mock_cpu,$mock_box,$mock_rss,$mock_pss,$mock_uss,$loadavg,$sys_mem,$now" | tee -a "$out"
   sleep "$interval"
 done
