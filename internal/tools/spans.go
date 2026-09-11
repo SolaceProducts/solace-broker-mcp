@@ -60,7 +60,7 @@ const dispatchSpanName = "tools.CallTool"
 // error_type value passes through, and a seam holding the variable behind a
 // struct field hides both that call and the `panic` reclassification from it.
 // The ordering is enforced behaviourally instead, by the panic case of
-// TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall and by
+// TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall and by
 // TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext.
 //
 // brokerLabel must be the canonical metric label, never a raw caller-supplied

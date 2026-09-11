@@ -41,6 +41,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# lib.sh is functions-only (perf_*), so sourcing it here costs nothing and
+# keeps capture_dirty and the run record's commit_dirty on one implementation.
+# shellcheck source=lib.sh
+source "$here/lib.sh"
 manifest="$here/fixtures.manifest"
 fixture_dirs=(mock-semp/canned fidelity/golden)
 
@@ -86,6 +90,16 @@ cmd_write() {
     echo "# Do not edit: the run scripts verify these hashes and will fail on a mismatch."
     echo "# run_id: $(date -u +%Y%m%dT%H%M%SZ)"
     echo "# captured_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # The commit the capture was taken at. Two captures of the same broker from
+    # different commits can differ in what the tools select, so a run record
+    # that names the fixture set should be able to name the code that made it.
+    echo "# capture_commit: $(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
+    # Tracked changes only. perf_tree_dirty carries the reasoning and the
+    # blind spot this buys: a fixture regenerated but never `git add`ed reads
+    # clean here. The alternative — counting untracked files — pinned this
+    # flag to `true` on any host that had ever left a scratch file in the
+    # tree, which is how it came to mean nothing.
+    echo "# capture_dirty: $(perf_tree_dirty "$here" || echo unknown)"
     echo "# broker_alias: ${BROKER_ALIAS:-unknown}"
     echo "# vpn: ${VPN:-unknown}"
     echo "# rdp: ${RDP_NAME:-unknown}"
@@ -187,7 +201,11 @@ EOF
 # preflight check reports the missing manifest properly.
 cmd_vpn() {
   [[ -f "$manifest" ]] || return 0
-  sed -n 's/^# vpn: //p' "$manifest" | head -1
+  # awk, not `sed | head`: a head that closes the pipe SIGPIPEs sed, and under
+  # `pipefail` that makes this function return non-zero on success. Benign here
+  # today (one matching line), but the shape is the one lib.sh removed for
+  # writing a malformed field, and leaving an instance behind reads as sanction.
+  awk '/^# vpn: / { sub(/^# vpn: /, ""); print; exit }' "$manifest"
 }
 
 # cmd_rdp prints the RDP name the capture pinned, for the same reason cmd_vpn
@@ -197,7 +215,7 @@ cmd_vpn() {
 # default in each script is how they would.
 cmd_rdp() {
   [[ -f "$manifest" ]] || return 0
-  sed -n 's/^# rdp: //p' "$manifest" | head -1
+  awk '/^# rdp: / { sub(/^# rdp: /, ""); print; exit }' "$manifest"
 }
 
 case "${1:-}" in
