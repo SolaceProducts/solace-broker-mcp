@@ -38,31 +38,39 @@ type AdvertisedPRM struct {
 	paths               []string
 }
 
-// NewAdvertisedPRM derives every advertised PRM value from cfg.
-// Callers read the resulting snapshot without reconstructing URLs or paths.
-func NewAdvertisedPRM(cfg *config.ServerConfig) *AdvertisedPRM {
+// AdvertisedPRMInput names the three fields NewAdvertisedPRM needs.
+// Pass by value; callers own the source config and copy these fields at the call site.
+type AdvertisedPRMInput struct {
+	Mode        string // one of config.AuthMode* constants
+	ResourceURL string
+	Issuer      string
+}
+
+// NewAdvertisedPRM builds the RFC 9728 PRM snapshot from in.
+// Always returns non-nil; disabled and static return an empty snapshot.
+func NewAdvertisedPRM(in AdvertisedPRMInput) *AdvertisedPRM {
 	prm := &AdvertisedPRM{}
-	if cfg.MCPClientAuth.Mode == config.AuthModeDisabled {
+	if in.Mode == config.AuthModeDisabled {
 		return prm
 	}
 
-	if cfg.MCPClientAuth.ResourceURL != "" {
-		parsedURL, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
+	if in.ResourceURL != "" {
+		parsedURL, _ := url.Parse(in.ResourceURL)
 		prm.resourceMetadataURL = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, prmBarePath)
 	}
-	if cfg.MCPClientAuth.Mode != config.AuthModeOAuth {
+	if in.Mode != config.AuthModeOAuth {
 		return prm
 	}
 
 	prm.metadata = &oauthex.ProtectedResourceMetadata{
-		Resource:               cfg.MCPClientAuth.ResourceURL,
-		AuthorizationServers:   []string{cfg.MCPClientAuth.Issuer},
+		Resource:               in.ResourceURL,
+		AuthorizationServers:   []string{in.Issuer},
 		ScopesSupported:        []string{"openid"},
 		BearerMethodsSupported: []string{"header"},
 	}
 	prm.handler = sdkauth.ProtectedResourceMetadataHandler(prm.metadata)
 	prm.paths = []string{prmBarePath}
-	parsedURL, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
+	parsedURL, _ := url.Parse(in.ResourceURL)
 	if resourcePath := strings.TrimRight(parsedURL.Path, "/"); resourcePath != "" {
 		prm.paths = append(prm.paths, prmBarePath+resourcePath)
 	}

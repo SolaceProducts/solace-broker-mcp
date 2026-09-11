@@ -27,26 +27,70 @@ import (
 func TestAdvertisedPRM_ConfiguredSurfaces(t *testing.T) {
 	tests := []struct {
 		name            string
-		mode            string
-		resourceURL     string
+		in              AdvertisedPRMInput
 		wantMetadataURL string
 		wantPaths       []string
 		wantHandler     bool
 	}{
-		{"oauth mcp path", config.AuthModeOAuth, "https://mcp.example.com/mcp", "https://mcp.example.com/.well-known/oauth-protected-resource", []string{prmBarePath, prmBarePath + "/mcp"}, true},
-		{"oauth ingress path", config.AuthModeOAuth, "https://mcp.example.com/broker/mcp", "https://mcp.example.com/.well-known/oauth-protected-resource", []string{prmBarePath, prmBarePath + "/broker/mcp"}, true},
-		{"oauth empty path", config.AuthModeOAuth, "https://mcp.example.com", "https://mcp.example.com/.well-known/oauth-protected-resource", []string{prmBarePath}, true},
-		{"oauth root path", config.AuthModeOAuth, "https://mcp.example.com/", "https://mcp.example.com/.well-known/oauth-protected-resource", []string{prmBarePath}, true},
-		{"static URL only", config.AuthModeStatic, "http://localhost:9090/mcp", "http://localhost:9090/.well-known/oauth-protected-resource", nil, false},
-		{"disabled none", config.AuthModeDisabled, "http://localhost:9090/mcp", "", nil, false},
+		// oauth full: both bare and canonical paths registered.
+		{
+			name:            "oauth mcp path",
+			in:              AdvertisedPRMInput{Mode: config.AuthModeOAuth, ResourceURL: "https://mcp.example.com/mcp", Issuer: "https://auth.example.com"},
+			wantMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource",
+			wantPaths:       []string{prmBarePath, prmBarePath + "/mcp"},
+			wantHandler:     true,
+		},
+		// Canonical path derived from resource_url, not hardcoded to /mcp.
+		{
+			name:            "oauth ingress path",
+			in:              AdvertisedPRMInput{Mode: config.AuthModeOAuth, ResourceURL: "https://mcp.example.com/broker/mcp", Issuer: "https://auth.example.com"},
+			wantMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource",
+			wantPaths:       []string{prmBarePath, prmBarePath + "/broker/mcp"},
+			wantHandler:     true,
+		},
+		// Empty path: canonical collides with bare, so only one path.
+		{
+			name:            "oauth empty path",
+			in:              AdvertisedPRMInput{Mode: config.AuthModeOAuth, ResourceURL: "https://mcp.example.com", Issuer: "https://auth.example.com"},
+			wantMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource",
+			wantPaths:       []string{prmBarePath},
+			wantHandler:     true,
+		},
+		// Trailing slash trimmed: same as empty path.
+		{
+			name:            "oauth root path",
+			in:              AdvertisedPRMInput{Mode: config.AuthModeOAuth, ResourceURL: "https://mcp.example.com/", Issuer: "https://auth.example.com"},
+			wantMetadataURL: "https://mcp.example.com/.well-known/oauth-protected-resource",
+			wantPaths:       []string{prmBarePath},
+			wantHandler:     true,
+		},
+		// Empty ResourceURL in OAuth: no resource_metadata URL, bare path only.
+		{
+			name:        "oauth empty resource URL",
+			in:          AdvertisedPRMInput{Mode: config.AuthModeOAuth, ResourceURL: "", Issuer: "https://auth.example.com"},
+			wantPaths:   []string{prmBarePath},
+			wantHandler: true,
+		},
+		// static URL-only: resource_metadata URL derived, no paths or handler.
+		{
+			name:            "static URL only",
+			in:              AdvertisedPRMInput{Mode: config.AuthModeStatic, ResourceURL: "http://localhost:9090/mcp", Issuer: ""},
+			wantMetadataURL: "http://localhost:9090/.well-known/oauth-protected-resource",
+			wantPaths:       nil,
+			wantHandler:     false,
+		},
+		// disabled empty snapshot: all fields zero.
+		{
+			name:        "disabled none",
+			in:          AdvertisedPRMInput{Mode: config.AuthModeDisabled, ResourceURL: "http://localhost:9090/mcp", Issuer: ""},
+			wantPaths:   nil,
+			wantHandler: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
-				Mode: tt.mode, ResourceURL: tt.resourceURL, Issuer: "https://auth.example.com",
-			}}
-			prm := NewAdvertisedPRM(cfg)
+			prm := NewAdvertisedPRM(tt.in)
 
 			if got := prm.ResourceMetadataURL(); got != tt.wantMetadataURL {
 				t.Errorf("ResourceMetadataURL() = %q, want %q", got, tt.wantMetadataURL)
@@ -79,12 +123,11 @@ func TestAdvertisedPRM_Log(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 			defer slog.SetDefault(previous)
 
-			cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
+			NewAdvertisedPRM(AdvertisedPRMInput{
 				Mode:        tt.mode,
 				ResourceURL: "https://resource-user:resource-pass@mcp.example.com/mcp",
 				Issuer:      "https://issuer-user:issuer-pass@auth.example.com/realm",
-			}}
-			NewAdvertisedPRM(cfg).Log()
+			}).Log()
 
 			if !tt.wantLine {
 				if buf.Len() != 0 {
