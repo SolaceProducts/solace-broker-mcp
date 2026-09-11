@@ -25,7 +25,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -170,25 +169,17 @@ func buildMux(readiness *health.ReadinessState) *http.ServeMux {
 	return mux
 }
 
-// registerMetadataRoutes serves PRM (RFC 9728) at the bare path (advertised in
-// WWW-Authenticate) and at the §3.1 canonical path derived from resource_url.
-// The canonical route is skipped when the two would collide (empty/"/" path),
-// which would otherwise panic ServeMux. No-op when mode != oauth.
+// registerMetadataRoutes installs the configured RFC 9728 PRM paths.
 func registerMetadataRoutes(mux *http.ServeMux, cfg *config.ServerConfig) {
-	metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg)
-	if metadataHandler == nil {
-		return
+	// Reads AdvertisedPRM; do not format resource_metadata here.
+	prm := auth.NewAdvertisedPRM(cfg)
+	paths := prm.Paths()
+	for _, path := range paths {
+		mux.Handle(path, prm.Handler())
 	}
-
-	const barePath = "/.well-known/oauth-protected-resource"
-	mux.Handle(barePath, metadataHandler)
-
-	parsed, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
-	resourcePath := strings.TrimRight(parsed.Path, "/")
-	if resourcePath != "" {
-		mux.Handle(barePath+resourcePath, metadataHandler)
+	if len(paths) > 0 {
+		slog.Info("registered OAuth protected resource metadata endpoint")
 	}
-	slog.Info("registered OAuth protected resource metadata endpoint")
 }
 
 // buildRootHandler returns the outermost HTTP handler for the server: the mux
