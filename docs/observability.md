@@ -91,6 +91,27 @@ Present-tense wording in a **[Planned]** section describes the **target** behavi
 review, not what the current build emits. Only capabilities tagged **[Implemented]** — more
 than one now — are live today.
 
+### Flag Defaults at GA
+
+Each capability is off by default unless the table says otherwise. A flag is off because
+turning it on commits us to something we cannot cheaply take back — a schema name, a
+listening port, a compliance record — so each default-off flag carries a written condition
+that would justify changing it. The conditions are recorded here so the decision is made
+against a stated test rather than re-argued each release.
+
+| Flag | Default | Why, and what would change it |
+|---|---|---|
+| `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
+| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. Flips when the schema review is complete and the names are frozen. |
+| `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
+| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Flips when the schema review is complete **and** the end-to-end identity chain is in place. The identity chain landed with OAuth token exchange; the schema review is the remaining half. |
+| `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
+| `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is met — see `observability.saturation_threshold_ms`. It stays off pending the metric form of the signal, so operators are not opted into per-request log volume to get it. |
+| `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows `OBS_METRICS_ENABLED` | A counter that `/metrics` does not expose has no consumer. Set it explicitly to override in either direction. |
+
+Panic recovery is not a flag: it is unconditional. `/livez` and `/readyz` are unconditional
+for the same reason — the check is cheap and commits us to nothing.
+
 ---
 
 ## How to Give Feedback

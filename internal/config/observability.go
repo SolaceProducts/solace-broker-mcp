@@ -22,11 +22,16 @@ import (
 
 // ObservabilityConfig holds the feature flags and tunables for the
 // observability capabilities (correlation IDs, metrics, audit log, tracing,
-// saturation events, auth-failure counter). The flags are loaded and surfaced
-// here; correlation IDs are now wired into the request path (SOL-151279), while
-// metrics, audit, tracing, and saturation remain surfaced-only until their
-// stories consume them. (Panic recovery is unconditional and is no longer a
-// flag on this struct.)
+// saturation events, auth-failure counter). Every flag here now gates a real
+// consumer: correlation IDs in the request path (SOL-151279), the metrics
+// provider and /metrics listener (cmd/server/main.go), the audit log on the
+// tool and SEMP paths (internal/tools, internal/semp), the tracer provider,
+// and the saturation signal on the broker admission path (internal/semp/pool.go).
+// (Panic recovery is unconditional and is no longer a flag on this struct.)
+//
+// The v1 defaults and the written flip-condition behind each one are recorded
+// in docs/observability.md, "Flag Defaults at GA". Change a default there and
+// here together, and update the default-assertion table in observability_test.go.
 //
 // Two distinct loading channels, deliberately split:
 //
