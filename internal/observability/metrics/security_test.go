@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -29,7 +30,7 @@ import (
 
 func newSecurityMetrics(t *testing.T) (*SecurityMetrics, *Provider) {
 	t.Helper()
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

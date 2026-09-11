@@ -23,12 +23,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TestToolMetrics_RecordSuccessLabels pins the label set on a successful tool
 // invocation: exactly one counter series, with error_type empty.
 func TestToolMetrics_RecordSuccessLabels(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,7 @@ mcp_tool_invocation_total{broker="dev",error_type="",outcome="success",tool="tes
 // boundaries to exactly the nine the ticket requires. A 42ms sample lands in the
 // 0.05s bucket and above, so every bucket from le="0.05" up is cumulative 1.
 func TestToolMetrics_HistogramBuckets(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +102,7 @@ var sempSample = SEMPRequest{
 // semantic-convention keys (dots translated to underscores) and the four
 // Solace labels, with attempt rendered as a string.
 func TestSEMPMetrics_RecordLabels(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +127,7 @@ mcp_semp_request_total{api="v2",attempt="1",broker="dev",http_request_method="GE
 // sample lands in the 0.05s bucket and above, so every bucket from le="0.05" up
 // is cumulative 1.
 func TestSEMPMetrics_HistogramBuckets(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ mcp_semp_request_duration_seconds_count{api="v2",broker="dev",http_request_metho
 // behaviour: a try that got no response records an empty status label rather
 // than a synthetic code.
 func TestSEMPMetrics_EmptyStatusOnNoResponse(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +215,7 @@ func gaugeValue(t *testing.T, p *Provider, name string) float64 {
 // holds every request "in flight" until all have incremented, so the mid-point
 // read sees the full count and cannot race an early decrement.
 func TestToolMetrics_ActiveRequestsIncDec(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

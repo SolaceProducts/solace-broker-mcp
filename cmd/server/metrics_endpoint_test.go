@@ -48,7 +48,7 @@ func TestServeMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	}
 	defer occupied.Close()
 
-	provider, err := metrics.New(version.Version(), sdkresource.Default())
+	provider, err := metrics.New(version.Version(), sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestServeMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 
 // A successful bind must leave /readyz ready.
 func TestServeMetricsEndpoint_SuccessIsReady(t *testing.T) {
-	provider, err := metrics.New(version.Version(), sdkresource.Default())
+	provider, err := metrics.New(version.Version(), sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestServeMetricsEndpoint_SuccessIsReady(t *testing.T) {
 // The provider's Shutdown must satisfy the shutdown-hook contract (SOL-153884):
 // registrable on a hooks.Registry and run cleanly, well within RunAll's budget.
 func TestMetricsProvider_ShutdownHook(t *testing.T) {
-	provider, err := metrics.New(version.Version(), sdkresource.Default())
+	provider, err := metrics.New(version.Version(), sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

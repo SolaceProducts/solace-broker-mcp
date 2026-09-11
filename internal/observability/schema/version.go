@@ -36,7 +36,10 @@ package schema
 // 1.2 (SOL-152099): added the mcp_auth_failure_total and mcp_authz_denied_total
 // families. 1.3 (SOL-152088): added mcp_broker_reachable,
 // mcp_broker_unreachable_reason, and mcp_broker_last_result_timestamp_seconds.
-const MetricsSchemaVersion = "1.3"
+// 1.4 (SOL-153332): added the mcp_broker_authz_denied_total family. 1.5
+// (SOL-152418): added the mcp_otel_metrics_exported_total and
+// mcp_otel_metrics_dropped_total families.
+const MetricsSchemaVersion = "1.5"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major

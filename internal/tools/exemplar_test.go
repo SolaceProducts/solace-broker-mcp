@@ -25,6 +25,7 @@ import (
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
@@ -171,7 +172,7 @@ func TestBrokerlessDispatchSites_LatencyBucketCarriesTheDispatchSpansTraceID(t *
 		t.Run(tc.name, func(t *testing.T) {
 			sr := recordSpans(t)
 
-			p, err := metrics.New("v-test", sdkresource.Default())
+			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

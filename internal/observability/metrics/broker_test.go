@@ -22,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 )
 
@@ -32,7 +33,7 @@ func snap(states map[string]health.BrokerSnapshot) func() map[string]health.Brok
 func TestBrokerMetrics_Reachable(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ mcp_broker_reachable{broker="prod"} 1
 func TestBrokerMetrics_Unreachable(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ mcp_broker_unreachable_reason{broker="prod",reason="unreachable"} 1
 func TestBrokerMetrics_OneHot(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +124,7 @@ mcp_broker_unreachable_reason{broker="prod",reason="unreachable"} 0
 func TestBrokerMetrics_Timestamp(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ mcp_broker_last_result_timestamp_seconds{broker="prod"} 1.7e+09
 func TestBrokerMetrics_Timestamp_ZeroAbsent(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +172,7 @@ func TestBrokerMetrics_Timestamp_ZeroAbsent(t *testing.T) {
 func TestBrokerMetrics_AbsentBeforeFirstCall(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,9 +181,9 @@ func TestBrokerMetrics_AbsentBeforeFirstCall(t *testing.T) {
 	}
 
 	absent := map[string]bool{
-		"mcp_broker_reachable":                      true,
-		"mcp_broker_unreachable_reason":              true,
-		"mcp_broker_last_result_timestamp_seconds":   true,
+		"mcp_broker_reachable":                     true,
+		"mcp_broker_unreachable_reason":            true,
+		"mcp_broker_last_result_timestamp_seconds": true,
 	}
 	mfs, err := p.registry.Gather()
 	if err != nil {

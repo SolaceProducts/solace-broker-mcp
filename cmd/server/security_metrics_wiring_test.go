@@ -43,7 +43,7 @@ func securityCfg(counterEnabled, metricsEnabled bool) *config.ServerConfig {
 
 func newTestMetricsProvider(t *testing.T) *metrics.Provider {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

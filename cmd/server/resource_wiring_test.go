@@ -47,7 +47,7 @@ func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.
 		t.Fatalf("resource.New() error = %v", err)
 	}
 
-	mp, err := metrics.New("v1.2.3", res)
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
