@@ -15,6 +15,9 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"reflect"
 	"testing"
 
@@ -53,6 +56,64 @@ func TestAdvertisedPRM_ConfiguredSurfaces(t *testing.T) {
 			}
 			if got := prm.Handler() != nil; got != tt.wantHandler {
 				t.Errorf("Handler present = %v, want %v", got, tt.wantHandler)
+			}
+		})
+	}
+}
+
+func TestAdvertisedPRM_Log(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantLine bool
+	}{
+		{"oauth", config.AuthModeOAuth, true},
+		{"static", config.AuthModeStatic, false},
+		{"disabled", config.AuthModeDisabled, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(previous)
+
+			cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:        tt.mode,
+				ResourceURL: "https://resource-user:resource-pass@mcp.example.com/mcp",
+				Issuer:      "https://issuer-user:issuer-pass@auth.example.com/realm",
+			}}
+			NewAdvertisedPRM(cfg).Log()
+
+			if !tt.wantLine {
+				if buf.Len() != 0 {
+					t.Fatalf("Log() emitted outside OAuth mode: %s", buf.String())
+				}
+				return
+			}
+			var got map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+				t.Fatalf("decode log: %v", err)
+			}
+			if got["msg"] != "registered OAuth protected resource metadata endpoint" {
+				t.Errorf("msg = %v", got["msg"])
+			}
+			if got["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO", got["level"])
+			}
+			want := map[string]any{
+				"resource":                 "https://mcp.example.com/mcp",
+				"issuers":                  []any{"https://auth.example.com/realm"},
+				"scopes_supported":         []any{"openid"},
+				"bearer_methods_supported": []any{"header"},
+				"resource_metadata_url":    "https://mcp.example.com/.well-known/oauth-protected-resource",
+				"prm_paths":                []any{prmBarePath, prmBarePath + "/mcp"},
+			}
+			for key, wantValue := range want {
+				if !reflect.DeepEqual(got[key], wantValue) {
+					t.Errorf("%s = %#v, want %#v", key, got[key], wantValue)
+				}
 			}
 		})
 	}

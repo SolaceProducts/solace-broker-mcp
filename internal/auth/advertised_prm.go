@@ -16,6 +16,7 @@ package auth
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,7 +30,7 @@ const prmBarePath = "/.well-known/oauth-protected-resource"
 
 // AdvertisedPRM is the single configured view of RFC 9728 PRM.
 // It owns the resource_metadata URL in WWW-Authenticate, the
-// oauth-protected-resource paths, and served metadata.
+// oauth-protected-resource paths, served metadata, and startup log.
 type AdvertisedPRM struct {
 	handler             http.Handler
 	metadata            *oauthex.ProtectedResourceMetadata
@@ -81,4 +82,24 @@ func (p *AdvertisedPRM) ResourceMetadataURL() string {
 // Paths returns the local paths that serve PRM.
 func (p *AdvertisedPRM) Paths() []string {
 	return p.paths
+}
+
+// Log emits the OAuth PRM registration snapshot when routes exist.
+func (p *AdvertisedPRM) Log() {
+	if p.metadata == nil || len(p.paths) == 0 {
+		return
+	}
+
+	issuers := make([]string, len(p.metadata.AuthorizationServers))
+	for i, issuer := range p.metadata.AuthorizationServers {
+		issuers[i] = config.SanitizeURLString(issuer)
+	}
+	slog.Info("registered OAuth protected resource metadata endpoint",
+		slog.String("resource", config.SanitizeURLString(p.metadata.Resource)),
+		slog.Any("issuers", issuers),
+		slog.Any("scopes_supported", p.metadata.ScopesSupported),
+		slog.Any("bearer_methods_supported", p.metadata.BearerMethodsSupported),
+		slog.String("resource_metadata_url", config.SanitizeURLString(p.resourceMetadataURL)),
+		slog.Any("prm_paths", p.paths),
+	)
 }

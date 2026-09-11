@@ -178,7 +178,7 @@ func registerMetadataRoutes(mux *http.ServeMux, cfg *config.ServerConfig) {
 		mux.Handle(path, prm.Handler())
 	}
 	if len(paths) > 0 {
-		slog.Info("registered OAuth protected resource metadata endpoint")
+		prm.Log()
 	}
 }
 
