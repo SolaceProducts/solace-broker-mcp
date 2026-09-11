@@ -39,6 +39,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // The two published histogram families this story attaches exemplars to.
@@ -251,7 +253,7 @@ func TestExemplars_OnlyASampledSpanProducesOne(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := New(testVersion, sdkresource.Default())
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -363,7 +365,7 @@ func sdkTracer(t *testing.T, sampler sdktrace.Sampler) trace.Tracer {
 // the schema-freeze gate has stopped being a gate; fix the representation
 // split rather than regenerating the fixture.
 func TestExemplars_AbsentFromPlainTextScrape(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +438,7 @@ func TestExemplars_ExemplarFilterEnvVarOverridesTheDefault(t *testing.T) {
 			t.Setenv("OTEL_METRICS_EXEMPLAR_FILTER", tc.filter)
 
 			// After the Setenv, so the meter provider reads it.
-			p, err := New(testVersion, sdkresource.Default())
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

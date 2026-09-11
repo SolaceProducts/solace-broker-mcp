@@ -239,7 +239,7 @@ var testQueueArgs = map[string]any{"msgVpnName": "default", "queueName": "test-q
 // then a 200 produce two samples, labelled attempt="1"/status="503" and
 // attempt="2"/status="200", both tagged api="v2".
 func TestClient_Execute_RecordsPerAttempt(t *testing.T) {
-	prov, err := metrics.New("vtest", sdkresource.Default())
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestClient_Execute_RecordsPerAttempt(t *testing.T) {
 // TestClient_Execute_NoResponseRecordsEmptyStatus proves a try that gets no
 // response records an empty status rather than a synthetic code.
 func TestClient_Execute_NoResponseRecordsEmptyStatus(t *testing.T) {
-	prov, err := metrics.New("vtest", sdkresource.Default())
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestClient_Execute_NoResponseRecordsEmptyStatus(t *testing.T) {
 // TestClient_Execute_NoMetricsWhenDisabled proves a nil recorder installs no
 // transport wrapper and emits nothing, even though the instrument is registered.
 func TestClient_Execute_NoMetricsWhenDisabled(t *testing.T) {
-	prov, err := metrics.New("vtest", sdkresource.Default())
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

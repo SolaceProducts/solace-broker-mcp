@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,7 +36,7 @@ import (
 
 func newSecurityMetrics(t *testing.T) (*metrics.SecurityMetrics, *metrics.Provider) {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

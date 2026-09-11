@@ -95,7 +95,7 @@ func TestBrokerAuthzDenial_RealHTTPStack_SEMPv2Code72(t *testing.T) {
 	}
 	executor := composite.NewCompositeExecutor(operations)
 
-	mp, err := metrics.New("v1.2.3-test", sdkresource.Default())
+	mp, err := metrics.New("v1.2.3-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

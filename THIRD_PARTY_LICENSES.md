@@ -85,6 +85,7 @@ under MPL-2.0.
 | `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE) |
 | `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.71.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-contrib/blob/instrumentation/net/http/otelhttp/v0.71.0/instrumentation/net/http/otelhttp/LICENSE) |
 | `go.opentelemetry.io/otel` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/v1.46.0/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlpmetric/otlpmetricgrpc/v1.46.0/exporters/otlp/otlpmetric/otlpmetricgrpc/LICENSE) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/v1.46.0/exporters/otlp/otlptrace/LICENSE) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/otlptracegrpc/v1.46.0/exporters/otlp/otlptrace/otlptracegrpc/LICENSE) |
 | `go.opentelemetry.io/otel/exporters/prometheus` | v0.68.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/prometheus/v0.68.0/LICENSE) |

@@ -36,6 +36,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
@@ -99,7 +100,7 @@ func crossSignalCall(t *testing.T, h tools.ToolHandler, brokerAlias string,
 	t.Helper()
 
 	sr := recordRequestPathSpans(t)
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

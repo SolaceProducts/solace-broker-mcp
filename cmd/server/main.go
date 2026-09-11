@@ -790,6 +790,26 @@ func runShutdownHooks(shutdownHooks *hooks.Registry, forceSig <-chan os.Signal) 
 	}
 }
 
+// warnIfOTLPEndpointUnset logs the effective OTLP endpoint and its source
+// (an explicit env var, or the SDK's own default) when the push flag is on.
+// With neither OTEL_EXPORTER_OTLP_ENDPOINT nor OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+// set, the SDK defaults to localhost:4317 — legitimate for a co-located
+// sidecar collector, but otherwise a silent push into nothing for the life
+// of the process, with no error anywhere to surface it. Diagnostic only: the
+// actual exporter still resolves these env vars itself (see newOTLPReader's
+// doc comment for why this server reads none of them explicitly elsewhere).
+func warnIfOTLPEndpointUnset(cfg config.ObservabilityConfig) {
+	if !cfg.MetricsOTLPEnabled {
+		return
+	}
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") != "" {
+		return
+	}
+	slog.Warn("OTLP metrics push is enabled but neither OTEL_EXPORTER_OTLP_ENDPOINT nor " +
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set; the SDK defaults to localhost:4317, " +
+		"which pushes into nothing unless a collector is actually listening there")
+}
+
 // registerShutdownHooks registers the shutdown flush for each provider that
 // was actually built, so main() has one call site instead of a Register call
 // scattered next to each provider's own construction, and so a wiring test
@@ -1169,7 +1189,7 @@ func main() {
 	// brokerTracker is always active; gauges are only registered when metrics are enabled.
 	brokerTracker := health.NewBrokerTracker()
 	if metrics.Enabled(cfg.Observability) {
-		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res, cfg.Observability); metricsBuildErr != nil {
 			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
 		} else {
 			if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
@@ -1186,6 +1206,7 @@ func main() {
 				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
 		}
+		warnIfOTLPEndpointUnset(cfg.Observability)
 	}
 
 	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both

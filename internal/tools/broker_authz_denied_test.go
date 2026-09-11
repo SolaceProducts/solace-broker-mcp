@@ -36,6 +36,7 @@ import (
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
@@ -227,7 +228,7 @@ func TestBrokerAuthzDenial_AuditLogOff_EmitsNoRecord(t *testing.T) {
 // CallTool, pinning the pairing in the direction the integration test does
 // not cover.
 func TestBrokerAuthzDenial_RecordsMetricErrorType(t *testing.T) {
-	p, err := metrics.New("v-test", sdkresource.Default())
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

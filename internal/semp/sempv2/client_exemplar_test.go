@@ -25,6 +25,7 @@ import (
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 )
 
@@ -100,7 +101,7 @@ func scrapeExemplarBearing(t *testing.T, p *metrics.Provider, family string) (wi
 func TestExecute_LatencyBucketCarriesTheRequestSpansTraceID(t *testing.T) {
 	sr := recordSpans(t)
 
-	prov, err := metrics.New("vtest", sdkresource.Default())
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

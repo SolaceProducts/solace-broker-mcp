@@ -81,7 +81,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` — the metrics pair is **not** emitted yet, see [OTLP Export Health](#otlp-export-health)), `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — records implemented, drop counter not yet wired]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is now emitted. The `mcp_audit_events_dropped_total` counter is the one piece not yet wired. See [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -90,6 +90,66 @@ capability headings carry the same tag:
 Present-tense wording in a **[Planned]** section describes the **target** behavior under
 review, not what the current build emits. Only capabilities tagged **[Implemented]** — more
 than one now — are live today.
+
+### Flag Defaults at GA
+
+Each capability is off by default unless the table says otherwise. A flag is off because
+turning it on commits us to something we cannot cheaply take back — a schema name, a
+listening port, a compliance record — so each default-off flag carries a written condition
+that would justify changing it. The conditions are recorded here so the decision is made
+against a stated test rather than re-argued each release.
+
+| Flag | Default | Why, and what would change it |
+|---|---|---|
+| `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
+| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
+| `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
+| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. It now flips when the Solace SDLC security review of the audit schema passes (tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040), same ticket as the metrics row above) **and** `mcp_audit_events_dropped_total` is emitted — a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent. |
+| `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
+| `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is satisfied — see `observability.saturation_threshold_ms`. It now flips when the metric form of this signal replaces the log lines, so operators are not opted into per-request log volume to get it. |
+| `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows `OBS_METRICS_ENABLED` | A counter that `/metrics` does not expose has no consumer. Set it explicitly to override in either direction. |
+
+Panic recovery is not a flag: it is unconditional. `/livez` and `/readyz` are unconditional
+for the same reason — the check is cheap and commits us to nothing.
+
+No flag's v1 default changes before GA. Three of them — metrics, audit, and saturation — have
+satisfied the condition they originally carried, and each stays off under the replacement
+condition named above rather than flipping. Tracing and OTLP push are opt-in permanently.
+
+### Schema Review Record
+
+**Outcome: reviewed internally with feedback incorporated, then circulated twice for wider
+review with no objections returned. The names ship as drafted.**
+
+The review ran in two phases ahead of the GA freeze.
+
+**Phase 1, internal review (from 2026-07-20).** The first draft drew substantive feedback
+from Solace engineering and field leadership, and it changed this schema. Each item below is
+checkable against the current document:
+
+| Feedback | What changed |
+|---|---|
+| Do not align exclusively to one telemetry vendor path | Metrics are designed for **two egresses**, Prometheus scrape and OTLP push, from one instrument set. The OTLP push half is not in this build; see the [Metrics](#metrics--planned-with-exceptions) section. |
+| Add `mcp_schema_version` and `mcp_build_info` | Both are in the schema and **emitted today**. |
+| Carry a broker identifier on metrics | `broker` is a label on the tool RED metrics, the SEMP metrics, and the broker reachability gauges. It is deliberately absent where no broker is in scope at the measurement point, such as authentication failures and authorization denials, which are decided before a broker is selected. |
+| Enrich `mcp_auth_failure_total` | It carries `reason`, across the five documented authentication-failure reasons. |
+| A two-month window before locking the schema is too limiting | The compatibility commitment is **bounded, not absolute**: additive within a MAJOR, with an announced deprecation path. It replaced an earlier unqualified "never rename". See [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy). |
+| The failure-event enum design needs scrutiny | `error_type` was promoted to a first-class shared label across metrics, logs, audit, and spans, so the four surfaces cannot disagree about why a call failed, and a test now asserts the vocabularies agree. |
+
+**Phase 2, wider solicitation (2026-07-27 and 2026-08-18).** Two further rounds went out over
+roughly seven weeks, the second asking named field and sales-engineering stakeholders to
+carry the brief and schema to key customers, on the explicit reasoning that changing the
+schema after GA is disruptive. **Neither round drew a response.**
+
+Read phase 2 as the absence of an objection rather than as positive confirmation: no response
+from a named customer operator came back, so nothing here records an operator having built a
+dashboard or a SIEM query against these names and found them workable. The fallback is
+deliberate. Names follow OpenTelemetry semantic conventions wherever conventions exist, and
+the compatibility policy above is bounded rather than absolute.
+
+**Feedback is still welcome and still worth sending**; see
+[How to Give Feedback](#how-to-give-feedback). What the freeze changes is the cost of acting
+on it, not our willingness to.
 
 ---
 
@@ -133,7 +193,7 @@ So a name you would change is worth flagging now. See
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.4**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.6**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.2**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -300,12 +360,24 @@ Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fai
 load with an explicit error rather than emitting nothing quietly, because both egresses
 share one meter provider.
 
-> **`OBS_METRICS_OTLP_ENABLED` does not exist in the current build.** The whole of the
-> preceding paragraph, the config-load check included, is the design shipping with Story 46
-> (SOL-152418). Today the variable is simply unread: setting it changes nothing, no push
-> happens, and the server starts clean rather than reporting an error — so a clean startup is
-> **not** evidence that push is on. The scrape endpoint (`OBS_METRICS_ENABLED`) is the only
-> metrics egress in this build.
+**Temporality is always cumulative, explicitly forced regardless of environment.** This server
+sets it in code rather than relying on the SDK's own default (which happens to already be
+cumulative) or on whatever `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` a customer may
+have set cluster-wide for other services. This matters because Prometheus's own OTLP receiver
+needs the experimental `otlp-deltatocumulative` feature flag to accept delta at all — shipping,
+or silently inheriting, delta would break the exact interop this egress exists to provide for a
+customer who points it at their own Prometheus.
+
+**Transport security.** TLS is the default: with no override, the exporter dials the collector
+over gRPC with the host's root CAs. That default is opted out of by the endpoint's own scheme —
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317` (the spelling most collector quickstarts use)
+or `OTEL_EXPORTER_OTLP_INSECURE=true` both downgrade to cleartext gRPC, silently, with no other
+signal that the choice was made. This stream carries broker aliases, tool names, `error_type`,
+and the identity resource (including `service.instance.id`, `cloud.region`) across a network
+boundary the in-cluster Prometheus scrape never crosses; in cleartext that is passive topology
+disclosure, and with no server authentication a collector can be impersonated to harvest it. Use
+an `https://` endpoint. For a private CA, set `OTEL_EXPORTER_OTLP_CERTIFICATE` (or the
+`_METRICS_` variant); for mTLS, the `_CLIENT_CERTIFICATE`/`_CLIENT_KEY` pair.
 
 ### Server and Scrape Health
 
@@ -610,32 +682,30 @@ increment is a no-op.
 
 ### OTLP Export Health
 
-Self-observation for the OTLP exporters. There are **two pairs, at two different maturities**,
-and the difference matters if you are about to point an alert at one of them.
+Self-observation for the OTLP exporters: two pairs, one per egress, both **[Implemented]** as
+of Story 46 (SOL-152418).
 
-**The span pair — [Implemented].**
+**The span pair.**
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_otel_spans_exported_total` | Counter | none | Solace |
 | `mcp_otel_spans_dropped_total` | Counter | `reason` | Solace |
 
-**The metrics pair — [Not yet emitted, designed].**
+**The metrics pair.**
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_otel_metrics_exported_total` | Counter | none | Solace |
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-> **The metrics pair is not emitted by the current build.** It is the self-observation
-> counterpart of OTLP metrics push, which ships with Story 46 (SOL-152418), and it is
-> registered only when that push is enabled (`OBS_METRICS_OTLP_ENABLED`). Both names and their
-> `reason` vocabulary are part of this schema and safe to write a rule against, but until
-> Story 46 lands the series are **absent, not zero** — an `absent()` alert on either fires
-> today for the mundane reason that the instrument does not exist. Alert on the span pair
-> below, and add the metrics pair when you enable push. This is the same treatment
-> [`broker_authz_denied`](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired)
-> and `mcp_audit_events_dropped_total` get: documented ahead of emission, marked as such.
+> **Registered only when OTLP metrics push is enabled** (`OBS_METRICS_OTLP_ENABLED`, Story 46,
+> SOL-152418). With push off, this pair's series are **absent, not zero** — the same treatment
+> `mcp_audit_events_dropped_total` gets: designed and schema-accepted, but a series only exists
+> once its emitter is both shipped and turned on. Unlike this pair, `mcp_broker_authz_denied_total`
+> needs no separate opt-in flag beyond `OBS_METRICS_ENABLED` itself — see [Broker-Side
+> Authorization Denials](#broker-side-authorization-denials). Alert on the span pair
+> unconditionally, and add the metrics pair once push is enabled in your deployment.
 
 **The span pair's reach depends on both flags, not just one.** The counters are always
 registered in-process while tracing is enabled (`OBS_TRACING_ENABLED`); they reach this scrape
@@ -644,36 +714,43 @@ surface only when a meter provider also exists to register them against, i.e. on
 only — reported solely by the periodic `event=otel_self_stats` INFO log (see [Distributed
 Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
-healthy rather than as "not exposed here."
-
-**The metrics pair's own flag is different: it is OTLP metrics push**
-(`OBS_METRICS_OTLP_ENABLED`), not `OBS_METRICS_ENABLED`, which governs the scrape surface alone
-(see [Metrics](#metrics--planned-with-exceptions)). So the two pairs can legitimately be in
+healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
+(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
+see [Metrics](#metrics--planned-with-exceptions)) — so the two pairs can legitimately be in
 different states in one process: spans exporting and their counters live, with the metrics
-pair absent because push is off.
+pair absent because push is off. `reason` is a closed set of four, `queue_full`,
+`export_timeout`, `export_error`, `shutdown` — but which of the four are live differs by pair,
+not a single caveat that applies to both:
 
-`reason` draws from the same closed set on both pairs — `queue_full`, `export_timeout`,
-`export_error`, `shutdown` — but the *vocabulary* being shared does not mean every value is
-live on both. `queue_full` is already reserved-but-inert on the span pair (next paragraph), and
-the design for the metrics pair expects only `export_timeout` and `export_error` to be
-reachable there: a periodic reader has no queue to overflow, and an incomplete shutdown flush
-happens after the scrape surface it would be read from is already gone. Treat the set as the
-bound on what a `reason` label can ever contain, not as a list of values you will observe.
-
-**`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
-SDK's batch span processor drops queue-overflow spans against an internal counter with no
-public accessor, so there is no supported way to surface that specific reason from outside the
-SDK today. The value stays in the schema for forward compatibility; do not alert on it as if it
-were live. `export_timeout`, `export_error`, and `shutdown` are all live and distinguish real
-causes: a gRPC-status timeout from the exporter, any other export failure (including a refused
-connection), and an in-progress export that didn't finish flushing before shutdown's deadline,
-respectively — `shutdown` counts one event per incomplete drain, not one per dropped span, since
-the SDK doesn't report how many spans it failed to flush.
+- **Span pair:** `export_timeout`, `export_error`, and `shutdown` are live and distinguish real
+  causes — a gRPC-status timeout from the exporter, any other export failure (including a
+  refused connection), and an in-progress export that didn't finish flushing before shutdown's
+  deadline, respectively; `shutdown` counts one event per incomplete drain, not one per dropped
+  span, since the SDK doesn't report how many spans it failed to flush. `queue_full` is
+  **reserved but currently inert** (SOL-152420): the OTel Go SDK's batch span processor drops
+  queue-overflow spans against an internal counter with no public accessor, so there is no
+  supported way to surface that specific reason from outside the SDK today. The value stays in
+  the schema for forward compatibility; do not alert on it as if it were live.
+- **Metrics pair:** only `export_timeout` and `export_error` are live. `queue_full` is not
+  merely un-called but **structurally inapplicable**: a `PeriodicReader` collects into a reused
+  buffer on its own goroutine and has no queue to overflow, unlike the span pair's batch
+  processor. `shutdown` is also not a counter on this pair — an incomplete flush logs a WARN
+  instead, because by the time `Provider.Shutdown` could record anything, that same call has
+  already torn down the reader the scrape reads from, making a counter touched there
+  unobservable rather than merely delayed. Do not alert on either as if they behaved like their
+  span-pair counterparts.
 
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
 collector is the thing that is down. The scrape path and the push path fail independently by
 design.
+
+**A NetworkPolicy egress rule to the collector's host and port is required** if your cluster
+enforces default-deny egress — a blocked gRPC dial fails silently rather than at startup, so the
+first sign of a missing rule is telemetry that never arrives, not an error anywhere in this
+server's own logs. The failure signature to alert on:
+`mcp_otel_metrics_dropped_total{reason="export_error"}` rising while
+`mcp_otel_metrics_exported_total` stays flat.
 
 ### `otel self stats` — periodic, when metrics are off
 
@@ -764,6 +841,12 @@ through the OTel meter API. They appear on `/metrics` but not on the OTLP metric
 (`OBS_METRICS_OTLP_ENABLED`). An OTLP-only consumer receives the `mcp_*` instruments and
 resource attributes, but not `go_*` or `process_*`. If your OTLP pipeline shows no `go_*`
 metrics, this is expected — scrape `/metrics` to get them.
+
+**Absent from the OTLP push egress (SOL-152418, Story 46).** These two collectors register
+directly against the Prometheus `client_golang` registry, never through the OTel meter provider
+the `mcp_*` instruments share — so the OTLP reader, which only observes what passes through that
+meter provider, never sees them. An OTLP-native APM ingesting this server's pushed metrics will
+not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
 
 ---
 
@@ -1464,8 +1547,9 @@ your own data-flow review before pointing this at a collector you don't operate.
 > onto every log line from immediately after config loads onward — the handful of log lines
 > emitted before config loads (the process banner and the config-load attempt itself) have no
 > identity to attach, since it's derived from config. The **OTLP push** query guidance below
-> describes that future egress (Story 46, not yet landed); the scrape (`target_info`) path is
-> live today._
+> describes that egress (SOL-152418, Story 46) — both it and the scrape (`target_info`) path
+> are live today, sharing this same resource by construction (both readers attach to the one
+> meter provider Story 14 built)._
 
 Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
 tell instances apart without a label duplicated onto every series. All five follow the
@@ -1906,9 +1990,8 @@ tag is stable and safe to cite in your own review notes.
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
 - **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes--implemented).
-- **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`** (the *decision* is
-  settled; the flag itself ships with Story 46, SOL-152418, and is unread in the current
-  build — see [Metrics](#metrics--planned-with-exceptions)). We considered activating
+- **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`** (ships with Story 46,
+  SOL-152418 — see [Metrics](#metrics--planned-with-exceptions)). We considered activating
   push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
   what your collectors already configure. We rejected it: that variable is frequently set
   cluster-wide for other services, so an upgrade could silently start egressing telemetry from
@@ -2033,7 +2116,7 @@ telemetry format. The wire formats are the open ones your existing stack already
 | Signal | Format | Transport | Status |
 |---|---|---|---|
 | Metrics | OpenTelemetry, plus **Prometheus text exposition additionally** for scrape-based stacks | `/metrics` scrape endpoint (`OBS_METRICS_ENABLED`) | Live |
-| Metrics | The same OpenTelemetry instruments | OTLP push (`OBS_METRICS_OTLP_ENABLED`) | Ships with Story 46 (SOL-152418); not in the current build |
+| Metrics | The same OpenTelemetry instruments | OTLP push (`OBS_METRICS_OTLP_ENABLED`) | Live (Story 46, SOL-152418) |
 | Traces | OpenTelemetry | OTLP over gRPC (`OBS_TRACING_ENABLED`) | Live |
 | Audit trail | Structured JSON on stderr, tagged `"event": "audit"` | Your log shipper, to any sink you route it to | Live |
 
@@ -2042,9 +2125,9 @@ Three things follow, and each is a commitment rather than an accident of the cur
 - **Metrics are designed for two egresses, not one.** OTLP push suits an OTLP-native APM; the
   Prometheus scrape endpoint suits a scrape-based stack with no collector in the path. Both
   observe one instrument set, so the two cannot disagree, and neither is a second-class path.
-  The scrape endpoint is live today; push ships with Story 46. Two things stay asymmetric even
-  then: the `go_*`/`process_*` collectors are scrape-only, and push is a separate flag — see
-  [Metrics](#metrics--planned-with-exceptions) and [Go Runtime and Process
+  Both are live today, each behind its own flag, both off by default (door-closing policy) — see
+  [Metrics](#metrics--planned-with-exceptions). One asymmetry stays even with both on: the
+  `go_*`/`process_*` collectors are scrape-only — see [Go Runtime and Process
   Metrics](#go-runtime-and-process-metrics).
 - **No Solace-proprietary telemetry format appears anywhere.** No custom exporter, no
   Solace-specific wire protocol, no agent you have to install. Where OpenTelemetry publishes
