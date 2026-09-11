@@ -54,6 +54,21 @@ type Result struct {
 	StatusCode int            // HTTP status code
 }
 
+// SEMPCodePermissionDenied is meta.error.code's value when the broker refuses
+// the exchanged identity for permission reasons. Named so classification
+// callers (internal/tools) compare against this constant rather than a bare
+// 72 repeated at each site.
+//
+// The SEMPStatus string paired with this code is deliberately not pinned
+// here, and not verified: no real broker capture of a code-72 response
+// exists in this repo. The struct comment below paraphrases it as
+// "UNAUTHORIZED", but that is a rough gloss, not a captured payload — and
+// test/integration's own mock fixture for this code uses "FORBIDDEN", a
+// hand-written test value with no more authority. Classification against
+// this code is therefore numeric-only rather than also matching a status
+// string via isSEMPStatus (internal/tools/errors.go).
+const SEMPCodePermissionDenied = 72
+
 // SEMPError is a structured error returned when a SEMP API call receives a
 // non-2xx HTTP response. It preserves the HTTP status code, operation ID, and
 // parsed meta.error fields so callers can extract structured data via

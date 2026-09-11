@@ -83,6 +83,10 @@ func mcpFamilies(body string) string {
 // internal/observability/panics because its call sites reach it as process state
 // rather than through a provider; the golden file is still the contract for how
 // it appears on the wire.
+//
+// mcp_broker_authz_denied_total (SOL-153332, Story 49) is a ToolMetrics
+// instrument like the tool-RED counters above, so it is seeded here the same
+// way: one fixed sample.
 func TestGoldenSchema(t *testing.T) {
 	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
@@ -100,6 +104,10 @@ func TestGoldenSchema(t *testing.T) {
 	tm.Record(context.Background(), "test-tool", "test-broker", "success", "", 5*time.Millisecond)
 	tm.IncActive(context.Background())
 	tm.DecActive(context.Background())
+	// mcp_broker_authz_denied_total (SOL-153332, Story 49): same
+	// only-renders-after-observed rule as the tool-RED instruments above, so a
+	// fixed sample seeds it into the fixture.
+	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", "permission_denied")
 
 	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
 	// labels and a 5ms duration keep the fixture stable.

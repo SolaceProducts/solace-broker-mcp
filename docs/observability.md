@@ -35,7 +35,7 @@
 | Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
 | Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
 | Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
-| Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) · [Canonical Audit Queries](#canonical-audit-queries) |
+| Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) · [Canonical Audit Queries](#canonical-audit-queries) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
 | Check this works with your existing stack | [Vendor Neutrality](#vendor-neutrality) |
@@ -59,7 +59,7 @@ The Broker MCP Server is designed to emit three observability signals:
   compliance evidence. Note "destructive", not "state-changing": object creation is not
   audited today, and a call that fails broker resolution or argument validation writes no
   record either — see
-  [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) for both
+  [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) for both
   gaps.
 - **Distributed traces**, exported over OTLP, for end-to-end request diagnosis.
 
@@ -81,8 +81,8 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), and `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)). `mcp_broker_authz_denied_total` is documented but **not** emitted yet (see [Broker-Side Authorization Denials](#broker-side-authorization-denials--not-yet-emitted)). Assume any other metric below is not yet emitted. |
-| Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
+| Audit trail | **[Interim — records implemented, drop counter not yet wired]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is now emitted. The `mcp_audit_events_dropped_total` counter is the one piece not yet wired. See [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -193,8 +193,8 @@ So a name you would change is worth flagging now. See
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.5**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
+- `metrics_schema` (current: **1.6**), surfaced by the `mcp_schema_version` metric.
+- `audit_schema` (current: **1.2**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
 
@@ -262,7 +262,7 @@ values in one field — technically possible. It still gets notice-then-cutover,
 dual-emitting the discriminator doubles **every** audit record for the whole window, not only
 `operation` records, doubling volume and retention on the one signal you pay a SIEM to
 store — a much larger cost than the [Audit
-Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) coverage gaps
+Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) coverage gaps
 this schema already tolerates.
 
 **The two schemas version independently, except where a vocabulary is shared.** A metrics
@@ -332,14 +332,13 @@ here can be reconciled.
 > `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)).
 > Assume any other metric below is not yet emitted._
 >
-> **Two metric groups below are documented but not emitted by any build yet**, and are marked
-> as such where they are defined: the OTLP **metrics** export-health pair
+> **One metric group below is documented but not emitted by any build yet**, and is marked as
+> such where it is defined: the OTLP **metrics** export-health pair
 > `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total{reason}` (see [OTLP
-> Export Health](#otlp-export-health)) and `mcp_broker_authz_denied_total{tool,broker,reason}`
-> (see [Broker-Side Authorization
-> Denials](#broker-side-authorization-denials--not-yet-emitted)). Their series are **absent,
-> not zero**, so an `absent()` alert on either fires today for the mundane reason that the
-> instrument does not exist.
+> Export Health](#otlp-export-health)). Its series are **absent, not zero**, so an `absent()`
+> alert on it fires today for the mundane reason that the instrument does not exist.
+> `mcp_broker_authz_denied_total{tool,broker,reason}` (see [Broker-Side Authorization
+> Denials](#broker-side-authorization-denials)) is emitted as of SOL-153332.
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
@@ -429,12 +428,12 @@ refused by tool authorization never reaches one, so it is absent here and counte
   call) and `unknown` (an alias that is not configured). The log line keeps the raw alias the
   caller typed; only the metric label is canonicalized, so a typo cannot mint a new series.
 - `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
-- `error_type`: the failure cause, from the twelve values in
+- `error_type`: the failure cause, from the thirteen values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
 **Cardinality:** all label domains are finite. `error_type` is non-empty only on the error
-path and is drawn from the closed set of twelve values above; `outcome` is one of three; and
+path and is drawn from the closed set of thirteen values above; `outcome` is one of three; and
 `broker` is bounded to the configured aliases plus the `none`/`unknown` sentinels. The series
 count is not a clean product of these domains, because several error types only ever occur
 before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, and
@@ -575,17 +574,14 @@ second, where `|reason|` grows only on distinct HTTP error status codes seen per
 Note the scope: this counter is **hop 1 only** — this server refusing an authenticated caller
 the tool they asked for. A refusal by the *broker* is a different counter, next.
 
-### Broker-Side Authorization Denials — [Not yet emitted]
+### Broker-Side Authorization Denials
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_broker_authz_denied_total` | Counter | `tool`, `broker`, `reason` | Solace |
 
-> **Not emitted yet.** The name, its label set, and its `reason` vocabulary are part of this
-> schema and safe to write a rule against today; the emission site ships with Story 49
-> (SOL-153332), alongside the `broker_authz_denied` audit record this counter mirrors. Until
-> then the series is **absent, not zero**. This matches the treatment the audit record itself
-> gets — see [Authentication Events](#authentication-events).
+The hop-2 counterpart to `mcp_authz_denied_total` above: a broker-side (SEMP) permission
+denial rather than an MCP-server-side one (SOL-153332, Story 49).
 
 - `reason` is a closed set of one today: `permission_denied`. Same value as the
   `broker_authz_denied` audit record, taken from the same decision, so the metric and the
@@ -617,7 +613,6 @@ the tool they asked for. A refusal by the *broker* is a different counter, next.
 by the time the broker refused, so the same call also produces an `mcp_tool_invocation_total`
 sample with `outcome=error` and — for a destructive tool — an `operation` audit record.
 Counting denials means summing this counter, not counting calls.
-
 ### Audit Pipeline Health
 
 | Metric | Type | Labels | Basis |
@@ -706,10 +701,11 @@ of Story 46 (SOL-152418).
 
 > **Registered only when OTLP metrics push is enabled** (`OBS_METRICS_OTLP_ENABLED`, Story 46,
 > SOL-152418). With push off, this pair's series are **absent, not zero** — the same treatment
-> [`broker_authz_denied`](#audit-trail--interim--all-record-types-except-broker_authz_denied)
-> and `mcp_audit_events_dropped_total` get: designed and schema-accepted, but a series only
-> exists once its emitter is both shipped and turned on. Alert on the span pair unconditionally,
-> and add the metrics pair once push is enabled in your deployment.
+> `mcp_audit_events_dropped_total` gets: designed and schema-accepted, but a series only exists
+> once its emitter is both shipped and turned on. Unlike this pair, `mcp_broker_authz_denied_total`
+> needs no separate opt-in flag beyond `OBS_METRICS_ENABLED` itself — see [Broker-Side
+> Authorization Denials](#broker-side-authorization-denials). Alert on the span pair
+> unconditionally, and add the metrics pair once push is enabled in your deployment.
 
 **The span pair's reach depends on both flags, not just one.** The counters are always
 registered in-process while tracing is enabled (`OBS_TRACING_ENABLED`); they reach this scrape
@@ -854,16 +850,17 @@ not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
 
 ---
 
-## Audit Trail — [Interim — all record types except `broker_authz_denied`]
+## Audit Trail — [Interim — records implemented, drop counter not yet wired]
 
-> _Status: **[Interim]** (SOL-152090, SOL-152096, SOL-152097). `operation` records for
-> destructive tool calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and the whole
-> record schema below is enforced in code by one constructor. `auth_success`, `auth_failure`,
-> `authz_denied`, and `broker_auth_retry` are also emitted today, behind the same flag
-> (SOL-152097) — see [Authentication Events](#authentication-events). `audit_drop` is
-> emitted. The one record type still unemitted is `broker_authz_denied`, landing with
-> SOL-153332. Write your SIEM rules against the schema; expect that one record type to start
-> appearing rather than to change shape._
+> _Status: **[Interim]** (SOL-152090, SOL-152096, SOL-152097, SOL-153332). `operation`
+> records for destructive tool calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and
+> the whole record schema below is enforced in code by one constructor. `auth_success`,
+> `auth_failure`, `authz_denied`, and `broker_auth_retry` are also emitted today, behind the
+> same flag (SOL-152097) — see [Authentication Events](#authentication-events).
+> `broker_authz_denied` is emitted as of this change (SOL-153332) — see [Authentication
+> Events](#authentication-events) for its hop-1/hop-2 pairing with `authz_denied`. `audit_drop`
+> is emitted. Every record type in the schema below is now emitted; write your SIEM rules
+> against the schema as the source of truth, not against this status note._
 
 One JSON event is emitted per **destructive** tool call (for example `disconnect-client`,
 `delete-queue`, `delete-message-vpn`), at completion, with the outcome known. Read-only calls
@@ -932,13 +929,13 @@ records means your log level, not your flag.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
-| `error_type` | Why an operation failed; present on `outcome: error` only. Five of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
+| `error_type` | Why an operation failed; present on `outcome: error` only. Six of the thirteen values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
 | `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
 | `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
-| `audit_schema_version` | The schema version, for query pinning | string (`1.1`) |
+| `audit_schema_version` | The schema version, for query pinning | string (`1.2`) |
 
 **`audit_event_type`** is a closed set of seven: `operation` (a destructive tool call),
 `auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`, `broker_auth_retry`,
@@ -1170,11 +1167,11 @@ produces two, and both are correct. (On a non-destructive tool it produces one, 
 tool never writes an `operation` record at all.) Match on `audit_event_type` instead of
 counting.
 
-> **Not emitted yet.** The record type is part of the schema and the constructor accepts it,
-> so a SIEM rule can be written against it today. The emission site ships with SOL-153332.
-> Its metric counterpart, `mcp_broker_authz_denied_total`, is documented under [Broker-Side
-> Authorization Denials](#broker-side-authorization-denials--not-yet-emitted) and ships in the
-> same story.
+> **Emitted as of SOL-153332.** Classified at the tools layer from SEMPv1's `ErrorKindPermission`
+> and SEMPv2's error code 72 — no new broker-response parsing needed, since both were already
+> classified there for the agent-facing error message. Its metric counterpart,
+> `mcp_broker_authz_denied_total`, is documented under [Broker-Side Authorization
+> Denials](#broker-side-authorization-denials) and ships in the same story.
 
 ### Canonical Audit Queries
 
@@ -1199,7 +1196,7 @@ contracts.
 **1. Destructive-operation review — who changed what.**
 
 ```
-event="audit" AND audit_schema_version="1.1" AND audit_event_type="operation"
+event="audit" AND audit_schema_version="1.2" AND audit_event_type="operation"
   → group by principal.sub
   → report tool, broker, outcome, timestamp_utc, correlation_id
 ```
@@ -1207,7 +1204,7 @@ event="audit" AND audit_schema_version="1.1" AND audit_event_type="operation"
 In Splunk SPL:
 
 ```
-index=<your_audit_index> event="audit" audit_schema_version="1.1" audit_event_type="operation"
+index=<your_audit_index> event="audit" audit_schema_version="1.2" audit_event_type="operation"
 | stats count, values(tool) as tools, values(broker) as brokers, values(outcome) as outcomes,
     values(timestamp_utc) as timestamps, values(correlation_id) as correlation_ids
     by principal.sub
@@ -1219,7 +1216,7 @@ made it. Two limits to state before a reviewer treats this as a complete record 
 - **It is not every state change.** The `create-*` tools and the `clear-*-stats` tools are
   annotated non-destructive and emit no `operation` record, so this query returns zero object
   creations. See the coverage note under [Audit
-  Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied).
+  Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired).
 - **`principal.sub` is absent** in a deployment running `mcp_client_auth.mode: disabled`, and
   resolving it to a named human is your IdP's job — see
   [Q-013](#decided-since-the-first-draft).
@@ -1227,7 +1224,7 @@ made it. Two limits to state before a reviewer treats this as a complete record 
 **2. Rejected credentials — who could not get in.**
 
 ```
-event="audit" AND audit_schema_version="1.1" AND audit_event_type="auth_failure"
+event="audit" AND audit_schema_version="1.2" AND audit_event_type="auth_failure"
   → group by reason
 ```
 
@@ -1240,7 +1237,7 @@ Events](#authentication-events)).
 **3. Denied privileged attempts, hop 1 — this server refused the tool.**
 
 ```
-event="audit" AND audit_schema_version="1.1" AND audit_event_type="authz_denied"
+event="audit" AND audit_schema_version="1.2" AND audit_event_type="authz_denied"
   → group by reason, tool
 ```
 
@@ -1250,16 +1247,12 @@ is no `operation` record and no tool-invocation metric sample for them.
 **4. Denied privileged attempts, hop 2 — the broker refused the operation.**
 
 ```
-event="audit" AND audit_schema_version="1.1" AND audit_event_type="broker_authz_denied"
+event="audit" AND audit_schema_version="1.2" AND audit_event_type="broker_authz_denied"
   → group by reason, tool, broker
 ```
 
 `reason` is `permission_denied`. Unlike hop 1, the call ran: expect a coexisting `operation`
 record on the same `correlation_id` for a destructive tool.
-
-> **Query 4 returns nothing today.** `broker_authz_denied` is designed and schema-accepted but
-> not yet emitted (Story 49, SOL-153332). Write the rule now so it starts working when the
-> story lands; do not read its silence as evidence of no broker-side denials.
 
 #### A complete refusal picture needs queries 3 and 4 together
 
@@ -1475,7 +1468,7 @@ below), none of which reach the tool dispatcher. Select those on
 `http.response.status_code` instead, and **not** on the span status: following the OTel server
 convention, `otelhttp` sets the status to `Error` only for 5xx, so a 403 or 413 entry span has
 status `Unset`. Only
-`tools.CallTool` carries `error_type`: the twelve-value set is scoped to tool-invocation outcomes,
+`tools.CallTool` carries `error_type`: the thirteen-value set is scoped to tool-invocation outcomes,
 and the executor and SEMP layers have no value in it that describes an orchestration or
 transport failure — the same reasoning that exempts `tokenexchange.Exchange` below. Those spans
 report `outcome: error` and an `Error` span status, and the classification for the call as a
@@ -1501,7 +1494,7 @@ in the audit record, inside your own log pipeline. (`tokenexchange.Exchange` is 
 does record its exception verbatim — see the warning at the end of this section.)
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
-twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+thirteen-value `error_type` set above is scoped to tool-invocation outcomes and has no value
 describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
 transport, request-build). The span still carries the actual cause via the span's recorded
 exception event and its status (`codes.Error`), just not through this shared field. A future
@@ -1694,7 +1687,7 @@ small enough to group by on a dashboard while still carrying the detail an inves
 
 ### `error_type`
 
-Present only on `outcome: error`, drawn from a closed set of twelve values:
+Present only on `outcome: error`, drawn from a closed set of thirteen values:
 
 | Value | Meaning |
 |---|---|
@@ -1710,15 +1703,16 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | `nil_result` | The tool returned no result. |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
+| `broker_permission_denied` | The broker refused the exchanged identity for the SEMP operation behind this tool (a hop-2 denial, SOL-153332, Story 49) — paired with the `broker_authz_denied` audit event. |
 
-**Only five of these reach an audit record.** The twelve values above are the full vocabulary
+**Only six of these reach an audit record.** The thirteen values above are the full vocabulary
 for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
 record is written only for a call that actually reached the tool, so only the failures that
 can happen at or after dispatch appear on one:
 
 | Reaches an `operation` audit record | Never appears on an audit record |
 |---|---|
-| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
+| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic`, `broker_permission_denied` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
 
 The right-hand column is every way a call is rejected **before** anything is attempted
 against a broker: an unregistered tool, an absent or unresolvable broker, arguments that
@@ -1962,8 +1956,8 @@ the review.
    inside it (Story 27, now shipped), matches how you would query retries, and whether you
    expect `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
-   cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the twelve
+   cause in a separate `error_type` of thirteen values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the thirteen
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**
