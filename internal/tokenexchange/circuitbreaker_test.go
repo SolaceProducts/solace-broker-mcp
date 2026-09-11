@@ -19,9 +19,103 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sony/gobreaker/v2"
 )
+
+func TestBreakerStateSnapshot(t *testing.T) {
+	t.Run("disabled breaker is absent", func(t *testing.T) {
+		e, err := New(validParams(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := e.BreakerStateSnapshot(); ok {
+			t.Fatalf("BreakerStateSnapshot() = %+v, true; want absent", got)
+		}
+	})
+
+	t.Run("enabled breaker starts closed", func(t *testing.T) {
+		p := validParams(t)
+		cfg := DefaultCircuitBreakerConfig()
+		p.CircuitBreaker = &cfg
+		e, err := New(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := e.BreakerStateSnapshot()
+		if !ok {
+			t.Fatal("BreakerStateSnapshot() absent for enabled breaker")
+		}
+		if got.Name != breakerName || got.State != gobreaker.StateClosed.String() {
+			t.Errorf("BreakerStateSnapshot() = %+v, want name=%q state=%q",
+				got, breakerName, gobreaker.StateClosed.String())
+		}
+	})
+}
+
+// TestBreakerStateSnapshot_DoesNotMaterializeHalfOpen proves the observability
+// seam is passive. gobreaker.State() would advance an expired open breaker to
+// half-open; repeated snapshots must leave it open until a real Execute call
+// arrives and admits the recovery probe.
+func TestBreakerStateSnapshot_DoesNotMaterializeHalfOpen(t *testing.T) {
+	p := validParams(t)
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 1
+	cfg.MinimumRequests = 1_000_000 // isolate the consecutive rule
+	cfg.OpenStateDuration = 20 * time.Millisecond
+	p.CircuitBreaker = &cfg
+
+	e, err := New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = e.breaker.Execute(func() (*Token, error) {
+		return nil, rawWith(FailureClassNetwork)
+	})
+	if err == nil {
+		t.Fatal("tripping Execute() error = nil, want network failure")
+	}
+
+	snapshot, ok := e.BreakerStateSnapshot()
+	if !ok || snapshot.State != gobreaker.StateOpen.String() {
+		t.Fatalf("snapshot after trip = %+v, %v; want open", snapshot, ok)
+	}
+
+	time.Sleep(2 * cfg.OpenStateDuration)
+	for range 3 {
+		snapshot, ok = e.BreakerStateSnapshot()
+		if !ok || snapshot.State != gobreaker.StateOpen.String() {
+			t.Fatalf("snapshot after open timeout = %+v, %v; want stored open state", snapshot, ok)
+		}
+	}
+	if got := e.breaker.Counts().Requests; got != 0 {
+		t.Fatalf("breaker requests after passive snapshots = %d, want 0", got)
+	}
+
+	_, err = e.breaker.Execute(func() (*Token, error) {
+		return &Token{}, nil
+	})
+	if err != nil {
+		t.Fatalf("first post-timeout probe error = %v, want nil", err)
+	}
+	snapshot, ok = e.BreakerStateSnapshot()
+	if !ok || snapshot.State != gobreaker.StateHalfOpen.String() {
+		t.Fatalf("snapshot after recovery probe = %+v, %v; want half-open", snapshot, ok)
+	}
+
+	_, err = e.breaker.Execute(func() (*Token, error) {
+		return &Token{}, nil
+	})
+	if err != nil {
+		t.Fatalf("second recovery probe error = %v, want nil", err)
+	}
+	snapshot, ok = e.BreakerStateSnapshot()
+	if !ok || snapshot.State != gobreaker.StateClosed.String() {
+		t.Fatalf("snapshot after recovery = %+v, %v; want closed", snapshot, ok)
+	}
+}
 
 // exhaustedWith wraps a transport-class *ExchangeError the way
 // classifyRetryOutcome does: it replaces the sentinel with
