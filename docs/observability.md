@@ -1920,8 +1920,32 @@ not the application's.** In particular, **`/readyz` is not a memory-pressure sig
 reports the server's own initialization state and will happily return 200 from a pod moments
 from being OOM-killed. Nothing in process is watching the heap, and nothing is meant to be.
 
-The 512Mi ceiling over a 128Mi request leaves headroom for the in-process session map
-described above plus buffered SEMP responses under concurrent tool calls.
+**Set `GOMEMLIMIT` to 75% of `limits.memory`.** The Go runtime never reads a cgroup *memory*
+limit — it reads the cgroup CPU limit for `GOMAXPROCS`, but with `GOMEMLIMIT` unset its heap
+target is driven by `GOGC` off the live heap with **no ceiling at all**, so the process has no
+reason to collect garbage it could collect and RSS settles far above what the pod needs. A
+`limits.memory` the runtime has not been told about is a cap it cannot aim below.
+`deploy/kubernetes/deployment.yaml` therefore ships `GOMEMLIMIT: "384MiB"` alongside
+`limits.memory: 512Mi`; raise the two together and keep the ratio. The rule is stated against
+`limits.memory` because that is the number an operator sets.
+
+Two properties of the setting matter when you change it. `GOMEMLIMIT` is a **soft** limit: the
+runtime spends more GC CPU to stay under it and, if it cannot, exceeds it rather than failing
+the allocation — it does not replace `limits.memory`, it keeps the pod away from it. And it
+covers only runtime-managed memory, excluding the binary's own mappings and anything the OS
+holds on the process's behalf; the 25% reserve is what those cost, and that overhead is
+roughly fixed rather than proportional, so at a much larger `limits.memory` the ratio is
+conservative. Note the spelling: Go's suffix is `MiB`, not Kubernetes' `Mi`, and a value the
+runtime cannot parse is fatal at startup — the pod crash-loops rather than falling back.
+
+The shipped 512Mi covers **2,000 concurrent sessions at the default
+`semp.request_min_interval`, with `GOMEMLIMIT` set** — all three conditions, not just the
+session count. **Changing `semp.request_min_interval` changes the memory profile**, and
+setting it to `0` changes it most: a deployment that does either is outside the measured
+envelope and needs its own measurement before its `limits.memory` can be trusted. No sizing
+is published for that case. The measurements behind these numbers — a 10-hour soak and a
+`GOMEMLIMIT` ladder — are recorded on
+[SOL-154158](https://sol-jira.atlassian.net/browse/SOL-154158).
 
 Two caveats on that ceiling. There is no session-count cap — sessions are bounded only by the
 2h idle timeout — so sustained growth ends in an OOM kill rather than backpressure. And
@@ -1930,6 +1954,15 @@ limit together; OOM is involuntary, so neither the PDB nor the rollout strategy 
 against losing both. Until a session gauge exists (metrics are `[Planned]` above, and no
 session metric appears in the proposed set), the signal to watch is the container's own
 `container_memory_working_set_bytes` against its limit, via cAdvisor or `kubectl top pods`.
+
+**With `GOMEMLIMIT` set, read that signal differently.** The working set now plateaus near
+`GOMEMLIMIT` by design instead of climbing toward `limits.memory`, so a saturated pod and a
+comfortable one look alike on that one line: distance-to-limit is no longer the leading
+indicator it was. What moves instead is GC effort — a pod holding the plateau by collecting
+harder shows it in `go_gc_duration_seconds` and `go_memstats_heap_inuse_bytes` on `/metrics`
+(`OBS_METRICS_ENABLED`, off by default), and in its CPU. Watch the plateau being *held*
+rather than the gap to the limit, and treat the working set crossing `GOMEMLIMIT` as the
+signal that the soft limit is no longer being met.
 
 ---
 

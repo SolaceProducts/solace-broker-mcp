@@ -14,6 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The shipped Kubernetes deployment now keeps the pod well clear of its own memory limit
+  instead of running just under it: `deploy/kubernetes/deployment.yaml` sets
+  `GOMEMLIMIT: "384MiB"`, 75% of its unchanged `limits.memory: 512Mi`, as a recommendation an
+  operator can carry to other sizes — raise the two together and keep the ratio. **The Go
+  runtime never reads a cgroup memory limit** (it reads the cgroup CPU limit for `GOMAXPROCS`,
+  which is what makes the omission easy to miss): with `GOMEMLIMIT` unset the heap target is
+  driven by `GOGC` off the live heap with no ceiling at all, so the process has no reason to
+  collect garbage it could collect. Measured at 2,000 concurrent sessions at the default
+  `semp.request_min_interval`, peak RSS sat at 497.9 MB — 7% under a 512Mi cap the runtime was
+  never told about — and fell to about 405 MB with `GOMEMLIMIT` set, throughput unchanged
+  inside the noise floor. `GOMEMLIMIT` is a **soft** limit and does not replace
+  `limits.memory`; it keeps the pod away from it. Because the working set now plateaus near
+  `GOMEMLIMIT` by design rather than climbing, `docs/observability.md` also corrects the
+  monitoring advice that pointed at distance-to-limit as the leading indicator, and notes that
+  Go's byte suffix is `MiB` rather than Kubernetes' `Mi` — an unparseable value is fatal at
+  startup, so a mis-spelled edit crash-loops the pod rather than being ignored.
+- `docs/observability.md` no longer claims that the 512Mi ceiling over a 128Mi request "leaves
+  headroom" for the session map and buffered SEMP responses. That sentence was unconditioned;
+  the sizing it described holds only at the default `semp.request_min_interval`, only at the
+  measured 2,000-session count, and only with `GOMEMLIMIT` set, and all three conditions are
+  now stated. Changing `semp.request_min_interval` puts a deployment outside the measured
+  envelope and needs its own measurement — no sizing is published for that case. Manifest and
+  documentation only; no code change. Tracked under SOL-154328, measured under SOL-154158.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added

@@ -15,8 +15,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -164,4 +167,156 @@ func TestShippedKubernetesConfigMapLoads(t *testing.T) {
 			"produces a crash-looping pod: %v", err)
 	}
 	assertShipsASharedToken(t, cfg, "deploy/kubernetes/configmap.yaml")
+}
+
+// TestShippedGOMEMLIMITTracksMemoryLimit guards the coupling between
+// GOMEMLIMIT and limits.memory in deploy/kubernetes/deployment.yaml
+// (SOL-154328, measured under SOL-154158). Two ways that pairing rots, both of
+// which reach the operator as a broken pod rather than a review comment:
+//
+//   - Someone raises limits.memory and leaves GOMEMLIMIT behind. The manifest
+//     comment says to move them together, and a comment is not a guard. The
+//     pod still starts, so nothing fails — it just quietly gives back the
+//     headroom the limit was raised to buy.
+//   - Someone writes the Kubernetes byte suffix. Go's parser accepts MiB and
+//     not Mi, and rejects a malformed GOMEMLIMIT by calling throw() during
+//     schedinit, so the process dies before main with no config error and no
+//     fallback: the pod CrashLoopBackOffs on a one-character edit.
+//
+// The ratio is a recommendation, so this asserts the shipped values match it
+// rather than that any particular ratio is correct. Changing the shipped ratio
+// deliberately means changing it here too.
+func TestShippedGOMEMLIMITTracksMemoryLimit(t *testing.T) {
+	raw, err := os.ReadFile(repoPath("deploy/kubernetes/deployment.yaml"))
+	if err != nil {
+		t.Fatalf("read Kubernetes Deployment: %v", err)
+	}
+
+	var dep struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Env []struct {
+							Name  string `yaml:"name"`
+							Value string `yaml:"value"`
+						} `yaml:"env"`
+						Resources struct {
+							Limits map[string]string `yaml:"limits"`
+						} `yaml:"resources"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(raw, &dep); err != nil {
+		t.Fatalf("parse Kubernetes Deployment: %v", err)
+	}
+	containers := dep.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("deploy/kubernetes/deployment.yaml has %d containers, want 1; "+
+			"this test reads the first one's env and resources", len(containers))
+	}
+	c := containers[0]
+
+	var gomemlimit string
+	found := false
+	for _, e := range c.Env {
+		if e.Name == "GOMEMLIMIT" {
+			gomemlimit, found = e.Value, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("deploy/kubernetes/deployment.yaml no longer sets GOMEMLIMIT. The Go runtime " +
+			"never reads a cgroup memory limit, so without it the heap target has no ceiling " +
+			"and the pod settles near limits.memory instead of below it (SOL-154158)")
+	}
+
+	// Go accepts B, KiB, MiB, GiB, TiB (runtime/extern.go). Kubernetes' own
+	// Mi/Gi are NOT among them, and are the likely mistake here.
+	limitBytes, err := parseGoByteCount(gomemlimit)
+	if err != nil {
+		t.Fatalf("GOMEMLIMIT=%q in deploy/kubernetes/deployment.yaml is not a byte count the "+
+			"Go runtime accepts (%v). Suffixes are B, KiB, MiB, GiB, TiB — note MiB, not "+
+			"Kubernetes' Mi. The runtime throws on a malformed value during startup, so this "+
+			"ships a pod that crash-loops before main with no config error", gomemlimit, err)
+	}
+
+	memLimit, ok := c.Resources.Limits["memory"]
+	if !ok {
+		t.Fatal("deploy/kubernetes/deployment.yaml sets no resources.limits.memory; " +
+			"GOMEMLIMIT is expressed as a fraction of it")
+	}
+	capBytes, err := parseK8sByteCount(memLimit)
+	if err != nil {
+		t.Fatalf("resources.limits.memory=%q: %v", memLimit, err)
+	}
+
+	// The shipped recommendation: GOMEMLIMIT at 75% of limits.memory.
+	const wantRatio = 0.75
+	want := int64(float64(capBytes) * wantRatio)
+	if limitBytes != want {
+		t.Fatalf("GOMEMLIMIT=%q (%d bytes) is %.1f%% of limits.memory=%q (%d bytes); the "+
+			"shipped recommendation is %.0f%% (%d bytes). Raise limits.memory and GOMEMLIMIT "+
+			"together and keep the ratio — see docs/observability.md § \"Resource requests "+
+			"and limits\" (SOL-154328)",
+			gomemlimit, limitBytes, 100*float64(limitBytes)/float64(capBytes),
+			memLimit, capBytes, 100*wantRatio, want)
+	}
+}
+
+// parseGoByteCount accepts exactly what the Go runtime accepts for GOMEMLIMIT:
+// a decimal integer with an optional B/KiB/MiB/GiB/TiB suffix (IEC, powers of
+// two). Deliberately strict — the point is to reject Kubernetes' Mi/Gi, which
+// the runtime rejects too, fatally and at startup.
+func parseGoByteCount(s string) (int64, error) {
+	for _, u := range []struct {
+		suffix string
+		scale  int64
+	}{
+		{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"B", 1},
+	} {
+		digits, ok := strings.CutSuffix(s, u.suffix)
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%q is not a decimal integer before the %s suffix", digits, u.suffix)
+		}
+		return n * u.scale, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("no recognized suffix (B, KiB, MiB, GiB, TiB) and not a bare byte count")
+	}
+	return n, nil
+}
+
+// parseK8sByteCount handles the Kubernetes quantity suffixes this manifest
+// plausibly uses for memory. Only what is needed to read limits.memory.
+func parseK8sByteCount(s string) (int64, error) {
+	for _, u := range []struct {
+		suffix string
+		scale  int64
+	}{
+		{"Ti", 1 << 40}, {"Gi", 1 << 30}, {"Mi", 1 << 20}, {"Ki", 1 << 10},
+		{"T", 1e12}, {"G", 1e9}, {"M", 1e6}, {"k", 1e3},
+	} {
+		digits, ok := strings.CutSuffix(s, u.suffix)
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%q is not a decimal integer before the %s suffix", digits, u.suffix)
+		}
+		return n * u.scale, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("unrecognized Kubernetes quantity %q", s)
+	}
+	return n, nil
 }
