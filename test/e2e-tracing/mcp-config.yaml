@@ -1,0 +1,15 @@
+port: 9090
+listen_address: "0.0.0.0"
+log_level: info
+
+mcp_client_auth:
+  mode: static
+  dev_token: "${MCP_DEV_TOKEN}"
+
+brokers:
+  solace:
+    url: "http://solace:8080"
+    auth:
+      mode: basic
+      username: "admin"
+      password: "${BROKER_PASSWORD}"

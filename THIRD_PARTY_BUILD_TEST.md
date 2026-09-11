@@ -240,6 +240,8 @@ published artifact; see [Scope](#scope).
 | `solace/solace-pubsub-standard` | `latest` | Broker fixture for e2e suites | Solace, proprietary |
 | `quay.io/keycloak/keycloak` | `26.2.5` | identity provider (IdP) fixture for the OAuth e2e suite | Apache-2.0 |
 | `apache/kafka` | `3.7.0` | Broker fixture for e2e suites | Apache-2.0 |
+| `otel/opentelemetry-collector-contrib` | `0.111.0` | OTel collector for e2e-tracing suite and reference deployment | Apache-2.0 |
+| `grafana/tempo` | `2.6.0` | Trace backend for e2e-tracing suite and reference deployment | Apache-2.0 |
 
 "Upstream license" is the license of the project that publishes the image. A
 container image is a stack of filesystem layers, and the layers carry operating

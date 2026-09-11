@@ -1,0 +1,42 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # OTEL_BACKEND_ENDPOINT is set by docker-compose.yaml; default is tempo:4317.
+  # For Jaeger: COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 docker compose up
+  otlp/backend:
+    endpoint: ${env:OTEL_BACKEND_ENDPOINT}
+    tls:
+      insecure: true
+
+  # Datadog — uncomment and set DD_API_KEY in the environment.
+  # datadog:
+  #   api:
+  #     key: ${env:DD_API_KEY}
+  #     site: datadoghq.com
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/backend]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/backend]

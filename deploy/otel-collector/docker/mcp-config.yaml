@@ -1,0 +1,17 @@
+port: 9090
+listen_address: "0.0.0.0"
+log_level: info
+
+mcp_client_auth:
+  mode: static
+  dev_token: "${MCP_DEV_TOKEN}"
+
+# Replace with the URL of your broker's SEMP management port.
+# Example: https://broker.example.com:943
+brokers:
+  my-broker:
+    url: "${BROKER_URL}"
+    auth:
+      mode: basic
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"

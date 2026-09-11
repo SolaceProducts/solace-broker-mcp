@@ -1,0 +1,62 @@
+services:
+  mcp-server:
+    image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
+    environment:
+      - CONFIG_FILE=/etc/mcp-server/config.yaml
+      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN}
+      - BROKER_URL=${BROKER_URL}
+      - BROKER_USERNAME=${BROKER_USERNAME}
+      - BROKER_PASSWORD=${BROKER_PASSWORD}
+      - OBS_TRACING_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    volumes:
+      - ./mcp-config.yaml:/etc/mcp-server/config.yaml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      # Default backend: Grafana Tempo.
+      # To use Jaeger: COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 docker compose up
+      # To use Datadog: DD_API_KEY=<key> docker compose up (also update otelcol.yaml exporter)
+      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo:4317}
+      - DD_API_KEY=${DD_API_KEY:-}
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8888:8888"
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      # Tempo UI / API — open http://localhost:3200 in Grafana to query traces
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=-", "http://localhost:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    profiles: [jaeger]
+    ports:
+      # Jaeger UI — open http://localhost:16686 to query traces
+      - "16686:16686"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=-", "http://localhost:14269/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s

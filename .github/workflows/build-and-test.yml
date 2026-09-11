@@ -220,6 +220,14 @@ jobs:
             echo "✅ Test files found. You can now remove this step"
           fi
 
+      - name: Validate OTel collector K8s manifests
+        # go install pins to a specific module version and the Go checksum database
+        # verifies the download — no separate SHA check needed. Consistent with
+        # the Go toolchain already installed above.
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          kubeconform -summary deploy/otel-collector/kubernetes/
+
   e2e-basic-mcp:
     runs-on: ubuntu-latest
     needs: build
@@ -399,6 +407,42 @@ jobs:
       - name: Tear down brokers
         if: always()
         run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v
+
+  e2e-tracing:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start stack
+        run: docker compose -f test/e2e-tracing/docker-compose.yml up -d
+
+      - name: Run tracing E2E tests
+        run: bash test/e2e-tracing/run-all.sh
+
+      - name: Collector logs (on failure)
+        if: failure()
+        run: docker logs otel-collector-e2e-tracing 2>&1 | tail -100
+
+      - name: Tempo logs (on failure)
+        if: failure()
+        run: docker logs tempo-e2e-tracing 2>&1 | tail -100
+
+      - name: MCP server logs (on failure)
+        if: failure()
+        run: docker logs mcp-server-e2e-tracing 2>&1 | tail -100
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: docker logs solace-e2e-tracing 2>&1 | tail -100
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/e2e-tracing/docker-compose.yml down -v
 
   e2e-management:
     runs-on: ubuntu-latest
