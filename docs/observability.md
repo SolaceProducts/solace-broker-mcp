@@ -47,8 +47,7 @@
 **Not in this document yet.** These are deliberately listed as plain text, not links, because
 they do not exist to link to. Each names the story that lands it:
 
-- Tracing setup and the reference OTel collector deployment, with a tested-backend matrix —
-  lands with Story 40 (SOL-152423).
+- [Tracing setup and the reference OTel collector deployment, with a tested-backend matrix](#stand-up-tracing-in-30-minutes) — shipped with Story 40 (SOL-152423).
 - Operator runbook by failure mode — lands with Story 36 (SOL-152098).
 - Reference SLO sheet — lands with Story 38.
 
@@ -1278,6 +1277,101 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 - **Propagation:** W3C Trace Context. When an inbound `traceparent` header is present, the
   server's entry span is a child of your agent's span; when absent, it starts a new root.
 
+### Stand up tracing in 30 minutes
+
+**The collector is optional.** If your APM already accepts OTLP directly (Datadog, New Relic,
+and others), skip the collector entirely: set `OTEL_EXPORTER_OTLP_ENDPOINT` to your APM's
+ingestion endpoint and flip `OBS_TRACING_ENABLED=true`. The reference collector below removes
+the "where do I start?" friction for operators who don't already have an OTLP endpoint.
+
+#### Deploy the reference collector
+
+A reference Kubernetes deployment lives in `deploy/otel-collector/kubernetes/`. Apply all
+three manifests:
+
+```
+kubectl apply -f deploy/otel-collector/kubernetes/
+```
+
+The collector listens for OTLP on port 4317 (gRPC) and 4318 (HTTP). It defaults to exporting
+to a Grafana Tempo instance at `tempo:4317`. Edit `collector-configmap.yaml` to point at your
+backend — see the [Tested backends](#tested-backends) section for the exporter config for each
+supported backend.
+
+For local development, `deploy/otel-collector/docker/docker-compose.yaml` starts the collector,
+the MCP server, and Grafana Tempo together. Swap `OTEL_BACKEND_ENDPOINT=jaeger:4317` and
+`COMPOSE_PROFILES=jaeger` to use Jaeger instead:
+
+```
+# Tempo (default)
+docker compose -f deploy/otel-collector/docker/docker-compose.yaml up
+
+# Jaeger
+COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 \
+  docker compose -f deploy/otel-collector/docker/docker-compose.yaml up
+```
+
+#### Point the MCP server at the collector
+
+Set two environment variables on the MCP server deployment:
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OBS_TRACING_ENABLED=true
+OBS_METRICS_ENABLED=true
+OBS_METRICS_OTLP_ENABLED=true
+```
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` is the standard OpenTelemetry SDK variable — no code change is
+needed. For a deployment without TLS between the server and collector, also set
+`OTEL_EXPORTER_OTLP_INSECURE=true`.
+
+`OBS_METRICS_OTLP_ENABLED` pushes metrics over OTLP to the same collector endpoint. It
+requires `OBS_METRICS_ENABLED=true` (which also enables the Prometheus scrape endpoint on
+`/metrics`). Omit both flags if you only want traces.
+
+#### Verify traces are arriving
+
+Make any tool call (for example, `list-brokers`) and open your backend's UI:
+
+- **Tempo:** search for `service.name = solace-broker-mcp` in the Explore view.
+- **Jaeger:** select service `solace-broker-mcp` on the Search page.
+
+You should see a trace with root span `POST /mcp` and child spans for each layer of the call.
+If no traces appear after 10 seconds, check the MCP server logs for `otel self stats` — the
+`spans_exported_total` field shows how many spans reached the collector.
+
+#### Tested backends
+
+"Tested" means a trace was produced by this server and seen in that backend's UI — not just
+that the exporter config compiles or that the vendor documents OTLP support.
+
+| Backend | Version tested | Traces verified | Metrics verified | Collector exporter config |
+|---|---|---|---|---|
+| Grafana Tempo | 2.6.0 | Yes (2026-09-11) | N/A — traces only | `otlp/tempo: endpoint: <tempo-host>:4317` (insecure) |
+| Jaeger | 1.60 | Yes (2026-09-11) | N/A — traces only | `otlp/jaeger: endpoint: <jaeger-host>:4317` (insecure) |
+| Datadog | — | Yes (2026-09-11) | Yes (2026-09-11) | `datadog: api: key: ${env:DD_API_KEY} site: datadoghq.com` |
+
+For each backend, the collector `config.yaml` exporter block is in
+`deploy/otel-collector/kubernetes/collector-configmap.yaml` — Jaeger and Datadog blocks are
+commented out and can be swapped in for the Tempo default.
+
+#### Ingesting OTLP metrics directly into Prometheus (no collector)
+
+Once `OBS_METRICS_OTLP_ENABLED=true` lands (SOL-152418), the server will push metrics over
+OTLP as well as serving the Prometheus scrape endpoint. Ingesting those push metrics directly
+into Prometheus (without a collector in the middle) requires four things that are easy to miss:
+
+1. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
+2. **Delta temporality requires an experimental feature flag.** The server ships cumulative
+   temporality to avoid this requirement — no flag needed on your side.
+3. **Resource attributes are not promoted to labels by default.** Configure
+   `promote_resource_attributes` in the Prometheus config, or use the `target_info` join
+   described in the [Resource Attributes](#resource-attributes--implemented) section.
+4. **`storage.tsdb.out_of_order_time_window` may need tuning.** OTLP push can arrive slightly
+   out of order relative to scrape data. Set a small window (for example `10m`) to avoid
+   rejected samples.
+
 ### Spans
 
 A successful end-to-end tool call produces four spans in one trace, nested in this order
@@ -2095,12 +2189,9 @@ the two levels are different:
 | Prometheus (with Grafana) | The scrape surface itself is pinned by test: golden-file exposition output, OpenMetrics negotiation, exemplar emission, and the suppressed `otel_scope_*` labels. Grafana is then an ordinary Prometheus data source. |
 | Grafana Tempo, Jaeger, Datadog | Reached over standard OTLP, with no backend-specific code path in this server. Verified at the protocol level, not yet as an end-to-end matrix per backend. |
 
-**A per-backend tested matrix, and a reference OTel collector deployment to sit in front of
-it, land with Story 40 (SOL-152423).** Until then, treat the second row as "should work
-because the format is standard" rather than as an attested integration. That list is a
-starting point, not a compatibility boundary: any backend that ingests OTLP or scrapes
-Prometheus text exposition should work, and we would rather hear about one that does not than
-have you assume it is unsupported.
+The per-backend tested matrix and the reference OTel collector deployment shipped with Story 40
+(SOL-152423) — see [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes). Any
+backend that ingests OTLP should work; the matrix records which ones were verified end to end.
 
 ---
 
