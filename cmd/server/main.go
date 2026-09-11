@@ -894,7 +894,13 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 		}
 		return nil, fmt.Errorf("creating token exchanger: %w", err)
 	}
-	slog.Info("token exchanger created for broker OAuth")
+	logAttrs := []any{
+		slog.Bool("expiry_fallback_configured", oauthCfg.TokenExpiryFallback != nil),
+	}
+	if oauthCfg.TokenExpiryFallback != nil {
+		logAttrs = append(logAttrs, slog.Duration("expiry_fallback", *oauthCfg.TokenExpiryFallback))
+	}
+	slog.Info("token exchanger created for broker OAuth", logAttrs...)
 	return exchanger, nil
 }
 
