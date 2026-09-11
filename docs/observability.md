@@ -126,7 +126,7 @@ So a name you would change is worth flagging now. See
 | Audit units | Durations are in **milliseconds** (`duration_ms`). This differs from metrics on purpose: metrics follow Prometheus base units, audit follows common SIEM JSON convention. |
 | Timestamps | RFC 3339, UTC. |
 | Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name in this document is tagged **OTel** or **Solace**. |
-| Cardinality | Every metric name and label key is documented here. A CI check that fails the build on any undocumented name or label key is planned for GA; today the catalog is maintained by review. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
+| Cardinality | Every metric name and label key is documented here, and a CI check (`TestObservabilityDocMatchesRegistry`, `cmd/server`, SOL-154238) fails the build on any undocumented name or label key, in both directions: emitted-but-undocumented, and documented-as-live-but-not-emitted. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
 ### Schema Versioning
