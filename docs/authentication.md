@@ -758,15 +758,15 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
   - `resource_metadata_url` — exact URL on 401 `WWW-Authenticate` `resource_metadata` (bare well-known; no `/mcp` suffix)
   - `prm_paths` — GET paths on this process that return that JSON
 
-  Example (`mcp_client_auth.resource_url` `http://localhost:9090/mcp`):
+  Example (`mcp_client_auth.resource_url` `https://localhost:9090/mcp`):
   ```json
-  {"time":"2026-09-11T13:43:10.924146-07:00","level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"http://localhost:9090/mcp","issuers":["https://auth.example.com"],"scopes_supported":["openid"],"bearer_methods_supported":["header"],"resource_metadata_url":"http://localhost:9090/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
+  {"time":"2026-09-11T13:43:10.924146-07:00","level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://localhost:9090/mcp","issuers":["https://auth.example.com"],"scopes_supported":["openid"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://localhost:9090/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
   ```
 - If that line is missing, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
 - Verify the live PRM endpoint returns the same document. Both paths return the same JSON:
   ```bash
-  curl http://localhost:9090/.well-known/oauth-protected-resource
-  curl http://localhost:9090/.well-known/oauth-protected-resource/mcp
+  curl https://localhost:9090/.well-known/oauth-protected-resource
+  curl https://localhost:9090/.well-known/oauth-protected-resource/mcp
   ```
   The bare path is what `WWW-Authenticate` advertises on a 401. The `/mcp`-suffixed path is the RFC 9728 §3.1 canonical path used by clients that construct it directly (for example, the Automatic OAuth discovery feature in Solace Agent Mesh).
 - Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
