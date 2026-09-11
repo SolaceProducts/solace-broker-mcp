@@ -155,6 +155,8 @@ Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sust
 | `open_state_duration` | `30s` | How long the breaker stays open (rejecting exchanges immediately) before probing recovery. |
 | `half_open_probe_requests` | `2` | Consecutive successful probes required to close the breaker again. |
 
+When Hop-2 is active, each state change still logs a `WARN` (`token exchange circuit breaker state change`). That log is the complete transition record; it is not an alert. With `OBS_METRICS_ENABLED` on (off by default), the same process also exposes `mcp_token_exchange_circuit_breaker_state` on `/metrics`. Alert on `{state="open"} == 1` per scrape target. Metrics off, or `circuit_breaker.enabled: false`, means the family is absent, not closed. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
+
 ### Retry-After Gate
 
 Nested under `broker_oauth.retry_after`. Shares a process-wide backoff across every event broker when an exhausted 429 retry chain to the IdP returns a `Retry-After` header, so one throttled event broker doesn't let every other event broker keep hammering the same IdP.

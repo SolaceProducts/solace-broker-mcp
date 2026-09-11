@@ -319,7 +319,7 @@ audience_parameter_name: "audience"
 
 Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
-- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional.
+- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional. Each transition still logs a `WARN`. With metrics enabled, the current state is also on `/metrics` as `mcp_token_exchange_circuit_breaker_state` so you can alert without grepping logs — see [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
 
 ### TLS for the MCP Server's Own Listener

@@ -35,6 +35,7 @@
 | Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
 | Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
 | Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
+| Alert when the IdP token-exchange breaker is open | [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented) |
 | Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied) · [Canonical Audit Queries](#canonical-audit-queries) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
@@ -81,7 +82,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` — the metrics pair is **not** emitted yet, see [OTLP Export Health](#otlp-export-health)), `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state)). `mcp_broker_authz_denied_total` is documented but **not** emitted yet (see [Broker-Side Authorization Denials](#broker-side-authorization-denials--not-yet-emitted)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP **span** export-health counters (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` — the metrics pair is **not** emitted yet, see [OTLP Export Health](#otlp-export-health)), `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), and `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)). `mcp_broker_authz_denied_total` is documented but **not** emitted yet (see [Broker-Side Authorization Denials](#broker-side-authorization-denials--not-yet-emitted)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -271,7 +272,7 @@ here can be reconciled.
 > `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and
 > `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)),
 > and `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit
-> Breaker State](#token-exchange-circuit-breaker-state)).
+> Breaker State](#token-exchange-circuit-breaker-state--implemented)).
 > Assume any other metric below is not yet emitted._
 >
 > **Two metric groups below are documented but not emitted by any build yet**, and are marked
@@ -452,7 +453,7 @@ broker state, not per attempt.
 **Cardinality:** `|broker|` for the first and third metrics; `|broker| x |reason|` for the
 second, where `|reason|` grows only on distinct HTTP error status codes seen per broker.
 
-### Token-Exchange Circuit Breaker State
+### Token-Exchange Circuit Breaker State — [Implemented]
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
