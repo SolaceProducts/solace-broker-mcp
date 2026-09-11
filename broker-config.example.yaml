@@ -160,7 +160,7 @@ mcp_client_auth:
 #       secret: "${MCP_SERVER_CLIENT_SECRET}"
 #   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 #   audience_parameter_name: "audience"    # the only value this version accepts
-#   token_expiry_fallback: 1h              # optional; used only when the IdP omits or zeros expires_in
+#   # token_expiry_fallback: 1h            # optional; omit = fail-closed when the IdP is silent
 
 # SEMP client settings — controls how the server talks to brokers.
 semp:
