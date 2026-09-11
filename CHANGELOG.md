@@ -44,8 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sizing it described holds only at the default `semp.request_min_interval`, only at the
   measured 2,000-session count, and only with `GOMEMLIMIT` set, and all three conditions are
   now stated. Changing `semp.request_min_interval` puts a deployment outside the measured
-  envelope and needs its own measurement — no sizing is published for that case. Manifest and
-  documentation only; no code change. Tracked under SOL-154328, measured under SOL-154158.
+  envelope and needs its own measurement — no sizing is published for that case. No production
+  code changes; the diff is the manifest, documentation, and one test
+  (`TestShippedGOMEMLIMITTracksMemoryLimit`) that fails the build if `GOMEMLIMIT` and
+  `limits.memory` drift apart or if the value stops being one the Go runtime accepts. Tracked
+  under SOL-154328, measured under SOL-154158.
 
 ## [0.9.0] - 2026-09-11
 

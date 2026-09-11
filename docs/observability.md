@@ -1973,14 +1973,21 @@ against losing both. Until a session gauge exists (metrics are `[Planned]` above
 session metric appears in the proposed set), the signal to watch is the container's own
 `container_memory_working_set_bytes` against its limit, via cAdvisor or `kubectl top pods`.
 
-**With `GOMEMLIMIT` set, read that signal differently.** The working set now plateaus near
-`GOMEMLIMIT` by design instead of climbing toward `limits.memory`, so a saturated pod and a
-comfortable one look alike on that one line: distance-to-limit is no longer the leading
-indicator it was. What moves instead is GC effort — a pod holding the plateau by collecting
-harder shows it in `go_gc_duration_seconds` and `go_memstats_heap_inuse_bytes` on `/metrics`
+**With `GOMEMLIMIT` set, read that signal differently.** The working set now plateaus by
+design instead of climbing toward `limits.memory`, so a saturated pod and a comfortable one
+look alike on that one line: distance-to-limit is no longer the leading indicator it was.
+What moves instead is GC effort — a pod holding the plateau by collecting harder shows it in
+`go_gc_duration_seconds` and `go_memstats_heap_inuse_bytes` on `/metrics`
 (`OBS_METRICS_ENABLED`, off by default), and in its CPU. Watch the plateau being *held*
-rather than the gap to the limit, and treat the working set crossing `GOMEMLIMIT` as the
-signal that the soft limit is no longer being met.
+rather than the gap to the limit.
+
+**Do not alarm on the working set crossing `GOMEMLIMIT`.** The two measure different things:
+`container_memory_working_set_bytes` is the whole container, including the binary's mappings
+and OS-held memory that `GOMEMLIMIT` explicitly excludes. A pod meeting its soft limit
+perfectly therefore sits *above* `GOMEMLIMIT` in working-set bytes as a matter of course, by
+roughly the non-heap overhead the 25% reserve exists to pay for — so that crossing is normal
+and not diagnostic on its own. `limits.memory` remains the threshold worth alarming on; use
+the Go heap metrics above to say whether the runtime is holding its own limit.
 
 ---
 
