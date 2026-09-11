@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- OAuth startup now logs one complete Protected Resource Metadata registration snapshot under `registered OAuth protected resource metadata endpoint`, including the advertised resource, sanitized `issuers`, supported scopes and bearer methods, the 401 `resource_metadata` URL, and every local PRM path. This gives operators a first troubleshooting check for OAuth discovery without changing the PRM document, `WWW-Authenticate` header, or registered routes; static and disabled modes emit no such line. `docs/authentication.md` documents the grep and field map. The issuer field is deliberately named `issuers`, not `authorization_servers`, because the logging redaction safety net treats keys containing `authorization` as credential-bearing. Tracked under SOL-154210.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added

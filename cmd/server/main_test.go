@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -31,6 +32,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1025,6 +1027,8 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 		bareStatus  int
 		canonPath   string // "" means the canonical route should not be registered
 		canonStatus int
+		wantLog     bool
+		wantPaths   []any
 	}{
 		{
 			name:        "oauth mode — both paths registered",
@@ -1032,6 +1036,8 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 			bareStatus:  http.StatusOK,
 			canonPath:   "/.well-known/oauth-protected-resource/mcp",
 			canonStatus: http.StatusOK,
+			wantLog:     true,
+			wantPaths:   []any{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"},
 		},
 		{
 			// Pins that the canonical path is derived from resource_url, not
@@ -1041,11 +1047,15 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 			bareStatus:  http.StatusOK,
 			canonPath:   "/.well-known/oauth-protected-resource/broker/mcp",
 			canonStatus: http.StatusOK,
+			wantLog:     true,
+			wantPaths:   []any{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/broker/mcp"},
 		},
 		{
 			name:       "empty path — canonical collides with bare, skip",
 			cfg:        oauthCfg("https://mcp.example.com"),
 			bareStatus: http.StatusOK,
+			wantLog:    true,
+			wantPaths:  []any{"/.well-known/oauth-protected-resource"},
 		},
 		{
 			name:       "static mode — no registration",
@@ -1056,8 +1066,30 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			logs, cleanup := captureStartupLog(t)
+			defer cleanup()
 			mux := http.NewServeMux()
 			registerMetadataRoutes(mux, tt.cfg)
+
+			var records []map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				if line == "" {
+					continue
+				}
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("decode startup log: %v", err)
+				}
+				records = append(records, record)
+			}
+			if got := len(records) == 1; got != tt.wantLog {
+				t.Fatalf("registration log present = %v, want %v: %s", got, tt.wantLog, logs.String())
+			}
+			if tt.wantLog {
+				if got := records[0]["prm_paths"]; !reflect.DeepEqual(got, tt.wantPaths) {
+					t.Errorf("prm_paths = %#v, want %#v", got, tt.wantPaths)
+				}
+			}
 
 			bareRec := httptest.NewRecorder()
 			bareReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/oauth-protected-resource", nil)
