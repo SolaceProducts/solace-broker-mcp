@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-11
+
 ### Added
 
 - Three new Prometheus gauges expose passive per-broker reachability on `/metrics` (SOL-152088, `metrics_schema` 1.2→1.3): `mcp_broker_reachable{broker}` (1 when last SEMP call succeeded, 0 otherwise), `mcp_broker_unreachable_reason{broker,reason}` (one-hot across all failure reasons ever seen — `credential_invalid` for 401/403, `unreachable` for transport failures, `broker_error_NNN` for 5xx/429), and `mcp_broker_last_result_timestamp_seconds{broker}` (Unix timestamp of the most recent result, for detecting silently idle brokers). All three are updated passively from real SEMP calls with no added broker load and no heartbeat goroutine. They are decoupled from `/readyz` (ADR-004): a broker outage sets the gauge to 0 but never marks the MCP pod unready.
@@ -483,7 +485,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.8.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.9.0...HEAD
+- [0.9.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.8.0...v0.9.0
 - [0.8.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.1...v0.8.0
 - [0.7.1]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.0...v0.7.1
 - [0.7.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.6.0...v0.7.0
