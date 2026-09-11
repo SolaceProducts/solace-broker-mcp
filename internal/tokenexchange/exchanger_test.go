@@ -45,11 +45,11 @@ func validParams(t *testing.T) Params {
 	}
 }
 
-// TestNew_HTTPClientNilRejected pins the only runtime check New performs.
-// Every other field is trusted (config validator enforced it at startup),
-// but HTTPClient is wired at runtime from outside config and must be
-// non-nil for the Exchanger to function. A nil here is a programming
-// error in main's wiring — fail fast, do not ship a half-built Exchanger.
+// TestNew_HTTPClientNilRejected pins the runtime check that HTTPClient
+// must be non-nil. HTTPClient is wired at runtime from outside config
+// and must be non-nil for the Exchanger to function. A nil here is a
+// programming error in main's wiring — fail fast, do not ship a
+// half-built Exchanger.
 func TestNew_HTTPClientNilRejected(t *testing.T) {
 	p := validParams(t)
 	p.HTTPClient = nil

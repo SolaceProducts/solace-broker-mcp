@@ -69,9 +69,11 @@ type Exchanger struct {
 
 // New constructs an Exchanger from Params. The config validator
 // (internal/config.validateBrokerOAuthConfig) has already enforced
-// every non-runtime field at startup, so this constructor only checks
-// runtime-wired dependencies the validator cannot see — specifically
-// that HTTPClient is non-nil.
+// YAML-level fields at startup. This constructor still checks
+// runtime-wired dependencies and values a direct Params caller can
+// get wrong: HTTPClient and Cache must be non-nil; TokenExpiryFallback
+// and MaxHonoredRetryAfter must not be negative; a non-nil
+// CircuitBreaker must pass Validate.
 //
 // Tests that build Params{...} directly without going through FromConfig
 // are responsible for supplying valid enum values; bad values surface at

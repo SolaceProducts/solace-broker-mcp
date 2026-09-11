@@ -133,7 +133,7 @@ broker_oauth:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: "audience"
-  token_expiry_fallback: 1h
+  # token_expiry_fallback: 1h  # optional; omit = fail-closed when the IdP is silent
 
 brokers:
   prod:

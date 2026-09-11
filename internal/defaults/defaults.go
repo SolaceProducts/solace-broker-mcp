@@ -335,9 +335,9 @@ const DefaultRetryMaxInterval = 30 * time.Second
 
 // DefaultTokenExpirySkew is subtracted from the selected token lifetime — a
 // positive IdP expires_in, or broker_oauth.token_expiry_fallback when the IdP
-// omits it — when computing ExpiresAt. The result is a conservative "use-by"
-// instant, so callers (and the cache) never present a token that might expire
-// mid-flight to the broker.
+// omits expires_in, returns null, or returns zero — when computing ExpiresAt.
+// The result is a conservative "use-by" instant, so callers (and the cache)
+// never present a token that might expire mid-flight to the broker.
 //
 // Subtracted EXACTLY ONCE, in internal/tokenexchange when the IdP response
 // is parsed. Every downstream component — the token cache above all — is a
