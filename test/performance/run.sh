@@ -52,6 +52,16 @@
 #                to be released before giving up (default 60)
 #   NOFILE       descriptor limit to request (default 1048576; falls back to the
 #                hard limit, and both are recorded)
+#   GODEBUG        passed through to the server. `gctrace=1` puts the live-heap
+#                  series into the run directory's mcp.log, where summary.sh
+#                  reads it — see README "Reading the live heap: gctrace".
+#                  Set nothing else here: GODEBUG is a general knob and other
+#                  values (http2debug) write request headers into that
+#                  archived file.
+#   ALLOW_VERBOSE_LOGS
+#                set to 1 to run even when the projected log volume exceeds half
+#                the free space on the log volume. The projection is printed
+#                either way; see README "Log volume on long runs".
 #   RIG_NOTE     free-text note about this host. Control characters are
 #                flattened, `=` becomes `:` and the value is capped at 200
 #                characters so the record stays parseable — the substitutions
@@ -234,6 +244,12 @@ if [[ -z "$RDP" || "$RDP" == "unknown" ]]; then
   exit 2
 fi
 
+# Filtered before ANY child starts, not just before the server: this runner
+# launches mock-semp first and captures its stderr into an archived mock.log,
+# so a filter placed at the server launch would already be too late.
+# See perf_filter_godebug in lib.sh for what is kept and why.
+perf_filter_godebug
+
 # Validate TOOLS before anything starts. loadgen enforces this at its own
 # startup too, but by then the mock is listening, the fidelity gate has run,
 # and (split-host) we may have waited minutes for Box B — a typo in TOOLS
@@ -297,6 +313,9 @@ peaks_recorded=0
 # Set at the end of the main flow. cleanup() is reached on every path, so this
 # is what tells it whether the peaks it is about to record cover a whole run.
 run_finished=0
+# Set instead of run_finished when a pre-load guard refuses the run, so the
+# record says which of the two it was.
+run_refused=""
 # Initialised here, not at the load phase, because cleanup() reads it and is
 # reached from every path — including the ones that never start a load.
 lg_rc=0
@@ -322,12 +341,21 @@ cleanup() {
     # run is not a measurement — calling that `complete` would let a failed run
     # be quoted as a whole one. It is not `run_terminated` either: the runner
     # reached its end. Say which of the two it was.
-    perf_record_kv "$mcp_record" load_rc "$lg_rc"
+    # Not written for a refused run: the load never ran, and a 0 here reads as
+    # a clean one to any sweep keying on load_rc.
+    [[ -z "${run_refused:-}" ]] && perf_record_kv "$mcp_record" load_rc "$lg_rc"
     if (( run_finished && lg_rc == 0 )); then
       perf_record_kv "$mcp_record" fd_peak_source complete
     elif (( run_finished )); then
       perf_record_kv "$mcp_record" load_failed true
       perf_record_kv "$mcp_record" fd_peak_source partial
+    elif [[ -n "${run_refused:-}" ]]; then
+      # A fourth outcome: refused by a pre-load guard, which is not an
+      # interrupted measurement. A sweep over archived records counting
+      # run_terminated as "interrupted" would otherwise include runs that
+      # never began.
+      perf_record_kv "$mcp_record" run_refused "$run_refused"
+      perf_record_kv "$mcp_record" fd_peak_source refused
     else
       perf_record_kv "$mcp_record" run_terminated true
       perf_record_kv "$mcp_record" fd_peak_source partial
@@ -378,6 +406,7 @@ wait_for_tcp() {
   echo "timed out waiting for $name at $host:$port" >&2
   return 1
 }
+
 
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
 # mock-semp reads canned/ from disk at startup (auto-located next to the
@@ -451,6 +480,10 @@ cp "$CONFIG_FILE" "$runs/broker-config.used.yaml"
 # Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
 # as a child process, so $mcp_pid would be the toolchain wrapper and the
 # memsampler in step 4 would sample that instead of MCP.
+# Read before the launch, not after the health check: gctrace stamps its lines
+# `@<seconds since program start>`, so placing them on the wall clock needs the
+# moment the process began, and the health-check wait is seconds of drift.
+mcp_start_epoch=$(date +%s)
 setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
@@ -465,6 +498,15 @@ perf_record_proc_nofile "$mcp_record" "$mcp_pid"
 # How much processor the Go runtime was entitled to. Without it, two runs on
 # one box with different GOMAXPROCS write records identical in every field.
 perf_record_runtime_cpu "$mcp_record" "$mcp_pid"
+perf_record_runtime_mem "$mcp_record" "$mcp_pid"
+perf_record_kv "$mcp_record" mcp_start_epoch "$mcp_start_epoch"
+
+# At info the server writes one line per tool call — about 2.2 GB/h at 2,500
+# calls/s — and a long run fills the volume and takes the samplers with it
+# before anything warns. Same guard as the split-host runner: project it, print
+# it either way, refuse what cannot fit.
+perf_guard_log_volume "$mcp_record" "$runs/mcp.log" "$runs/broker-config.used.yaml" \
+  "$runs" "$load_secs" local || { run_refused=log-volume; exit 2; }
 
 echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN rdp=$RDP; exclusions in fidelity/exclusions.txt)"
 # BROKER_ALIAS + VPN must match how the goldens were captured; the mock

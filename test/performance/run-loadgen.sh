@@ -55,6 +55,9 @@
 #                  the hard limit, and both are recorded). At high client counts
 #                  this box needs the most of it: every loadgen session is one
 #                  outbound socket here and one inbound socket on the MCP box.
+#   GODEBUG        passed through to the children this box launches. Only
+#                  `gctrace=<1-9>` survives — their stderr is archived, and
+#                  other values (http2debug) write request headers into it.
 #   RIG_NOTE       free-text note about this host. Control characters are
 #                  flattened, `=` becomes `:` and the value is capped at 200
 #                  characters so the record stays parseable — the substitutions
@@ -172,7 +175,7 @@ runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-loadgen-$RUN_TAG"
 mkdir -p "$runs"
 record="$runs/run-record.loadgen"
 
-required_bins=(loadgen fidelity)
+required_bins=(loadgen fidelity memsampler)
 [[ "$NO_MOCK" != "1" ]] && required_bins+=(mock-semp)
 for b in "${required_bins[@]}"; do
   if [[ ! -x "$bin/$b" ]]; then
@@ -250,6 +253,11 @@ if [[ -z "$RDP" || "$RDP" == "unknown" ]]; then
   exit 2
 fi
 
+# This box captures loadgen.log, fidelity.log and mock.log, and both loadgen
+# and fidelity set an Authorization header from MCP_DEV_TOKEN — so the same
+# filter the server-side runners apply belongs here too.
+perf_filter_godebug
+
 # Validate TOOLS before anything starts. loadgen enforces this at its own
 # startup too, but by then the mock is listening, the fidelity gate has run,
 # and (split-host) we may have waited minutes for Box B — a typo in TOOLS
@@ -268,7 +276,7 @@ sample_secs=$(( load_secs + 10 ))
 # halves are collected together when the run directories are archived.
 perf_record_begin "$record" loadgen "$runs"
 perf_record_rig "$record"
-perf_record_code "$record" "$repo_root" "$bin" loadgen mock-semp fidelity
+perf_record_code "$record" "$repo_root" "$bin" loadgen mock-semp fidelity memsampler
 perf_record_fixtures "$record" "$here"
 perf_record_comment "$record" "workload"
 # Userinfo stripped: the record is archived and shared, and a scheme://user:pass@
@@ -302,7 +310,8 @@ perf_record_kv "$record" no_mock "$NO_MOCK"
 perf_record_kv "$record" nofile_requested "$PERF_NOFILE_REQUESTED"
 perf_record_kv "$record" nofile_granted "$PERF_NOFILE_GRANTED"
 
-mock_pid= lg_pid= sampler_pid= mock_top_pid=
+
+mock_pid= lg_pid= sampler_pid= mock_top_pid= lg_mem_pid=
 # kill_tree signals a pid (and its process group if reachable) and returns.
 # It does NOT `wait` inside — callers that need the child's exit code
 # (e.g. mock-semp's hard-gate exit-nonzero-on-miss) must wait separately.
@@ -323,6 +332,7 @@ cleanup() {
   local rc=$?
   set +e
   kill_tree "$sampler_pid";  wait "$sampler_pid" 2>/dev/null
+  kill_tree "$lg_mem_pid";   wait "$lg_mem_pid" 2>/dev/null
   kill_tree "$mock_top_pid"; wait "$mock_top_pid" 2>/dev/null
   kill_tree "$lg_pid";       wait "$lg_pid" 2>/dev/null
   if [[ -n "$mock_pid" ]]; then
@@ -532,6 +542,26 @@ echo "== 5. loadgen-sampler (~${sample_secs}s at 5s intervals)"
   > "$runs/loadgen-sampler.log" 2>&1 &
 sampler_pid=$!
 
+# The generator's own process, sampled the same way the server's is.
+#
+# Not the first look at its memory: loadgen-sampler.sh has read VmRSS into
+# lg_res_kb at 5s intervals for as long as it has existed, and summary.sh
+# reports it as a percentage of the box. What this adds is the resolution and
+# the shape the SOL-154158 investigation needed — 1s samples, MB rather than
+# percent-of-box, a drift taken from medians at each end, and
+# vm_kb/threads/open_fds alongside. The +458 MB/h retention was found with a
+# wrapper outside this repo because a 5s percentage series on a 30 GB box is
+# too coarse to separate a climb from noise.
+#
+# sample_secs already carries the same tail buffer the other samplers get
+# (load_secs + 10, resolved once above), so it is used as-is: adding another
+# +10 here would give this one sampler a window twice as long as every other
+# and make the next reader size theirs off a number that was never symmetric.
+echo "== 5b. memsampler alongside loadgen (pid=$lg_pid)"
+"$bin/memsampler" -pid "$lg_pid" -interval 1s -duration "${sample_secs}s" \
+  -out "$runs/mem-loadgen.csv" >"$runs/memsampler-loadgen.log" 2>&1 &
+lg_mem_pid=$!
+
 lg_rc=0
 wait "$lg_pid" || lg_rc=$?
 perf_stamp_load_end "$record"
@@ -542,6 +572,7 @@ perf_record_kv "$record" load_rc "$lg_rc"
 
 # Let the samplers flush; they exit on their own via kill -0 / duration.
 wait "$sampler_pid" 2>/dev/null || true
+wait "$lg_mem_pid" 2>/dev/null || true
 wait "$mock_top_pid" 2>/dev/null || true
 
 echo "== done (loadgen rc=$lg_rc)"

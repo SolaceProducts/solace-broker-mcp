@@ -1069,6 +1069,891 @@ perf_record_runtime_cpu "$rec" 999999
 eq "a vanished pid records unknown for the environment" "$(field gomaxprocs_env)" "unknown"
 eq "and unknown for the cgroup"  "$(field cgroup_cpu_quota_cores)" "unknown"
 
+# --- perf_record_runtime_mem -------------------------------------------------
+
+echo "== perf_record_runtime_mem records the memory entitlement the same way"
+
+# The SOL-154158 GOMEMLIMIT ladder produced four records identical in every
+# field, separable only by a hand-written tag. Same failure the CPU fields
+# exist to stop, so: same three-fact shape, same unset/none/unknown contract.
+GOMEMLIMIT=512MiB sleep 30 &
+gml_pid=$!
+sleep 0.3
+rec="$tmp/rec-gomemlimit"
+: >"$rec"
+perf_record_runtime_mem "$rec" "$gml_pid"
+eq "GOMEMLIMIT is read from the process's own environ" "$(field gomemlimit_env)" "512MiB"
+kill "$gml_pid" 2>/dev/null || true
+
+rec="$tmp/rec-runtime-mem-self"
+: >"$rec"
+perf_record_runtime_mem "$rec" $$
+eq "a process with no GOMEMLIMIT set records 'unset', not a guessed byte count" \
+  "$(field gomemlimit_env)" "unset"
+lacks "and no effective memory limit is derived" \
+  "$(cat "$rec")" "gomemlimit_effective"
+
+echo "== perf_cgroup_binding_memory takes the limit that actually binds"
+
+# memory.max is one token, not two: "max" or a byte count. It is hierarchical
+# in exactly the way cpu.max is, so a 1 GiB leaf under a 256 MiB parent gets
+# 256 MiB and reporting the leaf would overstate it fourfold.
+bm="$tmp/bm"
+mkdir -p "$bm/parent/leaf"
+
+echo "536870912" >"$bm/parent/leaf/memory.max"
+eq "the process's own memory.max is read verbatim" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "536870912"
+eq "and the cgroup it came from is named" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f1)" "/parent/leaf"
+
+echo "268435456" >"$bm/parent/memory.max"
+eq "a tighter ancestor binds a looser leaf" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "268435456"
+eq "named as the ancestor that binds" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f1)" "/parent"
+
+echo "134217728" >"$bm/parent/leaf/memory.max"
+eq "a tighter leaf binds under a looser ancestor" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "134217728"
+
+# "max" is the v2 spelling of "no limit". It must not lift a limit set
+# elsewhere on the path, and it must not read as a byte count of its own.
+echo "max" >"$bm/parent/leaf/memory.max"
+eq "an unlimited leaf still yields to a limited ancestor" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "268435456"
+echo "garbage" >"$bm/parent/leaf/memory.max"
+eq "an unparsable leaf is skipped, not read as unlimited" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "268435456"
+echo "" >"$bm/parent/leaf/memory.max"
+eq "an empty memory.max is skipped too" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf | cut -d' ' -f2-)" "268435456"
+
+rm "$bm/parent/memory.max" "$bm/parent/leaf/memory.max"
+eq "no limit anywhere on the path returns nothing" \
+  "$(perf_cgroup_binding_memory "$bm" /parent/leaf)" ""
+eq "and a root given with a trailing slash still terminates" \
+  "$(perf_cgroup_binding_memory "$bm/" /nowhere)" ""
+
+# The composition: "found nothing" becomes `none`, which must not read the same
+# as "could not establish".
+mem_cgroot="$tmp/cgroup-mem"
+self_cg_mem=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup 2>/dev/null || true)
+if [[ -n "$self_cg_mem" ]]; then
+  mkdir -p "$mem_cgroot$self_cg_mem"
+  rec="$tmp/rec-nomemmax"
+  : >"$rec"
+  PERF_CGROUP_ROOT="$mem_cgroot" perf_record_runtime_mem "$rec" $$
+  eq "no memory.max anywhere reads 'none', not 'unknown'" \
+    "$(field cgroup_memory_max)" "none"
+  eq "and the binding level is none too" \
+    "$(field cgroup_memory_max_from)" "none"
+  echo "536870912" >"$mem_cgroot$self_cg_mem/memory.max"
+  rec="$tmp/rec-memmax"
+  : >"$rec"
+  PERF_CGROUP_ROOT="$mem_cgroot" perf_record_runtime_mem "$rec" $$
+  eq "a limit reaches the record verbatim" "$(field cgroup_memory_max)" "536870912"
+  eq "with the cgroup it binds at beside it" \
+    "$(field cgroup_memory_max_from)" "$self_cg_mem"
+else
+  skip "record-level memory cgroup composition (this host has no unified cgroup line)"
+fi
+
+# A pid that no longer exists: both halves unreadable, and the record says so
+# rather than describing this shell's own entitlement.
+rec="$tmp/rec-nopid-mem"
+: >"$rec"
+perf_record_runtime_mem "$rec" 999999
+eq "a vanished pid records unknown for the environment" "$(field gomemlimit_env)" "unknown"
+eq "and unknown for the cgroup"  "$(field cgroup_memory_max)" "unknown"
+
+# Two runs differing only in GOMEMLIMIT must be distinguishable — the whole
+# point of the field (AC 3).
+GOMEMLIMIT=256MiB sleep 30 &
+a_pid=$!
+GOMEMLIMIT=1GiB sleep 30 &
+b_pid=$!
+sleep 0.3
+rec="$tmp/rec-ladder-a"; : >"$rec"
+perf_record_runtime_mem "$rec" "$a_pid"
+ladder_a=$(field gomemlimit_env)
+rec="$tmp/rec-ladder-b"; : >"$rec"
+perf_record_runtime_mem "$rec" "$b_pid"
+ladder_b=$(field gomemlimit_env)
+kill "$a_pid" "$b_pid" 2>/dev/null || true
+if [[ "$ladder_a" != "$ladder_b" ]]; then
+  ok "two runs differing only in GOMEMLIMIT produce distinguishable records"
+else
+  bad "two runs differing only in GOMEMLIMIT produce distinguishable records"$'\n'"        both: [$ladder_a]"
+fi
+
+# --- log level and log-volume projection -------------------------------------
+
+echo "== perf_record_log_level names where the level came from"
+
+# The level is the input to the volume projection, and a wrong one projects a
+# confident wrong number — so it carries a _source like the admission settings.
+lv="$tmp/loglevel"
+mkdir -p "$lv"
+printf '%s\n' '{"time":"x","level":"INFO","msg":"config loaded","broker_count":50,"port":9090,"log_level":"debug","fair_scheduling":true}' >"$lv/mcp.log"
+printf '%s\n' 'log_level: info' 'semp:' '  max_concurrent_per_broker: 4' >"$lv/config.yaml"
+rec="$tmp/rec-loglevel-server"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/mcp.log" "$lv/config.yaml"
+eq "the server's own report wins over the config file" "$(field log_level)" "debug"
+eq "and is labelled server-log" "$(field log_level_source)" "server-log"
+
+# The server logged the line but not the field: a schema change, which must not
+# silently degrade to the config file's value as though the server agreed.
+printf '%s\n' '{"msg":"config loaded","broker_count":50,"port":9090}' >"$lv/mcp-noschema.log"
+rec="$tmp/rec-loglevel-schema"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/mcp-noschema.log" "$lv/config.yaml" 2>/dev/null
+eq "a config-loaded line without the field falls back to the config file" \
+  "$(field log_level)" "info"
+eq "and says the schema changed rather than claiming the server reported it" \
+  "$(field log_level_source)" "server-log-schema-changed"
+
+rec="$tmp/rec-loglevel-config"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/absent.log" "$lv/config.yaml"
+eq "no server line at all reads the config the run used" "$(field log_level)" "info"
+eq "labelled config-file" "$(field log_level_source)" "config-file"
+
+printf '%s\n' 'semp:' '  max_concurrent_per_broker: 4' >"$lv/nolevel.yaml"
+rec="$tmp/rec-loglevel-none"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/absent.log" "$lv/nolevel.yaml"
+eq "nothing written down and nothing reported reads unknown" "$(field log_level)" "unknown"
+eq "labelled as the server's own unreported default" \
+  "$(field log_level_source)" "unreported-server-default"
+
+# The server folds the level before validating, so `INFO` is a run at `info`.
+# Unfolded, it reached the projection as an unknown level, the guard printed
+# "cannot project", and a ten-hour info-level run was admitted.
+printf '%s\n' 'log_level: INFO' >"$lv/upper.yaml"
+rec="$tmp/rec-loglevel-upper"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/absent.log" "$lv/upper.yaml"
+eq "an upper-case level in the config is folded to the effective one" \
+  "$(field log_level)" "info"
+eq "and a ten-hour run at it is refused, not admitted as unprojectable" \
+  "$(perf_project_log_volume "$(field log_level)" 36000 30000000000 | cut -d' ' -f2)" "over"
+
+# A top-level key must not be confused with the same key nested under semp:.
+printf '%s\n' 'semp:' '  log_level: warn' >"$lv/nested.yaml"
+rec="$tmp/rec-loglevel-nested"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/absent.log" "$lv/nested.yaml"
+eq "a log_level nested under semp: is not the server's log level" \
+  "$(field log_level)" "unknown"
+
+echo "== perf_project_log_volume projects from the one rate that was measured"
+
+# Measured in the SOL-154158 control: 1.1 GB and 4,512,819 lines in 30 minutes
+# at 2,507 calls/s, so ~2.2 GB/h at info. Nothing else was measured, and the
+# projection says so rather than inventing rates per level.
+GB=1000000000
+eq "info for an hour projects the measured hourly rate" \
+  "$(perf_project_log_volume info 3600 $((30 * GB)) | cut -d' ' -f1)" "2200000000"
+eq "and an hour against 30 GB free is under the threshold" \
+  "$(perf_project_log_volume info 3600 $((30 * GB)) | cut -d' ' -f2)" "ok"
+eq "ten hours at info projects 22 GB" \
+  "$(perf_project_log_volume info 36000 $((30 * GB)) | cut -d' ' -f1)" "22000000000"
+eq "which is over half of a 30 GB volume and is refused" \
+  "$(perf_project_log_volume info 36000 $((30 * GB)) | cut -d' ' -f2)" "over"
+
+# warn and error emit no per-call line in a healthy run, but the shed and
+# slow-admission paths log at warn once per SEMP request — and driving a broker
+# past semp.max_concurrent_per_broker is what this harness's knobs exist to do.
+# A confident zero here would admit the run that fills the disk at hour three.
+eq "warn projects nothing"  "$(perf_project_log_volume warn 36000 $((30 * GB)) | cut -d' ' -f1)" "0"
+eq "but is not claimed to be comfortable either" \
+  "$(perf_project_log_volume warn 36000 $((30 * GB)) | cut -d' ' -f2)" "unknown"
+eq "and says why: the volume tracks the shed rate" \
+  "$(perf_project_log_volume warn 36000 $((30 * GB)) | cut -d' ' -f3)" "shed-dependent"
+eq "error projects nothing" "$(perf_project_log_volume error 36000 $((30 * GB)) | cut -d' ' -f1)" "0"
+eq "and is treated the same way" \
+  "$(perf_project_log_volume error 36000 $((30 * GB)) | cut -d' ' -f3)" "shed-dependent"
+
+# debug was never measured. It cannot be lower than info, so info's rate is
+# used as a floor and the verdict is the same — but the caller must be able to
+# tell a floor from a measurement.
+eq "debug uses info's rate as a floor" \
+  "$(perf_project_log_volume debug 36000 $((30 * GB)) | cut -d' ' -f1)" "22000000000"
+eq "and says the figure is a floor, not a measurement" \
+  "$(perf_project_log_volume debug 36000 $((30 * GB)) | cut -d' ' -f3)" "floor"
+eq "info's figure is labelled measured" \
+  "$(perf_project_log_volume info 3600 $((30 * GB)) | cut -d' ' -f3)" "measured"
+
+# An unestablished level cannot be projected, and refusing a run over a value
+# nobody measured would block a campaign for no reason.
+eq "an unknown level projects nothing and refuses nothing" \
+  "$(perf_project_log_volume unknown 36000 $((30 * GB)) | cut -d' ' -f2)" "unknown"
+eq "a level this table has never heard of is treated the same way" \
+  "$(perf_project_log_volume trace 36000 $((30 * GB)) | cut -d' ' -f2)" "unknown"
+
+# Free space the caller could not read must not divide by zero or read as full.
+eq "unreadable free space cannot be compared against" \
+  "$(perf_project_log_volume info 36000 0 | cut -d' ' -f2)" "unknown"
+eq "a negative duration projects nothing rather than a negative volume" \
+  "$(perf_project_log_volume info -60 $((30 * GB)) | cut -d' ' -f1)" "0"
+eq "and says nothing was projected rather than labelling 0 B as measured" \
+  "$(perf_project_log_volume info -60 $((30 * GB)) | cut -d' ' -f2-)" "unknown none"
+
+echo "== perf_human_bytes prints the projection in the units it was measured in"
+
+# Decimal, not binary: the measurement this feeds is quoted in GB (1.1 GB in 30
+# minutes) and a projection printed in GiB beside a GB measurement invites the
+# reader to think the two disagree by 7%.
+eq "bytes stay bytes"            "$(perf_human_bytes 512)"          "512 B"
+eq "kilobytes"                   "$(perf_human_bytes 2048)"         "2.0 KB"
+eq "megabytes"                   "$(perf_human_bytes 1100000)"      "1.1 MB"
+eq "gigabytes"                   "$(perf_human_bytes 22000000000)"  "22.0 GB"
+eq "terabytes do not wrap"       "$(perf_human_bytes 1500000000000)" "1.5 TB"
+eq "zero is zero, not 0.0 KB"    "$(perf_human_bytes 0)"            "0 B"
+eq "a non-number is not printed as one" "$(perf_human_bytes garbage)" "unknown"
+eq "and neither is an empty argument"   "$(perf_human_bytes "")"      "unknown"
+
+echo "== perf_guard_log_volume refuses a run that cannot fit, and says why"
+
+# The guard is the thin I/O wrapper over the projection: it records the level,
+# prints the figures, and decides. PERF_LOG_AVAIL_BYTES is a test seam and
+# nothing else — a real run reads df on the run directory, which no test can
+# control without filling a disk.
+gd="$tmp/guard"
+mkdir -p "$gd"
+printf '%s\n' '{"msg":"config loaded","port":9090,"log_level":"info","fair_scheduling":true}' >"$gd/mcp.log"
+printf '%s\n' 'log_level: info' >"$gd/config.yaml"
+GBG=1000000000
+
+rec="$tmp/rec-guard-over"
+: >"$rec"
+guard_out=""
+if PERF_LOG_AVAIL_BYTES=$((30 * GBG)) \
+   perf_guard_log_volume "$rec" "$gd/mcp.log" "$gd/config.yaml" "$gd" 36000 >"$tmp/guard-over.txt" 2>&1; then
+  bad "ten hours at info against 30 GB free is refused"
+else
+  ok "ten hours at info against 30 GB free is refused"
+fi
+guard_out=$(cat "$tmp/guard-over.txt")
+contains "and the refusal names the override rather than just failing" \
+  "$guard_out" "ALLOW_VERBOSE_LOGS=1"
+contains "and prints the projection it refused on" "$guard_out" "22.0 GB"
+eq "the level still reaches the record on a refused run" "$(field log_level)" "info"
+
+rec="$tmp/rec-guard-override"
+: >"$rec"
+if ALLOW_VERBOSE_LOGS=1 PERF_LOG_AVAIL_BYTES=$((30 * GBG)) \
+   perf_guard_log_volume "$rec" "$gd/mcp.log" "$gd/config.yaml" "$gd" 36000 >"$tmp/guard-ovr.txt" 2>&1; then
+  ok "the override lets the same run proceed"
+else
+  bad "the override lets the same run proceed"
+fi
+contains "and says it is running anyway rather than going quiet" \
+  "$(cat "$tmp/guard-ovr.txt")" "running anyway"
+
+rec="$tmp/rec-guard-ok"
+: >"$rec"
+if PERF_LOG_AVAIL_BYTES=$((30 * GBG)) \
+   perf_guard_log_volume "$rec" "$gd/mcp.log" "$gd/config.yaml" "$gd" 3600 >"$tmp/guard-ok.txt" 2>&1; then
+  ok "an hour at info fits and is not refused"
+else
+  bad "an hour at info fits and is not refused"
+fi
+contains "and the projection is printed anyway" "$(cat "$tmp/guard-ok.txt")" "projected"
+
+# The prose must match the basis. Spliced into the sentence written for
+# `measured`, a warn-level run printed "projected ~0 B (none at ~2,500
+# calls/s ...)" — not a sentence, and the opposite of what the zero meant.
+printf '%s\n' '{"msg":"config loaded","port":9090,"log_level":"warn"}' >"$gd/warn.log"
+rec="$tmp/rec-guard-warn"
+: >"$rec"
+if PERF_LOG_AVAIL_BYTES=$((30 * GBG)) \
+   perf_guard_log_volume "$rec" "$gd/warn.log" "$gd/config.yaml" "$gd" 36000 >"$tmp/guard-warn.txt" 2>&1; then
+  ok "a warn-level run is not refused"
+else
+  bad "a warn-level run is not refused"
+fi
+guard_warn=$(cat "$tmp/guard-warn.txt")
+contains "and says it cannot project at this level" "$guard_warn" "cannot project at this level"
+contains "naming the shed rate as the reason" "$guard_warn" "shed request"
+lacks "rather than splicing the basis token into a rate sentence" \
+  "$guard_warn" "none at ~2,500"
+lacks "and without a threshold line for a figure it did not produce" \
+  "$guard_warn" "threshold:"
+
+# The rate caveat blames the other box only where that is true. run.sh is
+# single-host: the generator is on the same box.
+rec="$tmp/rec-guard-local"
+: >"$rec"
+PERF_LOG_AVAIL_BYTES=$((300 * GBG)) \
+  perf_guard_log_volume "$rec" "$gd/mcp.log" "$gd/config.yaml" "$gd" 3600 local >"$tmp/guard-local.txt" 2>&1
+lacks "the single-host runner does not blame a box that is not there" \
+  "$(cat "$tmp/guard-local.txt")" "the load runs on the other box"
+contains "but still says the figure scales with the rate" \
+  "$(cat "$tmp/guard-local.txt")" "scales with the call rate"
+contains "and says gctrace bytes are not in the figure" \
+  "$(cat "$tmp/guard-local.txt")" "GODEBUG=gctrace"
+
+# A level that could not be established must not refuse: blocking a campaign
+# over a value nobody measured is the worse failure.
+printf '%s\n' '{"msg":"something else"}' >"$gd/nolevel.log"
+printf '%s\n' 'semp:' '  max_concurrent_per_broker: 4' >"$gd/nolevel.yaml"
+rec="$tmp/rec-guard-unknown"
+: >"$rec"
+if PERF_LOG_AVAIL_BYTES=$((1 * GBG)) \
+   perf_guard_log_volume "$rec" "$gd/nolevel.log" "$gd/nolevel.yaml" "$gd" 36000 >"$tmp/guard-unk.txt" 2>&1; then
+  ok "an unestablished level does not refuse the run"
+else
+  bad "an unestablished level does not refuse the run"
+fi
+contains "but does say it could not project" \
+  "$(cat "$tmp/guard-unk.txt")" "cannot project"
+
+# --- summary.sh: gctrace and the generator's own memory -----------------------
+
+# A gctrace line, as the runtime writes it under GODEBUG=gctrace=1. The triple
+# is H_T->H_a->H_m: heap at cycle start, heap at end, and heap MARKED LIVE. The
+# third is the only one that answers "does this leak" — RSS alone cannot
+# separate a growing live heap from an allocator holding freed spans, which is
+# exactly the question SOL-154158 had to answer with a script outside the repo.
+gc_line() { # <t_sec> <live_mb>
+  printf 'gc %d @%d.012s 0%%: 0.024+0.29+0.003 ms clock, 0.19+0.10/0.28/0.007+0.031 ms cpu, %d->%d->%d MB, %d MB goal, 0 MB stacks, 0 MB globals, 8 P\n' \
+    "$2" "$1" "$(( $2 + 6 ))" "$(( $2 + 4 ))" "$2" "$(( $2 + 8 ))"
+}
+
+# Live heap is deliberately flat inside each stretch so the medians are exact:
+# 52 MB over the first drift window, 53 through the middle, 54 over the last,
+# and 99 MB outside the load phase entirely — a number that must never appear
+# in a windowed figure.
+make_gctrace_log() { # <path>
+  local out=$1 t
+  {
+    echo '{"time":"x","level":"INFO","msg":"config loaded","port":9090,"log_level":"info","fair_scheduling":true}'
+    for t in $(seq 0 10 1200); do
+      if   (( t < 100 ));  then gc_line "$t" 99
+      elif (( t <= 200 )); then gc_line "$t" 52
+      elif (( t < 1000 )); then gc_line "$t" 53
+      elif (( t <= 1100 )); then gc_line "$t" 54
+      else                      gc_line "$t" 99
+      fi
+    done
+  } >"$out"
+}
+
+echo "== summary.sh reads the live heap out of gctrace, windowed on the load phase"
+
+run_gc="$tmp/run-gc"
+mkdir -p "$run_gc"
+make_sampler_csv "$run_gc/sampler.csv"
+make_gctrace_log "$run_gc/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_start_epoch=$((BASE + 100))"
+  echo "load_end_epoch=$((BASE + 1100))"
+} >"$run_gc/run-record.mcp"
+
+out=$("$here/summary.sh" "$run_gc")
+# 100, not the 101 cycles the fixture emits between t=100 and t=1100: gctrace
+# stamps fractional seconds, so the cycle at @1100.012s lands just past a
+# window that ends at load_end_epoch. Pinned deliberately — a boundary cycle
+# being excluded is correct, and an implementation that rounded it in would
+# also round in the 99 MB post-load cycles this fixture is watching for.
+contains "the cycle count is reported" "$out" "cycles=100"
+contains "and the live-heap median over the load phase" "$out" "median=53 MB"
+contains "and the drift between the first and last window of the run" "$out" "drift=+2 MB"
+lacks "cycles outside the load phase are excluded, not averaged in" "$out" "99 MB"
+
+# Without the anchor there is no way to place a program-relative @Xs on the wall
+# clock. Reporting over the whole capture is honest; silently pretending the
+# figure is windowed is not.
+run_gc2="$tmp/run-gc-noanchor"
+mkdir -p "$run_gc2"
+make_sampler_csv "$run_gc2/sampler.csv"
+make_gctrace_log "$run_gc2/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "load_start_epoch=$((BASE + 100))"
+  echo "load_end_epoch=$((BASE + 1100))"
+} >"$run_gc2/run-record.mcp"
+out=$("$here/summary.sh" "$run_gc2")
+contains "every cycle in the capture is counted when it cannot be windowed" \
+  "$out" "cycles=121"
+contains "and the report says why it is not windowed" \
+  "$out" "no usable mcp_start_epoch"
+
+# No gctrace in the log is the normal case — GODEBUG is opt-in — and it must
+# not print an empty section or a zero that reads like a measurement.
+run_gc3="$tmp/run-gc-absent"
+mkdir -p "$run_gc3"
+make_sampler_csv "$run_gc3/sampler.csv"
+echo '{"msg":"config loaded","port":9090,"log_level":"info"}' >"$run_gc3/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "load_start_epoch=$((BASE + 30))"
+  echo "load_end_epoch=$((BASE + 55))"
+} >"$run_gc3/run-record.mcp"
+out=$("$here/summary.sh" "$run_gc3")
+lacks "a run without gctrace prints no gc section at all" "$out" "live heap"
+
+echo "== summary.sh reports the generator's own memory the way it does the server's"
+
+run_lg="$tmp/run-lg-mem"
+mkdir -p "$run_lg"
+# Twelve samples climbing 100 MB -> 700 MB: the shape item 1 of the ticket
+# describes, and the shape this sampler exists to make visible. Ends are
+# medians of five samples each, so the fixture needs more than five rows for
+# the drift to mean anything.
+make_lg_mem() { # <path> [extra-row]
+  local out=$1 extra=${2:-}
+  {
+    echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+    local i kb
+    for i in $(seq 0 11); do
+      kb=$(( 100000 + i * 54545 ))
+      echo "$i,10:00:0$i,$kb,$(( kb + 300000 )),12,40"
+    done
+    if [[ -n "$extra" ]]; then printf '%s' "$extra"; fi
+  } >"$out"
+  # An explicit return: the redirect group above ends on a conditional, and a
+  # false one would make this function return non-zero and abort the suite.
+  return 0
+}
+make_lg_mem "$run_lg/mem-loadgen.csv"
+# Settle pinned to 0: this fixture's t_sec run 0..11, and the point of these
+# three assertions is the median-vs-single-sample behaviour, not the ramp-up
+# skip (which has its own fixtures below).
+out=$(LG_DRIFT_SETTLE_SECS=0 "$here/summary.sh" "$run_lg")
+contains "the generator's peak RSS is reported" "$out" "max= 683.6 MB"
+contains "with a drift taken from medians at each end, not single samples" \
+  "$out" "drift=+372.9 MB"
+contains "and it is labelled as the generator, not the server" "$out" "loadgen"
+
+# The runner SIGKILLs memsampler on every terminated run, and a kill between
+# two writes leaves the last row truncated mid-field. "3,10:00:03,80" parses as
+# a valid 80 KB RSS, and taking the end from it inverted the drift sign on a
+# generator that had grown by 586 MB — the leak verdict pointing backwards.
+make_lg_mem "$run_lg/mem-loadgen.csv" "12,10:00:12,80"
+out=$(LG_DRIFT_SETTLE_SECS=0 "$here/summary.sh" "$run_lg")
+contains "a row truncated mid-field does not become the end sample" \
+  "$out" "drift=+372.9 MB"
+lacks "and cannot drag the minimum to a fraction of a MB" "$out" "min=   0.1 MB"
+contains "the ignored row is reported rather than dropped in silence" \
+  "$out" "row(s) ignored"
+
+# Below eleven rows the five-sample end windows overlap, and at five or fewer
+# they are the same samples — which reported drift=+0.0 MB for a generator
+# climbing 97.7 -> 293.0 MB. Every terminated run lands here.
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  echo "0,10:00:00,100000,400000,12,40"
+  echo "1,10:00:01,200000,500000,12,40"
+  echo "2,10:00:02,300000,600000,12,40"
+} >"$run_lg/mem-loadgen.csv"
+out=$(LG_DRIFT_SETTLE_SECS=0 "$here/summary.sh" "$run_lg")
+contains "a series too short to have two distinct ends refuses a drift" \
+  "$out" "drift=n/a"
+contains "and says how many samples it had" "$out" "only 3 samples"
+lacks "rather than reporting a climbing generator as flat" "$out" "drift=+0.0 MB"
+contains "the peak is still reported, which needs no window" "$out" "max= 293.0 MB"
+
+# The MCP series has the identical truncation failure, on the rig whose RSS a
+# campaign actually compares — it was hardened one file too late.
+run_mcpmem="$tmp/run-mcp-mem"
+mkdir -p "$run_mcpmem"
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  echo "0,10:00:00,178000,900000,14,52"
+  echo "1,10:00:01,179000,900000,14,52"
+  echo "2,10:00:02,178500,900000,14,52"
+  printf '3,14:22:31,17'
+} >"$run_mcpmem/mem.csv"
+out=$("$here/summary.sh" "$run_mcpmem")
+lacks "a row truncated mid-field cannot drag the server's minimum to zero" \
+  "$out" "min=   0.0 MB"
+contains "the real floor is reported instead" "$out" "min= 173.8 MB"
+contains "and the ignored row is named" "$out" "row(s) ignored"
+contains "the thread end is still a number, not blank" "$out" "thr:  end=14"
+
+echo "== the generator drift baseline is taken after the dial ramp, not during it"
+
+# memsampler starts as loadgen launches, so the opening samples are taken
+# inside dialAll. Measured from them, a generator that allocates its sessions
+# and then never moves reads as a leak: 8s of dial to 600 MB followed by 592s
+# perfectly flat reported drift=+404.7 MB — on the one number this series
+# exists to produce.
+run_ramp="$tmp/run-ramp"
+mkdir -p "$run_ramp"
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  for i in $(seq 0 7); do echo "$i,10:00:00,$(( 60000 + i * 70000 )),900000,12,40"; done
+  for i in $(seq 8 599); do echo "$i,10:00:00,614400,900000,12,40"; done
+} >"$run_ramp/mem-loadgen.csv"
+out=$("$here/summary.sh" "$run_ramp")
+contains "a generator flat after its dial ramp reports no drift" "$out" "drift=+0.0 MB"
+contains "and says how much of the opening it skipped" "$out" "first 30s skipped as ramp-up"
+contains "and names the sample times the ends came from" "$out" "t=30s"
+contains "the peak still covers the whole series, ramp included" "$out" "max= 600.0 MB"
+
+# ...and the skip must not hide a real climb.
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  for i in $(seq 0 7); do echo "$i,10:00:00,60000,900000,12,40"; done
+  for i in $(seq 8 599); do echo "$i,10:00:00,$(( 100000 + i * 800 )),900000,12,40"; done
+} >"$run_ramp/mem-loadgen.csv"
+out=$("$here/summary.sh" "$run_ramp")
+contains "a genuine climb after the ramp is still reported" "$out" "drift=+441.4 MB"
+
+# WARMUP is ramp too — the stats window does not open until it has elapsed.
+{
+  echo "record_version=1"
+  echo "role=loadgen"
+  echo "stats_warmup=60s"
+} >"$run_ramp/run-record.loadgen"
+out=$("$here/summary.sh" "$run_ramp")
+contains "a warm-up extends the skip rather than being measured as growth" \
+  "$out" "first 90s skipped as ramp-up"
+
+# The column is resolved by name, never by index — the same rule the rest of
+# summary.sh follows, and the reason a new memsampler column cannot break this.
+{
+  echo "t_sec,wall_ts,vm_kb,threads,open_fds,rss_kb"
+  echo "0,10:00:00,200000,12,40,100000"
+  echo "1,10:00:01,240000,12,40,180000"
+} >"$run_lg/mem-loadgen.csv"
+out=$("$here/summary.sh" "$run_lg")
+contains "a reordered header still finds rss_kb" "$out" "max= 175.8 MB"
+
+# gctrace is fd 2 and slog is fd 1, both pointed at one mcp.log with a shared
+# offset, so under load a JSON record can land inside a gctrace line. Dropping
+# those silently under-reports the cycle count and skews the median.
+run_split="$tmp/run-interleaved"
+mkdir -p "$run_split"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  printf 'gc 1 @10.012s 0%%: x ms clock, y ms cpu, 58->56->52 MB, 60 MB goal, 8 P\n'
+  printf 'gc 2 @20.012s 0%%: x ms clock, y ms cpu, 58->56-{"time":"x"}>99 MB, 60 MB goal, 8 P\n'
+  printf 'gc 3 @30.012s 0%%: x ms clock, y ms cpu, 58->56->52 MB, 60 MB goal, 8 P\n'
+} >"$run_split/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_start_epoch=$((BASE + 5))"
+  echo "load_end_epoch=$((BASE + 35))"
+} >"$run_split/run-record.mcp"
+out=$("$here/summary.sh" "$run_split")
+contains "an unparsable gctrace line is counted and reported" \
+  "$out" "1 gctrace line(s) unparsable"
+contains "and the cycles it could read are still reported" "$out" "cycles=2"
+
+echo "== summary.sh does not claim a window it did not apply"
+
+# The split-host MCP box stamps no load window by design — the load runs on the
+# other box — so this record shape is the one a real soak produces, and it is
+# the shape that was reporting pre-load idle heap as the run's maximum with the
+# drift sign inverted.
+run_sh="$tmp/run-splithost"
+mkdir -p "$run_sh"
+make_sampler_csv "$run_sh/sampler.csv"
+make_gctrace_log "$run_sh/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_window_source=split-host-load-on-other-box"
+} >"$run_sh/run-record.mcp"
+out=$("$here/summary.sh" "$run_sh")
+contains "an unwindowed report says so in terms that cannot be skimmed past" \
+  "$out" "NOT windowed"
+contains "and warns that the figures include the idle stretch" "$out" "idle stretch"
+contains "and names the way to fix it" "$out" "--window-from"
+
+# The NUMBERS in the un-windowed case, not just the warning text. The previous
+# version of this section asserted only that the report said "NOT windowed",
+# which is why a real defect survived four review rounds: in that branch the
+# cycle position kept the string sub() left behind, so the end-window tests
+# compared a string against a number and awk did it lexicographically. The
+# windows came out holding 546 and 110 of 600 cycles, overlapping hugely,
+# while the numeric overlap guard never fired.
+#
+# Flat at 100 MB with a 500 MB plateau across the middle: the correct answer
+# is a drift of zero over two windows of 60 cycles each, and any window
+# selected by string order picks up the plateau and says otherwise.
+run_unw="$tmp/run-unwindowed-numbers"
+mkdir -p "$run_unw"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  for t in $(seq 0 1 599); do
+    if (( t >= 200 && t <= 400 )); then lv=500; else lv=100; fi
+    printf 'gc %d @%d.000s 0%%: x, y, %d->%d->%d MB, 60 MB goal, 8 P\n' \
+      "$t" "$t" $((lv + 6)) $((lv + 4)) "$lv"
+  done
+} >"$run_unw/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_window_source=split-host-load-on-other-box"
+} >"$run_unw/run-record.mcp"
+out=$("$here/summary.sh" "$run_unw")
+contains "every cycle is counted when there is no window to apply" "$out" "cycles=600"
+contains "the end windows hold the cycles the time span says they should" \
+  "$out" "over 60 cycles"
+contains "so a heap that starts and ends flat reports no drift" "$out" "drift=+0 MB"
+lacks "and the windows do not overlap into the middle of the run" "$out" "over 546 cycles"
+lacks "nor take a sliver at the other end" "$out" "over 110 cycles"
+
+# Given the load box's directory it windows properly, which is the documented
+# split-host workflow.
+run_sh_lg="$tmp/run-splithost-lg"
+mkdir -p "$run_sh_lg"
+{
+  echo "record_version=1"
+  echo "role=loadgen"
+  echo "load_start_epoch=$((BASE + 100))"
+  echo "load_end_epoch=$((BASE + 1100))"
+} >"$run_sh_lg/run-record.loadgen"
+out=$("$here/summary.sh" "$run_sh" --window-from "$run_sh_lg")
+contains "pointed at the load box it windows on the load phase" "$out" "cycles=100"
+lacks "and the idle heap is gone from the figures" "$out" "max=99 MB"
+contains "and the footer names the record the window came from" \
+  "$out" "run-record.loadgen"
+
+# A window typed by hand is unverified everywhere else in this report, and the
+# gc line is the one that gets pasted into a write-up.
+out=$("$here/summary.sh" "$run_sh" $((BASE + 100)) $((BASE + 1100)))
+contains "a hand-typed window is marked unverified on the gc line too" \
+  "$out" "unverified"
+
+# A record that was truncated mid-write or hand-edited must not reach awk, where
+# a non-integer becomes 0 and excludes every cycle — which reads as a gctrace
+# format change and sends the reader to the wrong place.
+run_bad="$tmp/run-bad-anchor"
+mkdir -p "$run_bad"
+make_gctrace_log "$run_bad/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=abc"
+  echo "load_start_epoch=$((BASE + 100))"
+  echo "load_end_epoch=$((BASE + 1100))"
+} >"$run_bad/run-record.mcp"
+out=$("$here/summary.sh" "$run_bad" 2>/dev/null)
+contains "a non-integer anchor is refused, not passed to awk" "$out" "NOT windowed"
+lacks "and no window is claimed on the strength of it" "$out" "windowed on the load"
+
+# Every cycle falling outside the window is a different failure from a format
+# change — a clock skew between the two boxes, most likely — and must not be
+# reported as one.
+run_skew="$tmp/run-skew"
+mkdir -p "$run_skew"
+make_gctrace_log "$run_skew/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_start_epoch=$((BASE + 90000))"
+  echo "load_end_epoch=$((BASE + 93000))"
+} >"$run_skew/run-record.mcp"
+out=$("$here/summary.sh" "$run_skew")
+contains "cycles parsed but excluded are counted and named as such" \
+  "$out" "cycles parsed, none inside the window"
+contains "and the clock is named as the thing to check" "$out" "clock"
+lacks "not reported as an unparsable format" "$out" "format may have changed"
+
+echo "== the runners are wired to the helpers they depend on"
+
+# A structural check, and deliberately labelled as one. run-mcp.sh's wiring is
+# asserted properly by run-mcp.test.sh, which drives the real script against a
+# stub server. run-loadgen.sh has no such harness — it needs a mock, a
+# fidelity gate and three stub binaries — and without one, deleting its
+# memsampler launch left every assertion in all three suites green. That is
+# the whole of AC7's implementation.
+#
+# So this greps. It catches a deleted call, which is the failure that actually
+# happened; it cannot catch a call in the wrong place or with the wrong
+# arguments. A dynamic run-loadgen.test.sh is the real answer and is not in
+# this change.
+wired() { # <name> <file> <needle>
+  if grep -qF -- "$3" "$here/$2"; then ok "$1"; else bad "$1 (missing from $2: $3)"; fi
+}
+wired "run-loadgen.sh starts memsampler against the generator at 1s resolution" \
+  run-loadgen.sh '"$bin/memsampler" -pid "$lg_pid" -interval 1s'
+wired "and writes it where summary.sh looks" \
+  run-loadgen.sh 'mem-loadgen.csv'
+wired "and kills it on the way out, like every other sampler" \
+  run-loadgen.sh 'kill_tree "$lg_mem_pid"'
+wired "and waits for it, so the CSV is flushed before summary runs" \
+  run-loadgen.sh 'wait "$lg_mem_pid"'
+wired "and records the binary it executed" \
+  run-loadgen.sh 'loadgen mock-semp fidelity memsampler'
+# Position, not presence. A grep for the call passed while the call sat 70
+# lines BELOW the mock-semp launch it was supposed to precede — and the
+# helper's own comment admitted a grep cannot see placement, which is exactly
+# the excuse that let it through. This compares line numbers instead.
+filters_first() { # <name> <file>
+  local f=$here/$2 filt first
+  # `|| true` on both, and it is not decoration: this file runs under
+  # `set -euo pipefail`, so a grep that matches nothing fails its pipeline and
+  # aborts the whole suite mid-report — which is what a missing call does. The
+  # assertion would then kill the run instead of failing, and print no FAIL
+  # line to say why. Exactly the hazard lib.sh guards its own /proc reads
+  # against.
+  filt=$( { grep -n '^perf_filter_godebug' "$f" || true; } | head -1 | cut -d: -f1)
+  # Every binary this script launches, not just the obvious one. The first
+  # version of this check looked for setsid and mock-semp only, and so could
+  # not see the `loadgen -validate-only` preflight that ran, unfiltered, 150
+  # lines above the filter in two of these scripts.
+  first=$( { grep -nE 'setsid|"\$bin/(mock-semp|loadgen|fidelity|memsampler)"' "$f" || true; } | head -1 | cut -d: -f1)
+  if [[ -z "$filt" ]]; then
+    bad "$1 (no perf_filter_godebug call in $2)"
+  elif [[ -z "$first" ]]; then
+    bad "$1 (no child launch found in $2 — has the launch shape changed?)"
+  elif (( filt < first )); then
+    ok "$1"
+  else
+    bad "$1 (filter at line $filt, first child launched at line $first)"
+  fi
+}
+filters_first "run.sh filters GODEBUG before it launches anything" run.sh
+filters_first "run-mcp.sh does too" run-mcp.sh
+filters_first "and run-loadgen.sh, which archives logs from binaries that send Authorization" run-loadgen.sh
+# The one script that launches against a REAL broker with real credentials and
+# captures the server's stderr into an archived log.
+filters_first "and regen-golden.sh, which runs against the real appliance" regen-golden.sh
+wired "run.sh records the memory entitlement too, not just the CPU one" \
+  run.sh 'perf_record_runtime_mem "$mcp_record" "$mcp_pid"'
+wired "and stamps the gctrace anchor" \
+  run.sh 'perf_record_kv "$mcp_record" mcp_start_epoch'
+wired "and guards its own log volume" \
+  run.sh 'perf_guard_log_volume "$mcp_record"'
+
+echo "== perf_filter_godebug keeps only the setting this harness asks for"
+
+# The runners capture child stderr into archived logs, and loadgen, fidelity
+# and the server all send an Authorization header. http2debug=2 would print it.
+( GODEBUG="gctrace=1,http2debug=2"; perf_filter_godebug 2>/dev/null
+  eq "http2debug is dropped and gctrace kept" "${GODEBUG:-<unset>}" "gctrace=1" )
+( GODEBUG="http2debug=2"; perf_filter_godebug 2>/dev/null
+  eq "a GODEBUG with nothing to keep is unset entirely" "${GODEBUG:-<unset>}" "<unset>" )
+# gctrace=0 passes a naive ^gctrace= filter, emits nothing, and would cost an
+# operator a ten-hour soak's live-heap series they believed they had captured.
+( GODEBUG="gctrace=0"; perf_filter_godebug 2>/dev/null
+  eq "gctrace=0 is dropped as the no-op it is" "${GODEBUG:-<unset>}" "<unset>" )
+( GODEBUG="gctrace=2"; perf_filter_godebug 2>/dev/null
+  eq "but a higher gctrace level is kept" "${GODEBUG:-<unset>}" "gctrace=2" )
+( unset GODEBUG; perf_filter_godebug 2>/dev/null
+  eq "an unset GODEBUG stays unset" "${GODEBUG:-<unset>}" "<unset>" )
+godebug_warn=$( GODEBUG="gctrace=1,http2debug=2"; perf_filter_godebug 2>&1 >/dev/null )
+contains "and the reduction is reported, not silent" "$godebug_warn" "GODEBUG reduced to"
+
+echo "== the gctrace drift refuses a figure it cannot support"
+
+# Every drift=n/a branch was unreachable from the suite: lowering the
+# five-cycle floor to one passed the whole suite while printing a fabricated
+# leak verdict off a single cycle at each end.
+gcshort="$tmp/run-gc-short"
+mkdir -p "$gcshort"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  printf 'gc 1 @10.000s 0%%: x, y, 506->504->500 MB, 520 MB goal, 8 P\n'
+  printf 'gc 2 @30.000s 0%%: x, y, 58->56->52 MB, 60 MB goal, 8 P\n'
+  printf 'gc 3 @50.000s 0%%: x, y, 58->56->52 MB, 60 MB goal, 8 P\n'
+  printf 'gc 4 @70.000s 0%%: x, y, 58->56->52 MB, 60 MB goal, 8 P\n'
+  printf 'gc 5 @90.000s 0%%: x, y, 58->56->53 MB, 60 MB goal, 8 P\n'
+} >"$gcshort/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_start_epoch=$BASE"
+  echo "load_end_epoch=$((BASE + 100))"
+} >"$gcshort/run-record.mcp"
+out=$("$here/summary.sh" "$gcshort")
+contains "too few cycles in an end window refuses the drift" "$out" "drift=n/a"
+contains "and says how many each end had" "$out" "cycles in the end windows"
+contains "the cycles it did read are still reported" "$out" "cycles=5"
+
+# A restart is a step backwards in the program clock. Inferred from
+# last-minus-first it is invisible whenever the second lifetime ends above
+# where the first began — which reported a 52 -> 300 MB rise as drift=-124 MB.
+gcrestart="$tmp/run-gc-restart"
+mkdir -p "$gcrestart"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  for t in $(seq 0 20 3599); do
+    printf 'gc %d @%d.000s 0%%: x, y, 58->56->52 MB, 60 MB goal, 8 P\n' "$t" "$t"
+  done
+  for t in $(seq 0 20 599); do
+    printf 'gc %d @%d.000s 0%%: x, y, 310->305->300 MB, 320 MB goal, 8 P\n' "$t" "$t"
+  done
+} >"$gcrestart/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+  echo "mcp_start_epoch=$BASE"
+  echo "load_window_source=split-host-load-on-other-box"
+} >"$gcrestart/run-record.mcp"
+out=$("$here/summary.sh" "$gcrestart")
+contains "a capture spanning two server lifetimes refuses a drift" "$out" "drift=n/a"
+contains "and names the restart as the reason" "$out" "clock goes backwards"
+lacks "rather than reporting a rise as a fall" "$out" "drift=-"
+
+echo "== the live-heap median is a median, not whichever value is handy"
+
+# Every other gctrace fixture is flat inside its windows, so the median arm was
+# only exercised where any definition agrees: int(total/2) instead of
+# int((total+1)/2) passed the whole suite. Skewed 50,50,60,60,60 separates the
+# median (60) from the lower-middle element (50) and the mean (56).
+gcmed="$tmp/run-gc-median"
+mkdir -p "$gcmed"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  for lv in 50 50 60 60 60; do
+    printf 'gc 1 @0.000s 0%%: x, y, %d->%d->%d MB, 70 MB goal, 8 P\n' \
+      $((lv + 6)) $((lv + 4)) "$lv"
+  done
+} >"$gcmed/mcp.log"
+{
+  echo "record_version=1"
+  echo "role=mcp"
+} >"$gcmed/run-record.mcp"
+out=$("$here/summary.sh" "$gcmed")
+contains "an odd, skewed window reports the true median" "$out" "median=60 MB"
+lacks "not the lower-middle element" "$out" "median=50 MB"
+lacks "and not the mean" "$out" "median=56 MB"
+
+echo "== a warm-up the record cannot express is refused, not defaulted away"
+
+# perf_duration_secs accepts 1.5m, and the runners record stats_warmup
+# verbatim. Folded in with bash arithmetic it errored mid-report, the settle
+# silently stayed at 30s, and the baseline was taken inside the warm-up — the
+# wrong-sign verdict the skip exists to prevent.
+gcwarm="$tmp/run-lg-warm"
+mkdir -p "$gcwarm"
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  for i in $(seq 0 89); do echo "$i,10:00:00,$(( 100000 + i * 4000 )),900000,12,40"; done
+  for i in $(seq 90 599); do echo "$i,10:00:00,460000,900000,12,40"; done
+} >"$gcwarm/mem-loadgen.csv"
+{ echo "record_version=1"; echo "role=loadgen"; echo "stats_warmup=1.5m"; } >"$gcwarm/run-record.loadgen"
+out=$("$here/summary.sh" "$gcwarm" 2>/dev/null)
+contains "a fractional warm-up is resolved, not fumbled into bash arithmetic" \
+  "$out" "first 120s skipped as ramp-up"
+contains "so a generator flat after its warm-up shows no drift" "$out" "drift=+0.0 MB"
+
+{ echo "record_version=1"; echo "role=loadgen"; echo "stats_warmup=banana"; } >"$gcwarm/run-record.loadgen"
+out=$("$here/summary.sh" "$gcwarm" 2>/dev/null)
+contains "an unresolvable warm-up refuses the drift rather than defaulting" \
+  "$out" "drift=n/a"
+contains "and says the ramp-up could not be sized" "$out" "could not be resolved"
+
 echo
 if (( skip )); then
   echo "$pass passed, $fail failed, $skip skipped"

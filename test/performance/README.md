@@ -75,7 +75,15 @@ fixtures.manifest     what the last capture produced (gitignored)
 ```
 
 Artifacts land in `bin/runs/<timestamp>[-<tag>]/`, including a `run-record.*`
-per role — see [The run record](#the-run-record).
+per role — see [The run record](#the-run-record). The memory series are one per
+sampled process: `mem.csv` for the MCP server from `run.sh` and `run-mcp.sh`
+(Box A runs no server, so it writes none), and — from
+`run-loadgen.sh` only — `mem-loadgen.csv` for the load generator itself, with
+`memsampler-loadgen.log` beside it. The generator was the one process in the rig
+nobody measured, and that is how its `O(rate x duration)` sample retention went
+unnoticed. `run.sh` runs the generator in the foreground, so a single-host run
+has no generator series; use the split-host runner when that is what you are
+measuring.
 
 ## Ports
 
@@ -122,6 +130,8 @@ Key env knobs (full list in `run.sh` header):
 | `BROKER_PREFIX` | `broker` | alias prefix, passed to `loadgen -broker-prefix`. Must match the `-prefix` a generated config was built with, or every broker lookup misses. `BROKER_ALIAS` defaults to `<prefix>-01` |
 | `PORT_WAIT_SECS` | 60 | how long to wait for a port a previous run still holds |
 | `NOFILE` | 1048576 | descriptor limit to request; falls back to the hard limit. Both requested and granted are recorded |
+| `ALLOW_VERBOSE_LOGS` | — | set to `1` to run even when the projected log volume exceeds half the free space on the log volume. The projection is printed either way — see [Log volume on long runs](#log-volume-on-long-runs) |
+| `GODEBUG` | — | passed through to the server. `gctrace=1` puts the live-heap series into the run directory's `mcp.log` — see [Reading the live heap](#reading-the-live-heap-gctrace). Other values are stripped: the runner archives the server's stderr, and `http2debug` would write request headers into it |
 | `RIG_NOTE` | — | free-text note about this host. Recorded with control characters flattened to spaces, `=` replaced with `:` (both reported on stderr) and the value capped at 200 characters, so the record stays parseable by the documented `awk -F=` reader |
 
 ## Split-host run
@@ -172,22 +182,30 @@ firing loadgen.
 
 `run-mcp.sh` (Box B) takes `PORT_WAIT_SECS`, `NOFILE`, `RIG_NOTE` and `WARMUP`
 too, with the same meanings and defaults, alongside its own `MOCK_HOST`,
-`DURATION` and `CONFIG_FILE` — full contract in the script header. `RIG_NOTE` matters most
+`DURATION`, `CONFIG_FILE`, `GODEBUG` and `ALLOW_VERBOSE_LOGS` — full contract in
+the script header. The log-volume guard those last two relate to is **MCP-side
+only**: Box A writes `loadgen.log` and `mock.log`, has no server config to read
+a level from, and never projects its own volume. `RIG_NOTE` matters most
 there: Box B is the rig whose CPU and RSS a campaign actually compares.
 
 ## Running the self-tests
 
 None of these needs a broker, a server or fixtures. The first three run in a
 `mktemp` dir in a couple of seconds; the fourth stubs a server and takes about
-twenty:
+thirty-five:
 
 ```
 ./lib.test.sh              # lib.sh: run record, _source labels, port wait,
-                           # and summary.sh's load-phase windowing
+                           # summary.sh's load-phase windowing, the log-volume
+                           # projection, GODEBUG filtering, the runtime memory
+                           # fields, and the gctrace / mem-loadgen reporting
 ./gen-mock-config.test.sh  # the N-broker config generator
 go test ./memsampler/      # the /proc parse and the descriptor count
-./run-mcp.test.sh          # run-mcp.sh's cleanup path: a terminated run still
-                           # records its peaks, once, and marks them partial
+./run-mcp.test.sh          # run-mcp.sh end to end against a stub server: the
+                           # cleanup path (a terminated run still records its
+                           # peaks, once, marked partial), the log-volume
+                           # refusal and its override, GODEBUG filtering, and
+                           # the provenance fields the runner wires up
 ```
 
 `run-mcp.test.sh` binds :9090 and :18081 with stubs, the ports a real run uses,
@@ -224,13 +242,14 @@ Format is one `key=value` per line with `#` comments, the same shape the
 |---|---|
 | rig | `host`, `kernel`, `arch`, `cores_logical`, `cores_physical`, `cpu_model`, `mem_total_kb`, plus `instance_type` / `availability_zone` on EC2 and `rig_note` when `RIG_NOTE` is set |
 | code | `commit`, `commit_dirty`, and a `<binary>_sha256` for every binary the run executed |
-| runtime | `gomaxprocs_env`, `cgroup_path`, `cgroup_cpu_max`, `cgroup_cpu_quota_cores` — how much processor the Go runtime was entitled to. MCP records only; see [What the runtime fields say](#what-the-runtime-fields-say-and-what-they-deliberately-do-not) |
+| runtime | `gomaxprocs_env`, `cgroup_path`, `cgroup_cpu_max`, `cgroup_cpu_quota_cores`, `cgroup_cpu_quota_from`, `gomemlimit_env`, `cgroup_memory_max`, `cgroup_memory_max_from` — how much processor and memory the Go runtime was entitled to. MCP records only; see [What the runtime fields say](#what-the-runtime-fields-say-and-what-they-deliberately-do-not) |
+| logging | `log_level` and `log_level_source` — the level the server actually ran at, and where that was established. MCP records only; Box A runs no server and never projects its own log volume. Drives the projection in [Log volume on long runs](#log-volume-on-long-runs) |
 | fixtures | `fixtures_manifest_sha256`, `fixtures_files`, `fixtures_captured_at`, `fixtures_capture_commit`, `fixtures_capture_dirty`, `fixtures_vpn`, `fixtures_rdp`, `fixtures_broker_alias` |
 | admission | `semp_max_concurrent_per_broker`, `semp_request_min_interval`, `semp_max_queue_wait`, `semp_fair_scheduling`, each with a `_source` |
-| descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak`, `fd_peak_source`, plus `run_terminated` or `load_failed` when the run was not a whole one |
+| descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak`, `fd_peak_source`, plus `run_terminated`, `load_failed` or `run_refused` when the run was not a whole one — `run_refused=<reason>` with `fd_peak_source=refused` marks a run a pre-load guard stopped, which is not the same as one that was interrupted |
 | workload | `clients`, `duration`, `stats_warmup`, `tools`, `broker_count`, `vpn`, `rdp`, `latency_ms`, `total_rps`, the error-injection knobs, plus `mcp_url`, `brokers_csv`, `no_mock` and `mock_broker_ports` on the load box and `mock_host`, `config_file` and `hold_duration` on the MCP box |
 | outcome | `load_rc` — the load generator's exit code, on the runners that drive it |
-| load phase | `load_start_epoch`, `load_end_epoch`, `load_window_source`, and `stats_start_epoch` when `WARMUP` is set |
+| load phase | `load_start_epoch`, `load_end_epoch`, `load_window_source`, `stats_start_epoch` when `WARMUP` is set, plus — on the MCP records only — `mcp_start_epoch`, the moment the server process began, which is what places a program-relative gctrace stamp on the wall clock |
 
 Two of those describe different quantities and are easy to conflate.
 `broker_count` is how many aliases **this loadgen drives** — the entry count of
@@ -321,6 +340,42 @@ and leave the derivation to the reader.
 cgroup v2 only. A v1 or hybrid host writes `unknown` rather than guessing at a
 layout it did not read.
 
+The memory fields are the same idea for the other resource, and they exist for
+a measured reason: the SOL-154158 `GOMEMLIMIT` ladder ran four arms differing
+only in that variable and produced records **identical in every field**,
+separable only by a tag typed in by hand.
+
+| field | meaning |
+|---|---|
+| `gomemlimit_env` | `GOMEMLIMIT` in the server process's own environment, or `unset` |
+| `cgroup_memory_max` | the binding `memory.max`, verbatim in bytes; `none` when nothing on the path sets one |
+| `cgroup_memory_max_from` | which cgroup on the path that limit came from |
+
+Set it the way the ladder that motivated these fields did — on the runner,
+which passes it through to the server it launches:
+
+```
+GOMEMLIMIT=512MiB DURATION=2h ./run-mcp.sh
+```
+
+Putting it in the YAML config or a systemd unit instead leaves
+`gomemlimit_env=unset` in every record, which is what made the original ladder
+unreadable.
+
+There is deliberately **no** single "effective memory limit". The two facts are
+different mechanisms with different failure modes: `GOMEMLIMIT` is a soft
+target the runtime honours by collecting harder, and a cgroup `memory.max` is a
+hard wall the kernel enforces by killing. A run that was up against the first
+degrades; a run up against the second disappears. One merged number would hide
+which happened.
+
+`memory.max` is hierarchical exactly as `cpu.max` is, so the same walk applies
+and the same rule decides: the limit reported is the one that **binds**, not the
+nearest. `max` is the v2 spelling of "no limit" and is skipped as such; a line
+that is neither `max` nor a plain byte count is skipped as unread rather than
+treated as permission. `cgroup_path` is written once, by the CPU half, for the
+same process.
+
 ### When a run does not finish
 
 `fd_peak` and `threads_peak` are written from the runners' `EXIT` traps, so a
@@ -332,7 +387,11 @@ without it.
 A peak over a run that was cut short is not the peak the run would have
 reached, though, and absence used to be the marker for that. So the record now
 says which it is: `fd_peak_source=complete` or `fd_peak_source=partial`, the
-latter alongside `run_terminated=true`. This matters most on the split-host MCP
+latter alongside `run_terminated=true`. A run a pre-load guard **refused** —
+today only the log-volume projection — is a third case and not an interrupted
+measurement: it records `fd_peak_source=refused` and `run_refused=<reason>`, so
+a sweep counting `run_terminated` as "interrupted" does not include runs that
+never began. This matters most on the split-host MCP
 box, which stamps no load window by design and so has nothing else that would
 distinguish an interrupted record from a whole one.
 
@@ -476,6 +535,152 @@ the window. A bare `<from_epoch> <to_epoch>` pair still works and is marked
 `unverified` in the output, because a mistyped epoch otherwise yields a
 plausible number rather than an error.
 
+## Reading the live heap: gctrace
+
+RSS cannot answer "does the server leak". It does not separate a live heap that
+is growing from an allocator holding freed spans, and those are different
+answers to the only question a soak is asking. The runtime will say directly —
+set `GODEBUG` on the **runner**, which passes it through to the server it
+launches and captures the output where `summary.sh` can find it:
+
+```
+GODEBUG=gctrace=1 DURATION=10h ./run-mcp.sh      # split-host, Box B
+GODEBUG=gctrace=1 ./run.sh                       # single host
+```
+
+Launching the server by hand instead puts gctrace on your terminal and nowhere
+`summary.sh` reads: it looks for the lines in the run directory's `mcp.log`,
+which only a runner produces.
+
+Only `gctrace=<1-9>` survives — `gctrace=0` is dropped too, because it passes
+a naive filter, produces no output at all, and would cost you a ten-hour
+soak's live-heap series you believed you had captured. `GODEBUG` is a general knob and
+the runner captures the server's stderr into an archived `mcp.log`, so
+`http2debug=2` would write the SEMP client's `Authorization` header into a file
+that gets shared with the run directory. All three runners therefore strip every other key before launching anything
+and print what they dropped — `run-loadgen.sh` included, since it captures
+`loadgen.log` and `fidelity.log` and both of those binaries send an
+`Authorization` header. Same treatment `mcp_url` gets for userinfo, and for
+the same reason.
+
+Every cycle then prints an `H_T->H_a->H_m` triple — heap at cycle start, heap
+at end, and **heap marked live**. The third figure is the series that matters;
+it was flat at 52-54 MB across 1.6M cycles in the SOL-154158 soak, which is
+what closed the leak question that RSS alone had left open.
+
+`summary.sh` reads it out of the run directory's `mcp.log` (the runners send
+the server's stdout and stderr there together) and reports:
+
+```
+-- gctrace (server live heap) --
+  mcp   gc:   cycles=1602144   live heap: median=53 MB   min=52 MB   max=54 MB
+  mcp   gc:   drift=+1 MB   (first 3600s median=52 MB over 160214 cycles -> last 3600s median=53 MB over 159803 cycles)
+  mcp   gc:   windowed: load-phase (window: run-record.mcp; anchor: mcp_start_epoch in run-record.mcp)
+```
+
+The footer names both the window and the anchor, because they can come from
+different places: with `--window-from` the window is the load box's record
+while the anchor stays in this box's, and a window typed as a bare epoch pair
+carries its `(unverified)` marker onto this line too. With `WARMUP` set the
+window is the stats span rather than the load phase, and the label says
+`stats-span` — the GC figures then cover the span the percentiles cover.
+
+Drift is measured between the **first and last hour**, or the first and last
+tenth of the run when the run is shorter than ten hours — whichever window is
+smaller. A window longer than a tenth of the run stops being an end and starts
+being the middle.
+
+Each end needs **at least five cycles**, and the two must not overlap;
+otherwise the line reads `drift=n/a` and says why. A short smoke run with
+gctrace on would otherwise produce a leak verdict off one cycle at each end —
+and a capture holding two server lifetimes (the clock restarts partway) has no
+single run to measure over at all, so that says so too.
+
+The section is silent when the log holds no gctrace lines. `GODEBUG` is opt-in,
+and an empty section or a zero would read like a measurement of a server that
+never reported one.
+
+**The windowing needs an anchor.** gctrace stamps each line `@<seconds since
+program start>`, so placing a cycle on the wall clock takes the moment the
+process began — which is why the runners record `mcp_start_epoch`. A run
+directory from before they did cannot be windowed; the figures then cover the
+whole capture, including the idle stretch before the load, and the report says
+so rather than printing a whole-capture number under a load-phase heading.
+
+## Log volume on long runs
+
+At `log_level: info` the server writes one line per tool call. Measured in the
+SOL-154158 control: **1.1 GB and 4,512,819 lines in 30 minutes at 2,507
+calls/s**, about 2.2 GB/h. A ten-hour soak at that level fills a 30 GB volume
+somewhere around hour three, and it takes the samplers down with it — RSS was
+unaffected (174.4 vs 174.6 MB), so this is a disk failure mode, not a memory
+one, and nothing warned before the disk did.
+
+Both runners now project it before the load starts and print the projection
+whether or not it is comfortable:
+
+```
+   log volume: level=info (server-log) over 3600s
+               projected ~2.2 GB, measured at ~2,500 calls/s
+               (scales with the call rate, which this box does not know —
+                the load runs on the other box)
+               Server log lines only: GODEBUG=gctrace output lands in the
+               same file and is not counted (~190 B per GC cycle).
+               free on the log volume: 28.4 GB   threshold: 50%
+```
+
+`run.sh` prints the same block without the second line's "the load runs on the
+other box" — on a single host the generator is right there, and the rate is
+knowable.
+
+A projection over **half** the free space on the log volume refuses the run —
+ten hours at `info` against the same 28.4 GB projects ~22.0 GB:
+
+```
+   REFUSING: the projected log volume exceeds 50% of the free space
+             on the log volume. Lower log_level in the config this run uses,
+             shorten the run, free space, or set ALLOW_VERBOSE_LOGS=1 to run anyway.
+```
+
+`ALLOW_VERBOSE_LOGS=1` overrides it, and the run says it is proceeding anyway.
+It is an override rather than a tunable threshold on purpose: someone who wants
+22 GB of logs says so once, instead of tuning a fraction until the check passes.
+
+Five caveats, because the number is a projection and not a prediction:
+
+* **It scales with the call rate, and the MCP box does not know the rate** —
+  the load runs on the other box by design. The figure assumes roughly the
+  2,500 calls/s the rate was measured at, and it is printed with that caveat
+  attached every time.
+* **Only `info` was ever measured.** `debug` has never been measured and
+  cannot be quieter than `info`, so `info`'s rate is used as a **floor** and
+  the projection is labelled `floor` rather than `measured`.
+* **`warn` and `error` are not projectable, and are not zero.** In a healthy
+  run they emit nothing per call. But the shed and slow-admission paths log at
+  `warn` **once per SEMP request** — and driving a broker past
+  `semp.max_concurrent_per_broker` is exactly what this harness's admission
+  knobs exist to do. At 2,000 shed/s those lines outweigh the `info` figure the
+  guard refuses on, so the projection reports that it cannot size them rather
+  than printing a zero that would admit the run.
+* **gctrace bytes are not counted.** `GODEBUG=gctrace=1` writes to the same
+  `mcp.log` at roughly 190 B per GC cycle — about 300 MB across the 1.6M cycles
+  a ten-hour soak logged. The projection covers the server's own log lines and
+  says so; add it yourself when sizing a volume for a run with gctrace on.
+* **An unestablished level never refuses.** If the level could not be read from
+  the server's own `config loaded` line or from the config the run used, the
+  report says it cannot project and the run proceeds. Blocking a campaign over
+  a value nobody measured is the worse failure.
+
+The level itself reaches the run record as `log_level` with a
+`log_level_source`, on the same terms as [the admission
+settings](#why-the-admission-settings-carry-a-_source): `server-log` when the
+server reported it — the common case, since it is on the `config loaded` line,
+except at `warn` and `error` where that line sits below the configured level
+and is never emitted, leaving the config file as the only source —
+`config-file` when only the config said so, `server-log-schema-changed` when
+the line was there but the field was not, and `unreported-server-default` when
+nothing established it.
+
 ## More than 50 brokers
 
 > **`gen-mock-config.sh -port-start` is not honoured by the runners.** All three
@@ -558,6 +763,33 @@ t_sec, wall_ts, rss_kb, vm_kb, threads, open_fds
 directory could not be read (another user's process, or the process exiting
 between the two reads) — `NA` rather than `0`, because "no descriptors" and "we
 could not look" are different facts and a `0` in a run record would be believed.
+
+`mem-loadgen.csv` is the same file, same columns, same sampler, taken against
+the load generator's own process by `run-loadgen.sh`.
+
+It overlaps `loadgen-metrics.csv`'s `lg_res_kb` column, which `loadgen-sampler.sh`
+has read from `/proc/<pid>/status` at 5s intervals for as long as it has
+existed — so `summary.sh` prints the generator's memory twice, and the two are
+the same quantity: `lg mem` as a percentage of the box at 5s, `lg rss` in MB at
+1s. The `lg rss` line says so in the report. The finer series exists because a
+5s percentage on a 30 GB box cannot separate a climb from noise, which is why
+the `+458 MB/h` retention had to be found with a wrapper outside this repo. `summary.sh` reports its
+peak **and** its start-to-end drift: a generator that climbs steadily and one
+that allocates its ceiling in the first minute have the same peak and
+completely different stories, and only the first is a leak. The baseline is
+taken **after the dial ramp** — the first 30 seconds plus any `WARMUP`, since
+`memsampler` starts as `loadgen` launches and its opening samples are taken
+mid-`dialAll`. Measured from those, a generator that allocates its sessions
+and then never moves reads as a +400 MB leak. `LG_DRIFT_SETTLE_SECS` overrides the margin — it is read by `summary.sh`, not
+by the runners, so set it on the summary invocation. The line names the sample
+times both ends came from and how much it skipped. A `stats_warmup` the record
+carries but `summary.sh` cannot resolve refuses the drift rather than falling
+back to the bare margin, which would measure from inside the warm-up.
+
+That margin is a margin, not a measurement. The honest version windows on
+`stats_start_epoch` the way the CPU roll-up does, which needs an `epoch` column
+on `memsampler` — a change to a CSV schema every archived run is read with, so
+it is a follow-up rather than part of this.
 
 Descriptors are sampled from `/proc` and **not** scraped off `/metrics`, for two
 reasons, the second being the stronger: the Go runtime and process collectors on
