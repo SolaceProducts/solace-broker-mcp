@@ -96,17 +96,23 @@ See [Authentication](authentication.md) for full OAuth setup.
 ## Natural-Language Queries
 
 After connecting, ask in plain language. The agent selects the tool and fills
-parameters. Representative queries and the shape they return:
+parameters. The examples below say `<your-vpn-name>` where a query needs a
+Message VPN — substitute an actual VPN name from your event broker. There is
+no VPN literally named "default" on Solace Cloud; if you don't already know
+the name, ask "What VPNs are configured on prod-broker?" first (invokes
+`list-vpns`), or check the service details in the Solace Cloud console.
+
+Representative queries and the shape they return:
 
 | You ask | Tool invoked | Returns (shape) |
 |---|---|---|
 | "What event brokers are configured?" | `list-brokers` | `{ "brokers": ["prod-broker", "dev-broker"] }` |
 | "What's prod-broker's current status?" | `get-broker-status` | envelope with version, uptime, resource and spool utilization |
-| "List queues with a backlog on the default VPN" | `list-queues` | envelope `{ "queues": [ { "queueName": ..., "spooledMsgCount": ... }, ... ] }` |
+| "List queues with a backlog on `<your-vpn-name>`" | `list-queues` | envelope `{ "queues": [ { "queueName": ..., "spooledMsgCount": ... }, ... ] }` |
 | "Why is orders.q backing up?" | `get-queue-metrics` | envelope `{ "queueMetrics": { "spooledMsgCount": ..., "txUnackedMsgCount": ..., "bindCount": ... } }` |
-| "Are there slow subscribers on the default VPN?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
+| "Are there slow subscribers on `<your-vpn-name>`?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
 | "Are we dropping messages anywhere?" | `get-discard-stats` | `{ "clientDiscards": {...}, "spoolDiscards": {...} }` |
-| "Create a queue orders.q in the default VPN, then subscribe it to orders/>" | `create-queue` then `create-queue-subscription` | a bare `create-queue` alone leaves the queue inert — it attracts no messages until a subscription is added |
+| "Create a queue orders.q in `<your-vpn-name>`, then subscribe it to orders/>" | `create-queue` then `create-queue-subscription` | a bare `create-queue` alone leaves the queue inert — it attracts no messages until a subscription is added |
 
 Read-only tools return their event broker data in a step-keyed envelope. See
 [Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
@@ -228,7 +234,7 @@ brokers:
 Then query each by alias:
 
 ```
-List the queues on prod-broker's default VPN.
+List the queues on prod-broker's <your-vpn-name>.
 Compare message rates between prod-broker and dev-broker.
 ```
 

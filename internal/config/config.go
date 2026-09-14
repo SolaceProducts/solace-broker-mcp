@@ -940,10 +940,23 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 // the line OR preceded by whitespace, AND not inside a single- or
 // double-quoted string on the same line.
 //
+// A ' only opens a single-quoted string at a position where YAML actually
+// permits a scalar to start — see isScalarStart. Earlier, any ' anywhere on
+// the line (including a contraction in plain unquoted text, e.g. "John's" or
+// "don't") flipped the in-string flag. With no matching close, the flag
+// stayed true for the rest of the line, so a real # later on the same line
+// was read as "inside a string" and never recognized as a comment marker —
+// silently pulling ${VAR} the author believed was commented out into
+// substitution (SOL-153079).
+//
 // Limitations: block scalars (|, >) treat # as literal text — this helper
 // does not track block-scalar context. The broker MCP config schema uses only
 // scalar values and nested structs, never block scalars, so this is acceptable.
-// If a block-scalar field is ever added, extend this helper accordingly.
+// If a block-scalar field is ever added, extend this helper accordingly. A '
+// that opens a scalar-start position but is not actually meant to start a
+// quoted string (e.g. a value literally beginning with an apostrophe, like
+// "'twas") is still misread as an opening quote; this residual case is far
+// rarer than a mid-word contraction and is accepted as a limitation.
 func splitYAMLComment(line []byte) (active, comment []byte) {
 	inSingle := false
 	inDouble := false
@@ -957,15 +970,40 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 				inDouble = !inDouble
 			}
 		case c == '\'' && !inDouble:
-			// YAML escapes ' inside a single-quoted string as ''. A naive
-			// toggle re-enters the string at the second quote, which leaves
-			// the in/out state correct at any later #.
-			inSingle = !inSingle
+			switch {
+			case inSingle && i+1 < len(line) && line[i+1] == '\'':
+				// YAML's '' escape for a literal ' inside a single-quoted
+				// string. Consume both characters and stay inside the string.
+				i++
+			case inSingle:
+				// The real closing quote.
+				inSingle = false
+			case isScalarStart(line, i):
+				inSingle = true
+			}
 		case c == '#' && !inSingle && !inDouble && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
 			return line[:i], line[i:]
 		}
 	}
 	return line, nil
+}
+
+// isScalarStart reports whether position i in line is a place YAML permits a
+// scalar value to begin: the start of the line, or immediately after
+// whitespace, ':', '-', '[', '{', or ','. Only in one of these positions can
+// a ' plausibly open a single-quoted scalar; a ' anywhere else is text (most
+// commonly a contraction, e.g. "John's") and must not be mistaken for a
+// string delimiter.
+func isScalarStart(line []byte, i int) bool {
+	if i == 0 {
+		return true
+	}
+	switch line[i-1] {
+	case ' ', '\t', ':', '-', '[', '{', ',':
+		return true
+	default:
+		return false
+	}
 }
 
 // validate checks that the config has all required fields and that values are

@@ -516,6 +516,61 @@ brokers:
 	}
 }
 
+// An apostrophe in unquoted active text (e.g. "John's broker") earlier on the
+// same line must not be mistaken for a single-quote delimiter. That mistake
+// leaves splitYAMLComment believing it is still "inside a string" when it
+// reaches the line's real # marker, so the marker is never recognized as a
+// comment start and everything after it — including ${VAR} the author wrote
+// believing it was commented out — is substituted (SOL-153079).
+func TestLoadConfig_ApostropheBeforeInlineCommentDoesNotLeakSubstitution(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: John's admin # old auth was ${UNSET_OLD_TOKEN}
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("${UNSET_OLD_TOKEN} after an apostrophe-containing comment must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Password != "secret" {
+		t.Errorf("expected password %q, got %q", "secret", cfg.brokers["prod"].Auth.Password)
+	}
+}
+
+// YAML escapes a literal ' inside a single-quoted scalar as ”. A # between
+// the doubled quote and the real closing quote must still be treated as part
+// of the string, not a comment marker.
+func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
+	t.Setenv("ESCAPED_PWD", "live")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: 'it''s # not a comment ${ESCAPED_PWD}'
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "it's # not a comment live" {
+		t.Errorf("expected username %q, got %q", "it's # not a comment live", got)
+	}
+}
+
 func TestLoadConfig_PortOutOfRange(t *testing.T) {
 	yaml := `
 port: 99999

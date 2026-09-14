@@ -70,7 +70,11 @@ For details on securing this connection with a static token or OAuth/OIDC, see [
 
 ### Example Queries
 
-After connecting, try these example queries:
+After connecting, try these example queries. Substitute `<your-vpn-name>` with
+an actual Message VPN name — Solace Cloud services don't ship a VPN literally
+named "default". Don't know the name? Ask "What VPNs are configured on
+my-broker?" first (invokes `list-vpns`), or check the service details in the
+Solace Cloud console.
 
 **Check event broker status:**
 ```
@@ -79,17 +83,17 @@ Get the status of my-broker
 
 **List queues:**
 ```
-Show me all queues in the default VPN on my-broker
+Show me all queues in <your-vpn-name> on my-broker
 ```
 
 **Diagnose a slow consumer:**
 ```
-Get client details for client-name in default VPN on my-broker
+Get client details for client-name in <your-vpn-name> on my-broker
 ```
 
 **Monitor message rates:**
 ```
-What are the current message rates for default VPN on my-broker?
+What are the current message rates for <your-vpn-name> on my-broker?
 ```
 
 ## Tools Reference

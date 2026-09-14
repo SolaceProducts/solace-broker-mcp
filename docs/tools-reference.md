@@ -34,6 +34,21 @@ The accepted values are the event broker aliases from your configuration. Call `
 to discover them. Alias matching is case-insensitive; original casing is
 preserved in output.
 
+### The `msgVpnName` Parameter
+
+Most tools also take a required `msgVpnName` identifying which Message VPN to
+query. There is no VPN literally named "default" on Solace Cloud — it's a
+per-event-broker configuration value, not a universal constant. Call
+`list-vpns` to discover the actual names on a given event broker, or check the
+service details in the Solace Cloud console.
+
+Each tool's **Example request** below writes `<your-vpn-name>` where a real VPN
+name is needed — replace it with one from your own event broker before trying
+the query. The JSON **example invocation** blocks instead use the literal
+string `"default"` for `msgVpnName`, the same way they use `"prod-broker"` for
+`broker`: both are illustrative placeholder values showing the call's shape,
+not values to reuse as-is.
+
 ### Pagination
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
@@ -263,7 +278,7 @@ useful "has replication been flaky recently?" signal.
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "Is replication in sync for the default VPN on prod-broker?"
+**Example request:** "Is replication in sync for <your-vpn-name> on prod-broker?"
 
 ---
 
@@ -316,7 +331,7 @@ discard counts.
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "Is the default VPN on prod-broker operational?"
+**Example request:** "Is <your-vpn-name> on prod-broker operational?"
 
 ### get-message-rates
 
@@ -337,7 +352,7 @@ equivalents.
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "What are the current message rates on the default VPN?"
+**Example request:** "What are the current message rates on <your-vpn-name>?"
 
 ---
 
@@ -369,7 +384,7 @@ discard/redelivery counters, use `get-queue-metrics`.
 { "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
 ```
 
-**Example request:** "Show queues with a backlog on the default VPN."
+**Example request:** "Show queues with a backlog on <your-vpn-name>."
 
 ### get-queue-metrics
 
@@ -452,7 +467,7 @@ client: `clientName`, `clientUsername`, `clientAddress`, `platform`, `rxMsgRate`
 { "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
 ```
 
-**Example request:** "List the connected clients on the default VPN."
+**Example request:** "List the connected clients on <your-vpn-name>."
 
 ### get-client-details
 
@@ -479,7 +494,7 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Get details for client consumer-7 on the default VPN."
+**Example request:** "Get details for client consumer-7 on <your-vpn-name>."
 
 ### list-client-subscriptions
 
@@ -526,7 +541,7 @@ per client: `clientName`, `clientUsername`, `clientAddress`, `platform`,
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "Are there any slow subscribers on the default VPN?"
+**Example request:** "Are there any slow subscribers on <your-vpn-name>?"
 
 ---
 
@@ -553,7 +568,7 @@ last failure reason. For full detail use `get-rdp-status`.
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "List the RDPs on the default VPN and flag any that are down."
+**Example request:** "List the RDPs on <your-vpn-name> and flag any that are down."
 
 ### get-rdp-status
 
@@ -581,7 +596,7 @@ bindings, and its REST consumers.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Why is the webhook-rdp on the default VPN failing?"
+**Example request:** "Why is the webhook-rdp on <your-vpn-name> failing?"
 
 ---
 
@@ -609,7 +624,7 @@ bridge: `bridgeName`, `bridgeVirtualRouter`, `enabled`, `inboundState`,
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "List the bridges on the default VPN and flag any that are down."
+**Example request:** "List the bridges on <your-vpn-name> and flag any that are down."
 
 ### get-bridge-status
 
@@ -636,7 +651,7 @@ pair; most deployments use `bridgeVirtualRouter: "auto"`.
 { "broker": "prod-broker", "msgVpnName": "default", "bridgeName": "bridge-to-dr", "bridgeVirtualRouter": "auto" }
 ```
 
-**Example request:** "Why is bridge-to-dr on the default VPN down?"
+**Example request:** "Why is bridge-to-dr on <your-vpn-name> down?"
 
 ---
 
@@ -666,7 +681,7 @@ fields per receiver: `kafkaReceiverName`, `clientName`, `enabled`, `up`,
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "List the Kafka Receivers on the default VPN and flag any that are down."
+**Example request:** "List the Kafka Receivers on <your-vpn-name> and flag any that are down."
 
 ### get-kafka-receiver-status
 
@@ -692,7 +707,7 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 { "broker": "prod-broker", "msgVpnName": "default", "kafkaReceiverName": "orders-ingest" }
 ```
 
-**Example request:** "Why is the orders-ingest Kafka Receiver on the default VPN down?"
+**Example request:** "Why is the orders-ingest Kafka Receiver on <your-vpn-name> down?"
 
 ### list-kafka-senders
 
@@ -718,7 +733,7 @@ fields per sender: `kafkaSenderName`, `clientName`, `enabled`, `up`,
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "List the Kafka Senders on the default VPN and flag any that are down."
+**Example request:** "List the Kafka Senders on <your-vpn-name> and flag any that are down."
 
 ### get-kafka-sender-status
 
@@ -744,7 +759,7 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 { "broker": "prod-broker", "msgVpnName": "default", "kafkaSenderName": "orders-export" }
 ```
 
-**Example request:** "Why is the orders-export Kafka Sender on the default VPN down?"
+**Example request:** "Why is the orders-export Kafka Sender on <your-vpn-name> down?"
 
 ---
 
@@ -820,7 +835,7 @@ queue: `queueName`, `maxTtlExpiredDiscardedMsgCount`,
 { "broker": "prod-broker", "msgVpnName": "default" }
 ```
 
-**Example request:** "Which queues on the default VPN are discarding messages, and why?"
+**Example request:** "Which queues on <your-vpn-name> are discarding messages, and why?"
 
 ---
 
@@ -853,7 +868,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Disconnect consumer-7 on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Disconnect consumer-7 on <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-client-stats
 
@@ -870,7 +885,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Reset the stats counters for consumer-7 on the default VPN."
+**Example request:** "Reset the stats counters for consumer-7 on <your-vpn-name>."
 
 ### delete-queue-messages
 
@@ -895,7 +910,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
 ```
 
-**Example request:** "Drain dead-letter.q on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Drain dead-letter.q on <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-queue-stats
 
@@ -913,7 +928,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
 ```
 
-**Example request:** "Reset the stats counters for orders.q on the default VPN."
+**Example request:** "Reset the stats counters for orders.q on <your-vpn-name>."
 
 ---
 
@@ -1039,7 +1054,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create a queue orders.q in <your-vpn-name> on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-queue
 
@@ -1062,7 +1077,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on orders.q in the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Turn off egress on orders.q in <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-queue
 
@@ -1084,7 +1099,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
 ```
 
-**Example request:** "Delete orders.q from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete orders.q from <your-vpn-name> on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-queue-subscription
 
@@ -1154,7 +1169,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create a topic endpoint orders.te in <your-vpn-name> on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-topic-endpoint
 
@@ -1177,7 +1192,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Turn off egress on the orders.te topic endpoint in <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-topic-endpoint
 
@@ -1198,7 +1213,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" }
 ```
 
-**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete the orders.te topic endpoint from <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### create-rdp
 
@@ -1222,7 +1237,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
 ```
 
-**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create an RDP called webhook-rdp in <your-vpn-name> on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-rdp
 
@@ -1244,7 +1259,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
 ```
 
-**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Enable the webhook-rdp RDP on <your-vpn-name>." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-rdp
 
@@ -1265,4 +1280,4 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete the webhook-rdp RDP from <your-vpn-name> on prod-broker." (The tool description instructs the agent to confirm before acting.)
