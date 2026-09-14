@@ -47,15 +47,21 @@ tool_response=$(curl -sf -X POST "$MCP_URL/mcp" \
 echo "$tool_response" | grep -q '"result"' || fail "Tool call did not return a result"
 pass "get-broker-status succeeded"
 
-# ── 4. Wait for batch flush (collector batches for up to 5s) ─────────────────
-echo "Waiting for trace batch flush..."
-sleep 10
+# ── 4. Poll Tempo until a trace appears (up to 60s) ─────────────────────────
+# The batch processor flushes every 5s; Tempo may take additional time to
+# index. A retry loop is more robust than a fixed sleep.
+echo "Waiting for traces to appear in Tempo..."
+tempo_response=""
+trace_count=0
+for i in $(seq 1 12); do
+    sleep 5
+    tempo_response=$(curl -sf "$TEMPO_URL/api/search?tags=service.name%3Dsolace-broker-mcp" 2>/dev/null || true)
+    trace_count=$(echo "$tempo_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('traces', [])))" 2>/dev/null || echo 0)
+    [ "$trace_count" -gt 0 ] && break
+    echo "  attempt $i/12: no traces yet..."
+done
 
-# ── 5. Assert trace landed in Tempo ─────────────────────────────────────────
-tempo_response=$(curl -sf "$TEMPO_URL/api/search?tags=service.name%3Dsolace-broker-mcp")
-trace_count=$(echo "$tempo_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('traces', [])))")
-
-[ "$trace_count" -gt 0 ] || fail "No traces found in Tempo for service solace-broker-mcp"
+[ "$trace_count" -gt 0 ] || fail "No traces found in Tempo for service solace-broker-mcp after 60s"
 pass "Found $trace_count trace(s) in Tempo"
 
 # ── 6. Assert semp.request span is present across all traces ─────────────────

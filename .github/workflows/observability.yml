@@ -1,0 +1,60 @@
+name: Observability
+
+# Runs the OTel collector tracing E2E suite once a day, after the dev nightly
+# build publishes a fresh ghcr.io/solaceproducts/solace-broker-mcp-dev:dev
+# image. Kept separate from build-and-test.yml because the test targets the
+# nightly image, not the commit under test, so it cannot be a required PR check.
+
+on:
+  workflow_run:
+    workflows: ["Dev build (unstable)"]
+    types: [completed]
+  workflow_dispatch:
+
+# One run at a time — the nightly fires once a day and the suite takes ~5 min,
+# so there is no meaningful queue to drain.
+concurrency:
+  group: e2e-tracing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-tracing:
+    # On workflow_run: only proceed if the dev build succeeded.
+    # On workflow_dispatch: always run.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start stack
+        run: docker compose -f test/e2e-tracing/docker-compose.yml up -d
+
+      - name: Run tracing E2E tests
+        run: bash test/e2e-tracing/run-all.sh
+
+      - name: Collector logs (on failure)
+        if: failure()
+        run: docker logs otel-collector-e2e-tracing 2>&1 | tail -100
+
+      - name: Tempo logs (on failure)
+        if: failure()
+        run: docker logs tempo-e2e-tracing 2>&1 | tail -100
+
+      - name: MCP server logs (on failure)
+        if: failure()
+        run: docker logs mcp-server-e2e-tracing 2>&1 | tail -100
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: docker logs solace-e2e-tracing 2>&1 | tail -100
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/e2e-tracing/docker-compose.yml down -v
