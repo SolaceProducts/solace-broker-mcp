@@ -49,19 +49,33 @@ pass "get-broker-status succeeded"
 
 # ── 4. Poll Tempo until a trace appears (up to 60s) ─────────────────────────
 # The batch processor flushes every 5s; Tempo may take additional time to
-# index. A retry loop is more robust than a fixed sleep.
+# index. A retry loop is more robust than a fixed sleep. Each failure mode
+# below is reported distinctly so a red run names its own cause.
 echo "Waiting for traces to appear in Tempo..."
 tempo_response=""
 trace_count=0
+last_error="Tempo never returned a valid search response"
 for i in $(seq 1 12); do
     sleep 5
-    tempo_response=$(curl -sf "$TEMPO_URL/api/search?tags=service.name%3Dsolace-broker-mcp" 2>/dev/null || true)
-    trace_count=$(echo "$tempo_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('traces', [])))" 2>/dev/null || echo 0)
+    # Separate "Tempo unreachable" from "reachable but no traces".
+    if ! tempo_response=$(curl -sf "$TEMPO_URL/api/search?tags=service.name%3Dsolace-broker-mcp" 2>/dev/null); then
+        last_error="Tempo unreachable at $TEMPO_URL (curl failed)"
+        echo "  attempt $i/12: $last_error"
+        continue
+    fi
+    # Separate "malformed JSON" from "valid JSON, zero traces".
+    if ! trace_count=$(echo "$tempo_response" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('traces', [])))" 2>/dev/null); then
+        last_error="Tempo returned a response that is not valid JSON: ${tempo_response:0:200}"
+        echo "  attempt $i/12: $last_error"
+        trace_count=0
+        continue
+    fi
     [ "$trace_count" -gt 0 ] && break
+    last_error="Tempo reachable and responding, but no traces for service solace-broker-mcp"
     echo "  attempt $i/12: no traces yet..."
 done
 
-[ "$trace_count" -gt 0 ] || fail "No traces found in Tempo for service solace-broker-mcp after 60s"
+[ "$trace_count" -gt 0 ] || fail "$last_error (after 60s)"
 pass "Found $trace_count trace(s) in Tempo"
 
 # ── 6. Assert semp.request span is present across all traces ─────────────────

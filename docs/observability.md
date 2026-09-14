@@ -1299,16 +1299,15 @@ backend — see the [Tested backends](#tested-backends) section for the exporter
 supported backend.
 
 For local development, `deploy/otel-collector/docker/docker-compose.yaml` starts the collector,
-the MCP server, and Grafana Tempo together. Swap `OTEL_BACKEND_ENDPOINT=jaeger:4317` and
-`COMPOSE_PROFILES=jaeger` to use Jaeger instead:
+the MCP server, and Grafana Tempo together. Run these from the
+`deploy/otel-collector/docker/` directory:
 
 ```
 # Tempo (default)
-docker compose -f deploy/otel-collector/docker/docker-compose.yaml up
+docker compose up
 
-# Jaeger
-COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 \
-  docker compose -f deploy/otel-collector/docker/docker-compose.yaml up
+# Jaeger — the env file sets the profile and the collector endpoint together
+docker compose --env-file .env.jaeger up
 ```
 
 #### Point the MCP server at the collector

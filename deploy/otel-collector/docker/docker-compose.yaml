@@ -2,19 +2,21 @@ services:
   mcp-server:
     image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
     environment:
-      # Copy .env.example to .env and set these values before running.
+      # Override any of these in the shell or an env file. The defaults let the
+      # stack come up for local tracing verification with no edits.
       - CONFIG_FILE=/etc/mcp-server/config.yaml
-      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN}
-      - BROKER_URL=${BROKER_URL}
-      - BROKER_USERNAME=${BROKER_USERNAME}
-      - BROKER_PASSWORD=${BROKER_PASSWORD}
+      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN:-change-me}
+      - BROKER_URL=${BROKER_URL:-https://broker.example.com:943}
+      - BROKER_USERNAME=${BROKER_USERNAME:-admin}
+      - BROKER_PASSWORD=${BROKER_PASSWORD:-placeholder}
       - OBS_TRACING_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
     volumes:
       - ./mcp-config.yaml:/etc/mcp-server/config.yaml:ro
     ports:
-      - "9090:9090"
+      # Bound to loopback — this is a local dev stack with a default dev token.
+      - "127.0.0.1:9090:9090"
     depends_on:
       - otel-collector
 
@@ -22,9 +24,9 @@ services:
     image: otel/opentelemetry-collector-contrib:0.111.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
-      # Backend endpoint is set by .env (default: tempo:4317) or .env.jaeger.
+      # Default: Tempo. .env.jaeger overrides this to jaeger:4317.
       # To use Datadog: DD_API_KEY=<key> docker compose up (also update otelcol.yaml exporter)
-      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT}
+      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo:4317}
       - DD_API_KEY=${DD_API_KEY:-}
     volumes:
       - ./otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -33,9 +35,10 @@ services:
       - "4318:4318"
       - "8888:8888"
 
+  # Tempo is the default backend and always starts. Jaeger is behind a profile;
+  # in Jaeger mode Tempo still runs but the collector sends only to Jaeger.
   tempo:
     image: grafana/tempo:2.6.0
-    profiles: [tempo]
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro
