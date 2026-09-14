@@ -33,7 +33,8 @@ data:
       #   tls:
       #     insecure: true
 
-      # Alternative: Datadog. Set DD_API_KEY in the Deployment env.
+      # Alternative: Datadog. Inject DD_API_KEY into the Deployment from a
+      # Secret (see collector-deployment.yaml) — never a literal value here.
       # datadog:
       #   api:
       #     key: ${env:DD_API_KEY}

@@ -1349,7 +1349,16 @@ that the exporter config compiles or that the vendor documents OTLP support.
 |---|---|---|---|---|
 | Grafana Tempo | 2.6.0 | Yes (2026-09-11) | N/A — traces only | `otlp/tempo: endpoint: <tempo-host>:4317` (insecure) |
 | Jaeger | 1.60 | Yes (2026-09-11) | N/A — traces only | `otlp/jaeger: endpoint: <jaeger-host>:4317` (insecure) |
-| Datadog | — | Yes (2026-09-11) | Yes (2026-09-11) | `datadog: api: key: ${env:DD_API_KEY} site: datadoghq.com` |
+| Datadog | SaaS, via collector-contrib `datadog` exporter 0.111.0 | Yes (2026-09-11) | Yes (2026-09-11) | `datadog: api: key: ${env:DD_API_KEY} site: datadoghq.com` |
+
+Datadog is a hosted service with no pinned version; what was tested is the collector's
+`datadog` exporter at 0.111.0 against the `datadoghq.com` site.
+
+**Verification step per backend** (after a tool call, e.g. `list-brokers`):
+
+- **Tempo:** `curl "http://<tempo>:3200/api/search?tags=service.name%3Dsolace-broker-mcp"` returns a non-empty `traces` array, or search the service in Grafana's Explore view.
+- **Jaeger:** `curl "http://<jaeger>:16686/api/services"` lists `solace-broker-mcp`, or select it on the Jaeger Search page.
+- **Datadog:** open **APM → Traces** and filter service `solace-broker-mcp` for traces; open **Metrics → Explorer** and search `mcp.` for metrics.
 
 For each backend, the collector `config.yaml` exporter block is in
 `deploy/otel-collector/kubernetes/collector-configmap.yaml` — Jaeger and Datadog blocks are

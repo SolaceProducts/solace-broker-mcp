@@ -24,6 +24,16 @@ spec:
           image: otel/opentelemetry-collector-contrib:0.111.0
           args:
             - --config=/etc/otelcol-contrib/config.yaml
+          # For the Datadog exporter, inject the API key from a Secret — never a
+          # literal value. Create it with:
+          #   kubectl create secret generic otel-collector-datadog \
+          #     --from-literal=api-key=<your-key>
+          # env:
+          #   - name: DD_API_KEY
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: otel-collector-datadog
+          #         key: api-key
           ports:
             - name: otlp-grpc
               containerPort: 4317
