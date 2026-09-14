@@ -1360,8 +1360,8 @@ commented out and can be swapped in for the Tempo default.
 
 With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP
 as well as serving the Prometheus scrape endpoint. Ingesting those push
-metrics directly
-into Prometheus (without a collector in the middle) requires four things that are easy to miss:
+metrics directly into Prometheus (without a collector in the middle) requires
+four things that are easy to miss:
 
 1. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
 2. **Delta temporality requires an experimental feature flag.** The server ships cumulative

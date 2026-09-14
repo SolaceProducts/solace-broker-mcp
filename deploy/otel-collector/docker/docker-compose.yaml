@@ -2,6 +2,7 @@ services:
   mcp-server:
     image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
     environment:
+      # Copy .env.example to .env and set these values before running.
       - CONFIG_FILE=/etc/mcp-server/config.yaml
       - MCP_DEV_TOKEN=${MCP_DEV_TOKEN}
       - BROKER_URL=${BROKER_URL}
@@ -21,10 +22,9 @@ services:
     image: otel/opentelemetry-collector-contrib:0.111.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
-      # Default backend: Grafana Tempo.
-      # To use Jaeger: COMPOSE_PROFILES=jaeger OTEL_BACKEND_ENDPOINT=jaeger:4317 docker compose up
+      # Backend endpoint is set by .env (default: tempo:4317) or .env.jaeger.
       # To use Datadog: DD_API_KEY=<key> docker compose up (also update otelcol.yaml exporter)
-      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo:4317}
+      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT}
       - DD_API_KEY=${DD_API_KEY:-}
     volumes:
       - ./otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -35,6 +35,7 @@ services:
 
   tempo:
     image: grafana/tempo:2.6.0
+    profiles: [tempo]
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml:ro

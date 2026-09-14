@@ -6,12 +6,13 @@ mcp_client_auth:
   mode: static
   dev_token: "${MCP_DEV_TOKEN}"
 
-# Replace with the URL of your broker's SEMP management port.
-# Example: https://broker.example.com:943
+# Set BROKER_URL, BROKER_USERNAME, and BROKER_PASSWORD to point at your broker.
+# The placeholder values below let the server start so you can verify tracing
+# with list-brokers (no SEMP call needed) before connecting a real broker.
 brokers:
   my-broker:
-    url: "${BROKER_URL}"
+    url: "${BROKER_URL:-https://broker.example.com:943}"
     auth:
       mode: basic
-      username: "${BROKER_USERNAME}"
-      password: "${BROKER_PASSWORD}"
+      username: "${BROKER_USERNAME:-admin}"
+      password: "${BROKER_PASSWORD:-}"
