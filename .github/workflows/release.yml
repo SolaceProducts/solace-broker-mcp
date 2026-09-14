@@ -559,7 +559,7 @@ jobs:
 
       # `dist/*.cdx.json` is an intentionally-optional pattern — SOL-153188's
       # SBOM is allowed to be absent (see the `licenses` job). Confirmed
-      # against this action's actual source at the pinned v3.0.2: `paths()` in
+      # against this action's actual source at the pinned v3.0.3: `paths()` in
       # src/util.ts resolves each pattern with `glob.sync()` and concatenates
       # whatever matches, so a pattern matching nothing just contributes
       # nothing — no error, no warning. That's the default; a separate
