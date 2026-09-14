@@ -55,7 +55,6 @@ services:
       - MCP_DEV_TOKEN=${MCP_DEV_TOKEN:-e2e-dev-token}
       - BROKER_PASSWORD=${BROKER_PASSWORD:-admin}
       - OBS_TRACING_ENABLED=true
-      - OBS_METRICS_OTLP_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
     volumes:
