@@ -297,6 +297,24 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 // every indexed operation in both views, and
 // TestDescribeSempSchema_OutputSchemaRejectsUndeclaredFields proves the closure
 // is real at all three instance levels.
+//
+// This describes the SUCCESS shape only. A panic unwinding through
+// withRecovery (internal/tools/register.go) is answered with a
+// structuredContent of {error, retryable}, which this schema rejects — it
+// requires operation and method and is closed. That costs nothing today, since
+// nothing validates this tool's output at runtime, but a client that
+// validates would reject a panic result. Describing both shapes would mean a
+// oneOf whose error arm is the generic local-error envelope every tool shares,
+// which belongs with that envelope rather than here.
+//
+// "definitions"/"#/definitions/..." is the draft-04/07 spelling, chosen
+// deliberately: gojsonschema — the validator this repo compiles schemas with
+// (internal/tools/validation.go) — is a draft-04/06/07 implementation, and
+// "$defs" is the 2020-12 rename, which it does not resolve. The consequence
+// is that only gojsonschema is exercised against this schema; a client on a
+// 2020-12-only validator that does not accept the older keyword would not
+// resolve the recursion. Reconsider the spelling if this repo's validator
+// moves to 2020-12.
 func describeSempSchemaOutputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",

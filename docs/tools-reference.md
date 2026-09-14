@@ -158,7 +158,19 @@ indexed here — a `monitor/...` operation returns `unknown operation`.
 | `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, for example `config/createMsgVpnQueue`. `specType` must be `config` or `action`. Take the value from the target write tool's description. |
 | `view` | string | no | `trimmed` (default) — compact per-attribute list. `raw` — full OpenAPI definition verbatim. |
 
-**Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.
+**Returns.** `operation` and `method` are always present. Which of the rest appear depends on the view *and* on whether the operation takes a request body — an asymmetry worth reading carefully, because more than half the indexed operations have no request body:
+
+| Operation | `view` | Returns |
+|---|---|---|
+| Has a request body | `trimmed` | `operation`, `method`, `definition`, `attributes` |
+| Has a request body | `raw` | `operation`, `method`, `definition`, `schema` |
+| No request body | either | `operation`, `method`, `note`, and an empty `attributes` |
+
+A bodyless operation returns before the view is consulted, so it answers both views identically and never carries `definition` or `schema`. `attributes` is therefore absent only from the `raw` view of an operation that has a request body.
+
+Each attribute in `attributes` carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). An object-typed attribute backed by a `$ref` carries a nested `properties` list — the same per-attribute shape, recursively — and no writability flags of its own; the attributes nested inside it do carry them.
+
+The tool declares an `outputSchema` covering this success shape, so a client can validate the response rather than relying on this table.
 
 **Typical invocation.** Most calls happen unprompted. The eight
 `create-*`/`update-*` write tool descriptions each point at
