@@ -29,10 +29,11 @@ import (
 // instance per process, shared by all per-request goroutines.
 //
 // INVARIANT: every field is written once in New() and never mutated
-// afterward, except group (concurrency-safe by type) and the gatedUntil and
-// breakerState atomics (safe by construction — see raiseGate and
-// BreakerStateSnapshot). Do not assign to any OTHER field from any method;
-// the race detector enforces this at test time.
+// afterward, except group (concurrency-safe by type) and the gatedUntil,
+// breakerState, and expiryFallbackLogged atomics (safe by construction —
+// see raiseGate, BreakerStateSnapshot, and logExpiryFallbackOnce). Do not
+// assign to any OTHER field from any method; the race detector enforces
+// this at test time.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -61,6 +62,10 @@ type Exchanger struct {
 	// updated only by OnStateChange and read by BreakerStateSnapshot so
 	// observability never calls gobreaker's state-mutating State method.
 	breakerState atomic.Int64
+	// expiryFallbackLogged is set the first time parseSuccessBody applies
+	// tokenExpiryFallback on a live IdP success. It gates one INFO (SOL-154334);
+	// later fallback uses stay on the Debug issued line.
+	expiryFallbackLogged atomic.Bool
 	// gatedUntil (nowFunc().UnixNano(); 0 = not gated) is a shared,
 	// process-wide backoff set on an exhausted 429 chain (see
 	// classifyRetryOutcome) and checked in runProtectedExchange. Deliberately
