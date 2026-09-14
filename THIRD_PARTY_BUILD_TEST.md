@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-10; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-14; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -183,7 +183,7 @@ note spells out.
 | `github/codeql-action/analyze` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
 | `github/codeql-action/init` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
-| `softprops/action-gh-release` | `3d0d988` | v3.0.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.2/LICENSE) |
+| `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
 
 `actions/github-script` names its license file `LICENSE.md` rather than
 `LICENSE`. Worth the sentence only because the obvious URL 404s, and a reader who
