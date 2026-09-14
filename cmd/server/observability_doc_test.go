@@ -25,16 +25,32 @@
 // assembles both, the same way cmd/server/main.go does.
 //
 // Maintenance note, stated because it is a real, easy-to-miss obligation: if
-// a future story adds a *sixth* instrument-emitting subsystem to
-// cmd/server/main.go alongside metrics and tracing, this test's harness must
-// be extended to register it too, or that subsystem's metrics will read as
-// "documented but missing from the registry" here — a false positive caused
-// by an incomplete test harness, not real drift. Fails loud either way, but
-// the fix in that case is this file, not the doc.
+// a future story adds a third instrument-emitting subsystem to
+// cmd/server/main.go alongside metrics and tracing, buildLiveRegistry below
+// must be extended to assemble it too.
+//
+// This does NOT always fail loud on its own, and it matters which direction
+// gets it wrong. If the new subsystem's metrics are already documented as
+// live (a table row plus a "wired and emitted today" mention) but this
+// harness isn't updated to produce them, TestObservabilityDocMatchesRegistry
+// correctly fails — "claims live, absent from scrape". But if the new
+// metrics are genuinely live in a real server and genuinely undocumented,
+// this harness's incompleteness makes them invisible to *both* directions of
+// that diff at once: they are missing from the doc AND missing from this
+// harness's own scrape, so neither side ever sees a name the other doesn't
+// have, and the exact class of bug this ticket exists to catch passes
+// silently. TestBuildLiveRegistry_TracksMainGoWiring below closes that gap
+// mechanically rather than leaving it to whoever reads this comment: it
+// parses cmd/server/main.go's AST and fails if the set of
+// internal/observability/*.New(...) provider calls there ever diverges from
+// what this file assumes.
 package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -201,20 +217,37 @@ func scrapeLiveMCPFamilies(t *testing.T, handler http.Handler) liveInventory {
 // zero" until real activity occurs — unlike the Tool/SEMP/security/broker
 // counters, which registerInstruments seeds with an explicit zero value the
 // moment the provider is built (see TestGoldenSchema's own comments to that
-// effect), the OTLP export-health counters only get their first data point
-// when a span or metric export actually succeeds or fails. A fresh,
-// quiescent harness — no real OTLP collector, no traffic — legitimately
-// never produces one, by design (docs/observability.md, OTLP Export
-// Health): "Diagnosing a broken push must not depend on the push working."
-// So their absence here is not evidence the doc overstates reality, and is
-// exempted from that one direction of the check. If they DO appear (a
-// future harness change forces an export attempt through), the other three
-// directions still apply to them normally.
+// effect), the OTLP span-export counters only get their first data point
+// when a span export actually succeeds or fails. A fresh, quiescent harness
+// — no real OTLP collector, no traffic — legitimately never produces one, by
+// design (docs/observability.md, OTLP Export Health): "Diagnosing a broken
+// push must not depend on the push working." So their absence here is not
+// evidence the doc overstates reality, and is exempted from that one
+// direction of the check. If they DO appear (a future harness change forces
+// an export attempt through), the other three directions still apply to
+// them normally.
+//
+// Deliberately just the span pair, not the metrics pair too. The two are not
+// equivalent: the span pair has a real instrument today that simply has no
+// data point yet; the metrics pair (mcp_otel_metrics_exported_total /
+// _dropped_total) has no instrument anywhere in this build at all — nothing
+// outside docs/ and this file's own strings reference those two names.
+// Exempting an unimplemented metric from the "claimed live but absent"
+// direction would make it invisible to the one check that could catch a doc
+// edit that falsely claims Story 46 (SOL-152418) landed before it has.
+// Add the metrics pair here in the same change that actually registers
+// those two instruments (Story 46) — at that point they become genuinely
+// activity-gated in the same sense the span pair is now, not before.
+//
+// direction 4 (label-key agreement) is consequently also skipped for the
+// span pair while it's absent — but that's not an unverified gap: the
+// `reason` label and its values are independently pinned by
+// internal/observability/tracing/stats_test.go's TestExportStats_*
+// (asserting on the OTel SDK metricdata directly), just not by a live scrape
+// the way every other family here is.
 var activityGated = map[string]bool{
-	"mcp_otel_spans_exported_total":   true,
-	"mcp_otel_spans_dropped_total":    true,
-	"mcp_otel_metrics_exported_total": true,
-	"mcp_otel_metrics_dropped_total":  true,
+	"mcp_otel_spans_exported_total": true,
+	"mcp_otel_spans_dropped_total":  true,
 }
 
 // TestObservabilityDocMatchesRegistry is the four-way check: every mcp_*
@@ -259,6 +292,105 @@ func TestObservabilityDocMatchesRegistry(t *testing.T) {
 		}
 		if _, ok := live[name]; !ok {
 			t.Errorf("docs/observability.md claims %s is \"wired and emitted today\", but it is absent from a live scrape — the doc overstates what the server emits (or this test's harness needs updating, see the file's package comment)", name)
+		}
+	}
+}
+
+// observabilityProviderCallers is the set of internal/observability/*
+// package names buildLiveRegistry assembles today, matching the package
+// comment's stated assumption. TestBuildLiveRegistry_TracksMainGoWiring
+// checks this against reality instead of leaving it to a comment someone
+// has to remember to read.
+var observabilityProviderCallers = map[string]bool{
+	"metrics": true,
+	"tracing": true,
+}
+
+// observabilityProviderExclusions names internal/observability/* packages
+// that do get a ".New(...)" call in cmd/server/main.go but are not
+// instrument-emitting subsystems in the sense this file cares about, along
+// with why each is excluded. Anything under internal/observability/ that
+// gets a New(...) call in main.go and is NOT in this list must be in
+// observabilityProviderCallers instead, or the AST guard below fails.
+var observabilityProviderExclusions = map[string]string{
+	"resource": "builds the shared identity resource.Resource both metrics.New and tracing.New are passed — it registers no instruments of its own",
+}
+
+// TestBuildLiveRegistry_TracksMainGoWiring parses cmd/server/main.go's own
+// AST for "<package>.New(...)" calls into packages under
+// internal/observability/, and fails if that set doesn't match
+// observabilityProviderCallers exactly. Same technique as
+// internal/tools/audit_error_type_drift_test.go and
+// internal/observability/metrics/error_type_vocabulary_test.go — a
+// hand-maintained list (here, buildLiveRegistry's own assembly) has no
+// runtime way to prove it stays complete, so this proves it statically
+// instead. Closes the gap the package comment above describes: without this,
+// a new subsystem wired into main.go but not into buildLiveRegistry can make
+// its own metrics invisible to TestObservabilityDocMatchesRegistry entirely,
+// rather than failing loud.
+func TestBuildLiveRegistry_TracksMainGoWiring(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(".", "main.go"), nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	// Map each import alias in this file to the last path segment of its
+	// import path — e.g. `"github.com/.../internal/observability/tracing"`
+	// (no explicit alias) maps "tracing" -> "tracing". Only packages under
+	// internal/observability/ are tracked; nothing else is relevant here.
+	const obsPrefix = "github.com/SolaceProducts/solace-broker-mcp/internal/observability/"
+	aliasToPkg := map[string]string{}
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if !strings.HasPrefix(path, obsPrefix) {
+			continue
+		}
+		pkg := path[len(obsPrefix):]
+		if strings.Contains(pkg, "/") {
+			continue // a sub-package of a sub-package; none exist today, and none of this file's direct callers are one
+		}
+		alias := pkg
+		if imp.Name != nil {
+			alias = imp.Name.Name
+		}
+		aliasToPkg[alias] = pkg
+	}
+
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "New" {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if pkg, tracked := aliasToPkg[ident.Name]; tracked {
+			found[pkg] = true
+		}
+		return true
+	})
+
+	for pkg := range found {
+		if observabilityProviderExclusions[pkg] != "" {
+			continue
+		}
+		if !observabilityProviderCallers[pkg] {
+			t.Errorf("main.go calls %s.New(...), which observabilityProviderCallers does not know about — "+
+				"if %s registers Prometheus instruments, add it to buildLiveRegistry and to observabilityProviderCallers; "+
+				"if it doesn't, add it (and why) to observabilityProviderExclusions instead", pkg, pkg)
+		}
+	}
+	for pkg := range observabilityProviderCallers {
+		if !found[pkg] {
+			t.Errorf("observabilityProviderCallers lists %s, but main.go no longer calls %s.New(...) — "+
+				"if %s was removed from main.go's wiring, remove it here and from buildLiveRegistry too", pkg, pkg, pkg)
 		}
 	}
 }

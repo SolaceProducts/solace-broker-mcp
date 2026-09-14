@@ -21,6 +21,12 @@
 // unit-tests it against small fabricated fixtures, independent of the real
 // doc's future edits.
 //
+// TestBuildLiveRegistry_TracksMainGoWiring (observability_doc_test.go) is the
+// enforced half of the maintenance obligation this file's sibling package
+// comment only used to describe in prose: it parses cmd/server/main.go's own
+// AST and fails if a new internal/observability/* provider is wired there
+// without a matching update to buildLiveRegistry.
+//
 // Scope: metrics only. Audit fields and span attributes have their own
 // tables in the same document; this ticket's AC is metrics names and label
 // keys, not those.
@@ -79,7 +85,15 @@ var (
 	nextTopLevelHeadingRE = regexp.MustCompile(`(?m)^## `)
 
 	tableHeaderRE = regexp.MustCompile(`(?m)^\| *Metric *\| *Type *\| *Labels *\| *Basis *\|$`)
-	tableSepRE    = regexp.MustCompile(`^\|(?:-+\|)+$`)
+	// tableHeaderNearMissRE matches anything that starts like a metric table
+	// header but doesn't match tableHeaderRE exactly — an extra column, a
+	// renamed column, reordered columns. Without this, such a table is
+	// silently skipped by the loop below (its header line doesn't match
+	// tableHeaderRE, so parseMetricTables just moves on), and its metrics
+	// later surface as "emitted but not documented, add a row" even though a
+	// row plainly exists, just in an unrecognized shape.
+	tableHeaderNearMissRE = regexp.MustCompile(`(?m)^\| *Metric *\|`)
+	tableSepRE            = regexp.MustCompile(`^\|(?:-+\|)+$`)
 	// tableRowRE splits a "| `name` | Type | Labels | Basis |" row into its
 	// four cells. Only the first (name) and third (labels) cells are used.
 	tableRowRE = regexp.MustCompile("^\\| *`([a-zA-Z0-9_.]+)` *\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|$")
@@ -133,26 +147,60 @@ func parseObservabilityDoc(raw string) (*docInventory, error) {
 	}, nil
 }
 
+// liveAnchor and notYetAnchor are the phrases that identify which blockquote
+// paragraph is which, searched for rather than assumed by position. An
+// earlier version of this parser took paragraphs[0] as the live list and
+// paragraphs[1] as the not-yet list — reflowing the blockquote (inserting a
+// third paragraph between them, say) would silently misattribute content
+// without either phrase changing, which is a worse failure than this one:
+// wrong data with no error, versus a clear error naming exactly which anchor
+// went missing. If the doc's prose changes enough that these no longer
+// match, update the phrases here.
+const (
+	liveAnchor   = "wired and emitted today"
+	notYetAnchor = "not emitted by any build yet"
+)
+
 // parseLiveEnumeration reads the blockquote immediately after the Metrics
 // heading. It is written as two paragraphs separated by a bare "&gt;" line:
 // the first says what is "wired and emitted today", the second says what is
-// "documented but not emitted by any build yet". The split is on that blank
-// blockquote line, not on the wording, so a rewrite of the sentences
-// themselves doesn't break this parser — only a restructure of the
-// blockquote into some other shape would, and that fails loudly below.
+// "documented but not emitted by any build yet". Which paragraph is which is
+// decided by searching each for liveAnchor / notYetAnchor, not by position —
+// see the comment on those constants.
 func parseLiveEnumeration(section string) (live, notYet map[string]bool, err error) {
 	lines := strings.Split(section, "\n")
 	start := -1
+	inComment := false
 	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), ">") {
+		trimmed := strings.TrimSpace(l)
+		if inComment {
+			if strings.Contains(trimmed, "-->") {
+				inComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") {
+			// Tolerated, not required: an HTML comment (e.g. the one
+			// documenting this section's own machine-parsed structure) is
+			// invisible to a rendered doc, so it must not count as "the
+			// blockquote didn't start here". A one-line comment
+			// ("<!-- ... -->" on the same line) never sets inComment at
+			// all, since the closing "-->" is already found above.
+			if !strings.Contains(trimmed, "-->") {
+				inComment = true
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
 			start = i
 			break
 		}
-		if strings.TrimSpace(l) == "" {
+		if trimmed == "" {
 			continue
 		}
-		// Any non-blank, non-blockquote line before the blockquote starts
-		// means the doc no longer opens the Metrics section with one.
+		// Any non-blank, non-comment, non-blockquote line before the
+		// blockquote starts means the doc no longer opens the Metrics
+		// section with one.
 		break
 	}
 	if start == -1 {
@@ -180,15 +228,26 @@ func parseLiveEnumeration(section string) (live, notYet map[string]bool, err err
 	if len(cur) > 0 {
 		paragraphs = append(paragraphs, cur)
 	}
-	if len(paragraphs) < 2 {
-		return nil, nil, fmt.Errorf(
-			"expected the Metrics-section blockquote to have at least two paragraphs "+
-				"(a \"wired and emitted today\" list and a \"documented but not emitted\" list), found %d",
-			len(paragraphs))
+
+	var liveParagraph, notYetParagraph []string
+	for _, p := range paragraphs {
+		joined := strings.ToLower(strings.Join(p, " "))
+		if strings.Contains(joined, liveAnchor) {
+			liveParagraph = p
+		}
+		if strings.Contains(joined, notYetAnchor) {
+			notYetParagraph = p
+		}
+	}
+	if liveParagraph == nil {
+		return nil, nil, fmt.Errorf("no paragraph in the Metrics-section blockquote matches %q — has the wording changed? update liveAnchor", liveAnchor)
+	}
+	if notYetParagraph == nil {
+		return nil, nil, fmt.Errorf("no paragraph in the Metrics-section blockquote matches %q — has the wording changed? update notYetAnchor", notYetAnchor)
 	}
 
-	live = extractNames(strings.Join(paragraphs[0], " "))
-	notYet = extractNames(strings.Join(paragraphs[1], " "))
+	live = extractNames(strings.Join(liveParagraph, " "))
+	notYet = extractNames(strings.Join(notYetParagraph, " "))
 	return live, notYet, nil
 }
 
@@ -212,6 +271,9 @@ func parseMetricTables(section string) (map[string]docMetric, error) {
 
 	for i := 0; i < len(lines); i++ {
 		if !tableHeaderRE.MatchString(lines[i]) {
+			if tableHeaderNearMissRE.MatchString(lines[i]) {
+				return nil, fmt.Errorf("line %d: looks like a metric table header but doesn't match \"| Metric | Type | Labels | Basis |\" exactly: %q", i+1, lines[i])
+			}
 			continue
 		}
 		if i+1 >= len(lines) || !tableSepRE.MatchString(strings.TrimSpace(lines[i+1])) {
@@ -226,7 +288,11 @@ func parseMetricTables(section string) (map[string]docMetric, error) {
 			if row == "" {
 				break
 			}
-			m := tableRowRE.FindStringSubmatch(lines[j])
+			// Matched against the trimmed row, not the raw line: tableRowRE
+			// is anchored at both ends, so a row with trailing whitespace —
+			// which some markdown formatters emit — would otherwise fail to
+			// match at all and hard-error as a malformed row.
+			m := tableRowRE.FindStringSubmatch(row)
 			if m == nil {
 				return nil, fmt.Errorf("line %d: row in a metric table doesn't match the expected shape: %q", j+1, lines[j])
 			}

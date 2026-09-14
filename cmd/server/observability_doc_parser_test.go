@@ -53,8 +53,14 @@ const fixture = `# Fixture
 
 ## Audit Trail
 
-Not part of the Metrics section — a parser bug that keeps reading past the
-section boundary would pick up a row here if one existed.
+A real table, in the same shape a metric table would be, so a parser bug
+that keeps reading past the section boundary actually has something to pick
+up and get caught by TestParseObservabilityDoc's assertion that
+` + "`mcp_outside_metrics_section_total`" + ` never appears in the parsed inventory.
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| ` + "`mcp_outside_metrics_section_total`" + ` | Counter | none | Solace |
 `
 
 func TestParseObservabilityDoc(t *testing.T) {
@@ -76,6 +82,10 @@ func TestParseObservabilityDoc(t *testing.T) {
 	wantLive := map[string]bool{"mcp_alpha_total": true, "mcp_beta_total": true}
 	if !reflect.DeepEqual(inv.liveClaimed, wantLive) {
 		t.Errorf("liveClaimed = %v, want %v", inv.liveClaimed, wantLive)
+	}
+
+	if _, ok := inv.metrics["mcp_outside_metrics_section_total"]; ok {
+		t.Error("a table under ## Audit Trail was parsed as if it were still in the Metrics section — the section boundary isn't being respected")
 	}
 
 	wantNotYet := map[string]bool{"mcp_gamma_total": true}
@@ -160,10 +170,100 @@ func TestParseObservabilityDoc_MissingHeading(t *testing.T) {
 	}
 }
 
+// validBlockquote satisfies parseLiveEnumeration on its own — both anchor
+// phrases present, two paragraphs — so every case below that uses it fails
+// (or doesn't) purely on the table-parsing defect it's actually testing,
+// not on an incidental blockquote-shape mismatch.
+const validBlockquote = "> _live: `mcp_a_total`, wired and emitted today._\n>\n> _not emitted by any build yet: none._\n\n"
+
+// TestParseObservabilityDoc_ToleratesLeadingHTMLComment locks in that an
+// HTML comment between the "## Metrics" heading and the blockquote (like
+// the one documenting this section's own machine-parsed structure in the
+// real doc) doesn't trip the "no blockquote found" error — a real
+// regression caught while adding that comment to docs/observability.md, not
+// a hypothetical.
+func TestParseObservabilityDoc_ToleratesLeadingHTMLComment(t *testing.T) {
+	doc := "## Metrics — [x]\n\n" +
+		"<!-- a multi-line\n     HTML comment -->\n\n" +
+		validBlockquote +
+		"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n"
+	inv, err := parseObservabilityDoc(doc)
+	if err != nil {
+		t.Fatalf("parseObservabilityDoc: %v", err)
+	}
+	if _, ok := inv.metrics["mcp_a_total"]; !ok {
+		t.Error("mcp_a_total not parsed — the HTML comment likely confused the blockquote/table detection")
+	}
+}
+
 func TestParseObservabilityDoc_NoTableRows(t *testing.T) {
-	doc := "## Metrics — [x]\n\n> _live: none._\n>\n> _not yet: none._\n\n## Audit Trail\n"
+	doc := "## Metrics — [x]\n\n" + validBlockquote + "## Audit Trail\n"
 	_, err := parseObservabilityDoc(doc)
 	if err == nil {
 		t.Fatal("expected an error (no metric tables found), got nil")
+	}
+}
+
+// TestParseObservabilityDoc_StructuralErrors covers every remaining error
+// return in parseObservabilityDoc/parseLiveEnumeration/parseMetricTables —
+// the fail-loud-on-any-structural-surprise property is the whole design's
+// safety net, so each way it can fire gets its own case rather than being
+// asserted only by the doc comment above the function. Each case is built on
+// validBlockquote so the defect under test is the only thing that can make
+// it fail.
+func TestParseObservabilityDoc_StructuralErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+	}{
+		{
+			name: "no closing heading after Metrics",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n",
+		},
+		{
+			name: "no blockquote after the heading",
+			doc: "## Metrics — [x]\n\nNo blockquote here.\n\n" +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+		},
+		{
+			name: "blockquote has only a live paragraph, no not-yet paragraph",
+			doc: "## Metrics — [x]\n\n> _live: `mcp_a_total`, wired and emitted today._\n\n" +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+		},
+		{
+			name: "table header not followed by a separator",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis |\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+		},
+		{
+			name: "row doesn't match the expected shape",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\nmcp_a_total, Counter, none, Solace\n\n## Audit Trail\n",
+		},
+		{
+			name: "same label set with no preceding row",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | same label set | Solace |\n\n## Audit Trail\n",
+		},
+		{
+			name: "same metric name in two tables",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n" +
+				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+		},
+		{
+			name: "table header near-miss (extra column) is rejected, not silently skipped",
+			doc: "## Metrics — [x]\n\n" + validBlockquote +
+				"| Metric | Type | Labels | Basis | Status |\n|---|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace | Live |\n\n## Audit Trail\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseObservabilityDoc(tc.doc)
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			t.Logf("got expected error: %v", err)
+		})
 	}
 }

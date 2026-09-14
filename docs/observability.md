@@ -187,7 +187,7 @@ So a name you would change is worth flagging now. See
 | Audit units | Durations are in **milliseconds** (`duration_ms`). This differs from metrics on purpose: metrics follow Prometheus base units, audit follows common SIEM JSON convention. |
 | Timestamps | RFC 3339, UTC. |
 | Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name in this document is tagged **OTel** or **Solace**. |
-| Cardinality | Every metric name and label key is documented here, and a CI check (`TestObservabilityDocMatchesRegistry`, `cmd/server`, SOL-154238) fails the build on any undocumented name or label key, in both directions: emitted-but-undocumented, and documented-as-live-but-not-emitted. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
+| Cardinality | Every first-party `mcp_*` metric name and label key is documented here, and a CI check (`TestObservabilityDocMatchesRegistry`, `cmd/server`, SOL-154238) fails the build on any undocumented name or label key, in both directions: emitted-but-undocumented, and documented-as-live-but-not-emitted. (The `go_*`/`process_*` collectors and the OTLP span-export pair are outside that check's scope — the former isn't Solace-defined schema, the latter is exempt from the "claimed live" direction only, both explained where they're documented.) Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
 ### Schema Versioning
@@ -316,6 +316,18 @@ here can be reconciled.
 ---
 
 ## Metrics — [Planned, with exceptions]
+
+<!-- Parsed by TestObservabilityDocMatchesRegistry (cmd/server/observability_doc_helpers_test.go,
+     observability_doc_test.go). Structural requirements this section must keep:
+     - The blockquote immediately below must contain a paragraph matching the phrase
+       "wired and emitted today" (what's live) and a separate paragraph matching
+       "not emitted by any build yet" (what isn't) — searched for by content, not by
+       paragraph position, so which one is first doesn't matter, but the phrases
+       themselves must survive a rewrite.
+     - Every metric table must keep the exact header "| Metric | Type | Labels | Basis |".
+       "none" and "same label set, minus `x`" are the only non-literal Labels cells the
+       parser understands; a name may appear in only one table.
+     After editing this section, run: go test ./cmd/server -run TestObservabilityDoc -->
 
 > _Status: **[Planned, with exceptions]**. Most instrument names, types, and labels below
 > are the proposal under review, not yet wired in the build. Wired and emitted today: the
