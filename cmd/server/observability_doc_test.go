@@ -61,6 +61,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/prometheus/common/expfmt"
@@ -71,6 +72,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
 // readObservabilityDoc reads the real docs/observability.md from the repo
@@ -96,7 +98,20 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	t.Helper()
 	res := sdkresource.Default()
 
-	mp, err := metrics.New("test-version", res)
+	// MetricsOTLPEnabled deliberately left at its zero value (off) — tried
+	// turning it on first, so mcp_otel_metrics_* would be constructed the
+	// same way Story 46 does on a real server, but that makes
+	// mp.Shutdown try a real OTLP flush against the unreachable default
+	// endpoint (127.0.0.1:4317), which doesn't fail fast: it eats a real
+	// ~10s export timeout and then Shutdown itself returns an error. The
+	// OTLP metrics pair is in activityGated regardless of whether the flag
+	// is on, since either way — instrument never registered, or registered
+	// but never given a real export attempt — the observable result this
+	// check cares about is the same: absent from the scrape. Off is also
+	// the actually-representative default (docs/observability.md: "Push is
+	// off by default"), so there's no fidelity lost, only a real hazard
+	// avoided.
+	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}
@@ -134,8 +149,23 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	}
 	sec.RecordAuthzDenied(context.Background(), "test-tool", "not_permitted")
 
+	// mcp_broker_authz_denied_total (SOL-153332, Story 49): seeded the same
+	// way as the hop-1 authz-denied counter above, via ToolMetrics.
+	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", metrics.DenialReasonPermissionDenied)
+
+	// SOL-154365: this leaves the package-level counter pointed at a
+	// provider this test shuts down, with no way to reset it from here.
 	if err := panics.Register(mp.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register: %v", err)
+	}
+
+	// mcp_token_exchange_circuit_breaker_state (SOL-152284): an observable
+	// gauge, so registering it is enough — the SDK invokes the callback on
+	// every collection pass, no seed call needed.
+	if _, err := mp.TokenExchangeBreakerMetrics(func() (tokenexchange.BreakerSnapshot, bool) {
+		return tokenexchange.BreakerSnapshot{Name: "test-idp", State: "closed"}, true
+	}); err != nil {
+		t.Fatalf("TokenExchangeBreakerMetrics: %v", err)
 	}
 
 	if _, err := mp.BrokerMetrics(func() map[string]health.BrokerSnapshot {
@@ -150,6 +180,23 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	}); err != nil {
 		t.Fatalf("BrokerMetrics: %v", err)
 	}
+
+	// tracing.New mutates two OTel globals: otel.SetTracerProvider and
+	// otel.SetTextMapPropagator. Save and restore both, matching the
+	// established pattern for each — internal/observability/tracing/
+	// provider_test.go:40-41 for the tracer provider,
+	// propagator_test.go:49-50 for the propagator — rather than leaving
+	// them pointed at this harness's shut-down provider for whatever test
+	// in this binary happens to run next. Registered before tracing.New so
+	// prevTP/prevProp capture the state truly prior to this harness, and
+	// before the Shutdown cleanup below so LIFO ordering shuts tp down
+	// first and restores the globals after, not the other way around.
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
 
 	// Tracing must be enabled for tracing.New to register anything at all —
 	// with the flag off it returns (nil, nil), which is correct production
@@ -227,27 +274,45 @@ func scrapeLiveMCPFamilies(t *testing.T, handler http.Handler) liveInventory {
 // an export attempt through), the other three directions still apply to
 // them normally.
 //
-// Deliberately just the span pair, not the metrics pair too. The two are not
-// equivalent: the span pair has a real instrument today that simply has no
-// data point yet; the metrics pair (mcp_otel_metrics_exported_total /
-// _dropped_total) has no instrument anywhere in this build at all — nothing
-// outside docs/ and this file's own strings reference those two names.
-// Exempting an unimplemented metric from the "claimed live but absent"
-// direction would make it invisible to the one check that could catch a doc
-// edit that falsely claims Story 46 (SOL-152418) landed before it has.
-// Add the metrics pair here in the same change that actually registers
-// those two instruments (Story 46) — at that point they become genuinely
-// activity-gated in the same sense the span pair is now, not before.
+// Both pairs now, not just the span pair: Story 46 (SOL-152418) landed
+// mcp_otel_metrics_exported_total / _dropped_total for real (previously they
+// had no instrument anywhere in this build, which would have made this a
+// different, invalid exemption — see git history on this map for that
+// version, and the sabotage test that caught it). registerInstruments for
+// the OTLP metrics reader has the same shape as tracing's span-export
+// counters: no data point until a real export attempt succeeds or fails, so
+// a quiescent harness legitimately never populates either pair, by the same
+// design (docs/observability.md, OTLP Export Health): "Diagnosing a broken
+// push must not depend on the push working."
 //
-// direction 4 (label-key agreement) is consequently also skipped for the
-// span pair while it's absent — but that's not an unverified gap: the
+// Forcing one through is possible for the metrics pair specifically —
+// buildLiveRegistry could point at an unreachable collector and call
+// mp.ForceFlush, the same technique
+// internal/observability/metrics/otlp_test.go's own
+// TestOTLP_UnreachableCollector_ScrapeStaysUpAndDropsAreVisible uses — but
+// costs several real seconds per test run (waiting out an export timeout)
+// for a name this map already exempts correctly, and would still only ever
+// reach the dropped half without a real reachable collector, same asymmetry
+// as the span pair. Not done, for that cost/benefit reason, not because it
+// can't be done.
+//
+// direction 4 (label-key agreement) is consequently skipped for both pairs
+// while they're absent. For the span pair that's not an unverified gap: the
 // `reason` label and its values are independently pinned by
 // internal/observability/tracing/stats_test.go's TestExportStats_*
-// (asserting on the OTel SDK metricdata directly), just not by a live scrape
-// the way every other family here is.
+// (asserting on the OTel SDK metricdata directly). The metrics pair is
+// honestly weaker here: otlp_test.go's
+// TestOTLP_UnreachableCollector_ScrapeStaysUpAndDropsAreVisible confirms
+// mcp_otel_metrics_dropped_total's *name* appears on an unreachable
+// collector, via a plain substring check — it does not assert the `reason`
+// label's key or value the way stats_test.go does for spans. That is a real,
+// currently-unmitigated gap in this exemption, not a covered one; noted
+// rather than glossed over.
 var activityGated = map[string]bool{
-	"mcp_otel_spans_exported_total": true,
-	"mcp_otel_spans_dropped_total":  true,
+	"mcp_otel_spans_exported_total":   true,
+	"mcp_otel_spans_dropped_total":    true,
+	"mcp_otel_metrics_exported_total": true,
+	"mcp_otel_metrics_dropped_total":  true,
 }
 
 // TestObservabilityDocMatchesRegistry is the four-way check: every mcp_*

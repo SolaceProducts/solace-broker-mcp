@@ -196,6 +196,28 @@ func TestParseObservabilityDoc_ToleratesLeadingHTMLComment(t *testing.T) {
 	}
 }
 
+// TestParseObservabilityDoc_NotYetParagraphIsOptional confirms a blockquote
+// with only a "wired and emitted today" paragraph — no "not emitted by any
+// build yet" paragraph at all — parses cleanly with an empty notYetClaimed,
+// rather than erroring. This is a real state, not a hypothetical: it's
+// exactly what docs/observability.md looked like the moment SOL-152418 and
+// SOL-153332 both shipped, retiring the last two "not yet emitted" entries
+// at once.
+func TestParseObservabilityDoc_NotYetParagraphIsOptional(t *testing.T) {
+	doc := "## Metrics — [x]\n\n> _live: `mcp_a_total`, wired and emitted today._\n\n" +
+		"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n"
+	inv, err := parseObservabilityDoc(doc)
+	if err != nil {
+		t.Fatalf("parseObservabilityDoc: %v", err)
+	}
+	if !inv.liveClaimed["mcp_a_total"] {
+		t.Errorf("liveClaimed = %v, want mcp_a_total present", inv.liveClaimed)
+	}
+	if len(inv.notYetClaimed) != 0 {
+		t.Errorf("notYetClaimed = %v, want empty", inv.notYetClaimed)
+	}
+}
+
 func TestParseObservabilityDoc_NoTableRows(t *testing.T) {
 	doc := "## Metrics — [x]\n\n" + validBlockquote + "## Audit Trail\n"
 	_, err := parseObservabilityDoc(doc)
@@ -224,11 +246,6 @@ func TestParseObservabilityDoc_StructuralErrors(t *testing.T) {
 		{
 			name: "no blockquote after the heading",
 			doc: "## Metrics — [x]\n\nNo blockquote here.\n\n" +
-				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
-		},
-		{
-			name: "blockquote has only a live paragraph, no not-yet paragraph",
-			doc: "## Metrics — [x]\n\n> _live: `mcp_a_total`, wired and emitted today._\n\n" +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
 		},
 		{

@@ -242,12 +242,18 @@ func parseLiveEnumeration(section string) (live, notYet map[string]bool, err err
 	if liveParagraph == nil {
 		return nil, nil, fmt.Errorf("no paragraph in the Metrics-section blockquote matches %q — has the wording changed? update liveAnchor", liveAnchor)
 	}
-	if notYetParagraph == nil {
-		return nil, nil, fmt.Errorf("no paragraph in the Metrics-section blockquote matches %q — has the wording changed? update notYetAnchor", notYetAnchor)
-	}
+	// notYetParagraph is allowed to be absent: once every metric that was
+	// ever "not yet emitted" ships, there is nothing left to put in that
+	// paragraph, and the doc's author is free to drop it rather than leave
+	// an empty stub. That's a real, valid state (SOL-152418 and SOL-153332
+	// both landing at once produced exactly this), not a structural defect —
+	// unlike the live paragraph, which this parser has no meaningful reading
+	// of the section without.
 
 	live = extractNames(strings.Join(liveParagraph, " "))
-	notYet = extractNames(strings.Join(notYetParagraph, " "))
+	if notYetParagraph != nil {
+		notYet = extractNames(strings.Join(notYetParagraph, " "))
+	}
 	return live, notYet, nil
 }
 
