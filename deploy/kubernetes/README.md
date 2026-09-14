@@ -20,6 +20,7 @@ refuses to run without it. That is deliberate — see the table below.
 | `secret.yaml` | `BROKER_USERNAME` | Defaults to `admin`. |
 | `configmap.yaml` | `brokers.my-broker.url` | Points at `https://broker.example.com:943`. Until you change it, every tool call fails. |
 | `deployment.yaml` | `image` tag | Ships as `:latest`. Pin a released version for a reproducible deploy. |
+| `deployment.yaml` | `limits.memory` **and** `GOMEMLIMIT` | Only if you change either. They ship coupled at 512Mi / `384MiB` (75%) and must move together — see [Resource requests and limits](../../docs/observability.md#resource-requests-and-limits). Go's suffix is `MiB`, not Kubernetes' `Mi`; a value the runtime cannot parse is fatal at startup. |
 
 Do not commit an edited `secret.yaml`. For anything beyond a trial, use Vault,
 Sealed Secrets, External Secrets Operator, or SOPS.

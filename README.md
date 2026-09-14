@@ -267,6 +267,8 @@ docker run -d \
 > ```
 > Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
 
+> **If you cap the container's memory** — `--memory`, or `mem_limit` in Compose — pass `-e GOMEMLIMIT` at 75% of that cap alongside it. The Go runtime reads the cgroup CPU limit but never the memory one, so an uninformed process runs right up against a cap it cannot see. The command above sets no memory limit and so needs no `GOMEMLIMIT`; the two belong together. Note the suffix is Go's `MiB`, not Docker's `m`, and an unparseable value kills the process at startup. See [Resource requests and limits](docs/observability.md#resource-requests-and-limits) for the rule and what it is measured against.
+
 The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's `release.yml` workflow:
 
 ```bash

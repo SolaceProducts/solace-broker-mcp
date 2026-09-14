@@ -82,6 +82,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            # Recommended: GOMEMLIMIT at 75% of limits.memory (SOL-154328,
+            # measured under SOL-154158). Go never reads a cgroup memory limit,
+            # so without this the heap target has no ceiling and the pod settles
+            # near limits.memory instead of below it. Raise limits.memory and
+            # this together; keep the ratio. Go's suffix is MiB, not
+            # Kubernetes' Mi — an unparseable value is fatal at startup.
+            - name: GOMEMLIMIT
+              value: "384MiB"
           envFrom:
             - secretRef:
                 name: solace-broker-mcp
@@ -132,8 +140,12 @@ spec:
           # limits.memory is set because memory is incompressible — a leak
           # takes the node down rather than just running slower. OOM eviction
           # is Kubernetes' job; /readyz reports init state, not memory
-          # pressure, so nothing in-process watches the heap. 512Mi covers the
-          # session map plus buffered SEMP responses under concurrent calls.
+          # pressure, so nothing in-process watches the heap.
+          #
+          # 512Mi is sized for the default semp.request_min_interval, with
+          # GOMEMLIMIT set above. Changing that setting changes the memory
+          # profile and needs its own measurement — see docs/observability.md
+          # § "Resource requests and limits".
           resources:
             requests:
               cpu: 100m
