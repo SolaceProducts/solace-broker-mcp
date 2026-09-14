@@ -2505,12 +2505,29 @@ func forBroker(recs []map[string]any, alias string) []map[string]any {
 // same convention as captureLogs.
 func captureJSONLogs(t *testing.T) *jsonLogBuffer {
 	t.Helper()
+	return captureJSONLogsAt(t, slog.LevelDebug)
+}
+
+// captureJSONLogsAt is captureJSONLogs with an explicit minimum level so a
+// test can prove a line is visible at production INFO (SOL-154334).
+func captureJSONLogsAt(t *testing.T, level slog.Level) *jsonLogBuffer {
+	t.Helper()
 	buf := &jsonLogBuffer{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(correlation.NewSlogHandler(
-		slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+		slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: level}))))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
+}
+
+func countMsg(recs []map[string]any, msg string) int {
+	n := 0
+	for _, r := range recs {
+		if r["msg"] == msg {
+			n++
+		}
+	}
+	return n
 }
 
 // The exchange context is deliberately detached from the caller (rooted at

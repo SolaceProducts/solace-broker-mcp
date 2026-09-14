@@ -702,9 +702,25 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		slog.Int("http_status", status),
 		slog.Int("attempts", idpclient.AttemptsFromContext(ctx)),
 		slog.Bool("used_fallback", parsed.usedFallback))
+	if parsed.usedFallback {
+		e.logExpiryFallbackOnce()
+	}
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).
 	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Audience, parsed.Value)
 	return parsed.Token, nil
+}
+
+// logExpiryFallbackOnce emits one INFO the first time this Exchanger applied
+// tokenExpiryFallback on a live IdP success. slog.Info is context-free so the
+// line is not attributed to one MCP call (SOL-154334). Later fallback uses
+// on this Exchanger keep the Debug used_fallback field on the issued-token
+// line. Production constructs one Exchanger per process.
+func (e *Exchanger) logExpiryFallbackOnce() {
+	if !e.expiryFallbackLogged.CompareAndSwap(false, true) {
+		return
+	}
+	slog.Info("broker OAuth token expiry fallback supplied a lifetime",
+		slog.Duration("expiry_fallback", e.tokenExpiryFallback))
 }

@@ -63,6 +63,9 @@ func TestNewTokenExchanger_LogsConfiguredExpiryFallback(t *testing.T) {
 	if !strings.Contains(out, `"expiry_fallback":3600000000000`) {
 		t.Errorf("expected one-hour expiry_fallback duration: %s", out)
 	}
+	if strings.Contains(out, `"msg":"broker OAuth token expiry fallback supplied a lifetime"`) {
+		t.Errorf("usage INFO must not fire at exchanger creation: %s", out)
+	}
 }
 
 func TestNewTokenExchanger_LogsUnconfiguredExpiryFallback(t *testing.T) {
