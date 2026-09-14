@@ -31,10 +31,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On workflow_run, check out the exact commit the dev build published
-          # the image from, so the test scripts match the image under test.
-          # Falls back to the default ref for a manual workflow_dispatch.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Default checkout (main HEAD). The nightly build also runs from main,
+          # so this matches the image's commit in practice. Pinning
+          # workflow_run.head_sha would tighten that but trips CodeQL's
+          # cache-poisoning check for a negligible gain.
           persist-credentials: false
 
       - name: Start stack

@@ -25,9 +25,10 @@ services:
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
       # Default: Tempo. .env.jaeger overrides this to jaeger:4317.
-      # To use Datadog: DD_API_KEY=<key> docker compose up (also update otelcol.yaml exporter)
       - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo:4317}
-      - DD_API_KEY=${DD_API_KEY:-}
+      # To use Datadog: uncomment the datadog exporter in otelcol.yaml AND the
+      # line below, then run with DD_API_KEY=<key> docker compose up.
+      # - DD_API_KEY=${DD_API_KEY:-}
     volumes:
       - ./otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
