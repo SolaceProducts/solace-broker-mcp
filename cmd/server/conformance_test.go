@@ -845,18 +845,13 @@ func TestToolsList_WireCompleteness(t *testing.T) {
 			}
 			assertObjectSchema(t, "inputSchema", tool.InputSchema)
 
-			// Output schemas: every tool that flows through ToolManager
-			// declares one, and the manager validates its result against it
-			// before the result reaches the wire. The exception below is a
-			// known gap, pinned so it cannot spread silently.
-			if toolsWithoutOutputSchema[tool.Name] {
-				if tool.OutputSchema != nil {
-					t.Errorf("%s now declares an outputSchema; "+
-						"remove it from toolsWithoutOutputSchema", tool.Name)
-				}
-			} else {
-				assertObjectSchema(t, "outputSchema", tool.OutputSchema)
-			}
+			// Output schemas: every registered tool declares one, with no
+			// exceptions and no allow-list. Tools on the ToolManager path get
+			// theirs at registration, and the manager validates each result
+			// against it before the result reaches the wire; the two tools
+			// registered directly on the server declare their own by hand
+			// (SOL-153694 closed the last gap here).
+			assertObjectSchema(t, "outputSchema", tool.OutputSchema)
 			if tool.Annotations == nil {
 				t.Error("annotations are absent; clients use readOnlyHint to decide " +
 					"whether a call needs confirmation")
@@ -907,24 +902,6 @@ func isKebabCase(name string) bool {
 		}
 	}
 	return true
-}
-
-// toolsWithoutOutputSchema records the tools that return structuredContent but
-// declare no outputSchema, so a client cannot validate what it gets back. MCP
-// 2025-11-25 says a tool returning structured content SHOULD declare an output
-// schema; these do not.
-//
-// describe-semp-schema (internal/tools/describe_semp_schema.go) is registered
-// outside the ToolManager pipeline, which is where every other tool's output
-// schema is attached and enforced — the gap is a consequence of that bypass,
-// not a deliberate choice.
-//
-// This is an allow-list, not an excuse: TestToolsList_WireCompleteness fails
-// if a tool listed here starts declaring a schema (remove it from the map) and
-// fails if any tool NOT listed here stops declaring one. Closing the gap is a
-// production change and is tracked separately — see the SOL-150761 report.
-var toolsWithoutOutputSchema = map[string]bool{
-	"describe-semp-schema": true,
 }
 
 // wireToolResult is the on-the-wire shape of a tools/call result. IsError is a
@@ -984,9 +961,9 @@ func callToolOverWireOmittedArguments(t *testing.T, handler http.Handler, sessio
 // That makes it a single-tool assertion, not a generalisation. list-brokers is
 // registered by tools.RegisterListBrokers and builds its own CallToolResult,
 // so it is precisely a tool that does NOT go through ToolManager.CallTool's
-// result-assembly tail (the same bypass that costs it an output schema — see
-// toolsWithoutOutputSchema below). The ToolManager success tail is covered at
-// unit level in internal/tools/.
+// result-assembly tail — which is also why it declares its output schema by
+// hand rather than receiving one at registration. The ToolManager success
+// tail is covered at unit level in internal/tools/.
 func TestToolsCall_ReturnsStructuredContent(t *testing.T) {
 	handler := conformanceHandler(t)
 	sessionID := initializeSessionFor(t, handler)
@@ -1168,10 +1145,9 @@ func assertConformantErrorResult(t *testing.T, env jsonRPCEnvelope, wantMessages
 //     declare is silently accepted.
 //
 // Closing either gap is a production change, tracked separately (SOL-150761).
-// Until then this test is a two-way gate, in the same shape as
-// toolsWithoutOutputSchema: it fails if the behaviour drifts further AND it
-// fails once production is fixed, so whoever fixes it is told to delete the
-// case rather than leaving a stale allow-list behind.
+// Until then this test is a two-way gate: it fails if the behaviour drifts
+// further AND it fails once production is fixed, so whoever fixes it is told
+// to delete the case rather than leaving a stale allow-list behind.
 func TestToolsCall_ValidationOutsideToolManagerIsNotConformant(t *testing.T) {
 	handler := conformanceHandler(t)
 	sessionID := initializeSessionFor(t, handler)

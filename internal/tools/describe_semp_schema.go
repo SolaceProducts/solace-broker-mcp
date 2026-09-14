@@ -271,6 +271,125 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 	return out
 }
 
+// describeSempSchemaOutputSchema declares the shape of this tool's
+// structuredContent (SOL-153694). Tools on the ToolManager registration path
+// inherit an output schema from it; this one registers directly on the server
+// (see RegisterDescribeSempSchema), as list-brokers does, so — like that one —
+// its schema is written out by hand here.
+//
+// Only operation and method are required, and which of the rest appear depends
+// on the view AND on whether the operation has a request body. describe()
+// returns early for a bodyless operation, before the view is consulted, so
+// that branch emits note and an empty attributes for BOTH views and never
+// definition or schema. With a body: definition always, then attributes in the
+// trimmed view or schema in the raw one. So attributes is absent only from the
+// raw view of an operation that has a request body — 287 of the 633 indexed
+// operations. TestDescribeSempSchema_RawViewOfBodylessOperationEmitsAttributes
+// pins that asymmetry, since it is the easiest thing here to state backwards.
+//
+// Closed at the root and in the attribute definition — and since the nesting
+// recursion reuses that one definition, every depth is closed by it. describe()
+// and trimAttributes are the only producers of these documents, so a field
+// added there without a matching entry here should fail loudly rather than ship
+// undocumented. Two tests stand in for the runtime validation this tool does
+// not get, since it bypasses ToolManager:
+// TestDescribeSempSchema_OutputMatchesDeclaredSchema validates real output for
+// every indexed operation in both views, and
+// TestDescribeSempSchema_OutputSchemaRejectsUndeclaredFields proves the closure
+// is real at all three instance levels.
+//
+// This describes the SUCCESS shape only. A panic unwinding through
+// withRecovery (internal/tools/register.go) is answered with a
+// structuredContent of {error, retryable}, which this schema rejects — it
+// requires operation and method and is closed. That costs nothing today, since
+// nothing validates this tool's output at runtime, but a client that
+// validates would reject a panic result. Describing both shapes would mean a
+// oneOf whose error arm is the generic local-error envelope every tool shares,
+// which belongs with that envelope rather than here.
+//
+// "definitions"/"#/definitions/..." is the draft-04/07 spelling, chosen
+// deliberately: gojsonschema — the validator this repo compiles schemas with
+// (internal/tools/validation.go) — is a draft-04/06/07 implementation, and
+// "$defs" is the 2020-12 rename, which it does not resolve. The consequence
+// is that only gojsonschema is exercised against this schema; a client on a
+// 2020-12-only validator that does not accept the older keyword would not
+// resolve the recursion. Reconsider the spelling if this repo's validator
+// moves to 2020-12.
+func describeSempSchemaOutputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{
+				"type":        "string",
+				"description": "The operation that was described, echoed back in the '<specType>/<operationId>' form it was requested as.",
+			},
+			"method": map[string]any{
+				"type":        "string",
+				"description": "The HTTP method the operation uses, e.g. POST for a create or PATCH for an update.",
+			},
+			"definition": map[string]any{
+				"type":        "string",
+				"description": "Name of the SEMPv2 request-body definition backing the operation. Absent when the operation takes no request body.",
+			},
+			"note": map[string]any{
+				"type":        "string",
+				"description": "Present only when the operation has no request-body definition, stating that there are no attributes to describe.",
+			},
+			"attributes": map[string]any{
+				"type":        "array",
+				"description": "One entry per configurable attribute, sorted by name. Present in the trimmed view, and in the raw view when the operation takes no request body (then always empty, because the no-body path returns before the view is consulted). Absent only from the raw view of an operation that has a request body.",
+				"items":       map[string]any{"$ref": "#/definitions/attribute"},
+			},
+			"schema": map[string]any{
+				"type":        "object",
+				"description": "Raw view only: the OpenAPI definition object verbatim, including every SEMP x-* extension. Deliberately unconstrained, being a passthrough of the spec.",
+			},
+		},
+		"required":             []string{"operation", "method"},
+		"additionalProperties": false,
+		"definitions": map[string]any{
+			"attribute": map[string]any{
+				"type":        "object",
+				"description": "One attribute of the request body, as produced by trimAttributes.",
+				"properties": map[string]any{
+					"name":        map[string]any{"type": "string"},
+					"type":        map[string]any{"type": "string"},
+					"description": map[string]any{"type": "string"},
+					// enum values and defaults carry the spec's own types
+					// (string, number, boolean), so their items and value are
+					// left unconstrained.
+					"enum":      map[string]any{"type": "array"},
+					"default":   map[string]any{},
+					"pattern":   map[string]any{"type": "string"},
+					"maxLength": map[string]any{"type": "number"},
+					"minimum":   map[string]any{"type": "number"},
+					"maximum":   map[string]any{"type": "number"},
+					// Always emitted for a plain attribute and always absent
+					// for a $ref-backed one, which carries nested properties
+					// instead — so neither can be required here.
+					"writableOnCreate": map[string]any{"type": "boolean"},
+					"writableOnUpdate": map[string]any{"type": "boolean"},
+					// Emitted only when true (see omitWhenFalse).
+					"identifying":       map[string]any{"type": "boolean"},
+					"requiredForCreate": map[string]any{"type": "boolean"},
+					"writeOnly":         map[string]any{"type": "boolean"},
+					"sensitive":         map[string]any{"type": "boolean"},
+					"deprecated":        map[string]any{"type": "boolean"},
+					"requiresDisable":   map[string]any{"type": "array"},
+					"autoDisable":       map[string]any{"type": "array"},
+					"properties": map[string]any{
+						"type":        "array",
+						"description": "Nested attribute list for a $ref-backed object attribute, the same shape as the top-level attributes list.",
+						"items":       map[string]any{"$ref": "#/definitions/attribute"},
+					},
+				},
+				"required":             []string{"name"},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
 // RegisterDescribeSempSchema registers describe-semp-schema as a standalone tool —
 // same shape as RegisterListBrokers, no broker resolution, no policy wrapping.
 func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS, tm *metrics.ToolMetrics) error {
@@ -319,6 +438,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 			},
 			"required": []string{"operation"},
 		},
+		OutputSchema: describeSempSchemaOutputSchema(),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: true,
 		},
