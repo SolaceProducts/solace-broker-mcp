@@ -714,8 +714,9 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 
 // logExpiryFallbackOnce emits one INFO the first time this Exchanger applied
 // tokenExpiryFallback on a live IdP success. slog.Info is context-free so the
-// line is a process breadcrumb, not one MCP call (SOL-154334). Later fallback
-// uses keep the Debug used_fallback field on the issued-token line.
+// line is not attributed to one MCP call (SOL-154334). Later fallback uses
+// on this Exchanger keep the Debug used_fallback field on the issued-token
+// line. Production constructs one Exchanger per process.
 func (e *Exchanger) logExpiryFallbackOnce() {
 	if !e.expiryFallbackLogged.CompareAndSwap(false, true) {
 		return

@@ -62,9 +62,10 @@ type Exchanger struct {
 	// updated only by OnStateChange and read by BreakerStateSnapshot so
 	// observability never calls gobreaker's state-mutating State method.
 	breakerState atomic.Int64
-	// expiryFallbackLogged is set the first time parseSuccessBody applies
-	// tokenExpiryFallback on a live IdP success. It gates one INFO (SOL-154334);
-	// later fallback uses stay on the Debug issued line.
+	// expiryFallbackLogged is set the first time this Exchanger applies
+	// tokenExpiryFallback on a live IdP success. It gates one INFO on this
+	// instance (SOL-154334); later fallback uses on this Exchanger stay on
+	// the Debug issued line. Production constructs one Exchanger per process.
 	expiryFallbackLogged atomic.Bool
 	// gatedUntil (nowFunc().UnixNano(); 0 = not gated) is a shared,
 	// process-wide backoff set on an exhausted 429 chain (see

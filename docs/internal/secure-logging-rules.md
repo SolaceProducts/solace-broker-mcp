@@ -33,7 +33,7 @@ These must never appear in log output, in any environment:
 | Broker connection created | broker alias, URL |
 | Config loaded | broker_count, port |
 | OAuth protected resource metadata endpoint registered | resource, issuers (PRM JSON `authorization_servers`), scopes_supported, bearer_methods_supported, resource_metadata_url, prm_paths |
-| Hop-2 token expiry fallback first supplied a lifetime | `expiry_fallback` (configured duration; once per process exchanger) |
+| Hop-2 token expiry fallback first supplied a lifetime | `expiry_fallback` (configured duration; once per Exchanger — production constructs one per process) |
 
 **Important:** At startup, log the broker alias list (`[]string`) — never the broker config map. The config map contains `AuthConfig` which holds credentials.
 
