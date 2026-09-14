@@ -235,44 +235,52 @@ func TestParseObservabilityDoc_NoTableRows(t *testing.T) {
 // it fail.
 func TestParseObservabilityDoc_StructuralErrors(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		doc  string
+		name    string
+		doc     string
+		wantErr string // substring unique to the guard this case exercises
 	}{
 		{
 			name: "no closing heading after Metrics",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n",
+			wantErr: `no top-level heading found after "## Metrics"`,
 		},
 		{
 			name: "no blockquote after the heading",
 			doc: "## Metrics — [x]\n\nNo blockquote here.\n\n" +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+			wantErr: "no blockquote found immediately after",
 		},
 		{
 			name: "table header not followed by a separator",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis |\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+			wantErr: "header not followed by a separator row",
 		},
 		{
 			name: "row doesn't match the expected shape",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\nmcp_a_total, Counter, none, Solace\n\n## Audit Trail\n",
+			wantErr: "doesn't match the expected shape",
 		},
 		{
 			name: "same label set with no preceding row",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | same label set | Solace |\n\n## Audit Trail\n",
+			wantErr: `references "same label set" but there is no preceding row`,
 		},
 		{
 			name: "same metric name in two tables",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n" +
 				"| Metric | Type | Labels | Basis |\n|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace |\n\n## Audit Trail\n",
+			wantErr: "appears in more than one metric table",
 		},
 		{
 			name: "table header near-miss (extra column) is rejected, not silently skipped",
 			doc: "## Metrics — [x]\n\n" + validBlockquote +
 				"| Metric | Type | Labels | Basis | Status |\n|---|---|---|---|---|\n| `mcp_a_total` | Counter | none | Solace | Live |\n\n## Audit Trail\n",
+			wantErr: "looks like a metric table header but doesn't match",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,7 +288,9 @@ func TestParseObservabilityDoc_StructuralErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error, got nil")
 			}
-			t.Logf("got expected error: %v", err)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q — this case may be failing on an earlier guard than the one it tests", err, tc.wantErr)
+			}
 		})
 	}
 }
