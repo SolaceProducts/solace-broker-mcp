@@ -581,3 +581,95 @@ func TestDescribeSempSchema_OutputSchemaRejectsUndeclaredFields(t *testing.T) {
 			"describeSempSchemaOutputSchema is dead and should be removed")
 	})
 }
+
+// TestDescribeSempSchema_RawViewOfBodylessOperationEmitsAttributes pins the
+// asymmetry that the declared schema's `attributes` description depends on, and
+// that PR #418 review found stated backwards in three places.
+//
+// describe() returns early for an operation with no request-body definition,
+// BEFORE the view is consulted, so that branch emits `attributes` (empty) for
+// the raw view as well as the trimmed one. `attributes` is therefore absent
+// only from the raw view of an operation that HAS a request body. More than
+// half the indexed operations are bodyless, so "absent in the raw view" was
+// wrong for the majority of raw calls.
+//
+// The schema itself was always correct — `attributes` is optional, so an empty
+// array validates — which is why the 1,266-document test passed against the
+// wrong description. Only a behavioural assertion catches this, hence this test.
+//
+// It is also a two-way gate. Moving `resp["attributes"]` behind the view check
+// would make the original claim true and is arguably the cleaner shape, but it
+// changes a response that already ships, so it belongs in its own ticket. If
+// someone makes that change, this test fails and points at the three
+// descriptions that have to change back with it.
+func TestDescribeSempSchema_RawViewOfBodylessOperationEmitsAttributes(t *testing.T) {
+	t.Parallel()
+	reg, err := buildSempSchemaMap(specs.FS)
+	if err != nil {
+		t.Fatalf("buildSempSchemaMap: %v", err)
+	}
+
+	var bodyless, withBody string
+	ops := make([]string, 0, len(reg.ops))
+	for op := range reg.ops {
+		ops = append(ops, op)
+	}
+	sort.Strings(ops)
+	bodylessCount := 0
+	for _, op := range ops {
+		if reg.ops[op].defName == "" {
+			bodylessCount++
+			if bodyless == "" {
+				bodyless = op
+			}
+		} else if withBody == "" {
+			withBody = op
+		}
+	}
+	if bodyless == "" || withBody == "" {
+		t.Fatalf("need one operation of each kind; bodyless=%q withBody=%q", bodyless, withBody)
+	}
+	t.Logf("%d of %d indexed operations are bodyless; probing %q and %q",
+		bodylessCount, len(ops), bodyless, withBody)
+
+	// The bodyless branch ignores the view: both views carry an empty
+	// attributes list and a note, and neither carries definition or schema.
+	for _, view := range []string{"trimmed", "raw"} {
+		doc, dErr := reg.describe(bodyless, view)
+		if dErr != nil {
+			t.Fatalf("describe(%q, %q): %v", bodyless, view, dErr)
+		}
+		attrs, ok := doc["attributes"]
+		if !ok {
+			t.Errorf("describe(%q, %q) omits attributes; the declared schema's "+
+				"description says a bodyless operation carries it in BOTH views", bodyless, view)
+			continue
+		}
+		if got, isEmpty := attrs.([]any); !isEmpty || len(got) != 0 {
+			t.Errorf("describe(%q, %q) attributes = %#v, want an empty []any",
+				bodyless, view, attrs)
+		}
+		if _, hasNote := doc["note"]; !hasNote {
+			t.Errorf("describe(%q, %q) omits note", bodyless, view)
+		}
+		for _, absent := range []string{"definition", "schema"} {
+			if _, has := doc[absent]; has {
+				t.Errorf("describe(%q, %q) carries %s; the bodyless branch returns before "+
+					"either is set", bodyless, view, absent)
+			}
+		}
+	}
+
+	// With a request body, the raw view is the one case that omits attributes.
+	rawDoc, err := reg.describe(withBody, "raw")
+	if err != nil {
+		t.Fatalf("describe(%q, raw): %v", withBody, err)
+	}
+	if _, has := rawDoc["attributes"]; has {
+		t.Errorf("describe(%q, raw) carries attributes; with a request body the raw "+
+			"view is meant to carry schema instead", withBody)
+	}
+	if _, has := rawDoc["schema"]; !has {
+		t.Errorf("describe(%q, raw) omits schema", withBody)
+	}
+}

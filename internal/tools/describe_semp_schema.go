@@ -272,15 +272,20 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 }
 
 // describeSempSchemaOutputSchema declares the shape of this tool's
-// structuredContent (SOL-153694). Every other tool inherits an output schema
-// from the ToolManager registration path; this one registers directly on the
-// server (see RegisterDescribeSempSchema), so the declaration is written out
-// here.
+// structuredContent (SOL-153694). Tools on the ToolManager registration path
+// inherit an output schema from it; this one registers directly on the server
+// (see RegisterDescribeSempSchema), as list-brokers does, so — like that one —
+// its schema is written out by hand here.
 //
-// Only operation and method are required. describe() emits definition only
-// when the operation has a request body, note only when it does not,
-// attributes in the trimmed view (as an empty array in the no-body case), and
-// schema only in the raw view.
+// Only operation and method are required, and which of the rest appear depends
+// on the view AND on whether the operation has a request body. describe()
+// returns early for a bodyless operation, before the view is consulted, so
+// that branch emits note and an empty attributes for BOTH views and never
+// definition or schema. With a body: definition always, then attributes in the
+// trimmed view or schema in the raw one. So attributes is absent only from the
+// raw view of an operation that has a request body — 287 of the 633 indexed
+// operations. TestDescribeSempSchema_RawViewOfBodylessOperationEmitsAttributes
+// pins that asymmetry, since it is the easiest thing here to state backwards.
 //
 // Closed at the root and in the attribute definition — and since the nesting
 // recursion reuses that one definition, every depth is closed by it. describe()
@@ -314,7 +319,7 @@ func describeSempSchemaOutputSchema() map[string]any {
 			},
 			"attributes": map[string]any{
 				"type":        "array",
-				"description": "Trimmed view: one entry per configurable attribute, sorted by name. Empty when the operation takes no request body. Absent in the raw view.",
+				"description": "One entry per configurable attribute, sorted by name. Present in the trimmed view, and in the raw view when the operation takes no request body (then always empty, because the no-body path returns before the view is consulted). Absent only from the raw view of an operation that has a request body.",
 				"items":       map[string]any{"$ref": "#/definitions/attribute"},
 			},
 			"schema": map[string]any{
