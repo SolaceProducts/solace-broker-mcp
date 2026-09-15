@@ -34,7 +34,8 @@
 | Find out what is actually live today | [Implementation Status](#implementation-status) |
 | Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
 | Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
-| Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
+| Import a starter Grafana dashboard | [Grafana Dashboard](#grafana-dashboard--implemented) |
+| Build a custom Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
 | Alert when the IdP token-exchange breaker is open | [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented) |
 | Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) · [Canonical Audit Queries](#canonical-audit-queries) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
@@ -893,6 +894,115 @@ the `mcp_*` instruments share — so the OTLP reader, which only observes what p
 meter provider, never sees them. An OTLP-native APM ingesting this server's pushed metrics will
 not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
 
+### Grafana Dashboard — [Implemented]
+
+> _Status: **[Implemented]** (SOL-152092, Story 37). `deploy/grafana/solace-broker-mcp-overview.json`
+> is a committed, importable dashboard. Every panel's metric name, label keys, and template
+> variable are checked in CI (`cmd/server/grafana_dashboard_test.go`) against Story 14's golden
+> file, not against this prose — a dashboard and a scrape cannot disagree without failing the
+> build._
+
+A starter dashboard so a customer NOC operator sees the service from day one without authoring
+panels: tool RED, an active-requests gauge alongside it, SEMP RED-per-attempt, an auth-failure
+rate broken out by reason, an `error_type` breakdown, Go runtime, and build info.
+
+**Import it.** In Grafana, **Dashboards → New → Import**, upload
+`deploy/grafana/solace-broker-mcp-overview.json`. Grafana prompts for one input — the Prometheus
+data source to bind the dashboard's `${DS_PROMETHEUS}` variable to — and the dashboard is ready.
+No manual panel edits, no datasource UID to hand-patch.
+
+**Panels, and what they answer:**
+
+| Panel | Query | Answers |
+|---|---|---|
+| Tool call rate / error rate / latency | `mcp_tool_invocation_total` / `_duration_seconds`, by `outcome` | Is the service up, and how fast? |
+| Active requests | `mcp_http_active_requests` (Decision #15) | Is a latency spike a capacity problem? Placed beside tool RED on purpose — read them together. |
+| SEMP request rate / error rate / latency | `mcp_semp_request_total` / `_duration_seconds`, per attempt | Is the broker the bottleneck, and is it retrying? |
+| Auth failure rate by reason | `mcp_auth_failure_total`, stacked by `reason` | Which failure mode — `signature_invalid` (Decision #7) isolates a JWKS-rotation symptom from a malformed-token one. |
+| Tool errors by `error_type` | `sum by (error_type) (rate(mcp_tool_invocation_total{outcome="error"}[5m]))` (ADR-009) | "Show me every crash" — `error_type="panic"` answers it directly. This panel is the visible payoff of splitting cause out of `outcome`. |
+| Go runtime / build info | `go_*`, `process_*`, `mcp_build_info` | Memory pressure, goroutine leaks, which build is running. |
+
+**Deliberately absent: retry outcomes, broker pool gauges, saturation events** (Stories 17, 18,
+28, 29). Those metrics do not exist in any registry yet — a panel built against one would import
+broken. They land in this dashboard when those stories ship, not before.
+
+**Variables**, top of dashboard — `$service_name`, `$cloud_region`, `$broker` — filter **every**
+panel, not just the ones that name a metric with an obvious matching label: every panel's query
+joins against `target_info` (or filters on `broker` directly, where the underlying metric carries
+one) so the three selectors apply dashboard-wide. Two different sourcing mechanisms, deliberately:
+
+- `$cloud_region` and `$service_name` come from the **[Resource Attributes](#resource-attributes--implemented)**
+  `target_info` series, joined the same way that section documents — **with one correction
+  learned by testing both egresses live, not assumed from the resource-attribute table alone**:
+  `$service_name`'s query is `label_values(target_info, job)`, **not**
+  `label_values(target_info, service_name)`. On a scrape-fed Prometheus, `target_info` does carry
+  an explicit `service_name` label, exactly as that section describes. On an OTLP-fed Prometheus,
+  it does not — Prometheus's OTLP-to-TSDB translator folds `service.name` into the standard `job`
+  label on `target_info` instead of also duplicating it there, while every *other*
+  `promote_resource_attributes`-listed attribute (`cloud.region` included) lands on `target_info`
+  normally. `job` returns the identical value on both egresses, so this is the one query that
+  works unmodified on both; a `service_name`-keyed query would silently return an empty dropdown
+  on the OTLP path, which is exactly the "customer choosing OTLP gets a broken dashboard" failure
+  this dashboard is committed to avoid.
+- `$broker` is an ordinary per-series label already on `mcp_tool_invocation_total` and
+  `mcp_semp_request_total` (`label_values(mcp_tool_invocation_total, broker)`) — it is **not** a
+  resource attribute, and querying it against `target_info` would return nothing. Metrics with no
+  `broker` dimension (`mcp_http_active_requests`, `mcp_auth_failure_total`, the Go runtime
+  collectors, `mcp_build_info`) are still scoped by `$service_name`/`$cloud_region` via the
+  `target_info` join; they simply have no `broker` axis to also filter on.
+
+**Exemplars.** The two latency panels (tool call, SEMP request) carry `"exemplar": true` on
+their Prometheus query targets, so a slow bucket can link straight to the trace that produced it
+— see [Trace Exemplars](#trace-exemplars--implemented) for what has to be true on the server
+side (tracing enabled, a sampled span, OpenMetrics negotiation). Two more things have to be true
+on **your** Prometheus and Grafana specifically, neither of which is optional and neither of
+which fails loudly if missed:
+
+- **Prometheus needs `--enable-feature=exemplar-storage`.** Without it, Prometheus scrapes the
+  exemplar off the wire and silently discards it before it ever reaches storage — OpenMetrics
+  negotiation alone is not sufficient. Verified live: identical traffic produced zero results
+  from `/api/v1/query_exemplars` without the flag and a correctly stored, queryable exemplar
+  with it.
+- **Your Prometheus data source in Grafana needs an Exemplars mapping** (Data source settings →
+  Exemplars → map the `trace_id` label to your Tempo, Jaeger, or other trace data source). See
+  [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes) for standing up a reference
+  Tempo/Jaeger backend if you don't already have one.
+
+With either piece missing, the two latency panels render as plain histograms with no exemplar
+markers — verified live, not merely asserted. Nothing breaks; the panel simply carries no
+clickable link. No Tempo/Jaeger data source UID is hardcoded in the committed dashboard JSON,
+deliberately: it varies per customer, and baking one in would either import broken (an unknown
+UID) or silently point at the wrong trace backend.
+
+**Works against both ingestion paths (ADR-010) — with the OTLP path requiring a collector,
+verified, not assumed:**
+
+- **A Prometheus that scrapes `/metrics`.** Works with no extra configuration.
+- **A Prometheus that ingests this server's OTLP metrics push.** Two things are required, and
+  a customer choosing this path should not discover either by trial and error:
+  1. **A collector in front of Prometheus — mandatory, not optional.** This server's OTLP
+     metrics exporter is gRPC-only (`internal/observability/metrics/otlp.go`); Prometheus's
+     native OTLP receiver (`--web.enable-otlp-receiver`) only speaks OTLP/HTTP. Pointing this
+     server directly at a bare Prometheus **does not work** — verified live: the export fails
+     with `mcp_otel_metrics_dropped_total{reason="export_timeout"}` on every attempt, because
+     the gRPC client's connection to an HTTP/1.1-only endpoint never completes. See
+     ["Ingesting OTLP metrics into Prometheus (collector required)"](#ingesting-otlp-metrics-into-prometheus-collector-required)
+     above (Story 40, SOL-152423) for the full requirement list — corrected 2026-09-15 to lead
+     with this one, since the other four are moot without it. Deploy the reference collector from
+     [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes) (its metrics pipeline is
+     commented out by default; enable it with an `otlphttp` exporter pointed at
+     `http(s)://<prometheus>/api/v1/otlp`) rather than attempting a direct push.
+  2. **`promote_resource_attributes` on that Prometheus**, covering at minimum `service.name`,
+     `service.instance.id`, `deployment.environment.name`, and `cloud.region` — otherwise this
+     dashboard's `$service_name`/`$cloud_region` variables return empty dropdowns, per
+     [Resource Attributes](#resource-attributes--implemented)'s own note that resource
+     attributes are not promoted to labels by default on the OTLP path.
+- **One known, structural difference between the two paths on this dashboard**: the Go runtime
+  panels (goroutines, heap, CPU) show **no data** on the OTLP-ingested path. This is not a
+  dashboard defect — see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics) above:
+  `go_*`/`process_*` are registered outside the OTel meter provider and structurally never reach
+  the OTLP egress. Every other panel on this dashboard works on both paths.
+
 ---
 
 ## Audit Trail — [Interim — records implemented, drop counter not yet wired]
@@ -1463,20 +1573,37 @@ For each backend, the collector `config.yaml` exporter block is in
 `deploy/otel-collector/kubernetes/collector-configmap.yaml` — Jaeger and Datadog blocks are
 commented out and can be swapped in for the Tempo default.
 
-#### Ingesting OTLP metrics directly into Prometheus (no collector)
+#### Ingesting OTLP metrics into Prometheus (collector required)
 
-With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP
-as well as serving the Prometheus scrape endpoint. Ingesting those push
-metrics directly into Prometheus (without a collector in the middle) requires
-four things that are easy to miss:
+> **Corrected 2026-09-15 (SOL-152092):** this section originally read "no collector" and omitted
+> the one prerequisite that makes the other four moot without it. Verified live: pointing this
+> server's OTLP metrics exporter straight at a bare Prometheus does not work, and cannot be made
+> to work by adjusting Prometheus-side configuration alone. The corrected requirement is below,
+> first, because it is load-bearing for everything that follows it.
 
-1. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
-2. **Delta temporality requires an experimental feature flag.** The server ships cumulative
+With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP as well as serving the
+Prometheus scrape endpoint. Ingesting those push metrics into Prometheus requires five things,
+the first of which is not optional:
+
+1. **A collector in front of Prometheus.** This server's OTLP metrics exporter is gRPC-only
+   (`internal/observability/metrics/otlp.go`, `otlpmetricgrpc`); Prometheus's native OTLP
+   receiver (`--web.enable-otlp-receiver`, item 2 below) only speaks OTLP/HTTP, and never opens a
+   gRPC listener. Pointing this server directly at a bare Prometheus therefore **does not work**
+   — verified live: every export attempt fails with
+   `mcp_otel_metrics_dropped_total{reason="export_timeout"}`, because the gRPC client's
+   connection to an HTTP/1.1-only endpoint never completes. Route through an OTel Collector
+   instead: an `otlp` gRPC receiver (what this server can talk to) and an `otlphttp` exporter
+   pointed at `http(s)://<prometheus>/api/v1/otlp` (what Prometheus can talk to) is sufficient.
+   The reference collector under [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes)
+   ships this exact metrics pipeline commented out by default (Tempo/Jaeger are traces-only) —
+   enable it and point its exporter at your Prometheus's OTLP endpoint.
+2. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
+3. **Delta temporality requires an experimental feature flag.** The server ships cumulative
    temporality to avoid this requirement — no flag needed on your side.
-3. **Resource attributes are not promoted to labels by default.** Configure
+4. **Resource attributes are not promoted to labels by default.** Configure
    `promote_resource_attributes` in the Prometheus config, or use the `target_info` join
    described in the [Resource Attributes](#resource-attributes--implemented) section.
-4. **`storage.tsdb.out_of_order_time_window` may need tuning.** OTLP push can arrive slightly
+5. **`storage.tsdb.out_of_order_time_window` may need tuning.** OTLP push can arrive slightly
    out of order relative to scrape data. Set a small window (for example `10m`) to avoid
    rejected samples.
 
@@ -2344,10 +2471,11 @@ Three things follow, and each is a commitment rather than an accident of the cur
   use a documented Solace-*named* metric or field, carried over the standard transport like
   every other one.
 - **Grafana is a reference implementation, not a requirement.** This document mentions Grafana
-  because it is the most common way to consume these signals, and a reference dashboard is
-  planned (Story 37, SOL-152092). Nothing in the schema depends on it. Trace exemplars are the
-  one place a dashboard feature is described, and they are an OpenMetrics feature any
-  conforming backend can read — see [Trace Exemplars](#trace-exemplars--implemented).
+  because it is the most common way to consume these signals, and a committed reference
+  dashboard ships as of this change — see [Grafana Dashboard](#grafana-dashboard--implemented)
+  (Story 37, SOL-152092). Nothing in the schema depends on it. Trace exemplars are the one place
+  a dashboard feature is described, and they are an OpenMetrics feature any conforming backend
+  can read — see [Trace Exemplars](#trace-exemplars--implemented).
 
 **Backends in scope.** The four we design and check against are Prometheus with Grafana,
 Grafana Tempo, Jaeger, and Datadog. Be precise about what "check against" means today, because

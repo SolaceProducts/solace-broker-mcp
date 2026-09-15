@@ -1,0 +1,533 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "A Prometheus data source scraping this server's /metrics, or ingesting its OTLP metrics push (see docs/observability.md for the promote_resource_attributes + collector requirements on the OTLP path).",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "9.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "title": "Solace Broker MCP — Overview",
+  "uid": "solace-broker-mcp-overview",
+  "schemaVersion": 37,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "tags": [
+    "solace-broker-mcp",
+    "reference"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "service_name",
+        "type": "query",
+        "label": "Service",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(target_info, job)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {}
+      },
+      {
+        "name": "cloud_region",
+        "type": "query",
+        "label": "Cloud region",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(target_info, cloud_region)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {}
+      },
+      {
+        "name": "broker",
+        "type": "query",
+        "label": "Broker",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(mcp_tool_invocation_total, broker)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Tool RED & Active Requests",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Tool call rate by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (outcome) (rate(mcp_tool_invocation_total{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Tool error rate",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(mcp_tool_invocation_total{outcome=\"error\", broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "errors/s"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Tool call latency (p50/p95/p99)",
+      "description": "Exemplars (clickable trace links) need: tracing enabled on the server, a Prometheus started with --enable-feature=exemplar-storage, OpenMetrics negotiation on the scrape, and this datasource's Exemplars config pointing at a Tempo/Jaeger data source. Renders as a plain latency panel with none of that configured.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mcp_tool_invocation_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p50",
+          "exemplar": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mcp_tool_invocation_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p95",
+          "exemplar": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mcp_tool_invocation_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p99",
+          "exemplar": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active requests",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "mcp_http_active_requests * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}",
+          "legendFormat": "active"
+        }
+      ]
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "SEMP RED (per attempt)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "SEMP request rate by operation",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (operation) (rate(mcp_semp_request_total{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "{{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "SEMP error rate by status code",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (http_response_status_code) (rate(mcp_semp_request_total{broker=~\"$broker\", http_response_status_code!~\"2..\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "{{http_response_status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "SEMP request latency (p50/p95/p99)",
+      "description": "Same exemplar prerequisites as the tool-call latency panel above.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mcp_semp_request_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p50",
+          "exemplar": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mcp_semp_request_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p95",
+          "exemplar": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mcp_semp_request_duration_seconds_bucket{broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}))",
+          "legendFormat": "p99",
+          "exemplar": true
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "Auth failures & error breakdown",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Auth failure rate by reason",
+      "description": "signature_invalid (Decision #7) distinguishes JWKS-rotation/stale-cache failures from malformed-token failures.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (reason) (rate(mcp_auth_failure_total[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tool errors by error_type (ADR-009)",
+      "description": "sum by (error_type) (rate(mcp_tool_invocation_total{outcome=\"error\"}[5m])) — answers \"show me all crashes\" via error_type=\"panic\".",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (error_type) (rate(mcp_tool_invocation_total{outcome=\"error\", broker=~\"$broker\"}[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"})",
+          "legendFormat": "{{error_type}}"
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "type": "row",
+      "title": "Go runtime & build info",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Goroutines",
+      "description": "No data if this Prometheus ingests our OTLP push rather than scraping /metrics: go_*/process_* are upstream client_golang collectors, registered outside the OTel meter provider, so they never reach the OTLP egress. Scrape-only by design, not a broken panel — see docs/observability.md, \"Go Runtime and Process Metrics\".",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "go_goroutines * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}",
+          "legendFormat": "goroutines"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Heap in use",
+      "description": "Scrape-only, same as the other Go/process panels in this row — see the Goroutines panel's note.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "go_memstats_heap_inuse_bytes * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}",
+          "legendFormat": "heap in use"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "CPU usage",
+      "description": "Scrape-only, same as the other Go/process panels in this row — see the Goroutines panel's note.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(process_cpu_seconds_total[5m]) * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}",
+          "legendFormat": "cpu seconds/s"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Build info",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 36
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "mcp_build_info * on (instance, job) group_left(cloud_region) target_info{job=~\"$service_name\", cloud_region=~\"$cloud_region\"}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}
