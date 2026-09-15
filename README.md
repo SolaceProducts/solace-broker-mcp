@@ -121,12 +121,14 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 ## Quickstart
 
-All deployment methods share the same configuration step below. Complete it,
-then pick a deployment method — listed simplest to most advanced.
+Binary, Docker, and `go install` deployments share the same configuration step
+below — complete it, then pick a deployment method. Kubernetes uses its own
+checked-in manifests instead of this step; see
+[Kubernetes Deployment](#kubernetes-deployment).
 
 ### Configuration
 
-All deployment methods use the same YAML configuration file and `.env` credentials file.
+Binary, Docker, and `go install` deployments use the same YAML configuration file and `.env` credentials file. Kubernetes carries the equivalent settings in its own ConfigMap and Secret manifests instead — see [Kubernetes Deployment](#kubernetes-deployment).
 
 **1. Create a configuration file** (`broker-config.yaml`):
 
@@ -169,7 +171,7 @@ The `.env` file is loaded automatically. Environment variables set directly (for
 
 ---
 
-Select a deployment method, simplest to most advanced:
+Select a deployment method:
 - **[Binary](#binary-deployment)** — Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick.
 - **[Docker](#docker-deployment)** — Containerized deployment; suitable for production and Kubernetes environments
 - **[go install](#install-with-go-install)** — Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`
@@ -339,10 +341,7 @@ Example query:
 List queues in <your-vpn-name> on the dev event broker
 ```
 
-Replace `<your-vpn-name>` with an actual Message VPN name — there's no VPN
-named "default" on Solace Cloud. Don't know it? Ask "What VPNs are configured
-on the dev event broker?" first (invokes `list-vpns`), or check the service
-details in the Solace Cloud console.
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ### Connect from Solace Agent Mesh
 
@@ -364,9 +363,7 @@ What event brokers are configured?
 List the queues on event-broker-one's <your-vpn-name> VPN.
 ```
 
-Ask "What VPNs are configured on event-broker-one?" first if you don't already
-know the name — Solace Cloud services don't ship a VPN literally named
-"default".
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ## Development Setup
 

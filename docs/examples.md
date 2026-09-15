@@ -96,11 +96,13 @@ See [Authentication](authentication.md) for full OAuth setup.
 ## Natural-Language Queries
 
 After connecting, ask in plain language. The agent selects the tool and fills
-parameters. The examples below say `<your-vpn-name>` where a query needs a
-Message VPN — substitute an actual VPN name from your event broker. There is
-no VPN literally named "default" on Solace Cloud; if you don't already know
-the name, ask "What VPNs are configured on prod-broker?" first (invokes
-`list-vpns`), or check the service details in the Solace Cloud console.
+parameters.
+
+> **Note:** `<your-vpn-name>` in the examples below stands in for a Message VPN
+> name — replace it with one from your own event broker. The name is
+> per-broker; Solace Cloud services use the service name rather than `default`.
+> To look it up, ask "What VPNs are configured on prod-broker?" (invokes
+> `list-vpns`), or check the service details in the Solace Cloud console.
 
 Representative queries and the shape they return:
 
@@ -134,56 +136,56 @@ request). Replace `prod-broker` with one of your configured aliases (from
 ```json
 { "name": "get-broker-status", "arguments": { "broker": "prod-broker" } }
 { "name": "get-redundancy-status", "arguments": { "broker": "prod-broker" } }
-{ "name": "get-replication-status", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "get-replication-status", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
 ```
 
 **Message VPN**
 
 ```json
 { "name": "list-vpns", "arguments": { "broker": "prod-broker", "maxResults": 50 } }
-{ "name": "get-vpn-status", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
-{ "name": "get-message-rates", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "get-vpn-status", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
+{ "name": "get-message-rates", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
 ```
 
 **Queues**
 
 ```json
-{ "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
-{ "name": "get-queue-metrics", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
-{ "name": "list-queue-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
+{ "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
+{ "name": "get-queue-metrics", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
+{ "name": "list-queue-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
 ```
 
 **Clients**
 
 ```json
-{ "name": "list-clients", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
-{ "name": "get-client-details", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
-{ "name": "list-client-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
-{ "name": "list-slow-subscribers", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "list-clients", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
+{ "name": "get-client-details", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" } }
+{ "name": "list-client-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" } }
+{ "name": "list-slow-subscribers", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
 ```
 
 **REST Delivery Points**
 
 ```json
-{ "name": "list-rdps", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
-{ "name": "get-rdp-status", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" } }
+{ "name": "list-rdps", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
+{ "name": "get-rdp-status", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "restDeliveryPointName": "webhook-rdp" } }
 ```
 
 **Discards**
 
 ```json
 { "name": "get-discard-stats", "arguments": { "broker": "prod-broker" } }
-{ "name": "list-queue-discards", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "list-queue-discards", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
 ```
 
 **Action Tools** (only available when `enable_write_tools: true`; destructive tools
 prompt for confirmation through the agent):
 
 ```json
-{ "name": "clear-queue-stats", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
-{ "name": "delete-queue-messages", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" } }
-{ "name": "clear-client-stats", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
-{ "name": "disconnect-client", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
+{ "name": "clear-queue-stats", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
+{ "name": "delete-queue-messages", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "dead-letter.q" } }
+{ "name": "clear-client-stats", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" } }
+{ "name": "disconnect-client", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" } }
 ```
 
 **Management Tools** (Config API; only available when `enable_write_tools: true`;
@@ -195,14 +197,14 @@ create or are left unchanged on update:
 { "name": "create-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": true, "maxConnectionCount": 100 } } }
 { "name": "update-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": false } } }
 { "name": "delete-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn" } }
-{ "name": "create-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
-{ "name": "update-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } } }
-{ "name": "delete-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
-{ "name": "create-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
-{ "name": "delete-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
-{ "name": "create-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } } }
-{ "name": "update-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } } }
-{ "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" } }
+{ "name": "create-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "update-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } } }
+{ "name": "delete-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
+{ "name": "create-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
+{ "name": "delete-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
+{ "name": "create-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "update-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } } }
+{ "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te" } }
 ```
 
 ## Multi-Broker Configuration
@@ -234,13 +236,13 @@ brokers:
 Then query each by alias:
 
 ```
-List the queues on prod-broker's <your-vpn-name>.
+List the queues on prod-broker's <your-vpn-name> VPN.
 Compare message rates between prod-broker and dev-broker.
 ```
 
 ```json
-{ "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
-{ "name": "get-message-rates", "arguments": { "broker": "dev-broker", "msgVpnName": "default" } }
+{ "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
+{ "name": "get-message-rates", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>" } }
 ```
 
 ## Static Token (Local Development)

@@ -940,23 +940,25 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 // the line OR preceded by whitespace, AND not inside a single- or
 // double-quoted string on the same line.
 //
-// A ' only opens a single-quoted string at a position where YAML actually
-// permits a scalar to start — see isScalarStart. Earlier, any ' anywhere on
-// the line (including a contraction in plain unquoted text, e.g. "John's" or
-// "don't") flipped the in-string flag. With no matching close, the flag
-// stayed true for the rest of the line, so a real # later on the same line
-// was read as "inside a string" and never recognized as a comment marker —
-// silently pulling ${VAR} the author believed was commented out into
-// substitution (SOL-153079).
+// A quote (' or ") only opens a string at a position where YAML actually
+// permits a scalar to start — see isScalarStart. Earlier, either quote
+// character anywhere on the line (including a contraction in plain unquoted
+// text, e.g. "John's" or "don't", or a bare " inside an unquoted word) flipped
+// the in-string flag. With no matching close, the flag stayed true for the
+// rest of the line, so a real # later on the same line was read as "inside a
+// string" and never recognized as a comment marker — silently pulling ${VAR}
+// the author believed was commented out into substitution (SOL-153079).
 //
 // Limitations: block scalars (|, >) treat # as literal text — this helper
 // does not track block-scalar context. The broker MCP config schema uses only
-// scalar values and nested structs, never block scalars, so this is acceptable.
-// If a block-scalar field is ever added, extend this helper accordingly. A '
-// that opens a scalar-start position but is not actually meant to start a
-// quoted string (e.g. a value literally beginning with an apostrophe, like
-// "'twas") is still misread as an opening quote; this residual case is far
-// rarer than a mid-word contraction and is accepted as a limitation.
+// scalar values and nested structs, never block scalars, so this is
+// acceptable. If a block-scalar field is ever added, extend this helper
+// accordingly. A quote that sits at a scalar-start position (isScalarStart)
+// but is not actually meant to start a quoted string — a value that itself
+// begins with a quote character, like "'twas" or a bare " prefix — is still
+// misread as an opening delimiter; this is structurally undecidable from
+// position alone (it looks identical to a real quoted scalar) and is accepted
+// as a limitation.
 func splitYAMLComment(line []byte) (active, comment []byte) {
 	inSingle := false
 	inDouble := false
@@ -964,10 +966,15 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 		c := line[i]
 		switch {
 		case c == '"' && !inSingle:
-			// Treat a preceding backslash as escaping the quote (heuristic,
-			// not a full YAML lexer — double-backslash isn't unescaped here).
-			if !inDouble || i == 0 || line[i-1] != '\\' {
-				inDouble = !inDouble
+			switch {
+			case inDouble && i > 0 && line[i-1] == '\\':
+				// Escaped quote (\") inside the string; stays inside. Not a
+				// full YAML lexer — double-backslash isn't unescaped here.
+			case inDouble:
+				// The real closing quote.
+				inDouble = false
+			case isScalarStart(line, i):
+				inDouble = true
 			}
 		case c == '\'' && !inDouble:
 			switch {
@@ -989,17 +996,26 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 }
 
 // isScalarStart reports whether position i in line is a place YAML permits a
-// scalar value to begin: the start of the line, or immediately after
-// whitespace, ':', '-', '[', '{', or ','. Only in one of these positions can
-// a ' plausibly open a single-quoted scalar; a ' anywhere else is text (most
-// commonly a contraction, e.g. "John's") and must not be mistaken for a
-// string delimiter.
+// scalar value to begin: the start of the line, or after skipping back over
+// any run of spaces/tabs immediately before i, a ':', '-', '[', '{', or ','.
+// Skipping back over whitespace (rather than checking only line[i-1]) means a
+// run of spaces after a real delimiter still counts (e.g. "key:   'value'"),
+// while a quote preceded by a word-separating space *inside* an
+// already-started plain scalar (e.g. "it is 'ere") does not: skipping back
+// from that space lands on 's', not a delimiter, so it is correctly not
+// mistaken for scalar start. Only in one of these positions can a quote
+// plausibly open a quoted scalar; elsewhere it is text (most commonly a
+// contraction, e.g. "John's") and must not be mistaken for a string
+// delimiter.
 func isScalarStart(line []byte, i int) bool {
+	for i > 0 && (line[i-1] == ' ' || line[i-1] == '\t') {
+		i--
+	}
 	if i == 0 {
 		return true
 	}
 	switch line[i-1] {
-	case ' ', '\t', ':', '-', '[', '{', ',':
+	case ':', '-', '[', '{', ',':
 		return true
 	default:
 		return false
