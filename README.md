@@ -19,8 +19,9 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 - [Quickstart](#quickstart)
   - [Configuration](#configuration)
   - [Binary Deployment](#binary-deployment)
-  - [Install with go install](#install-with-go-install)
   - [Docker Deployment](#docker-deployment)
+  - [Install with go install](#install-with-go-install)
+  - [Kubernetes Deployment](#kubernetes-deployment)
   - [Connect from Claude Code](#connect-from-claude-code)
   - [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh)
 - [Development Setup](#development-setup)
@@ -120,9 +121,14 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 ## Quickstart
 
+Binary, Docker, and `go install` deployments share the same configuration step
+below — complete it, then pick a deployment method. Kubernetes uses its own
+checked-in manifests instead of this step; see
+[Kubernetes Deployment](#kubernetes-deployment).
+
 ### Configuration
 
-All deployment methods use the same YAML configuration file and `.env` credentials file.
+Binary, Docker, and `go install` deployments use the same YAML configuration file and `.env` credentials file. Kubernetes carries the equivalent settings in its own ConfigMap and Secret manifests instead — see [Kubernetes Deployment](#kubernetes-deployment).
 
 **1. Create a configuration file** (`broker-config.yaml`):
 
@@ -166,9 +172,10 @@ The `.env` file is loaded automatically. Environment variables set directly (for
 ---
 
 Select a deployment method:
-- **[Binary](#binary-deployment)** — Single executable with no dependencies; suitable for local development and VM deployment
-- **[go install](#install-with-go-install)** — Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`
+- **[Binary](#binary-deployment)** — Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick.
 - **[Docker](#docker-deployment)** — Containerized deployment; suitable for production and Kubernetes environments
+- **[go install](#install-with-go-install)** — Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`
+- **[Kubernetes](#kubernetes-deployment)** — Cluster deployment via the reference manifests; suitable when you already run workloads on Kubernetes
 
 For contributors running from source, see [Development Setup](#development-setup).
 
@@ -216,31 +223,6 @@ curl http://localhost:9090/livez
 ```
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
-
-### Install with go install
-
-If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install the server directly from source:
-
-```bash
-go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
-```
-
-This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example, `@v1.2.0`.
-
-Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your configuration file:
-
-```bash
-CONFIG_FILE=./broker-config.yaml server
-```
-
-> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — copy `broker-config.example.yaml` from the repository.
-
-Verify:
-
-```bash
-curl http://localhost:9090/livez
-# {"status":"alive"}
-```
 
 ### Docker Deployment
 
@@ -306,6 +288,31 @@ services:
       - .env
 ```
 
+### Install with go install
+
+If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install the server directly from source:
+
+```bash
+go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
+```
+
+This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example, `@v1.2.0`.
+
+Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your configuration file:
+
+```bash
+CONFIG_FILE=./broker-config.yaml server
+```
+
+> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — copy `broker-config.example.yaml` from the repository.
+
+Verify:
+
+```bash
+curl http://localhost:9090/livez
+# {"status":"alive"}
+```
+
 ### Kubernetes Deployment
 
 Reference manifests — ConfigMap, Secret, Deployment, and a ClusterIP Service —
@@ -331,8 +338,10 @@ claude mcp add solace-broker --transport http http://localhost:9090/mcp
 Example query:
 
 ```
-List queues in the default VPN on the dev event broker
+List queues in <your-vpn-name> on the dev event broker
 ```
+
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ### Connect from Solace Agent Mesh
 
@@ -351,8 +360,10 @@ Example queries through the Agent Mesh web UI:
 
 ```
 What event brokers are configured?
-List the queues on event-broker-one's default VPN.
+List the queues on event-broker-one's <your-vpn-name> VPN.
 ```
+
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ## Development Setup
 

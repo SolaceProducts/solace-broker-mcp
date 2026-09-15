@@ -516,6 +516,197 @@ brokers:
 	}
 }
 
+// An apostrophe in unquoted active text (e.g. "John's broker") earlier on the
+// same line must not be mistaken for a single-quote delimiter. That mistake
+// leaves splitYAMLComment believing it is still "inside a string" when it
+// reaches the line's real # marker, so the marker is never recognized as a
+// comment start and everything after it — including ${VAR} the author wrote
+// believing it was commented out — is substituted (SOL-153079).
+func TestLoadConfig_ApostropheBeforeInlineCommentDoesNotLeakSubstitution(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: John's admin # old auth was ${UNSET_OLD_TOKEN}
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("${UNSET_OLD_TOKEN} after an apostrophe-containing comment must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Password != "secret" {
+		t.Errorf("expected password %q, got %q", "secret", cfg.brokers["prod"].Auth.Password)
+	}
+}
+
+// YAML escapes a literal ' inside a single-quoted scalar as ''. A # between
+// the doubled quote and the real closing quote must still be treated as part
+// of the string, not a comment marker.
+func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
+	t.Setenv("ESCAPED_PWD", "live")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: 'it''s # not a comment ${ESCAPED_PWD}'
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "it's # not a comment live" {
+		t.Errorf("expected username %q, got %q", "it's # not a comment live", got)
+	}
+}
+
+// A " anywhere in unquoted text previously had the same bug already fixed for
+// ' — any " flipped inDouble unconditionally, so a " inside a plain word (not
+// itself opening a real quoted scalar) could hide a real # comment marker
+// later on the same line.
+func TestLoadConfig_BareDoubleQuoteInUnquotedTextDoesNotLeakSubstitution(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: 6" pipe # old auth was ${UNSET_PIPE_TOKEN}
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("${UNSET_PIPE_TOKEN} after a bare \" in unquoted text must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Password != "secret" {
+		t.Errorf("expected password %q, got %q", "secret", cfg.brokers["prod"].Auth.Password)
+	}
+}
+
+// A quote preceded by a word-separating space *inside* an already-started
+// plain scalar (not right after a real YAML delimiter) must not be mistaken
+// for scalar start either.
+func TestLoadConfig_ApostropheAfterWordSeparatingSpaceDoesNotLeakSubstitution(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: it is 'ere # old auth was ${UNSET_ERE_TOKEN}
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("${UNSET_ERE_TOKEN} after a mid-scalar apostrophe must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Password != "secret" {
+		t.Errorf("expected password %q, got %q", "secret", cfg.brokers["prod"].Auth.Password)
+	}
+}
+
+// Reproduces the exact case raised in PR #420 review: an apostrophe following
+// a space inside an already-started plain scalar value, immediately before a
+// real inline comment.
+func TestLoadConfig_ApostropheAfterSpaceInPlainScalarValueDoesNotLeakSubstitution(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: foo 'bar # ${UNSET_FOOBAR_TOKEN}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("${UNSET_FOOBAR_TOKEN} after \"foo 'bar\" must not fail load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "foo 'bar" {
+		t.Errorf("expected password %q, got %q", "foo 'bar", got)
+	}
+}
+
+func TestSplitYAMLComment(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		active  string
+		comment string
+	}{
+		{"no comment", "key: value", "key: value", ""},
+		{"whole-line comment", "# a comment", "", "# a comment"},
+		{"indented whole-line comment", "  # a comment", "  ", "# a comment"},
+		{"inline comment", "key: value # trailing", "key: value ", "# trailing"},
+		{"hash inside double quotes is not a comment", `key: "a#b"`, `key: "a#b"`, ""},
+		{"hash inside single quotes is not a comment", "key: 'a#b'", "key: 'a#b'", ""},
+		{"contraction before inline comment", "key: John's admin # comment", "key: John's admin ", "# comment"},
+		{"contraction before inline comment, double quote", `key: 6" pipe # comment`, `key: 6" pipe `, "# comment"},
+		{"apostrophe after word-separating space", "key: it is 'ere # comment", "key: it is 'ere ", "# comment"},
+		{"real single-quoted value containing hash", "key: 'a#b' # comment", "key: 'a#b' ", "# comment"},
+		{"doubled single-quote escape then hash", "key: 'it''s#not-a-comment'", "key: 'it''s#not-a-comment'", ""},
+		{"sequence item with quoted value", "- 'value' # comment", "- 'value' ", "# comment"},
+		{"quoted value with multiple leading spaces", "key:   'value' # comment", "key:   'value' ", "# comment"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			active, comment := splitYAMLComment([]byte(tt.line))
+			if string(active) != tt.active {
+				t.Errorf("active: got %q, want %q", active, tt.active)
+			}
+			if string(comment) != tt.comment {
+				t.Errorf("comment: got %q, want %q", comment, tt.comment)
+			}
+		})
+	}
+}
+
+func TestIsScalarStart(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		i    int
+		want bool
+	}{
+		{"start of line", "'value'", 0, true},
+		{"after colon-space", "key: 'value'", 5, true},
+		{"after colon and multiple spaces", "key:   'value'", 7, true},
+		{"after dash-space (sequence item)", "- 'value'", 2, true},
+		{"after comma-space (flow)", "[a, 'b']", 4, true},
+		{"after open bracket (flow, no space)", "['b']", 1, true},
+		{"mid-word contraction", "John's", 4, false},
+		{"after word-separating space, not a delimiter", "it is 'ere", 6, false},
+		{"indented start of line", "  'value'", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isScalarStart([]byte(tt.line), tt.i); got != tt.want {
+				t.Errorf("isScalarStart(%q, %d) = %v, want %v", tt.line, tt.i, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_PortOutOfRange(t *testing.T) {
 	yaml := `
 port: 99999
