@@ -25,5 +25,14 @@ spec:
       port: 9090
       targetPort: http
       protocol: TCP
+    # Prometheus scrape target (SOL-152424), named by servicemonitor.yaml.example.
+    # Resolves to `connection refused` until OBS_METRICS_ENABLED is set. Scrapes
+    # go to pod IPs from the EndpointSlices, never through the ClusterIP, so the
+    # sessionAffinity above does not apply to them; who may reach the port is
+    # networkpolicy.yaml's job.
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
   selector:
     app.kubernetes.io/name: solace-broker-mcp
