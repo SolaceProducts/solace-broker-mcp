@@ -1,0 +1,67 @@
+services:
+  mcp-server:
+    image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
+    environment:
+      # Override any of these in the shell or an env file. The defaults let the
+      # stack come up for local tracing verification with no edits.
+      - CONFIG_FILE=/etc/mcp-server/config.yaml
+      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN:-change-me}
+      - BROKER_URL=${BROKER_URL:-https://broker.example.com:943}
+      - BROKER_USERNAME=${BROKER_USERNAME:-admin}
+      - BROKER_PASSWORD=${BROKER_PASSWORD:-placeholder}
+      - OBS_TRACING_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    volumes:
+      - ./mcp-config.yaml:/etc/mcp-server/config.yaml:ro
+    ports:
+      # Bound to loopback — this is a local dev stack with a default dev token.
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      # Default: Tempo. .env.jaeger overrides this to jaeger:4317.
+      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo:4317}
+      # To use Datadog: uncomment the datadog exporter in otelcol.yaml AND the
+      # line below, then run with DD_API_KEY=<key> docker compose up.
+      # - DD_API_KEY=${DD_API_KEY:-}
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8888:8888"
+
+  # Tempo is the default backend and always starts. Jaeger is behind a profile;
+  # in Jaeger mode Tempo still runs but the collector sends only to Jaeger.
+  tempo:
+    image: grafana/tempo:2.6.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      # Tempo UI / API — open http://localhost:3200 in Grafana to query traces
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=-", "http://localhost:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    profiles: [jaeger]
+    ports:
+      # Jaeger UI — open http://localhost:16686 to query traces
+      - "16686:16686"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=-", "http://localhost:14269/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s

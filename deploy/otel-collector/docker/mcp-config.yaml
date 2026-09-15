@@ -1,0 +1,18 @@
+port: 9090
+listen_address: "0.0.0.0"
+log_level: info
+
+mcp_client_auth:
+  mode: static
+  dev_token: "${MCP_DEV_TOKEN}"
+
+# Broker coordinates come from the environment (see docker-compose.yaml).
+# The defaults there let the server start so you can verify tracing with
+# list-brokers (no SEMP call needed) before connecting a real broker.
+brokers:
+  my-broker:
+    url: "${BROKER_URL}"
+    auth:
+      mode: basic
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"

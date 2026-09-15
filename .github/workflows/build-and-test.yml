@@ -220,6 +220,14 @@ jobs:
             echo "✅ Test files found. You can now remove this step"
           fi
 
+      - name: Validate OTel collector K8s manifests
+        # go install pins to a specific module version and the Go checksum database
+        # verifies the download — no separate SHA check needed. Consistent with
+        # the Go toolchain already installed above.
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          kubeconform -summary deploy/otel-collector/kubernetes/
+
   e2e-basic-mcp:
     runs-on: ubuntu-latest
     needs: build
@@ -399,6 +407,7 @@ jobs:
       - name: Tear down brokers
         if: always()
         run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v
+
 
   e2e-management:
     runs-on: ubuntu-latest
