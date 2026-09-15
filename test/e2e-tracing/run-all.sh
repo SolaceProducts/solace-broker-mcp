@@ -44,7 +44,12 @@ tool_response=$(curl -sf -X POST "$MCP_URL/mcp" \
     -H "Mcp-Session-Id: $session_id" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get-broker-status\",\"arguments\":{\"broker\":\"$BROKER_ALIAS\"}}}")
 
-echo "$tool_response" | grep -q '"result"' || fail "Tool call did not return a result"
+# MCP returns a tool failure as a successful response with isError:true inside
+# result, so check for that too — not just a well-formed reply.
+echo "$tool_response" | grep -q '"result"' || fail "Tool call did not return a result: $tool_response"
+if echo "$tool_response" | grep -q '"isError"[[:space:]]*:[[:space:]]*true'; then
+    fail "get-broker-status returned a tool error: $tool_response"
+fi
 pass "get-broker-status succeeded"
 
 # ── 4. Poll Tempo until a trace appears (up to 60s) ─────────────────────────
@@ -81,7 +86,11 @@ pass "Found $trace_count trace(s) in Tempo"
 # ── 6. Assert semp.request span is present across all traces ─────────────────
 found_semp=false
 while IFS= read -r trace_id; do
-    spans=$(curl -sf "$TEMPO_URL/api/traces/$trace_id" | python3 -c "
+    # Guard the fetch so a Tempo 5xx reports itself instead of aborting the
+    # script with no FAIL: line under set -euo pipefail.
+    trace_json=$(curl -sf "$TEMPO_URL/api/traces/$trace_id") \
+        || fail "could not fetch trace $trace_id from Tempo"
+    spans=$(echo "$trace_json" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 names = [s.get('name','') for b in d.get('batches',[]) for ss in b.get('scopeSpans',[]) for s in ss.get('spans',[])]

@@ -5,7 +5,12 @@ name: Observability
 # image. Kept separate from build-and-test.yml because the test targets the
 # nightly image, not the commit under test, so it cannot be a required PR check.
 
-on:
+# zizmor flags workflow_run as a dangerous trigger. It is safe here: "Dev build
+# (unstable)" is schedule + workflow_dispatch only, so no untrusted code can
+# start it; the job checks out the default branch (not an event ref), downloads
+# no artifact, writes no cache, and uses no secrets. See dev-build.yaml — this
+# safety depends on that file's triggers staying free of pull_request.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: ["Dev build (unstable)"]
     types: [completed]
@@ -19,8 +24,6 @@ concurrency:
 
 permissions:
   contents: read
-  # A failed nightly run opens or updates a tracking issue (see the last step).
-  issues: write
 
 jobs:
   e2e-tracing:
@@ -61,24 +64,8 @@ jobs:
         if: failure()
         run: docker logs solace-e2e-tracing 2>&1 | tail -100
 
+      # A red nightly run is visible in the Actions tab. There is no email or
+      # tracking issue, by design — we watch the runs.
       - name: Tear down
         if: always()
         run: docker compose -f test/e2e-tracing/docker-compose.yml down -v
-
-      # Post-merge this suite runs unattended, so a red run must reach someone.
-      # Opens a tracking issue, or comments on the existing open one to avoid a
-      # new issue every night.
-      - name: Open a tracking issue on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          title="Nightly observability e2e-tracing failed"
-          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Failed again on $(date -u +%Y-%m-%d): $RUN_URL"
-          else
-            gh issue create --title "$title" \
-              --body "The nightly observability tracing suite failed. Investigate the shipped collector/Tempo configs first, since this workflow contains no Go code. Run: $RUN_URL"
-          fi
