@@ -380,7 +380,12 @@ fi
 # product under test, so it has not been worth an extra column. If that changes,
 # give loadgen-sampler.sh an epoch column and this block can window like roll()
 # does.
+# Whether an `lg mem` line was printed, so the mem-loadgen.csv block below
+# only cross-references a line that is actually in this report: a run
+# directory can hold one series without the other.
+lg_mem_reported=0
 if [[ -r "$lg_csv" ]]; then
+  lg_mem_reported=1
   info="$lg_csv.info"
   ncores=$(awk -F= '/^cores_logical/ {print $2; exit}' "$info" 2>/dev/null || echo 1)
   mem=$(info_mem "$info")
@@ -432,10 +437,21 @@ if [[ -r "$mem_csv" ]]; then
   echo "-- mem.csv (MCP process) --"
   awk -F, '
     NR==1 {
-      for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i); ix[$i] = i }
+      for (i = 1; i <= NF; i++) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", $i); ix[$i] = i }
       rc = ix["rss_kb"]; tc = ix["threads"]; fc = ix["open_fds"]
+      hdr_nf = NF
       next
     }
+    # Same guard as the loadgen series below, for the same reason: the runner
+    # SIGKILLs this sampler on every terminated run, and a kill between two
+    # writes leaves a final row truncated mid-field. "1799,14:22:31,17" parses
+    # as a valid 17 KB RSS and reported `min= 0.0 MB` for a server that never
+    # went below 170 MB, while leaving the thread and descriptor ends blank.
+    # A genuinely empty trailing record is not a truncated write, and saying
+    # "a sampler killed mid-write" about one sends the reader hunting a kill
+    # that never happened.
+    NF == 0 || $0 ~ /^[ \t\r]*$/ { next }
+    NF != hdr_nf { short++; next }
     rc && $rc ~ /^[0-9]+$/ {
       m++
       rss = $rc + 0
@@ -454,6 +470,7 @@ if [[ -r "$mem_csv" ]]; then
     END {
       if (m == 0) { print "  (no samples)"; exit }
       printf "  mcp   rss:  min=%6.1f MB   max=%6.1f MB   (%d samples)\n", rss_min/1024, rss_max/1024, m
+      if (short) printf "  mcp   rss:  %d row(s) ignored: fewer fields than the header (a sampler killed mid-write)\n", short
       if (th_seen) printf "  mcp   thr:  end=%s   peak=%d\n", th_final, th_max
       if (fd_seen) printf "  mcp   fds:  end=%s   peak=%d\n", fd_final, fd_max
       else if (fc)  printf "  mcp   fds:  not readable in any sample (/proc/<pid>/fd unreadable)\n"
@@ -467,6 +484,358 @@ if [[ -r "$mem_csv" ]]; then
     lim=$(awk -F= '/^nofile_effective_soft=/ {print $2; exit}' "$rec")
     [[ -n "$lim" ]] && printf '  mcp   fds:  limit=%s   (nofile_effective_soft, %s)\n' "$lim" "$(basename "$rec")"
   done
+  echo
+fi
+
+# mem-loadgen.csv is the same memsampler series taken against the load
+# generator's own process. It exists because the generator was the one process
+# in the rig nobody measured: a run holding thousands of sessions open for
+# hours was only ever watched from outside the repo, and that is how its
+# O(rate x duration) sample retention was found. Reported here so a regression
+# shows up in the ordinary summary rather than in a one-off script.
+#
+# Drift, not just peak: a generator that climbs steadily and one that allocates
+# its ceiling in the first minute have the same peak and completely different
+# stories, and only the first is a leak.
+# How much of the generator's opening stretch the drift baseline skips.
+# memsampler starts as loadgen launches, so the first samples are taken during
+# dialAll — a generator that allocates its sessions and then stays flat would
+# otherwise report the ramp as a leak. Warm-up counts as ramp too: with WARMUP
+# set, the stats window does not even open until it has elapsed.
+#
+# LG_DRIFT_SETTLE_SECS overrides the 30s margin. It is a margin and not a
+# measurement — the honest fix is an epoch column on memsampler so this can
+# window on stats_start_epoch the way the CPU roll-up does, which is a change
+# to the CSV schema every archived run is read with.
+lg_settle_secs=${LG_DRIFT_SETTLE_SECS:-30}
+for rec in "$runs"/run-record.*; do
+  [[ -r "$rec" ]] || continue
+  lg_warm=$(awk -F= '/^stats_warmup=/ {print $2; exit}' "$rec")
+  [[ -z "$lg_warm" || "$lg_warm" == none ]] && break
+  # Converted in awk, not by stripping a suffix into `$(( ))`. The runners
+  # accept any duration perf_duration_secs accepts, and that includes
+  # fractional notation landing on a whole second — `1.5m` is documented as
+  # valid. Bash cannot evaluate `1.5 * 60`: the arithmetic errored mid-report,
+  # the settle silently stayed at its default, and the baseline was taken
+  # inside the warm-up ramp, which is the wrong-sign leak verdict this skip
+  # exists to prevent.
+  lg_warm_secs=$(awk -v v="$lg_warm" 'BEGIN {
+    if      (v ~ /^[0-9]+(\.[0-9]+)?s$/) { sub(/s$/, "", v); x = v + 0 }
+    else if (v ~ /^[0-9]+(\.[0-9]+)?m$/) { sub(/m$/, "", v); x = v * 60 }
+    else if (v ~ /^[0-9]+(\.[0-9]+)?h$/) { sub(/h$/, "", v); x = v * 3600 }
+    else exit 1
+    if (x != int(x)) exit 1
+    printf "%d", x
+  }') || lg_warm_secs=""
+  if [[ -n "$lg_warm_secs" ]]; then
+    lg_settle_secs=$(( lg_settle_secs + lg_warm_secs ))
+  else
+    # Refused, not defaulted. Falling back to the bare 30s would measure the
+    # drift from inside a warm-up nobody could size.
+    echo "cannot resolve stats_warmup='$lg_warm' from $(basename "$rec"); the generator drift is not reported" >&2
+    lg_settle_secs=-1
+  fi
+  break
+done
+
+lg_mem_csv="$runs/mem-loadgen.csv"
+if [[ -r "$lg_mem_csv" ]]; then
+  echo "-- mem-loadgen.csv (loadgen process) --"
+  awk -F, -v have_lg_mem="$lg_mem_reported" -v settle="$lg_settle_secs" '
+    # \r in the class as well as space and tab: a CSV round-tripped through a
+    # Windows editor during triage otherwise leaves the last header name as
+    # "open_fds\r", ix["rss_kb"] still resolves, and the section silently
+    # reports (no samples) if rss_kb happened to be last.
+    NR==1 {
+      for (i = 1; i <= NF; i++) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", $i); ix[$i] = i }
+      rc = ix["rss_kb"]; tc = ix["t_sec"]
+      hdr_nf = NF
+      next
+    }
+    # A row must have the width the header declared. memsampler is SIGKILLed by
+    # the runner cleanup on every terminated run, and a kill between two writes
+    # leaves a final row truncated mid-field — "3,10:00:03,80" parses as a
+    # perfectly good 80 KB RSS. Counting it turned a generator that grew
+    # 586 -> 684 MB into "drift=-585.9 MB": the leak verdict with its sign
+    # inverted, on a number a campaign is compared on.
+    # A genuinely empty trailing record is not a truncated write, and saying
+    # "a sampler killed mid-write" about one sends the reader hunting a kill
+    # that never happened.
+    NF == 0 || $0 ~ /^[ \t\r]*$/ { next }
+    NF != hdr_nf { short++; next }
+    rc && $rc ~ /^[0-9]+$/ {
+      m++
+      rss = $rc + 0
+      if (rss > rss_max) rss_max = rss
+      if (rss_min == "" || rss < rss_min) rss_min = rss
+      # Ends as a median of up to five samples each, not one sample each. One
+      # sample is one bad row away from the wrong answer, and the start of a
+      # run is exactly where a generator is still dialling sessions.
+      # Baseline taken after the ramp, not from the first rows. memsampler
+      # starts as loadgen launches, so rows 1..5 land inside dialAll: a
+      # generator that dialled 2,000 sessions in 8s and then sat perfectly
+      # flat at 600 MB reported drift=+404.7 MB — a leak verdict on a bounded
+      # generator, which is the one number this series exists to produce.
+      # t_sec is seconds since the sampler started, within a second of the
+      # generator starting.
+      if (tc && $tc + 0 < settle) { skipped++; next }
+      if (fn < 5) { first[++fn] = rss; if (first_t == "") first_t = $tc + 0 }
+      last[(++ln - 1) % 5 + 1] = rss
+      last_t = $tc + 0
+    }
+    function med(a, n,   i, j, t, b) {
+      for (i = 1; i <= n; i++) b[i] = a[i]
+      for (i = 2; i <= n; i++) { t = b[i]; for (j = i - 1; j >= 1 && b[j] > t; j--) b[j+1] = b[j]; b[j+1] = t }
+      if (n % 2) return b[(n + 1) / 2]
+      return (b[n/2] + b[n/2 + 1]) / 2
+    }
+    END {
+      if (m == 0) { print "  (no samples)"; exit }
+      printf "  lg    rss:  min=%6.1f MB   max=%6.1f MB   (%d samples)\n", rss_min/1024, rss_max/1024, m
+      ln_eff = (ln > 5 ? 5 : ln)
+      # The two ends must not be the same samples. Below eleven rows the
+      # five-sample windows overlap, and at five or fewer they are identical —
+      # which reported drift=+0.0 MB for a generator climbing 97.7 -> 293.0 MB.
+      # A refused number beats a wrong one: a terminated run, a dial failure or
+      # a short smoke DURATION all land here.
+      if (settle < 0) {
+        print "  lg    rss:  drift=n/a   (stats_warmup in the run record could not be resolved,"
+        print "              so the ramp-up to skip is unknown — see the warning on stderr)"
+      } else if (ln < fn + 5) {
+        printf "  lg    rss:  drift=n/a   (only %d samples after the %ds ramp-up skip; the end windows would overlap)\n", ln, settle
+      } else {
+        fs = med(first, fn); ls = med(last, ln_eff)
+        printf "  lg    rss:  drift=%+.1f MB   (t=%ds median=%6.1f MB over %d -> t=%ds median=%6.1f MB over %d; first %ds skipped as ramp-up)\n", \
+          (ls - fs)/1024, first_t, fs/1024, fn, last_t, ls/1024, ln_eff, settle
+      }
+      if (short) printf "  lg    rss:  %d row(s) ignored: fewer fields than the header (a sampler killed mid-write)\n", short
+      if (have_lg_mem) print "  lg    rss:  the same quantity as the lg mem line above, sampled at 1s not 5s"
+    }
+  ' "$lg_mem_csv"
+  echo
+fi
+
+# gctrace: the live heap, which is the only series that answers "does the
+# server leak". RSS cannot — it does not separate a live heap that is growing
+# from an allocator holding freed spans, and that ambiguity is what SOL-154158
+# had to resolve with a script outside this repo. Under GODEBUG=gctrace=1 the
+# runtime prints H_T->H_a->H_m per cycle and the third figure is the heap
+# marked live.
+#
+# Silent when the log holds no gctrace lines: GODEBUG is opt-in, and an empty
+# section or a zero would read like a measurement of a server that never
+# reported one.
+gc_log="$runs/mcp.log"
+if [[ -r "$gc_log" ]] && grep -qE '^gc [0-9]+ @[0-9.]+s' "$gc_log"; then
+  # gctrace stamps @<seconds since program start>, so placing a cycle on the
+  # wall clock needs the moment the process began. The runners stamp it; a run
+  # directory from before they did cannot be windowed.
+  #
+  # Validated as an integer for the same reason the window epochs are: a record
+  # can be truncated mid-write or hand-edited, and a non-integer reaches awk as
+  # 0, which excludes every cycle and reads as "the gctrace format changed".
+  gc_anchor=""
+  gc_anchor_src=""
+  for rec in "$runs"/run-record.*; do
+    [[ -r "$rec" ]] || continue
+    gc_anchor=$(awk -F= '/^mcp_start_epoch=/ {print $2; exit}' "$rec")
+    if [[ -n "$gc_anchor" ]]; then gc_anchor_src=$(basename "$rec"); break; fi
+  done
+  if [[ -n "$gc_anchor" ]] && ! [[ "$gc_anchor" =~ ^[0-9]+$ ]]; then
+    echo "ignoring mcp_start_epoch in ${gc_anchor_src:-the run record}: not integer seconds ($gc_anchor)" >&2
+    gc_anchor="" gc_anchor_src=""
+  fi
+
+  gc_windowed=0
+  if [[ -n "$gc_anchor" && -n "${load_start:-}" && -n "${load_end:-}" ]]; then
+    gc_windowed=1
+  fi
+
+  # The parse, once, shared by both passes below. Two passes rather than one,
+  # because the drift windows are sized from the run's own span and the span is
+  # not known until the file ends. Retaining a position per cycle to fill them
+  # afterwards is what the histogram below exists to avoid: at the 1.6M cycles
+  # the SOL-154158 soak logged, per-cycle arrays cost 430 MB of RSS — the same
+  # O(rate x duration) retention shape this ticket exists to remove, in the
+  # tool that reports on it. Two passes over the file cost a second re-read and
+  # keep memory at O(distinct heap sizes).
+  gc_parse='
+    function parse(  i, n, tri) {
+      # Anchored here rather than in the rule pattern. The rule matches a gc
+      # stamp anywhere on the line, so a slog record that landed at the START
+      # of one — both streams are the server stderr, captured into one
+      # file — reaches
+      # this function instead of failing the pattern and vanishing from both
+      # counters. It is a lost cycle either way, and the point is to say so.
+      if ($0 !~ /^gc [0-9]+ @/) { unparsable++; return 0 }
+      t = $3; sub(/^@/, "", t); sub(/s$/, "", t)
+      live = ""
+      # Field-scan rather than match(): the triple is one whitespace-delimited
+      # token, and this has to parse under mawk as well as gawk.
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^[0-9]+->[0-9]+->[0-9]+$/) { n = split($i, tri, "->"); live = tri[3] + 0; break }
+      }
+      # Not a cycle we can read. Counted, because gctrace from the Go runtime and
+      # slog both write to the server stderr (cmd/server/main.go builds its
+      # JSON handler on os.Stderr) and the runner captures that one stream
+      # into mcp.log — so a gctrace line, which the runtime emits as several
+      # small writes, can be split by a JSON record landing mid-line. Dropping those silently under-reports
+      # `cycles=` and skews the median toward whichever cycles survived, with
+      # no signal in the report that anything was lost.
+      if (live == "") { unparsable++; return 0 }
+      parsed++
+      # A restart is a step BACKWARDS in the program clock, and it has to be
+      # seen here: inferring it from last-minus-first only catches the case
+      # where the second lifetime ends below where the first one began. A
+      # 3600-cycle run followed by a 600-cycle restart reported drift=-124 MB
+      # for a heap that ROSE 52 -> 300 MB, with a last window of 3120 cycles.
+      if (prev_t != "" && t + 0 < prev_t) restarts++
+      prev_t = t + 0
+      if (windowed) {
+        pos = anchor + t
+        if (pos < ws || pos > we) return 0
+      } else {
+        # `+ 0` is load-bearing. t is the string sub() left behind on $3, and
+        # the end-window tests below compare it against fp + w — a string
+        # against a number is a LEXICOGRAPHIC comparison in awk, which picked
+        # nonsense windows (546 and 110 cycles out of 600) while the numeric
+        # overlap guard sat there and never fired.
+        pos = t + 0
+      }
+      return 1
+    }
+  '
+
+  read -r gc_parsed gc_cycles gc_first gc_last gc_unparsable gc_restarts <<<"$(
+    awk -v anchor="${gc_anchor:-0}" -v ws="${load_start:-0}" -v we="${load_end:-0}" \
+        -v windowed="$gc_windowed" "$gc_parse"'
+      /gc [0-9]+ @[0-9.]+s/ {
+        if (!parse()) next
+        cycles++
+        if (first_pos == "") first_pos = pos
+        last_pos = pos
+      }
+      END { printf "%d %d %.3f %.3f %d %d\n", parsed, cycles, first_pos + 0, last_pos + 0, unparsable + 0, restarts + 0 }
+    ' "$gc_log")"
+
+  echo "-- gctrace (server live heap) --"
+  if (( gc_cycles == 0 )); then
+    # Parsed-but-excluded and not-parsed-at-all are different failures and lead
+    # the reader to different places: a clock skew between the two boxes of a
+    # split-host run, versus a gctrace format change.
+    if (( gc_parsed > 0 )); then
+      printf '  mcp   gc:   %d cycles parsed, none inside the window\n' "$gc_parsed"
+      printf '              (anchor=%s, window=%s..%s — check the two boxes agree on the clock)\n' \
+        "${gc_anchor:-none}" "${load_start:-none}" "${load_end:-none}"
+    else
+      echo "  mcp   gc:   no parsable gctrace cycles — the line format may have changed"
+    fi
+  else
+    awk -v anchor="${gc_anchor:-0}" -v ws="${load_start:-0}" -v we="${load_end:-0}" \
+        -v windowed="$gc_windowed" -v fp="$gc_first" -v lp="$gc_last" \
+        -v restarts="$gc_restarts" "$gc_parse"'
+      BEGIN {
+        span = lp - fp
+        # A non-positive span means @t went backwards: the log holds more than
+        # one program lifetime (a hand-restarted server, or two run
+        # directories concatenated during triage). Sized from it, the end
+        # windows select opposite ends and the drift comes out with the wrong
+        # sign — a 52 -> 300 MB climb reported as -248 MB. There is no run to
+        # measure a drift over, so none is reported.
+        # Negative and zero are different faults. Negative means @t went
+        # backwards; zero means every cycle carries one timestamp, which a
+        # capture of a few cycles inside one second does.
+        # restarts is authoritative; span can still be positive across one.
+        if (restarts > 0) { no_span = "lifetimes" }
+        else if (span < 0) { no_span = "lifetimes" }
+        else if (span == 0) { no_span = "instant" }
+        # An hour, or a tenth of the run when the run is shorter than ten
+        # hours. Whichever is smaller: a window longer than a tenth of the run
+        # stops being an end and starts being the middle.
+        w = 3600
+        if (span / 10 < w) w = span / 10
+        if (w <= 0) w = span
+      }
+      /gc [0-9]+ @[0-9.]+s/ {
+        if (!parse()) next
+        cycles++
+        cnt[live]++
+        if (lo == "" || live < lo) lo = live
+        if (hi == "" || live > hi) hi = live
+        if (pos <= fp + w) { fcnt[live]++; ftot++ }
+        if (pos >= lp - w) { lcnt[live]++; ltot++ }
+      }
+      # median of a value->count histogram. A histogram, not a sort: the values
+      # are a narrow band of integer MB, so counting is O(range) where sorting
+      # would be O(n log n) over an array mawk has no asort for.
+      function hmedian(h, l, u, total,   acc, v, want, m1, m2) {
+        if (total == 0) return ""
+        want = int((total + 1) / 2)
+        acc = 0
+        for (v = l; v <= u; v++) {
+          if (!(v in h)) continue
+          acc += h[v]
+          if (m1 == "" && acc >= want) m1 = v
+          if (total % 2 == 0) { if (acc >= want + 1) { m2 = v; break } }
+          else if (m1 != "") { m2 = m1; break }
+        }
+        if (m2 == "") m2 = m1
+        return (m1 + m2) / 2
+      }
+      END {
+        med  = hmedian(cnt,  lo, hi, cycles)
+        fmed = hmedian(fcnt, lo, hi, ftot)
+        lmed = hmedian(lcnt, lo, hi, ltot)
+        printf "  mcp   gc:   cycles=%d   live heap: median=%.0f MB   min=%d MB   max=%d MB\n", cycles, med, lo, hi
+        # The same floor the loadgen series applies, for the same reason and
+        # with the same preference: a refused number beats a wrong one.
+        # Sized by time alone, a 90s smoke run puts one cycle in each end
+        # window and reported a 448 MB "leak" off a single transient cycle on
+        # a heap that never moved. Five per end, and the two ends must not be
+        # the same cycles.
+        if (no_span == "lifetimes") {
+          print "  mcp   gc:   drift=n/a   (the gctrace clock goes backwards in this capture:"
+          print "              it holds more than one server lifetime, so there is no single"
+          print "              run to measure a drift over)"
+        } else if (no_span == "instant") {
+          printf "  mcp   gc:   drift=n/a   (all %d cycles carry the same timestamp; no span to measure over)\n", cycles
+        } else if (ftot < 5 || ltot < 5 || fp + w >= lp - w) {
+          printf "  mcp   gc:   drift=n/a   (only %d and %d cycles in the end windows; too few, or they overlap)\n", ftot, ltot
+        } else if (fmed != "" && lmed != "") {
+          printf "  mcp   gc:   drift=%+.0f MB   (first %ds median=%.0f MB over %d cycles -> last %ds median=%.0f MB over %d cycles)\n", \
+            lmed - fmed, w, fmed, ftot, w, lmed, ltot
+        }
+      }
+    ' "$gc_log"
+  fi
+
+  if (( gc_unparsable > 0 )); then
+    printf '  mcp   gc:   %d gctrace line(s) unparsable and not counted (a JSON log\n' "$gc_unparsable"
+    echo   "              record can land mid-line: gctrace and slog share the server's stderr)"
+  fi
+
+  if (( gc_windowed )); then
+    # Name where the window came from, not just that there was one. A window
+    # typed on the command line is marked unverified everywhere else in this
+    # report (see the header line), and the gc line is the one that gets pasted
+    # into a soak write-up — a mistyped epoch otherwise yields a plausible
+    # live-heap median with no caveat attached.
+    printf '  mcp   gc:   windowed: %s (window: %s; anchor: mcp_start_epoch in %s)\n' \
+      "$window_label" \
+      "$(if [[ -f "$window_source" ]]; then basename "$window_source"; else echo "${window_source:-run record}"; fi)" \
+      "$gc_anchor_src"
+  elif [[ -z "$gc_anchor" ]]; then
+    echo "  mcp   gc:   NOT windowed — no usable mcp_start_epoch in the run record, so a"
+    echo "              program-relative @Xs cannot be placed on the wall clock. The"
+    echo "              figures above cover the whole capture, including any idle"
+    echo "              stretch before and after the load: read min/max/drift with care."
+  else
+    echo "  mcp   gc:   NOT windowed — this run directory stamped no load window (the"
+    echo "              split-host MCP box cannot: the load runs on the other box). The"
+    echo "              figures above cover the whole capture, including the idle stretch"
+    echo "              before the load, so min/max and the drift sign can both mislead."
+    echo "              Re-run with --window-from <the load box's run directory>."
+  fi
   echo
 fi
 

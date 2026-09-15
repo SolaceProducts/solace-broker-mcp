@@ -157,6 +157,12 @@ fi
 : "${BROKER_PASSWORD:?BROKER_PASSWORD unset (missing from $repo_root/.env and shell env)}"
 export BROKER_URL BROKER_USERNAME BROKER_PASSWORD
 
+# Filtered before the server starts, and this is the script where it matters
+# most: the credentials below are a real appliance's, and this launch captures
+# the server's stderr into an archived mcp.log. GODEBUG=http2debug=2 would put
+# the broker's Authorization header in that file. See perf_filter_godebug.
+perf_filter_godebug
+
 echo "== 1. MCP server on :9090 (config: $config)"
 setsid bash -c "cd '$repo_root' && CONFIG_FILE='$config' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &

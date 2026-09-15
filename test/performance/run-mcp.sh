@@ -27,6 +27,16 @@
 #                  sweep point before giving up (default 60)
 #   NOFILE         descriptor limit to request for the server (default 1048576;
 #                  falls back to the hard limit, and both are recorded)
+#   GODEBUG        passed through to the server. `gctrace=1` puts the live-heap
+#                  series into the run directory's mcp.log, where summary.sh
+#                  reads it — see README "Reading the live heap: gctrace".
+#                  Set nothing else here: GODEBUG is a general knob and other
+#                  values (http2debug) write request headers into that
+#                  archived file.
+#   ALLOW_VERBOSE_LOGS
+#                  set to 1 to run even when the projected log volume exceeds
+#                  half the free space on the log volume. The projection is
+#                  printed either way; see README "Log volume on long runs".
 #   RIG_NOTE       free-text note about this host. Control characters are
 #                  flattened, `=` becomes `:` and the value is capped at 200
 #                  characters so the record stays parseable — the substitutions
@@ -147,6 +157,9 @@ peaks_recorded=0
 # Set at the end of the main flow. cleanup() is reached on every path, so this
 # is what tells it whether the peaks it is about to record cover a whole run.
 run_finished=0
+# Set instead of run_finished when a pre-load guard refuses the run, so the
+# record says which of the two it was.
+run_refused=""
 cleanup() {
   local rc=$?
   set +e
@@ -174,6 +187,12 @@ cleanup() {
     # exists to quote, so it says which kind it is.
     if (( run_finished )); then
       perf_record_kv "$record" fd_peak_source complete
+    elif [[ -n "${run_refused:-}" ]]; then
+      # Refused before the load ever started, which is not an interrupted
+      # measurement: a sweep over archived records counting run_terminated as
+      # "interrupted" would otherwise include runs that never began.
+      perf_record_kv "$record" run_refused "$run_refused"
+      perf_record_kv "$record" fd_peak_source refused
     else
       perf_record_kv "$record" run_terminated true
       perf_record_kv "$record" fd_peak_source partial
@@ -226,6 +245,15 @@ cp "$CONFIG_FILE" "$runs/broker-config.used.yaml"
 # Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
 # as a child process, so $mcp_pid would be the toolchain wrapper and the
 # memsampler in step 2 would sample that instead of MCP.
+# GODEBUG reaches the server through the launch below and its output lands
+# in an archived mcp.log, so the value is filtered before anything starts.
+# See perf_filter_godebug in lib.sh for what is kept and why.
+perf_filter_godebug
+
+# Read before the launch, not after the health check: gctrace stamps its lines
+# `@<seconds since program start>`, so placing them on the wall clock needs the
+# moment the process began, and the health-check wait is seconds of drift.
+mcp_start_epoch=$(date +%s)
 setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
@@ -241,6 +269,17 @@ perf_record_proc_nofile "$record" "$mcp_pid"
 # How much processor the Go runtime was entitled to. Without this, two runs on
 # one box with different GOMAXPROCS write records identical in every field.
 perf_record_runtime_cpu "$record" "$mcp_pid"
+perf_record_runtime_mem "$record" "$mcp_pid"
+perf_record_kv "$record" mcp_start_epoch "$mcp_start_epoch"
+
+# At info the server writes one line per tool call: 1.1 GB in a 30-minute
+# control at 2,507 calls/s, about 2.2 GB/h. A ten-hour soak at that level fills
+# a 30 GB volume around hour three and takes the samplers down with it, and
+# nothing warns before the disk does. So project it, print the projection
+# whatever it says, and refuse a run that cannot fit rather than discovering it
+# at hour three.
+perf_guard_log_volume "$record" "$runs/mcp.log" "$runs/broker-config.used.yaml" \
+  "$runs" "$load_secs" || { run_refused=log-volume; exit 2; }
 
 # This box drives no load, so it cannot stamp the load window: the load runs on
 # the other box and the two share no channel by design. Say so in the record
