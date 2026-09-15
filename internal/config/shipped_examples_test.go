@@ -16,6 +16,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // The configs this package ships for operators to copy — the root example and
@@ -263,6 +266,168 @@ func TestShippedGOMEMLIMITTracksMemoryLimit(t *testing.T) {
 			"and limits\" (SOL-154328)",
 			gomemlimit, limitBytes, 100*float64(limitBytes)/float64(capBytes),
 			memLimit, capBytes, 100*wantRatio, want)
+	}
+}
+
+// TestShippedMetricsPortTracksDefault guards the metrics port that
+// deploy/kubernetes/ spells in three places — the Service's `metrics` port, the
+// Deployment's named containerPort it targets, and the NetworkPolicy's allow
+// rule — against the listener's compiled default (SOL-152424). Only manifest
+// comments say they must agree, and a comment is not a guard. Drift reaches an
+// operator as a scrape that silently stops: once the policy isolates the pod
+// for ingress, a port it does not list is denied, not merely unprotected.
+//
+// It also pins three properties of the shipped policy: ingress-only, because
+// an egress allow-list default-denies every destination it omits (brokers,
+// IdP, DNS) and, policies being additive, cannot override a customer's own
+// default-deny anyway; the `http` port still admitted, or isolating the pod
+// denies the MCP endpoint; and the metrics port admitted from a named source,
+// which is the policy's whole purpose. See docs/observability.md § "Scraping
+// and securing the metrics endpoint".
+func TestShippedMetricsPortTracksDefault(t *testing.T) {
+	_, portStr, err := net.SplitHostPort(defaults.DefaultMetricsBindAddress)
+	if err != nil {
+		t.Fatalf("defaults.DefaultMetricsBindAddress=%q is not host:port: %v",
+			defaults.DefaultMetricsBindAddress, err)
+	}
+	wantPort, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("defaults.DefaultMetricsBindAddress=%q has a non-numeric port: %v",
+			defaults.DefaultMetricsBindAddress, err)
+	}
+
+	// Deployment: the named containerPort the Service's targetPort resolves to.
+	var dep struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Ports []struct {
+							Name          string `yaml:"name"`
+							ContainerPort int    `yaml:"containerPort"`
+						} `yaml:"ports"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	readManifest(t, "deploy/kubernetes/deployment.yaml", &dep)
+	if n := len(dep.Spec.Template.Spec.Containers); n != 1 {
+		t.Fatalf("deploy/kubernetes/deployment.yaml has %d containers, want 1", n)
+	}
+	containerPorts := map[string]int{}
+	for _, p := range dep.Spec.Template.Spec.Containers[0].Ports {
+		containerPorts[p.Name] = p.ContainerPort
+	}
+	depPort, ok := containerPorts["metrics"]
+	if !ok {
+		t.Fatal("deploy/kubernetes/deployment.yaml declares no containerPort named `metrics`; " +
+			"service.yaml's `metrics` port targets it by that name")
+	}
+	if depPort != wantPort {
+		t.Errorf("deploy/kubernetes/deployment.yaml `metrics` containerPort is %d; the listener's "+
+			"compiled default is %q", depPort, defaults.DefaultMetricsBindAddress)
+	}
+	// The MCP port the probes and the Service's `http` port use. The policy must
+	// allow it too, or isolating the pod for ingress takes the whole endpoint down.
+	httpPort, ok := containerPorts["http"]
+	if !ok {
+		t.Fatal("deploy/kubernetes/deployment.yaml declares no containerPort named `http`; " +
+			"the probes and service.yaml target it by that name")
+	}
+
+	// Service: the port servicemonitor.yaml.example names.
+	var svc struct {
+		Spec struct {
+			Ports []struct {
+				Name       string `yaml:"name"`
+				Port       int    `yaml:"port"`
+				TargetPort string `yaml:"targetPort"`
+			} `yaml:"ports"`
+		} `yaml:"spec"`
+	}
+	readManifest(t, "deploy/kubernetes/service.yaml", &svc)
+	svcFound := false
+	for _, p := range svc.Spec.Ports {
+		if p.Name != "metrics" {
+			continue
+		}
+		svcFound = true
+		if p.Port != wantPort {
+			t.Errorf("deploy/kubernetes/service.yaml `metrics` port is %d; the listener's compiled "+
+				"default is %q", p.Port, defaults.DefaultMetricsBindAddress)
+		}
+		if p.TargetPort != "metrics" {
+			t.Errorf("deploy/kubernetes/service.yaml `metrics` targetPort is %q, want the named "+
+				"containerPort `metrics` so the two cannot drift apart", p.TargetPort)
+		}
+	}
+	if !svcFound {
+		t.Fatal("deploy/kubernetes/service.yaml exposes no port named `metrics`; " +
+			"servicemonitor.yaml.example scrapes it by that name")
+	}
+
+	// NetworkPolicy: ingress-only, the http port still admitted, and the
+	// metrics port admitted from a named source rather than from everywhere.
+	var np struct {
+		Spec struct {
+			PolicyTypes []string `yaml:"policyTypes"`
+			Egress      []any    `yaml:"egress"`
+			Ingress     []struct {
+				From  []any `yaml:"from"`
+				Ports []struct {
+					Port int `yaml:"port"`
+				} `yaml:"ports"`
+			} `yaml:"ingress"`
+		} `yaml:"spec"`
+	}
+	readManifest(t, "deploy/kubernetes/networkpolicy.yaml", &np)
+	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != "Ingress" || len(np.Spec.Egress) != 0 {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml policyTypes=%v with %d egress rules; the shipped "+
+			"policy is ingress-only. An egress allow-list default-denies every destination it omits "+
+			"(brokers, IdP, DNS), and cannot override a customer's own default-deny because policies "+
+			"are additive — keep the OTLP egress rule a commented template",
+			np.Spec.PolicyTypes, len(np.Spec.Egress))
+	}
+	httpRule, metricsRule := false, false
+	for _, rule := range np.Spec.Ingress {
+		for _, p := range rule.Ports {
+			switch p.Port {
+			case httpPort:
+				httpRule = true
+			case wantPort:
+				metricsRule = true
+				if len(rule.From) == 0 {
+					t.Errorf("deploy/kubernetes/networkpolicy.yaml admits port %d with no `from`, i.e. from "+
+						"every source; restricting that port to the monitoring namespace is the policy's "+
+						"whole purpose", wantPort)
+				}
+			}
+		}
+	}
+	if !httpRule {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for the `http` containerPort "+
+			"%d. With the pod isolated for ingress that denies the MCP endpoint itself, and on CNIs "+
+			"that police node traffic the kubelet probes too", httpPort)
+	}
+	if !metricsRule {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for port %d (the listener's "+
+			"compiled default, %q). With the pod isolated for ingress, an unlisted metrics port is "+
+			"denied, not merely unprotected — the only symptom is a scrape that stops",
+			wantPort, defaults.DefaultMetricsBindAddress)
+	}
+}
+
+// readManifest parses one shipped manifest into out, failing the test on a
+// read or YAML error.
+func readManifest(t *testing.T, rel string, out any) {
+	t.Helper()
+	raw, err := os.ReadFile(repoPath(rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	if err := yaml.Unmarshal(raw, out); err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
 	}
 }
 
