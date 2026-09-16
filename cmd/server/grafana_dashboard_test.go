@@ -128,6 +128,13 @@ var braceRe = regexp.MustCompile(`\{([^{}]*)\}`)
 // selector (op is one of =, !=, =~, !~).
 var labelKeyRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!~|!=|=)`)
 
+// quotedStringRe matches a double-quoted PromQL string literal. Applied
+// before labelKeyRe so a literal "=" inside a label VALUE (e.g. a regex
+// value like outcome=~"foo=bar") can never be mistaken for another label
+// key — labelKeyRe has no concept of quoting and would otherwise match
+// "foo" there too.
+var quotedStringRe = regexp.MustCompile(`"[^"]*"`)
+
 // groupingRe finds PromQL aggregation/join grouping clauses (by/without/
 // on/ignoring/group_left/group_right) and captures their parenthesized
 // label list.
@@ -283,7 +290,8 @@ func resolveFamily(name string, golden map[string]map[string]bool) (string, bool
 func extractLabelKeys(expr string) map[string]bool {
 	keys := map[string]bool{}
 	for _, brace := range braceRe.FindAllStringSubmatch(expr, -1) {
-		for _, lm := range labelKeyRe.FindAllStringSubmatch(brace[1], -1) {
+		stripped := quotedStringRe.ReplaceAllString(brace[1], `""`)
+		for _, lm := range labelKeyRe.FindAllStringSubmatch(stripped, -1) {
 			if lm[1] != "__name__" {
 				keys[lm[1]] = true
 			}
@@ -464,6 +472,17 @@ func TestResolveFamilyAndExtractLabelKeys_DetectDrift(t *testing.T) {
 		// golden[fam][key] check to ever have something to reject.
 		if golden["mcp_tool_invocation_total"]["made_up_label"] {
 			t.Fatal("test setup bug: made_up_label must not be a real label in this synthetic golden map")
+		}
+
+		// A literal "=" inside a quoted label VALUE must not be mistaken
+		// for another label key (flagged in PR review: a value like
+		// outcome=~"foo=bar" would otherwise spuriously extract "foo").
+		quoted := extractLabelKeys(`mcp_tool_invocation_total{outcome=~"foo=bar"}`)
+		if quoted["foo"] {
+			t.Errorf("extractLabelKeys(...) = %v, must not extract \"foo\" from inside a quoted value", quoted)
+		}
+		if !quoted["outcome"] {
+			t.Errorf("extractLabelKeys(...) = %v, must still find the real \"outcome\" key", quoted)
 		}
 	})
 }
