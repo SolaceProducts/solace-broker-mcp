@@ -416,3 +416,101 @@ func TestGrafanaDashboardExcludesV1xMetrics(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveFamilyAndExtractLabelKeys_DetectDrift is the committed regression
+// guard the PR description referred to — during development, the schema
+// checks above were proven to actually fail on an injected bad metric name
+// and an injected bad label key by hand (editing the committed dashboard
+// JSON, running `go test`, observing the failure, then reverting). That
+// proved the *tests* catch drift, but left no permanent guard that
+// `resolveFamily`/`extractLabelKeys` themselves keep catching it after a
+// future edit to either. This test exercises both directly, against a small
+// synthetic golden map, so a change that silently turns either into a
+// no-op fails CI instead of only ever being caught by a repeat of that
+// manual exercise.
+func TestResolveFamilyAndExtractLabelKeys_DetectDrift(t *testing.T) {
+	golden := map[string]map[string]bool{
+		"mcp_tool_invocation_total": labelSet("broker", "outcome"),
+	}
+
+	t.Run("resolveFamily", func(t *testing.T) {
+		if _, ok := resolveFamily("mcp_tool_invocation_total", golden); !ok {
+			t.Error("a real, present family must resolve")
+		}
+		if _, ok := resolveFamily("mcp_totally_made_up_metric", golden); ok {
+			t.Error("an unknown metric name must NOT resolve — this is the exact drift the lint exists to catch")
+		}
+		// A histogram's sample-suffixed name only resolves once its base
+		// family is actually present in the golden map — not unconditionally.
+		if _, ok := resolveFamily("mcp_tool_invocation_duration_seconds_bucket", golden); ok {
+			t.Error("a histogram suffix must not resolve against a golden map that never registered the base family")
+		}
+		golden["mcp_tool_invocation_duration_seconds"] = labelSet("broker", "tool")
+		if _, ok := resolveFamily("mcp_tool_invocation_duration_seconds_bucket", golden); !ok {
+			t.Error("once the base histogram family is present, its _bucket-suffixed name must resolve to it")
+		}
+	})
+
+	t.Run("extractLabelKeys", func(t *testing.T) {
+		keys := extractLabelKeys(`sum by (outcome) (mcp_tool_invocation_total{broker=~"$broker", made_up_label="x"})`)
+		for _, want := range []string{"outcome", "broker", "made_up_label"} {
+			if !keys[want] {
+				t.Errorf("extractLabelKeys(...) missing expected key %q from %v", want, keys)
+			}
+		}
+		// made_up_label is present in golden's absence deliberately: this
+		// confirms extraction finds a bad key at all, which is the
+		// precondition for TestGrafanaDashboardMatchesGoldenFile's own
+		// golden[fam][key] check to ever have something to reject.
+		if golden["mcp_tool_invocation_total"]["made_up_label"] {
+			t.Fatal("test setup bug: made_up_label must not be a real label in this synthetic golden map")
+		}
+	})
+}
+
+// requiredACFamilies are the metric families Story 37's AC requires a panel
+// for — one per signal named in the AC (Tool RED, active requests, SEMP
+// RED, auth-failure breakdown, Go runtime, build info). Checked as "does
+// the dashboard reference this family at all", deliberately coarse: the
+// schema-drift tests above only ever check what a panel DOES reference
+// against the golden file, so a panel silently deleted (or its query
+// gutted) would shrink what gets checked and still pass every other test
+// in this file. This one exists specifically to catch that.
+var requiredACFamilies = []string{
+	"mcp_tool_invocation_total",
+	"mcp_tool_invocation_duration_seconds",
+	"mcp_http_active_requests",
+	"mcp_semp_request_total",
+	"mcp_semp_request_duration_seconds",
+	"mcp_auth_failure_total",
+	"go_goroutines",
+	"mcp_build_info",
+}
+
+func TestGrafanaDashboardCoversRequiredACPanels(t *testing.T) {
+	raw := string(readDashboardRaw(t))
+	for _, fam := range requiredACFamilies {
+		if !strings.Contains(raw, fam) {
+			t.Errorf("dashboard no longer references %q — Story 37's AC requires a panel for this family; either a panel was accidentally deleted, or this list needs updating alongside a deliberate, reviewed removal", fam)
+		}
+	}
+	// The error-type breakdown is checked by its literal AC expression, not
+	// just the family name, because the AC pins the exact query
+	// (ADR-009) — "some panel mentions error_type" is not the same
+	// guarantee as "the panel computes what the AC says it must". Checked
+	// against the parsed target exprs (loadDashboardTargets), not raw file
+	// bytes: raw bytes carry the JSON string encoding's escaped quotes
+	// (`\"error\"`), which never matches a Go string literal containing a
+	// bare `"`.
+	const errorBreakdownExpr = `sum by (error_type) (rate(mcp_tool_invocation_total{outcome="error"`
+	found := false
+	for _, tgt := range loadDashboardTargets(t) {
+		if strings.Contains(tgt.expr, errorBreakdownExpr) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("dashboard is missing the AC-required error breakdown query (expected some panel's expr to contain %q)", errorBreakdownExpr)
+	}
+}

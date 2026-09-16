@@ -30,6 +30,11 @@ dashboard's `${DS_PROMETHEUS}` variable to. Requires Grafana 9 or later.
   the "Works against both ingestion paths" subsection in
   [`docs/observability.md`](../../docs/observability.md#grafana-dashboard--implemented)
   for what's required.
+- **`$service_name` reflects your Prometheus scrape job, not necessarily "one
+  service."** It's sourced from `target_info`'s `job` label, which on the
+  scrape path is whatever `scrape_config.job_name` you chose — not derived
+  from `service.name`. If one job scrapes several different services, this
+  variable can't tell them apart. Give each service its own scrape job.
 - **The two latency panels show no exemplar links** unless: tracing is
   enabled on the server, your Prometheus was started with
   `--enable-feature=exemplar-storage`, and your Grafana Prometheus data

@@ -953,6 +953,13 @@ one) so the three selectors apply dashboard-wide. Two different sourcing mechani
   works unmodified on both; a `service_name`-keyed query would silently return an empty dropdown
   on the OTLP path, which is exactly the "customer choosing OTLP gets a broken dashboard" failure
   this dashboard is committed to avoid.
+  **This assumes your scrape config's `job_name` maps 1:1 to this service.** `job` is Prometheus
+  scrape metadata (`scrape_config.job_name`, an operator-chosen string) on the scrape path — it
+  is not derived from `service.name` there, only synthesized from it on the OTLP path. If your
+  Prometheus scrapes several different services under one `job_name` (legal, if unusual), the
+  variable reflects that shared job label, not per-service identity, and stops actually
+  isolating one service despite the name — give each service its own scrape job to keep this
+  selector meaningful.
 - `$broker` is an ordinary per-series label already on `mcp_tool_invocation_total` and
   `mcp_semp_request_total` (`label_values(mcp_tool_invocation_total, broker)`) — it is **not** a
   resource attribute, and querying it against `target_info` would return nothing. Metrics with no
@@ -1604,8 +1611,11 @@ the first of which is not optional:
    instead: an `otlp` gRPC receiver (what this server can talk to) and an `otlphttp` exporter
    pointed at `http(s)://<prometheus>/api/v1/otlp` (what Prometheus can talk to) is sufficient.
    The reference collector under [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes)
-   ships this exact metrics pipeline commented out by default (Tempo/Jaeger are traces-only) —
-   enable it and point its exporter at your Prometheus's OTLP endpoint.
+   ships exactly this: an `otlphttp/prometheus` exporter and the metrics pipeline that uses it,
+   both commented out by default (Tempo/Jaeger are traces-only, so the collector's *trace*
+   exporter — `otlp/backend` or `otlp/tempo` — is gRPC and cannot serve this purpose; do not
+   point the metrics pipeline at it). Uncomment both the exporter and the pipeline, and set the
+   exporter's endpoint to your Prometheus's OTLP path.
 2. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
 3. **Delta temporality requires an experimental feature flag.** The server ships cumulative
    temporality to avoid this requirement — no flag needed on your side.
