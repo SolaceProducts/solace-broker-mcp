@@ -1597,6 +1597,11 @@ commented out and can be swapped in for the Tempo default.
 > to work by adjusting Prometheus-side configuration alone. The corrected requirement is below,
 > first, because it is load-bearing for everything that follows it.
 
+If you only need metrics in Prometheus, **scraping `/metrics` needs no OTLP and no collector** —
+see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint),
+the shortest path for most Prometheus deployments. The rest of this section is for running one
+OTLP pipeline that carries both signals.
+
 With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP as well as serving the
 Prometheus scrape endpoint. Ingesting those push metrics into Prometheus requires five things,
 the first of which is not optional:
@@ -2378,8 +2383,9 @@ destinations are yours, not ours to ship. NetworkPolicies are additive (a pod's 
 is the union of every policy selecting it), so if your cluster applies default-deny egress an
 allow in this file could not override it anyway. The OTLP egress rule that [OTLP Export
 Health](#otlp-export-health) requires therefore sits at the bottom of `networkpolicy.yaml` as a
-commented template to add to **your** egress policy: your collector's pod selector, TCP `4317`
-for gRPC or `4318` for HTTP. That policy also needs a DNS rule (UDP and TCP `53` to kube-dns),
+commented template to add to **your** egress policy: your collector's pod selector and TCP
+`4317`, the gRPC port — this pod pushes OTLP over gRPC only, so opening `4318` instead leaves
+the push blocked. That policy also needs a DNS rule (UDP and TCP `53` to kube-dns),
 which the template does not show, or the collector's name never resolves. None of this is
 needed unless something already restricts this pod's egress, whatever `OBS_METRICS_OTLP_ENABLED`
 or `OBS_TRACING_ENABLED` are set to.
@@ -2620,7 +2626,7 @@ is most likely to mis-read as healthy.
 | Slow tool calls under load; no metric to show it | [Requests queueing behind the broker limit](#requests-queueing-behind-the-broker-limit) |
 | OTLP push on, collector receiving nothing | [OTLP metrics push arrives nowhere](#otlp-metrics-push-arrives-nowhere) |
 | Server refuses to start after enabling OTLP push | [OTLP push enabled while metrics are disabled](#otlp-push-enabled-while-metrics-are-disabled) |
-| Pushing to Prometheus directly; series missing or unlabelled | [Ingesting OTLP into Prometheus without a collector](#ingesting-otlp-into-prometheus-without-a-collector) |
+| Pushing to Prometheus directly; nothing arrives | [Ingesting OTLP into Prometheus without a collector](#ingesting-otlp-into-prometheus-without-a-collector) |
 | `go_*` and `process_*` absent from an OTLP backend | [Runtime metrics missing from the OTLP pipeline](#runtime-metrics-missing-from-the-otlp-pipeline) |
 | Traces stop arriving; spans dropped | [OTLP collector unreachable](#otlp-collector-unreachable) |
 | Need to diagnose tracing with metrics turned off | [Diagnosing tracing export without metrics](#diagnosing-tracing-export-without-metrics) |
@@ -2637,7 +2643,10 @@ is most likely to mis-read as healthy.
 
 **Symptom.** `mcp_broker_reachable{broker="..."} == 0`, with
 `mcp_broker_unreachable_reason{broker="...", reason="unreachable"} == 1`. Every tool call
-against that broker fails. `mcp_broker_last_result_timestamp_seconds` stops advancing.
+against that broker fails. `mcp_broker_last_result_timestamp_seconds` keeps **advancing**
+through the outage — it is stamped on every call result, transport failures included, so it
+measures traffic recency rather than broker health. A moving timestamp is not evidence the
+broker is up.
 
 The gauge is set from the result of real calls, not from a heartbeat, so a broker that has
 had no call since the pod started is **absent from it entirely** rather than `0`. Alert on
@@ -2683,14 +2692,16 @@ entry: [Caller tokens rejected](#caller-tokens-rejected).
 
 **Symptom.** `mcp_broker_unreachable_reason{reason="unreachable"} == 1` — the same value a
 DNS failure or a refused connection produces. The metric alone cannot tell you it was TLS.
-The distinguishing evidence is in the logs: a certificate or handshake error on the
-`broker connection` line.
+The distinguishing evidence is in the logs: the failing call's error `tool invoked` record
+carries the handshake error in its `detail` field. There is no dedicated connection-failure
+line — `broker connection created` is emitted only when a client is built successfully, and
+the SEMP layer logs no error of its own.
 
 **Likely cause.** The broker's certificate expired, its chain changed, or the CA bundle the
 server trusts does not cover it.
 
-**First response.** Read the log line for the failing broker to confirm it is TLS and not
-connectivity. Check the certificate's expiry
+**First response.** Read the failing call's error `tool invoked` record and check its
+`detail` for a certificate or handshake error, to confirm it is TLS and not connectivity. Check the certificate's expiry
 (`openssl s_client -connect <broker>:943 </dev/null 2>/dev/null | openssl x509 -noout -dates`).
 If it has expired or rotated, the broker's certificate needs renewing, or the CA bundle
 mounted into this pod needs updating.
@@ -2741,8 +2752,9 @@ that persist past a few seconds are not a stale cache — check, in order:
 2. The pod can reach that endpoint. The refresh is bounded only by the HTTP client's
    timeout, so a slow or unreachable JWKS endpoint makes the refresh fail quietly and
    leaves the old keys in use — the same symptom, a different cause.
-3. The token's `iss` matches the configured issuer. A token from another issuer fails
-   signature verification identically.
+3. The token's `iss` matches the configured issuer. An issuer mismatch does **not** land in
+   this bucket — it is classified `invalid_token` — so pursue this only if the
+   `signature_invalid` rise does not account for all the failures you are seeing.
 
 **Escalate.** To the IdP team if its published key set does not contain the `kid` its own
 tokens are signed with, or if it rotated without publishing. To the platform team if the
@@ -2832,8 +2844,15 @@ sidecar, an init-system image, or a pod using `shareProcessNamespace`, PID 1 may
 or a supervisor that never forwards the signal. The in-process drain only runs once the Go
 process itself receives SIGTERM.
 
-**First response.** Check what PID 1 actually is (`kubectl exec <pod> -- ps -o pid,comm`). If
-it is not the server, either run the server as PID 1 — the shipped `deployment.yaml` does —
+**First response.** Check what PID 1 actually is. The shipped image is distroless, so it
+carries no shell and no `ps` — `kubectl exec` cannot run them. Use an ephemeral debug
+container instead:
+
+```
+kubectl debug <pod> -it --image=busybox:1.36 --target=<container> -- ps -o pid,comm
+```
+
+If it is not the server, either run the server as PID 1 — the shipped `deployment.yaml` does —
 or make PID 1 forward the signal: a supervisor configured to propagate it, or
 `pkill -TERM solace-broker-mcp` from the init system's shutdown hook.
 
@@ -2944,9 +2963,13 @@ push can be diagnosed from the scrape. Then, in order:
 1. Egress to the collector. The shipped `networkpolicy.yaml` is **ingress-only** and does
    not restrict egress — so if the push is blocked, the rule is in *your* egress policy, not
    ours. That policy also needs a DNS rule (UDP and TCP 53 to kube-dns) or the collector's
-   name never resolves. A blocked dial fails silently.
+   name never resolves. A blocked dial is silent on the wire but **not** in the logs: a
+   failed export writes `OTLP metrics export failed` at `WARN` with its reason and
+   data-point count, rate-limited to once every five minutes. Read that alongside the
+   counter — it is the faster route to the cause.
 2. `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`), including
-   scheme and port — gRPC is 4317, HTTP 4318.
+   scheme and port. The port is `4317`: this server pushes OTLP over gRPC only, so an
+   OTLP/HTTP endpoint on `4318` is never the right target.
 3. The collector's receiver configuration.
 
 **Escalate.** To the team that owns the collector once the counters show we are exporting and
@@ -2974,23 +2997,23 @@ would do it silently. Failing at config load turns a silent nothing into an expl
 
 ### Ingesting OTLP into Prometheus without a collector
 
-**Symptom.** Push configured straight at Prometheus; series are missing, arrive unlabelled,
-or are rejected as out of order.
+**Symptom.** Push configured straight at Prometheus; nothing arrives at all.
 
-**Likely cause.** One of three customer-side prerequisites, each easy to miss and each
-producing a different confusing symptom.
+**Likely cause.** This route does not work with this server. Prometheus's OTLP receiver
+(`--web.enable-otlp-receiver`) accepts OTLP over **HTTP**; this server pushes OTLP over
+**gRPC** only, with no protocol override. No configuration on either side connects the two,
+so the four Prometheus-side prerequisites are beside the point — satisfying all of them still
+yields nothing.
 
-**First response.** Check all three:
+**First response.** Pick one of the two routes that do work:
 
-1. **The OTLP receiver is disabled by default.** Prometheus needs
-   `--web.enable-otlp-receiver`. Without it there is no endpoint to push to.
-2. **Resource attributes are not promoted to labels by default.** Configure
-   `promote_resource_attributes`, or join through `target_info` — see
-   [Resource Attributes](#resource-attributes--implemented).
-3. **Out-of-order samples.** Collector replicas can deliver out of order; tune
-   `storage.tsdb.out_of_order_time_window` rather than treating the rejections as data loss.
+1. **Scrape `/metrics`.** No OTLP involved, no collector, nothing to configure beyond the
+   scrape job — see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint).
+2. **Put a collector in between.** The reference config in `deploy/otel-collector/` receives
+   gRPC on `4317` and re-exports to Prometheus.
 
-**Escalate.** To the monitoring team — all three are Prometheus-side settings.
+**Escalate.** To the MCP server team if neither route suits your environment and OTLP/HTTP
+egress is a requirement for you. It is not a setting that can be turned on today.
 
 **On temporality.** We emit **cumulative** only. Delta temporality in Prometheus is behind an
 experimental feature flag, which is why we do not use it.
@@ -3047,7 +3070,7 @@ It carries the totals as **separate fields, one per reason**:
 | Field | Meaning |
 |---|---|
 | `spans_exported_total` | Spans successfully exported |
-| `spans_dropped_queue_full_total` | The export queue filled — the collector is slower than we produce |
+| `spans_dropped_queue_full_total` | Reserved; **never increments in this release** — the SDK exposes no queue-overflow count, so a full queue is not observable here |
 | `spans_dropped_export_timeout_total` | The export call timed out |
 | `spans_dropped_export_error_total` | The export call failed |
 | `spans_dropped_shutdown_total` | Spans still queued when the process shut down |
@@ -3164,17 +3187,21 @@ be a surprise. See
 few, none. The scrape succeeds and the metrics are right, so it presents as a broken
 dashboard rather than a configuration gap.
 
-**Likely cause.** Prometheus is not negotiating the OpenMetrics exposition. We enable
-OpenMetrics on the handler, but exemplars are only sent when the scraper asks for that
-exposition — a default scrape config does not.
+**Likely cause.** One of three things: exemplars are switched off outright by
+`OTEL_METRICS_EXEMPLAR_FILTER=always_off`; tracing is off, leaving no span for an exemplar to
+point at; or Prometheus is not negotiating the OpenMetrics exposition, which carries them.
+Recent Prometheus versions request OpenMetrics by default, so negotiation is the likely cause
+only on an older version or a hand-written scrape config — check the two local causes first.
 
-**First response.** Three checks, in order:
+**First response.** Four checks, in order:
 
-1. The scrape config negotiates OpenMetrics.
-2. Exemplar storage is enabled on the Prometheus side.
-3. `OBS_TRACING_ENABLED` is on — an exemplar needs a span to point at.
+1. `OTEL_METRICS_EXEMPLAR_FILTER` is unset or not `always_off` — that value suppresses every
+   exemplar even under full sampling.
+2. `OBS_TRACING_ENABLED` is on — an exemplar needs a span to point at.
+3. The scrape config negotiates OpenMetrics.
+4. Exemplar storage is enabled on the Prometheus side.
 
-**Escalate.** To the monitoring team for the first two.
+**Escalate.** To the monitoring team for the last two.
 
 **Tell it apart from sampling.** No exemplars *anywhere* is this entry. A few exemplars with
 most buckets empty is [the next one](#most-buckets-carry-no-exemplar). These are the two
