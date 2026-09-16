@@ -149,15 +149,27 @@ func newSEMPDialer(requestTimeout time.Duration) *net.Dialer {
 // Clone would copy ForceAttemptHTTP2: true, which overrides the conservative
 // auto-disable that the custom TLSClientConfig above relies on — HTTP/2 would
 // then multiplex several in-flight requests onto one connection and invalidate
-// the MaxConnsPerHost sizing described above. It would also bring
-// Proxy: ProxyFromEnvironment, making SEMP traffic newly sensitive to
-// HTTPS_PROXY. Supplying our own DialContext is HTTP/2-neutral: net/http lists
-// a custom DialContext in the same conservative-disable set as a custom
-// TLSClientConfig.
+// the MaxConnsPerHost sizing described above. Supplying our own DialContext is
+// HTTP/2-neutral: net/http lists a custom DialContext in the same
+// conservative-disable set as a custom TLSClientConfig.
+//
+// Proxy is therefore named explicitly (SOL-153295). A nil Proxy means "never
+// proxy" rather than "consult the environment", so before this the server
+// ignored HTTPS_PROXY for broker traffic with no error and no log line, while
+// IdP traffic honoured it — internal/idpclient does clone DefaultTransport.
+// ProxyFromEnvironment does not disturb the HTTP/2 posture above: net/http's
+// auto-disable keys off TLSClientConfig and DialContext, not off Proxy.
+//
+// Two limits, both under "Outbound HTTP Proxy" in docs/configuration.md: the
+// environment is read once per process and cached, so this is restart-scoped
+// and cannot vary per broker; and NO_PROXY matches the host as written in the
+// URL, so a CIDR entry exempts only a broker addressed by IP literal, never
+// one addressed by hostname.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 		DialContext:           newSEMPDialer(sempCfg.RequestTimeoutDuration).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
 		MaxConnsPerHost:       sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,

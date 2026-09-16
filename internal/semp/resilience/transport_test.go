@@ -17,6 +17,8 @@ package resilience
 import (
 	"context"
 	"errors"
+	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -274,5 +276,39 @@ func TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap(t *testing.T) {
 	// ForceAttemptHTTP2 staying false.
 	if tr.TLSClientConfig == nil {
 		t.Error("TLSClientConfig = nil re-enables Go's automatic HTTP/2, breaking the MaxConnsPerHost concurrency bound")
+	}
+}
+
+// TestNewTunedTransport_HonorsProxyEnvironment pins that broker traffic follows
+// HTTP_PROXY/HTTPS_PROXY/NO_PROXY (SOL-153295). A nil Proxy means net/http never
+// proxies rather than consulting the environment, which is why the omission was
+// silent.
+//
+// Identity rather than behaviour: ProxyFromEnvironment caches the environment
+// behind a sync.Once, so a t.Setenv test would pass or fail on whether an
+// earlier test in this binary already tripped it. Non-nil alone is too weak —
+// a func that never returns a proxy satisfies it, which is the defect. Func
+// pointers are not a unique identity per reflect.Value.Pointer, so this is a
+// strong signal rather than a proof.
+//
+// The HTTP/2 risk is pinned by
+// TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap, which fails if
+// anyone swaps this field for a DefaultTransport clone.
+func TestNewTunedTransport_HonorsProxyEnvironment(t *testing.T) {
+	brokerCfg := &config.BrokerConfig{URL: "https://broker.example.com:1943"}
+	sempCfg := &config.SEMPConfig{
+		MaxConcurrentPerBroker: defaults.DefaultMaxConcurrentPerBroker,
+		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
+	}
+
+	tr := NewTunedTransport(brokerCfg, sempCfg)
+
+	if tr.Proxy == nil {
+		t.Fatal("Proxy = nil, want http.ProxyFromEnvironment; a nil Proxy means net/http never proxies, so HTTP_PROXY/HTTPS_PROXY are silently ignored for all broker traffic")
+	}
+	got := reflect.ValueOf(tr.Proxy).Pointer()
+	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
+	if got != want {
+		t.Error("Proxy is not http.ProxyFromEnvironment; broker traffic no longer follows the standard proxy environment variables")
 	}
 }

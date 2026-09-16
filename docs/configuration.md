@@ -491,3 +491,104 @@ observability:
   deployment_environment: "production"
   cloud_region: "us-east-1"
 ```
+
+## Outbound HTTP Proxy
+
+Operators behind a mandatory egress proxy point the server's outbound traffic at it with the
+standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables — the same mechanism
+Terraform and most Go tooling uses. There is no YAML equivalent and no per-broker setting; see
+[Limits](#limits-of-the-environment-variable-approach).
+
+Either case works (`HTTPS_PROXY` or `https_proxy`). If both are set the upper-case form wins.
+
+### What the variables govern
+
+| Outbound traffic | Proxied | Notes |
+|---|---|---|
+| Broker SEMP (all tools, SEMPv1 and SEMPv2) | Yes | `https://` broker URLs follow `HTTPS_PROXY`, `http://` follows `HTTP_PROXY`. |
+| IdP / OIDC — discovery, JWKS refresh, RFC 8693 token exchange | Yes | Has always followed these variables, including before broker traffic did. |
+| OTLP telemetry export (traces and metrics) | Yes | **Always `HTTPS_PROXY`, whatever `OTEL_EXPORTER_OTLP_ENDPOINT` says.** Export is gRPC, and grpc-go resolves its proxy against a synthesized `https` target, so an `http://collector:4317` endpoint is *not* governed by `HTTP_PROXY`. Exempt the collector in `NO_PROXY` — see below. |
+| `--health` probe | No | Loopback only, and loopback is never proxied (see below). |
+| Inbound MCP requests | N/A | Not outbound traffic. Running the server behind a reverse proxy is a separate concern — see [`tls_terminated_upstream`](#server-settings). |
+
+All three proxied paths read the same process-wide environment. You cannot proxy one and not
+another by role.
+
+### Separating traffic by destination
+
+The only separation axis is the **destination**. `NO_PROXY` exempts destinations from the proxy;
+nothing selects by role, and the `HTTP_PROXY`/`HTTPS_PROXY` split is by URL **scheme**, not by
+role. SEMP over TLS, a cloud IdP, and OTLP export all land on `HTTPS_PROXY`, so that split is
+not a way to separate them.
+
+The common topology is internal brokers and an internal collector with an external IdP: proxy
+the IdP, go direct to everything else. **List the collector explicitly** — a telemetry endpoint
+that matches no `NO_PROXY` entry is CONNECT-tunneled to a proxy that usually cannot reach it,
+and export then fails silently.
+
+```bash
+# Brokers at broker-01.internal.example.com, broker-02.internal.example.com
+# Collector at otel-collector:4317 (OTEL_EXPORTER_OTLP_ENDPOINT)
+# IdP at login.microsoftonline.com
+HTTPS_PROXY=http://proxy.example.com:3128
+NO_PROXY=.internal.example.com,otel-collector
+```
+
+The inverse — brokers reached through the proxy for allow-listing, IdP and collector direct:
+
+```bash
+HTTPS_PROXY=http://proxy.example.com:3128
+NO_PROXY=login.microsoftonline.com,otel-collector
+```
+
+A single-label host like `otel-collector` needs its own entry; it matches no dotted suffix. In
+Kubernetes, prefer the form the endpoint actually uses — `otel-collector.monitoring` or
+`.svc.cluster.local` — since `NO_PROXY` matches the host as written, not after resolution.
+
+### How `NO_PROXY` entries match
+
+Comma-separated. Which entries can match a broker depends on **how that broker's `url:` is
+written**, and the two families are mutually exclusive:
+
+| Entry form | Matches | Does not match |
+|---|---|---|
+| `example.com` | `example.com` and any subdomain (`broker.example.com`) | any IP-literal host |
+| `.example.com`, `*.example.com` | subdomains only — **not** the apex `example.com` | any IP-literal host |
+| `example.com:943` | as above, but only on port 943 | other ports |
+| `10.1.2.3`, `10.1.2.3:943` | that IP literal, optionally port-scoped | hostnames |
+| `10.0.0.0/8` | IP literals inside the block; **port cannot be scoped** | hostnames |
+| `*` | everything — disables proxying entirely | — |
+
+**A CIDR entry only applies to a broker addressed by IP literal.** A broker configured as
+`url: "https://broker.example.com:943"` is never matched by `NO_PROXY=10.0.0.0/8`, even when
+that name resolves inside the block — Go matches `NO_PROXY` against the host as written in the
+URL and performs no DNS resolution. Since the documented broker form is a hostname, prefer a
+domain suffix; reach for CIDR only if your `brokers:` entries genuinely use IP literals. The
+converse also holds: a domain entry never matches an IP-literal host.
+
+`localhost` and any loopback address are never proxied, regardless of `NO_PROXY`.
+
+### Proxy authentication
+
+Credentials go in the proxy URL: `HTTPS_PROXY=http://user:password@proxy.example.com:3128`.
+Supply it the same way as other secrets — via the environment or the `.env` file, not a YAML
+literal — since the value contains a password.
+
+This server's own log statements never include proxy URLs. One caveat is outside its control:
+if you set `GRPC_GO_LOG_SEVERITY_LEVEL=info` to debug OTLP export, grpc-go logs the detected
+proxy URL to stderr unredacted, password included. Prefer an unauthenticated proxy, or an
+allow-list on the proxy side, if that debugging path is one your operators will use.
+
+### Limits of the environment-variable approach
+
+- **Restart-scoped.** Go resolves these variables once per process and caches the result, so
+  changing them requires a server restart. They are not re-read on config reload.
+- **Process-wide.** The setting applies to every broker in `brokers:`, to the IdP, and to OTLP
+  export alike. Per-broker or per-role proxy configuration does not exist; `NO_PROXY` is the
+  only way to carve out a destination.
+- **Silent when wrong.** Nothing logs the effective proxy, and a `NO_PROXY` entry that matches
+  nothing produces no warning — traffic simply goes through the proxy. After setting a proxy,
+  an unreachable broker surfaces only as a `proxyconnect tcp:` dial error, and a tunneled
+  collector surfaces only as OTLP export failures ([OTLP Export
+  Health](observability.md#otlp-export-health)). Check every host form against the tables above
+  before looking elsewhere.
