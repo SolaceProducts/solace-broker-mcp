@@ -17,6 +17,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `deploy/grafana/solace-broker-mcp-overview.json` is a committed, importable Grafana 9+ dashboard: tool RED, an active-requests gauge beside it, SEMP RED-per-attempt, an auth-failure rate stacked by reason, an `error_type` breakdown (`sum by (error_type) (rate(mcp_tool_invocation_total{outcome="error"}[5m]))`), Go runtime, and build info. Trace exemplars are wired on the two latency panels and degrade to plain histograms with no trace data source configured. `docs/observability.md` documents import steps and two caveats found by testing both metric-ingestion paths live rather than assuming the schema doc's join expression covers them: (1) the `$service_name` dashboard variable is sourced from `target_info`'s `job` label, not `service_name` — Prometheus's OTLP-to-TSDB translator folds `service.name` into `job` on `target_info` specifically, so a `service_name`-keyed query returns an empty dropdown on the OTLP-ingestion path though it works fine on scrape; (2) this server's OTLP metrics exporter is gRPC-only, so a bare Prometheus's native OTLP receiver (HTTP-only) cannot receive it directly — an OTel Collector bridge in front of that Prometheus is required, not optional, alongside `promote_resource_attributes`. A new CI test, `cmd/server/grafana_dashboard_test.go`, parses Story 14's golden file and asserts every panel's metric name, label keys, and template-variable query exist in it, so the dashboard and the real schema cannot silently drift apart. Also corrects Story 40's (SOL-152423, #412) already-merged "Ingesting OTLP metrics directly into Prometheus (no collector)" doc section, which omitted the collector requirement above and would have sent an operator through the same four steps into the same dead end. Tracked under SOL-152092.
+- An **Operator Runbook** section in `docs/observability.md` gives Tier-1 staff one entry per
+  operator-visible failure mode, each with a symptom drawn from a metric, log line, or probe,
+  the likely cause, a first response, and escalation criteria (SOL-152098, Story 36). A
+  symptom-lookup table fronts it, and it is linked from the `Start Here` table of contents,
+  replacing the plain-text placeholder that named this story. Entries that **present as
+  silence** are marked as such, because they are the ones most easily mis-read as healthy: an
+  OTLP push that arrives nowhere while `/metrics` looks fine, a ServiceMonitor absent from the
+  targets page rather than down, latency panels with no exemplar links because the scrape never
+  negotiated OpenMetrics. Four grounding corrections were made against the code rather than
+  carried over from the story: the `event=otel_self_stats` log line exposes per-reason totals as
+  **flat fields** (`spans_dropped_queue_full_total` and siblings), not the `reason` label the
+  metric uses, so a SIEM rule written for the metric shape will not match the line; the OTLP
+  egress rule lives in the customer's own egress policy, not in the shipped ingress-only
+  `networkpolicy.yaml`, and needs a DNS rule beside it or the collector name never resolves; a
+  broker TLS handshake failure carries `reason="unreachable"` like every other transport fault,
+  so the entry sends the operator to the logs rather than to a label that cannot distinguish it;
+  and the SEMP dialer's 30-second TCP keep-alive is a compiled constant, listed only so an
+  operator hunting for a tunable stops hunting. Two failure modes are documented with their gap
+  stated rather than papered over: audit-pipeline drops are alertable on the `audit_drop`
+  *record* (`ERROR`-level, so it survives the log level that suppressed the record it reports),
+  but not on `mcp_audit_events_dropped_total`, which this schema documents and no code
+  registers — SOL-152096 closed without it and no ticket carries it, so the entry points
+  operators at the record and warns against building a panel on the series; and rate-limit
+  admission delay is logs-only behind a default-off flag, with no metric to build an alert
+  against. The reference SIEM queries for unreconciled progress
+  markers are **not** included: they search for `event=tool_progress` records, which nothing
+  emits, and the emitter (Story 43) is tiered post-GA under SOL-150254 with no ticket filed.
 - The Kubernetes manifests now make `/metrics` scrapeable and restricted on day one
   (SOL-152424, Story 32). `service.yaml` and `deployment.yaml` gain a named `metrics` port
   (`:9091`); a new `networkpolicy.yaml` applies with the directory and admits `:9091` only from
