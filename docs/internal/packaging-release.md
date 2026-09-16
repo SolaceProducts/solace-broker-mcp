@@ -201,6 +201,20 @@ and the switch to production OAuth. In outline the manifests are:
 - **`poddisruptionbudget.yaml`** — `maxUnavailable: 1`, so a node drain evicts
   one pod at a time. Applied automatically by the directory-wide `kubectl
   apply` above
+- **`networkpolicy.yaml`** — ingress-only policy admitting `/metrics` (`:9091`)
+  from the `monitoring` namespace and leaving `:9090` open to all sources, since
+  the kubelet's probes cannot be named by a selector. Applied by the
+  directory-wide `kubectl apply`, but enforced only by a CNI that supports
+  NetworkPolicy — and additive, so another policy can widen it. Egress is
+  deliberately absent; the OTLP rule ships as a commented template. See
+  [Observability](../observability.md#scraping-and-securing-the-metrics-endpoint)
+  § "Scraping and securing the metrics endpoint"
+- **`servicemonitor.yaml.example`** — Prometheus Operator scrape config for the
+  `metrics` Service port (15s interval, 10s timeout). `.example` because the
+  `monitoring.coreos.com` CRD is absent on non-Operator clusters and one missing
+  kind fails the whole directory apply; copy, edit the `release:` label, and
+  apply by hand. Clusters without the Operator use the `prometheus.io/*`
+  annotation fallback documented in the same section
 - **`configmap.yaml`** — server configuration (broker URLs, SEMP settings).
   Note `semp.max_concurrent_per_broker` and `request_min_interval` are
   per-pod, so a broker sees `replicas ×` the configured value

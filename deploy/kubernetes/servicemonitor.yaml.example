@@ -1,0 +1,46 @@
+# Copy-and-edit ServiceMonitor for Prometheus Operator (SOL-152424). Named
+# .example so the directory-wide `kubectl apply` skips it: the CRD
+# (monitoring.coreos.com/v1) is not on every cluster, and one missing kind
+# fails the whole apply. Without the Operator, use the annotation fallback in
+# docs/observability.md § "Scraping and securing the metrics endpoint".
+#
+# Apply it in the same namespace as service.yaml — a ServiceMonitor selects
+# Services in its own namespace unless spec.namespaceSelector says otherwise.
+#
+# Four things must hold before a target appears; only the first fails loudly:
+#   1. OBS_METRICS_ENABLED=true on the Deployment (deployment.yaml carries the
+#      commented env entry), or every scrape is `connection refused`.
+#   2. The `metrics` port on service.yaml (shipped): `endpoints[].port` below
+#      names a Service port, not a container port.
+#   3. Prometheus selects this object. kube-prometheus-stack by default selects
+#      only ServiceMonitors labelled `release: <its Helm release>` — EDIT the
+#      label below, or set serviceMonitorSelectorNilUsesHelmValues to false.
+#      If Prometheus runs in another namespace, its
+#      serviceMonitorNamespaceSelector must be `{}` or match this one; unset
+#      means its own namespace only. Neither mismatch is an error anywhere;
+#      the only symptom is no target.
+#   4. Ingress to :9091 from Prometheus's namespace — networkpolicy.yaml
+#      allows `monitoring`; edit it if yours differs.
+#
+# Exemplars need two Prometheus-side settings this object cannot supply:
+# exemplar storage (`spec.enableFeatures: [exemplar-storage]` on the Prometheus
+# CR) and a scrape that negotiates OpenMetrics. Without them the scrape
+# succeeds and the trace links are silently absent — docs/observability.md
+# § "Trace Exemplars".
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: solace-broker-mcp
+  labels:
+    app.kubernetes.io/name: solace-broker-mcp
+    # EDIT: kube-prometheus-stack's default selector matches on this label.
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: solace-broker-mcp
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

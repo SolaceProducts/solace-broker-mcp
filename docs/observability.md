@@ -42,6 +42,7 @@
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
 | Check this works with your existing stack | [Vendor Neutrality](#vendor-neutrality) |
 | Deploy to Kubernetes | [Deployment Topology and Resource Policy](#deployment-topology-and-resource-policy--implemented) |
+| Scrape `/metrics` from Prometheus, and keep everyone else off it | [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) |
 | See what is still open, and what we already decided | [Open Items for This Review](#open-items-for-this-review) · [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review) |
 | Map this to PCI DSS, SOC 2, SOX, or ISO 27001 | [Standards This Schema Supports](#standards-this-schema-supports) |
 | Understand load shedding and saturation | [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only) |
@@ -420,8 +421,9 @@ version, schema versions, and — once tools run — tool names already public i
 metrics, and usage timing), with two exceptions: `mcp_auth_failure_total{reason}` exposes a
 readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_total{tool}`
 tells a reader which tools authorization is refusing. Treat restricting the listener as the
-default posture, not optional hardening. The listener is absent entirely unless
-`OBS_METRICS_ENABLED` is set.
+default posture, not optional hardening: `deploy/kubernetes/networkpolicy.yaml` ships it — see
+[Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint). The
+listener is absent entirely unless `OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
@@ -794,7 +796,10 @@ design.
 **A NetworkPolicy egress rule to the collector's host and port is required** if your cluster
 enforces default-deny egress — a blocked gRPC dial fails silently rather than at startup, so the
 first sign of a missing rule is telemetry that never arrives, not an error anywhere in this
-server's own logs. The failure signature to alert on:
+server's own logs. The shipped `deploy/kubernetes/networkpolicy.yaml` restricts ingress only and
+carries this rule as a commented template to add to *your* egress policy — [Scraping and securing
+the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) explains why it cannot live in
+ours. The failure signature to alert on:
 `mcp_otel_metrics_dropped_total{reason="export_error"}` rising while
 `mcp_otel_metrics_exported_total` stays flat.
 
@@ -836,10 +841,14 @@ you skip correlating by timestamp. The matching `_total` counters carry them too
 Four things to know. Each is a reason exemplars can be missing from a scrape that is
 otherwise perfectly healthy, and none of them is visible from the scrape itself:
 
-- **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
-  older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
-  default; if yours does not, exemplars will be silently absent from an otherwise healthy
-  scrape. To confirm by hand:
+- **Your Prometheus must negotiate OpenMetrics to receive them, and have exemplar storage
+  enabled to keep them.** Exemplars are not part of the older Prometheus text exposition
+  format. Recent Prometheus versions request OpenMetrics by default; if yours does not,
+  exemplars will be silently absent from an otherwise healthy scrape. Storage is a separate
+  switch, off by default: `--enable-feature=exemplar-storage`, or under Prometheus Operator
+  `spec.enableFeatures: [exemplar-storage]` on the Prometheus object — a setting on that
+  object, not one a ServiceMonitor or this server can supply. To confirm the negotiation by
+  hand:
 
   ```
   curl -H 'Accept: application/openmetrics-text; version=1.0.0; charset=utf-8' \
@@ -2260,6 +2269,144 @@ perfectly therefore sits *above* `GOMEMLIMIT` in working-set bytes as a matter o
 roughly the non-heap overhead the 25% reserve exists to pay for — so that crossing is normal
 and not diagnostic on its own. `limits.memory` remains the threshold worth alarming on; use
 the Go heap metrics above to say whether the runtime is holding its own limit.
+
+### Scraping and securing the metrics endpoint
+
+`/metrics` listens on its own port (`observability.metrics_bind_address`, default `:9091`),
+unauthenticated and on all interfaces — see the exposure note under [Server and Scrape
+Health](#server-and-scrape-health). The shipped manifests make it scrapeable and restricted at
+once (SOL-152424):
+
+| Piece | File | In `kubectl apply -f deploy/kubernetes/`? |
+|---|---|---|
+| A `metrics` Service port and the named `containerPort` it targets | `service.yaml`, `deployment.yaml` | Yes. Resolves to `connection refused` until `OBS_METRICS_ENABLED` is set |
+| Ingress to `:9091` admitted from the monitoring namespace only | `networkpolicy.yaml` | Yes. A built-in API, safe on any cluster; enforced only by a CNI that supports it |
+| Prometheus Operator discovery | `servicemonitor.yaml.example` | No. The CRD is not on every cluster, and one missing kind fails the whole apply. Copy, edit, apply by hand |
+
+Nothing flips `OBS_METRICS_ENABLED`: it stays off per [Flag Defaults at GA](#flag-defaults-at-ga)
+and ships as a commented env entry in `deployment.yaml`.
+
+#### With Prometheus Operator
+
+Apply the ServiceMonitor in the Service's namespace — it selects Services in its own namespace
+unless told otherwise — then check Prometheus's *Status → Targets* page, because the two most
+common failures produce no error anywhere:
+
+- **The `release:` label.** kube-prometheus-stack installs its Prometheus with
+  `serviceMonitorSelectorNilUsesHelmValues: true`, so it selects only ServiceMonitors carrying
+  `release: <your Helm release name>`. The shipped `release: kube-prometheus-stack` is a
+  placeholder to edit; alternatively set that Helm value to `false` to select every
+  ServiceMonitor in scope.
+- **The namespace selector.** `serviceMonitorNamespaceSelector` on the Prometheus object left
+  unset means its own namespace only; `{}` means all. With Prometheus in `monitoring` and this
+  server elsewhere, it must be `{}` or match the server's namespace.
+
+An unselected ServiceMonitor is simply absent from the targets page — not down, not logged.
+Confirm with a scrape you can see (`mcp_metrics_scrape_total` rising), not with
+`kubectl get servicemonitor`, which only shows the object exists. For exemplar links the
+Prometheus object also needs exemplar storage and OpenMetrics negotiation, both covered under
+[Trace Exemplars](#trace-exemplars--implemented); without them the scrape succeeds and the
+exemplars are silently absent.
+
+#### Without Prometheus Operator
+
+A Prometheus using `kubernetes_sd_configs` directly discovers targets through the
+`prometheus.io/*` annotation convention. Add these to `service.yaml`'s `metadata` for the
+`endpoints` role, or to the pod template in `deployment.yaml` for the `pod` role:
+
+```yaml
+metadata:
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/metrics"
+```
+
+They are a convention, not an API: they do nothing unless your Prometheus config carries the
+relabel rules that read them, as the widely copied `kubernetes-service-endpoints` example job
+does. Prometheus Operator ignores them; under the Operator the ServiceMonitor is the mechanism.
+
+Unlike the ServiceMonitor, which names the Service's `metrics` port and so follows it
+automatically, `prometheus.io/port` is a literal. If you move the listener off `:9091`, change
+this value too, or you get a target that scrapes the wrong port.
+
+#### The NetworkPolicy
+
+`networkpolicy.yaml` selects the server's pods with `policyTypes: [Ingress]` and two rules:
+
+1. **`:9090` from any source.** The rule has no `from`, which means all sources. The kubelet's
+   probes arrive from the node's own address, which no `podSelector` or `namespaceSelector` can
+   name, and this policy exists to protect `:9091`, not to change who may reach the MCP
+   endpoint. Tighten it only if you know every source.
+2. **`:9091` from the `monitoring` namespace**, matched on the `kubernetes.io/metadata.name`
+   label Kubernetes (1.22+) sets on every namespace. Edit the name if your Prometheus runs
+   elsewhere; add a `podSelector` beside it to narrow to the Prometheus pods.
+
+Once the pod is isolated for ingress, anything this policy does not list is denied. Ports are
+numeric because a named port here resolves against the pod's `containerPort` names and CNI
+support for that varies.
+
+**"Denied" means by this policy, not by the cluster.** NetworkPolicies are additive: a pod's
+allowed traffic is the union of every policy that selects it, and there is no precedence or
+deny rule to override one. So another ingress policy selecting these pods — a namespace-wide
+default, a platform-team policy, a chart you install later — can admit `:9091` from anywhere,
+and nothing in this file can stop it. Treat this policy as "we do not open the metrics port to
+the cluster", not as proof the port is closed. `kubectl get networkpolicy -A -o wide` lists
+every policy that could widen it; audit those before treating the endpoint as restricted.
+
+**The ports follow the config.** A port the policy does not list is denied outright, not merely
+unprotected, so `9091` must move with `metrics_bind_address` (and the `metrics` port in
+`service.yaml` and `deployment.yaml`), and `9090` with `port` in `configmap.yaml` (and the
+`http` containerPort). For `:9091` the symptom is a scrape that stops; for `:9090` it is the
+MCP endpoint itself. `TestShippedPortsTrackCompiledDefaults` pins all four files to the
+compiled defaults, so moving a default in code without the manifests fails the build.
+
+**Egress is deliberately not in this policy.** With `policyTypes: [Ingress]`, broker SEMP, the
+IdP, DNS, and the OTLP push are untouched. Listing `Egress` with an allow-list would
+default-deny every destination not named — a full outage disguised as hardening — and the
+destinations are yours, not ours to ship. NetworkPolicies are additive (a pod's allowed traffic
+is the union of every policy selecting it), so if your cluster applies default-deny egress an
+allow in this file could not override it anyway. The OTLP egress rule that [OTLP Export
+Health](#otlp-export-health) requires therefore sits at the bottom of `networkpolicy.yaml` as a
+commented template to add to **your** egress policy: your collector's pod selector, TCP `4317`
+for gRPC or `4318` for HTTP. That policy also needs a DNS rule (UDP and TCP `53` to kube-dns),
+which the template does not show, or the collector's name never resolves. None of this is
+needed unless something already restricts this pod's egress, whatever `OBS_METRICS_OTLP_ENABLED`
+or `OBS_TRACING_ENABLED` are set to.
+
+**Under a service mesh.** A sidecar that owns the pod's inbound ports — Istio in strict mTLS
+mode, for example — refuses a plaintext scrape of `:9091` from a Prometheus outside the mesh.
+Either exempt the port from mTLS (a `PeerAuthentication` with `portLevelMtls` for `9091`, or
+`traffic.sidecar.istio.io/excludeInboundPorts: "9091"` on the pod template) so the
+NetworkPolicy stays the control, or run a mesh-aware Prometheus that presents a workload
+certificate. Istio's own `prometheus.io/*` annotation rewriting applies only to the annotation
+path, not to a ServiceMonitor.
+
+**Enforcement is a cluster feature, and on most managed platforms it is off until you turn it
+on.** Every cluster *accepts* a NetworkPolicy object, because the API is built in; only the CNI
+enforces one, and `kubectl get networkpolicy` looks identical either way. **An accepted policy
+is not an enforced boundary.** On the managed platforms the feature is generally a
+cluster-creation choice that cannot be flipped on a running cluster:
+
+| Platform | Enforces NetworkPolicy? |
+|---|---|
+| Calico, Cilium (self-managed) | Yes, that is what they are for |
+| GKE | Only with Dataplane V2, or the legacy `--enable-network-policy` add-on. Neither is the default on every cluster |
+| AKS | Only when a network policy engine (`azure`, `calico`, or `cilium`) was selected at cluster creation |
+| EKS | Only with the VPC CNI's network-policy feature enabled (v1.14+), or Calico/Cilium installed alongside. The VPC CNI does **not** enforce by default |
+| OpenShift | Yes. OVN-Kubernetes is the default plugin and enforces NetworkPolicy; the legacy OpenShiftSDN plugin defaulted to its `networkpolicy` isolation mode and was removed in 4.17, so any supported release enforces |
+| kind (default `kindnet`), and others | No. The object is accepted and silently does nothing |
+
+**Verify rather than infer, whatever the table says.** From a pod *outside* the `monitoring`
+namespace, `curl` a server pod IP on `:9091`: it should hang or be refused. A `200` with the
+policy applied means your cluster is not enforcing it. This is the only check that answers the
+question, and it is worth doing once per cluster.
+
+Where enforcement is unavailable the restriction has to come from elsewhere — bind the
+listener to loopback (`metrics_bind_address: "127.0.0.1:9091"`) and scrape through a
+co-located sidecar, a service-mesh authorization policy, or the node or cloud-network firewall
+in front of the pod CIDR. Treat one of them as required, not optional; the exposure note under
+[Server and Scrape Health](#server-and-scrape-health) says what the endpoint reveals.
 
 ---
 
