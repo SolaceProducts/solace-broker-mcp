@@ -76,6 +76,14 @@ data:
       retry_min_interval: 3s
       retry_max_interval: 30s
 
+    # Observability tunables (docs/configuration.md § "Observability Settings").
+    # The on/off switches are OBS_* env vars on the Deployment, not YAML. Every
+    # key has a default, so the block can stay commented.
+    # observability:
+    #   metrics_bind_address: ":9091"  # networkpolicy.yaml, service.yaml, and
+    #                                  # deployment.yaml spell this port too
+    #   shutdown_drain_delay_s: 10     # raise terminationGracePeriodSeconds with it
+
     brokers:
       my-broker:
         url: "https://broker.example.com:943"

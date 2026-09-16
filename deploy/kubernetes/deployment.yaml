@@ -71,9 +71,22 @@ spec:
             - name: http
               containerPort: 9090
               protocol: TCP
+            # /metrics (SOL-152424). A containerPort opens nothing; it names the
+            # port so service.yaml's `metrics` targetPort resolves. Tracks
+            # observability.metrics_bind_address (default :9091) together with
+            # service.yaml and networkpolicy.yaml. The listener exists only with
+            # OBS_METRICS_ENABLED set (below).
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
           env:
             - name: CONFIG_FILE
               value: /etc/mcp-server/config.yaml
+            # Metrics are off by default (docs/observability.md § "Flag Defaults
+            # at GA"). Uncomment to open the /metrics listener that the `metrics`
+            # port above, servicemonitor.yaml.example, and networkpolicy.yaml expect.
+            # - name: OBS_METRICS_ENABLED
+            #   value: "true"
             # service.instance.id (SOL-152425, Story 34): the pod name is what
             # differentiates one replica's metrics/traces/logs from another in
             # an aggregator. The downward API is the only way to get it — a pod

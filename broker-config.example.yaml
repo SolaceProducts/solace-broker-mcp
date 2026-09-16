@@ -180,6 +180,18 @@ semp:
   retry_min_interval: 3s
   retry_max_interval: 30s
 
+# Observability tunables. The on/off switches are OBS_* environment variables,
+# not YAML — see docs/observability.md § "Flag Defaults at GA". Every key has a
+# default, so the block can be omitted; docs/configuration.md § "Observability
+# Settings" lists them all.
+# observability:
+#   metrics_bind_address: ":9091"   # /metrics listener when OBS_METRICS_ENABLED is set.
+#                                   # Must not share `port`. The Kubernetes NetworkPolicy,
+#                                   # Service, and Deployment spell this port too.
+#   shutdown_drain_delay_s: 10      # raise terminationGracePeriodSeconds with it
+#   deployment_environment: ""      # OTel deployment.environment.name; omitted when empty
+#   cloud_region: ""                # OTel cloud.region; omitted when empty
+
 # Broker connections. Add one entry per broker.
 # Credentials should use ${VAR_NAME} references, not hardcoded values.
 # Broker aliases: 1-63 chars, [A-Za-z0-9-], must start and end alphanumeric.

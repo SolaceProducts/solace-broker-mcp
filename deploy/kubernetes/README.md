@@ -2,10 +2,13 @@
 
 Reference manifests for running the Solace Broker MCP Server in a cluster:
 `configmap.yaml` (server config), `secret.yaml` (credentials),
-`deployment.yaml` (the pod), `service.yaml` (a ClusterIP Service), and
-`poddisruptionbudget.yaml` (keeps a pod serving through node drains). Plus
-`ingress.yaml.example` — required reading above one replica, and `.example` so
-the directory-wide apply skips it; see [TLS and ingress](#tls-and-ingress).
+`deployment.yaml` (the pod), `service.yaml` (a ClusterIP Service),
+`poddisruptionbudget.yaml` (keeps a pod serving through node drains), and
+`networkpolicy.yaml` (admits `/metrics` scrapes from the monitoring namespace
+only). Plus two `.example` files the directory-wide apply skips:
+`ingress.yaml.example` — required reading above one replica; see
+[TLS and ingress](#tls-and-ingress) — and `servicemonitor.yaml.example` for
+Prometheus Operator; see [Metrics scraping](#metrics-scraping).
 
 They are a starting point to copy and edit, not a turnkey install. Applied
 unmodified the pod will not start: `DEV_TOKEN` ships empty and the server
@@ -21,6 +24,9 @@ refuses to run without it. That is deliberate — see the table below.
 | `configmap.yaml` | `brokers.my-broker.url` | Points at `https://broker.example.com:943`. Until you change it, every tool call fails. |
 | `deployment.yaml` | `image` tag | Ships as `:latest`. Pin a released version for a reproducible deploy. |
 | `deployment.yaml` | `limits.memory` **and** `GOMEMLIMIT` | Only if you change either. They ship coupled at 512Mi / `384MiB` (75%) and must move together — see [Resource requests and limits](../../docs/observability.md#resource-requests-and-limits). Go's suffix is `MiB`, not Kubernetes' `Mi`; a value the runtime cannot parse is fatal at startup. |
+| `networkpolicy.yaml` | `kubernetes.io/metadata.name: monitoring` | Only if Prometheus runs in another namespace. The policy admits `:9091` from that namespace and nothing else; a wrong name is a scrape that silently never happens, not an error. |
+| `networkpolicy.yaml` | the `9090` and `9091` ports | Only if you change `port` in `configmap.yaml` or `observability.metrics_bind_address`. A port the policy does not list is denied outright: for `:9091` that is a scrape that stops, for `:9090` it is the MCP endpoint itself. Move the containerPorts in `deployment.yaml` and the `metrics` port in `service.yaml` with them. |
+| `servicemonitor.yaml.example` | `release:` label | kube-prometheus-stack selects only ServiceMonitors carrying its own Helm release name. Wrong or missing, the target never appears and nothing logs it. |
 
 Do not commit an edited `secret.yaml`. For anything beyond a trial, use Vault,
 Sealed Secrets, External Secrets Operator, or SOPS.
@@ -118,6 +124,39 @@ Ingress needs a hostname and TLS secret only you can supply.
 > nor hashing on `Mcp-Session-Id` works — see
 > [`docs/authentication.md`](../../docs/authentication.md#session-routing-at-the-ingress-required-above-one-replica)
 > § "Session Routing at the Ingress".
+
+## Metrics scraping
+
+`/metrics` is off by default and, when on, listens on a second port (`:9091`)
+that the Service exposes as `metrics`. Three shipped pieces make it scrapeable
+from day one:
+
+1. **Turn the listener on.** Uncomment `OBS_METRICS_ENABLED` in
+   `deployment.yaml`. Until then the port resolves to `connection refused`.
+2. **Restrict who can reach it.** `networkpolicy.yaml` applies with the
+   directory and admits `:9091` only from the `monitoring` namespace. `:9090`
+   stays open to every source, because the kubelet's probes arrive from the
+   node and no selector can name them. It restricts ingress only; broker, IdP,
+   and OTLP egress are untouched.
+
+   **Two reasons an applied policy may not be protecting anything.** Only the
+   CNI enforces it, and on GKE, AKS, and EKS that is a cluster-level feature
+   normally chosen at creation time, while kind's default CNI accepts the object
+   and enforces nothing. And because policies are additive with no deny rule,
+   another policy selecting these pods can re-open `:9091` regardless of this
+   one. So verify with a `curl` to a pod IP on `:9091` from a pod outside
+   `monitoring`, and audit `kubectl get networkpolicy -A`. Both are covered in
+   [Scraping and securing the metrics endpoint](../../docs/observability.md#scraping-and-securing-the-metrics-endpoint).
+3. **Point Prometheus at it.** `servicemonitor.yaml.example` is the Prometheus
+   Operator manifest: copy it, edit the `release:` label, apply it to the same
+   namespace as the Service. It is `.example` because the CRD is not on every
+   cluster and one missing kind fails the whole directory apply.
+
+The two ways a correct ServiceMonitor is silently never scraped, the annotation
+fallback for clusters without Prometheus Operator, what to do when your CNI does
+not enforce NetworkPolicy, and where the OTLP egress rule belongs if your cluster
+default-denies egress are all in
+[Scraping and securing the metrics endpoint](../../docs/observability.md#scraping-and-securing-the-metrics-endpoint).
 
 ## Health endpoints
 

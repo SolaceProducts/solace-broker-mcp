@@ -461,3 +461,33 @@ and below `max_queue_wait`. Set it at or above `max_queue_wait` and the signal
 is silently dead, because the request is shed before the warning fires. Neither
 bound is validated. See
 [Observability](observability.md#load-and-saturation-visibility--interim--logs-only).
+
+## Observability Settings
+
+The observability on/off switches are `OBS_*` environment variables, not YAML — see
+[Observability § Flag Defaults at GA](observability.md#flag-defaults-at-ga). The
+`observability:` block carries only the tunables and identity fields below. Every key has a
+default, so the block may be omitted entirely, and every value supports `${VAR}` substitution.
+
+| YAML field | Env var | Default | Description |
+|---|---|---|---|
+| `observability.metrics_bind_address` | — | `:9091` | Address the Prometheus `/metrics` listener binds when `OBS_METRICS_ENABLED` is set. Must not share the MCP `port`; config load rejects the collision. The shipped Kubernetes `networkpolicy.yaml`, `service.yaml`, and `deployment.yaml` spell this port and must move with it — see [Observability § Scraping and securing the metrics endpoint](observability.md#scraping-and-securing-the-metrics-endpoint). |
+| `observability.shutdown_drain_delay_s` | — | `10` | Seconds the server waits after flipping `/readyz` to 503 on SIGTERM, before draining in-flight requests, so the orchestrator deregisters the pod first. Raise `terminationGracePeriodSeconds` with it. |
+| `observability.saturation_threshold_ms` | — | `1000` | Queue wait above which a `broker admission slow` warning fires, when `OBS_SATURATION_EVENTS_ENABLED` is set. Sizing guidance under [When a broker is too busy](#when-a-broker-is-too-busy). |
+| `observability.otel_self_stats_interval_s` | — | `60` | Interval of the `otel self stats` log line, emitted when tracing is on but no meter provider exists — see [Observability § otel self stats](observability.md#otel-self-stats--periodic-when-metrics-are-off). |
+| `observability.progress_signal_threshold_ms` | — | `5000` | Reserved. Parsed and defaulted, but no signal consumes it yet. |
+| `observability.service_name` | — | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. |
+| `observability.service_instance_id` | — | pod name, else hostname | OTel `service.instance.id`. Set only when neither the downward-API pod name nor the hostname identifies the instance. |
+| `observability.deployment_environment` | — | none | OTel `deployment.environment.name`. Omitted from telemetry when empty. |
+| `observability.cloud_region` | — | none | OTel `cloud.region`. Omitted from telemetry when empty. |
+
+The identity fields are described under
+[Observability § Resource Attributes](observability.md#resource-attributes--implemented).
+
+```yaml
+observability:
+  metrics_bind_address: ":9091"
+  shutdown_drain_delay_s: 10
+  deployment_environment: "production"
+  cloud_region: "us-east-1"
+```

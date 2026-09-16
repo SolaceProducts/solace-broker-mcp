@@ -16,6 +16,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Kubernetes manifests now make `/metrics` scrapeable and restricted on day one
+  (SOL-152424, Story 32). `service.yaml` and `deployment.yaml` gain a named `metrics` port
+  (`:9091`); a new `networkpolicy.yaml` applies with the directory and admits `:9091` only from
+  the `monitoring` namespace, leaving `:9090` and every egress untouched; and a new
+  `servicemonitor.yaml.example` (Prometheus Operator, 15s interval / 10s timeout) is `.example`
+  because the CRD is not on every cluster and one missing kind fails the whole
+  `kubectl apply -f deploy/kubernetes/`. `OBS_METRICS_ENABLED` is **not** flipped: it stays off
+  per the door-closing policy and ships as a commented env entry. The policy is ingress-only on
+  purpose — listing `Egress` would default-deny brokers, IdP, and DNS, and NetworkPolicies are
+  additive, so an allow here could not override a customer's default-deny anyway — so the OTLP
+  egress rule ships as a commented template to add to *your* egress policy. A new
+  `docs/observability.md` section, "Scraping and securing the metrics endpoint", covers the two
+  ways a correct ServiceMonitor is silently never scraped (kube-prometheus-stack's `release:`
+  label and `serviceMonitorNamespaceSelector`), the `prometheus.io/*` annotation fallback
+  without the Operator, the fallbacks where the CNI does not enforce NetworkPolicy, that
+  exemplar storage is a Prometheus-object setting no ServiceMonitor can supply, that a
+  sidecar enforcing mTLS refuses the plaintext scrape unless `:9091` is exempted, and that the
+  policy's ports must move with `metrics_bind_address` and the server `port` — a port it does
+  not list is denied, not merely unprotected. `docs/configuration.md` gains an "Observability
+  Settings" section documenting the `observability:` YAML block, which had no reference entry
+  before (`metrics_bind_address` appeared only in this changelog), and the example configs
+  carry it commented. Two limits on the policy are stated rather than implied: enforcement is a
+  cluster-level CNI feature that is off by default on GKE, AKS, and EKS, so an accepted policy
+  object is not an enforced boundary; and because NetworkPolicies are additive with no deny
+  rule, another policy selecting these pods can re-open `:9091` regardless of this one. A
+  per-platform enforcement table and the `curl`-from-outside check that settles it are in the
+  same section. Three tests pin the manifests: ports across the ConfigMap, Deployment, Service,
+  and policy against `defaults.DefaultPort` and `defaults.DefaultMetricsBindAddress`; the
+  policy's ingress-only shape, its pod selector, and the `monitoring` namespace selector on the
+  metrics rule (an `ipBlock` peer or a typo'd namespace fails the build); and
+  `servicemonitor.yaml.example` against the Service port name, labels, path, and scrape timings
+  it depends on. CI validates `deploy/kubernetes/` with kubeconform in strict mode as an
+  advisory `Kubernetes manifests valid` check, kept off the required build job because its
+  ServiceMonitor pass fetches a third-party CRD schema — pinned to a catalog commit rather than
+  a branch — which should not be able to fail an unrelated PR. The `.example` files are copied
+  under their real extension first, since kubeconform ignores that suffix silently even when
+  passed by path; `ingress.yaml.example` had never been validated before.
 - The first time a hop-2 exchanger applies `token_expiry_fallback`, the server logs one INFO `broker OAuth token expiry fallback supplied a lifetime` with `expiry_fallback`. Later uses on that exchanger stay on Debug `used_fallback`. Production constructs one exchanger per process. Tracked under SOL-154334.
 - New `mcp_token_exchange_circuit_breaker_state{breaker,state}` one-hot gauge exposes each process's materialized IdP token-exchange breaker state for alerting (`metrics_schema` 1.6→1.7). It is absent when Hop-2, metrics, or the breaker is disabled. Tracked under SOL-152284.
 - OAuth startup now logs one complete Protected Resource Metadata registration snapshot under `registered OAuth protected resource metadata endpoint`, including the advertised resource, sanitized `issuers`, supported scopes and bearer methods, the 401 `resource_metadata` URL, and every local PRM path. This gives operators a first troubleshooting check for OAuth discovery without changing the PRM document, `WWW-Authenticate` header, or registered routes; static and disabled modes emit no such line. `docs/authentication.md` documents the grep and field map. The issuer field is deliberately named `issuers`, not `authorization_servers`, because the logging redaction safety net treats keys containing `authorization` as credential-bearing. Tracked under SOL-154210.

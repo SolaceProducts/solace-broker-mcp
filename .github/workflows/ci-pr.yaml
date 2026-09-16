@@ -307,6 +307,82 @@ jobs:
   # request, before a tag ever exists, rather than only at release time. It
   # also doesn't depend on release.yml's matrix leg names at all, so it can't
   # go quiet just because a leg is renamed or reordered there.
+  # Validates the example Kubernetes manifests in deploy/kubernetes/ against the
+  # upstream API schemas. `kubectl apply` reports success for a manifest full of
+  # misspelt keys — the API server silently drops fields it does not know — so
+  # -strict is the point of this check, not a nicety.
+  #
+  # DELIBERATELY NOT IN build-and-test.yml's required `build` job, and this is
+  # the whole reason it is a separate job: the ServiceMonitor pass reaches a
+  # third-party schema catalog over the network, and a rate limit or outage
+  # there would otherwise fail a required context on every open pull request —
+  # including one that never touches a manifest. Here a catalog problem reports
+  # against the change that can actually be caused by a manifest edit and
+  # blocks nothing else. Registering this as a required context is a repo-admin
+  # ruleset action (.github/ADMIN_SETUP.md), the same as every other job here.
+  #
+  # The manifests are copy-and-edit examples, not a shipped product surface, so
+  # an advisory verdict is the right weight for them.
+  manifests:
+    name: Kubernetes manifests valid
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+      - name: Validate deploy/kubernetes/ with kubeconform
+        # go install pins the module version and the Go checksum database
+        # verifies the download, so the binary needs no separate SHA check.
+        #
+        # Two passes, because kubeconform validates .yaml/.yml/.json only. A
+        # .example file is not merely skipped by the directory walk: passed by
+        # path it is ignored with a zero-resource summary and exit 0 — a
+        # vacuous pass. The second pass therefore copies the .example files
+        # under their real extension. `nullglob` keeps that loop from passing a
+        # literal unmatched glob to cp if the last .example file is ever removed.
+        #
+        # Only the second pass needs the CRD catalog, and only for
+        # servicemonitor.yaml.example (kind: ServiceMonitor,
+        # monitoring.coreos.com). Everything else — networkpolicy.yaml included,
+        # which is the security-bearing manifest here — validates against
+        # kubeconform's own bundled schemas, pinned by the @v0.6.7 module
+        # version and untouched by the catalog. So the blast radius of a
+        # compromised or altered catalog entry is a malformed *ServiceMonitor*
+        # slipping through, not a broken NetworkPolicy.
+        #
+        # The catalog is pinned to a commit SHA rather than `main` so the
+        # verdict is reproducible and a catalog change cannot alter it
+        # silently. Bump the SHA deliberately when a newer CRD schema is needed.
+        env:
+          # datreeio/CRDs-catalog @ 2026-09-08. Pinned, not `main`.
+          CRD_CATALOG_SHA: ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
+        run: |
+          set -euo pipefail
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+
+          kubeconform -strict -summary deploy/kubernetes/
+
+          shopt -s nullglob
+          examples=$(mktemp -d)
+          for f in deploy/kubernetes/*.yaml.example; do
+            cp "$f" "$examples/$(basename "$f" .example)"
+          done
+          if [ -z "$(ls -A "$examples")" ]; then
+            echo "::error::no .yaml.example manifests found in deploy/kubernetes/ — this pass validated nothing"
+            exit 1
+          fi
+          kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRD_CATALOG_SHA}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
+            "$examples"
+
   smoke_test_selftest:
     name: Smoke-test script self-test
     runs-on: ubuntu-latest
