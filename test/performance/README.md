@@ -552,7 +552,7 @@ Launching the server by hand instead puts gctrace on your terminal and nowhere
 `summary.sh` reads: it looks for the lines in the run directory's `mcp.log`,
 which only a runner produces.
 
-Only `gctrace=<1-9>` survives — `gctrace=0` is dropped too, because it passes
+Only a complete `gctrace=<n>` token survives — `gctrace=0` is dropped too, because it passes
 a naive filter, produces no output at all, and would cost you a ten-hour
 soak's live-heap series you believed you had captured. `GODEBUG` is a general knob and
 the runner captures the server's stderr into an archived `mcp.log`, so
@@ -666,6 +666,10 @@ Five caveats, because the number is a projection and not a prediction:
   `mcp.log` at roughly 190 B per GC cycle — about 300 MB across the 1.6M cycles
   a ten-hour soak logged. The projection covers the server's own log lines and
   says so; add it yourself when sizing a volume for a run with gctrace on.
+* **A full volume is refused, not waved through.** Free space the harness
+  could not *read* is `unknown` and never refuses — but a `df` that reports
+  **zero** is a reading, not a failure to read, and it is the most emphatic
+  refusal there is.
 * **An unestablished level never refuses.** If the level could not be read from
   the server's own `config loaded` line or from the config the run used, the
   report says it cannot project and the run proceeds. Blocking a campaign over
@@ -765,7 +769,11 @@ between the two reads) — `NA` rather than `0`, because "no descriptors" and "w
 could not look" are different facts and a `0` in a run record would be believed.
 
 `mem-loadgen.csv` is the same file, same columns, same sampler, taken against
-the load generator's own process by `run-loadgen.sh`.
+the load generator's own process by `run-loadgen.sh`. It samples until the
+generator exits rather than for a fixed window: this sampler starts when
+`loadgen` launches, but `loadgen`'s own clock starts only once `dialAll` has
+every session connected, so at high client counts a fixed window ends before
+the load does.
 
 It overlaps `loadgen-metrics.csv`'s `lg_res_kb` column, which `loadgen-sampler.sh`
 has read from `/proc/<pid>/status` at 5s intervals for as long as it has
@@ -781,7 +789,9 @@ taken **after the dial ramp** — the first 30 seconds plus any `WARMUP`, since
 `memsampler` starts as `loadgen` launches and its opening samples are taken
 mid-`dialAll`. Measured from those, a generator that allocates its sessions
 and then never moves reads as a +400 MB leak. `LG_DRIFT_SETTLE_SECS` overrides the margin — it is read by `summary.sh`, not
-by the runners, so set it on the summary invocation. The line names the sample
+by the runners, so set it on the summary invocation. It must be a whole number
+of seconds; anything else refuses the drift and says so, rather than silently
+moving the baseline. The line names the sample
 times both ends came from and how much it skipped. A `stats_warmup` the record
 carries but `summary.sh` cannot resolve refuses the drift rather than falling
 back to the bare margin, which would measure from inside the warm-up.

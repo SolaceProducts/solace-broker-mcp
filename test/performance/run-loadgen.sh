@@ -553,12 +553,16 @@ sampler_pid=$!
 # wrapper outside this repo because a 5s percentage series on a 30 GB box is
 # too coarse to separate a climb from noise.
 #
-# sample_secs already carries the same tail buffer the other samplers get
-# (load_secs + 10, resolved once above), so it is used as-is: adding another
-# +10 here would give this one sampler a window twice as long as every other
-# and make the next reader size theirs off a number that was never symmetric.
+# `-duration 0s` — run until the generator's pid disappears, which is what
+# that value means (see the note above). A fixed window cannot be right here:
+# this sampler starts as loadgen launches, but loadgen's own clock does not
+# start until dialAll has every session connected. At the client counts this
+# suite advertises that dial phase can exceed the sampler's tail buffer, and
+# the CSV then stops before the load does — losing the end of exactly the
+# series whose drift is the point. cleanup() kills it on every path, so the
+# open-ended window cannot outlive the run.
 echo "== 5b. memsampler alongside loadgen (pid=$lg_pid)"
-"$bin/memsampler" -pid "$lg_pid" -interval 1s -duration "${sample_secs}s" \
+"$bin/memsampler" -pid "$lg_pid" -interval 1s -duration 0s \
   -out "$runs/mem-loadgen.csv" >"$runs/memsampler-loadgen.log" 2>&1 &
 lg_mem_pid=$!
 

@@ -27,6 +27,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 bin="$here/bin"
+# Sourced for perf_filter_godebug alone. This script otherwise keeps its own
+# helpers (see wait_for_http below) — lib.sh defines functions and two
+# constants and nothing else at load time, so there is nothing to collide with.
+# shellcheck source=lib.sh
+source "$here/lib.sh"
 config="${CONFIG_FILE:-$repo_root/broker-config.yaml}"
 broker_alias="${BROKER_ALIAS:-my-broker}"
 vpn="${VPN:-default}"

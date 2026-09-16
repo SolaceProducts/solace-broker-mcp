@@ -75,6 +75,13 @@ window_from_record() {
   ' "$1"
 }
 
+# Sourced for perf_duration_secs. The warm-up conversion below was a second
+# copy of it, and that copy used an exact float comparison — which
+# perf_duration_secs' own comment warns rejects a legal `1.1h`, because
+# 1.1 * 3600 is 3960.0000000000005. No function names collide.
+# shellcheck source=lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
 load_start="" load_end="" window_source="" window_kind=""
 # The per-process lines carry this, so a figure is never labelled as covering
 # the load phase when the window it was computed over deliberately excludes
@@ -452,6 +459,11 @@ if [[ -r "$mem_csv" ]]; then
     # that never happened.
     NF == 0 || $0 ~ /^[ \t\r]*$/ { next }
     NF != hdr_nf { short++; next }
+    # The header rule strips \r; the row fields were not. A CRLF file with
+    # rss_kb in the LAST column therefore gave $rc a trailing carriage
+    # return, failed the digit test on every row, and reported (no samples)
+    # for good data — the Windows round-trip this reader claims to handle.
+    { for (i = 1; i <= NF; i++) gsub(/\r$/, "", $i) }
     rc && $rc ~ /^[0-9]+$/ {
       m++
       rss = $rc + 0
@@ -508,6 +520,14 @@ fi
 # window on stats_start_epoch the way the CPU roll-up does, which is a change
 # to the CSV schema every archived run is read with.
 lg_settle_secs=${LG_DRIFT_SETTLE_SECS:-30}
+# Validated, because it is copied into an awk numeric comparison. `banana`
+# string-compares against t_sec, `-1` collided with the sentinel below, and
+# `1.5` silently moved the baseline — each producing the fabricated drift this
+# block exists to refuse, while the report claimed a clean skip.
+if [[ ! "$lg_settle_secs" =~ ^[0-9]+$ ]]; then
+  echo "LG_DRIFT_SETTLE_SECS='$LG_DRIFT_SETTLE_SECS' is not a whole number of seconds" >&2
+  lg_settle_secs=-2
+fi
 for rec in "$runs"/run-record.*; do
   [[ -r "$rec" ]] || continue
   lg_warm=$(awk -F= '/^stats_warmup=/ {print $2; exit}' "$rec")
@@ -519,15 +539,8 @@ for rec in "$runs"/run-record.*; do
   # the settle silently stayed at its default, and the baseline was taken
   # inside the warm-up ramp, which is the wrong-sign leak verdict this skip
   # exists to prevent.
-  lg_warm_secs=$(awk -v v="$lg_warm" 'BEGIN {
-    if      (v ~ /^[0-9]+(\.[0-9]+)?s$/) { sub(/s$/, "", v); x = v + 0 }
-    else if (v ~ /^[0-9]+(\.[0-9]+)?m$/) { sub(/m$/, "", v); x = v * 60 }
-    else if (v ~ /^[0-9]+(\.[0-9]+)?h$/) { sub(/h$/, "", v); x = v * 3600 }
-    else exit 1
-    if (x != int(x)) exit 1
-    printf "%d", x
-  }') || lg_warm_secs=""
-  if [[ -n "$lg_warm_secs" ]]; then
+  lg_warm_secs=$(perf_duration_secs "$lg_warm" 2>/dev/null) || lg_warm_secs=""
+  if [[ -n "$lg_warm_secs" && "$lg_settle_secs" != -2 ]]; then
     lg_settle_secs=$(( lg_settle_secs + lg_warm_secs ))
   else
     # Refused, not defaulted. Falling back to the bare 30s would measure the
@@ -563,6 +576,11 @@ if [[ -r "$lg_mem_csv" ]]; then
     # that never happened.
     NF == 0 || $0 ~ /^[ \t\r]*$/ { next }
     NF != hdr_nf { short++; next }
+    # The header rule strips \r; the row fields were not. A CRLF file with
+    # rss_kb in the LAST column therefore gave $rc a trailing carriage
+    # return, failed the digit test on every row, and reported (no samples)
+    # for good data — the Windows round-trip this reader claims to handle.
+    { for (i = 1; i <= NF; i++) gsub(/\r$/, "", $i) }
     rc && $rc ~ /^[0-9]+$/ {
       m++
       rss = $rc + 0
@@ -578,7 +596,11 @@ if [[ -r "$lg_mem_csv" ]]; then
       # generator, which is the one number this series exists to produce.
       # t_sec is seconds since the sampler started, within a second of the
       # generator starting.
-      if (tc && $tc + 0 < settle) { skipped++; next }
+      # Without a usable t_sec there is no way to locate the ramp, and awk
+      # coerces a missing or non-numeric column to 0 — accepting every row
+      # while the line below still claimed the opening seconds were skipped.
+      if (!tc || $tc !~ /^[0-9]+(\.[0-9]+)?$/) { no_tsec = 1; next }
+      if ($tc + 0 < settle) { skipped++; next }
       if (fn < 5) { first[++fn] = rss; if (first_t == "") first_t = $tc + 0 }
       last[(++ln - 1) % 5 + 1] = rss
       last_t = $tc + 0
@@ -598,7 +620,12 @@ if [[ -r "$lg_mem_csv" ]]; then
       # which reported drift=+0.0 MB for a generator climbing 97.7 -> 293.0 MB.
       # A refused number beats a wrong one: a terminated run, a dial failure or
       # a short smoke DURATION all land here.
-      if (settle < 0) {
+      if (no_tsec) {
+        print "  lg    rss:  drift=n/a   (no usable t_sec column, so the ramp-up cannot be located)"
+      } else if (settle == -2) {
+        print "  lg    rss:  drift=n/a   (LG_DRIFT_SETTLE_SECS is not a whole number of"
+        print "              seconds, so the ramp-up to skip is unknown — see stderr)"
+      } else if (settle == -1) {
         print "  lg    rss:  drift=n/a   (stats_warmup in the run record could not be resolved,"
         print "              so the ramp-up to skip is unknown — see the warning on stderr)"
       } else if (ln < fn + 5) {
@@ -626,7 +653,10 @@ fi
 # section or a zero would read like a measurement of a server that never
 # reported one.
 gc_log="$runs/mcp.log"
-if [[ -r "$gc_log" ]] && grep -qE '^gc [0-9]+ @[0-9.]+s' "$gc_log"; then
+# Unanchored, matching the parser. Anchored at ^, a capture whose gctrace
+# lines were all prefixed by an interleaved slog record skipped the whole
+# section and reported no loss at all.
+if [[ -r "$gc_log" ]] && grep -qE 'gc [0-9]+ @[0-9.]+s' "$gc_log"; then
   # gctrace stamps @<seconds since program start>, so placing a cycle on the
   # wall clock needs the moment the process began. The runners stamp it; a run
   # directory from before they did cannot be windowed.

@@ -1148,6 +1148,18 @@ if [[ -n "$self_cg_mem" ]]; then
     "$(field cgroup_memory_max)" "none"
   eq "and the binding level is none too" \
     "$(field cgroup_memory_max_from)" "none"
+  # Unread is not uncapped. A torn write, or a read racing a cgroup teardown,
+  # leaves the limit unestablished — and `none` there archives a capped arm as
+  # an uncapped one, leaving a later OOM unexplained.
+  echo "garbage" >"$mem_cgroot$self_cg_mem/memory.max"
+  rec="$tmp/rec-memmax-unread"
+  : >"$rec"
+  PERF_CGROUP_ROOT="$mem_cgroot" perf_record_runtime_mem "$rec" $$
+  eq "a memory.max that could not be parsed reads 'unknown', not 'none'" \
+    "$(field cgroup_memory_max)" "unknown"
+  eq "and its binding level says so too" \
+    "$(field cgroup_memory_max_from)" "unknown"
+  rm -f "$mem_cgroot$self_cg_mem/memory.max"
   echo "536870912" >"$mem_cgroot$self_cg_mem/memory.max"
   rec="$tmp/rec-memmax"
   : >"$rec"
@@ -1241,6 +1253,20 @@ eq "and a ten-hour run at it is refused, not admitted as unprojectable" \
   "$(perf_project_log_volume "$(field log_level)" 36000 30000000000 | cut -d' ' -f2)" "over"
 
 # A top-level key must not be confused with the same key nested under semp:.
+# A key at column 0 the narrow reader cannot extract is not a server default:
+# the value IS written down. perf_record_admission calls this
+# config-file-unparsed and warns; this has to say the same thing, or the
+# projection trusts a provenance label that is a lie.
+printf '%s\n' 'log_level:' >"$lv/unparsable.yaml"
+rec="$tmp/rec-loglevel-unparsed"
+: >"$rec"
+perf_record_log_level "$rec" "$lv/absent.log" "$lv/unparsable.yaml" 2>/dev/null
+eq "a log_level present but unreadable is not called a server default" \
+  "$(field log_level_source)" "config-file-unparsed"
+eq "and its value is unknown rather than guessed" "$(field log_level)" "unknown"
+unparsed_warn=$(perf_record_log_level "$tmp/rec-lv-warn" "$lv/absent.log" "$lv/unparsable.yaml" 2>&1 >/dev/null)
+contains "and the parse failure is reported on stderr" "$unparsed_warn" "could not parse it"
+
 printf '%s\n' 'semp:' '  log_level: warn' >"$lv/nested.yaml"
 rec="$tmp/rec-loglevel-nested"
 : >"$rec"
@@ -1294,8 +1320,15 @@ eq "a level this table has never heard of is treated the same way" \
   "$(perf_project_log_volume trace 36000 $((30 * GB)) | cut -d' ' -f2)" "unknown"
 
 # Free space the caller could not read must not divide by zero or read as full.
-eq "unreadable free space cannot be compared against" \
-  "$(perf_project_log_volume info 36000 0 | cut -d' ' -f2)" "unknown"
+# Zero is a reading, not a failure to read: the volume is full, which is the
+# most emphatic `over` there is. This assertion previously pinned `unknown`,
+# so the one state the guard exists for was the one it waved through.
+eq "a full volume is refused, not called unreadable" \
+  "$(perf_project_log_volume info 36000 0 | cut -d' ' -f2)" "over"
+eq "free space that could not be READ is still unknown" \
+  "$(perf_project_log_volume info 36000 unreadable | cut -d' ' -f2)" "unknown"
+eq "and a leading zero is decimal, not octal" \
+  "$(perf_project_log_volume info 3600 08 | cut -d' ' -f2)" "over"
 eq "a negative duration projects nothing rather than a negative volume" \
   "$(perf_project_log_volume info -60 $((30 * GB)) | cut -d' ' -f1)" "0"
 eq "and says nothing was projected rather than labelling 0 B as measured" \
@@ -1785,6 +1818,10 @@ wired() { # <name> <file> <needle>
 }
 wired "run-loadgen.sh starts memsampler against the generator at 1s resolution" \
   run-loadgen.sh '"$bin/memsampler" -pid "$lg_pid" -interval 1s'
+# Open-ended, not a fixed window: loadgen's clock starts only once dialAll
+# finishes, so a fixed window can stop before the load does.
+wired "and lets it run until the generator exits" \
+  run-loadgen.sh '-interval 1s -duration 0s'
 wired "and writes it where summary.sh looks" \
   run-loadgen.sh 'mem-loadgen.csv'
 wired "and kills it on the way out, like every other sampler" \
@@ -1797,6 +1834,34 @@ wired "and records the binary it executed" \
 # lines BELOW the mock-semp launch it was supposed to precede — and the
 # helper's own comment admitted a grep cannot see placement, which is exactly
 # the excuse that let it through. This compares line numbers instead.
+# Position AND resolution. The line-number check below could not see that
+# regen-golden.sh never sourced lib.sh, so the call it greps for was an
+# undefined command: exit 127 under `set -e`, before the server started, with
+# the assertion green. A grep proves text exists; it cannot prove the shell can
+# run it.
+#
+# Static on purpose. The first version of this check ran `type
+# perf_filter_godebug` in a subshell — which inherited the function from THIS
+# file's own `source lib.sh`, so it passed no matter what the script did. A
+# check whose environment differs from the thing it checks is worse than no
+# check. So: the function must be defined, or lib.sh sourced, above the call.
+resolves_filter() { # <name> <file>
+  local f=$here/$2 call src
+  call=$( { grep -n '^perf_filter_godebug$' "$f" || true; } | head -1 | cut -d: -f1)
+  if [[ -z "$call" ]]; then
+    bad "$1 (no perf_filter_godebug call in $2)"
+    return
+  fi
+  src=$( { head -n "$call" "$f" \
+           | grep -nE '^[[:space:]]*(source|\.)[[:space:]]+.*lib\.sh|^perf_filter_godebug\(\)' \
+           || true; } | head -1 | cut -d: -f1)
+  if [[ -n "$src" ]]; then
+    ok "$1"
+  else
+    bad "$1 ($2 calls perf_filter_godebug at line $call without sourcing lib.sh first — exit 127 under set -e)"
+  fi
+}
+
 filters_first() { # <name> <file>
   local f=$here/$2 filt first
   # `|| true` on both, and it is not decoration: this file runs under
@@ -1827,6 +1892,11 @@ filters_first "and run-loadgen.sh, which archives logs from binaries that send A
 # The one script that launches against a REAL broker with real credentials and
 # captures the server's stderr into an archived log.
 filters_first "and regen-golden.sh, which runs against the real appliance" regen-golden.sh
+
+resolves_filter "run.sh can actually call the filter it names" run.sh
+resolves_filter "run-mcp.sh too" run-mcp.sh
+resolves_filter "run-loadgen.sh too" run-loadgen.sh
+resolves_filter "and regen-golden.sh, which keeps its own helpers and had to source lib.sh for this" regen-golden.sh
 wired "run.sh records the memory entitlement too, not just the CPU one" \
   run.sh 'perf_record_runtime_mem "$mcp_record" "$mcp_pid"'
 wired "and stamps the gctrace anchor" \
@@ -1848,6 +1918,13 @@ echo "== perf_filter_godebug keeps only the setting this harness asks for"
   eq "gctrace=0 is dropped as the no-op it is" "${GODEBUG:-<unset>}" "<unset>" )
 ( GODEBUG="gctrace=2"; perf_filter_godebug 2>/dev/null
   eq "but a higher gctrace level is kept" "${GODEBUG:-<unset>}" "gctrace=2" )
+# A prefix match kept gctrace=1junk, which the runtime ignores — so the value
+# survived, no gctrace was emitted, and the report implied a capture that
+# never ran.
+( GODEBUG="gctrace=1junk"; perf_filter_godebug 2>/dev/null
+  eq "a gctrace value with trailing junk is not a gctrace value" "${GODEBUG:-<unset>}" "<unset>" )
+( GODEBUG="gctrace=10"; perf_filter_godebug 2>/dev/null
+  eq "a multi-digit level still survives" "${GODEBUG:-<unset>}" "gctrace=10" )
 ( unset GODEBUG; perf_filter_godebug 2>/dev/null
   eq "an unset GODEBUG stays unset" "${GODEBUG:-<unset>}" "<unset>" )
 godebug_warn=$( GODEBUG="gctrace=1,http2debug=2"; perf_filter_godebug 2>&1 >/dev/null )
@@ -1953,6 +2030,86 @@ out=$("$here/summary.sh" "$gcwarm" 2>/dev/null)
 contains "an unresolvable warm-up refuses the drift rather than defaulting" \
   "$out" "drift=n/a"
 contains "and says the ramp-up could not be sized" "$out" "could not be resolved"
+
+echo "== the CSV readers survive a Windows round-trip and a missing time column"
+
+# The header rule stripped \r; the row fields did not. With rss_kb in the LAST
+# column every row failed the digit test and the reader said (no samples) for
+# perfectly good data — the exact case its own comment claims to handle.
+crlf="$tmp/run-crlf"
+mkdir -p "$crlf"
+printf 't_sec,wall_ts,vm_kb,threads,open_fds,rss_kb\r\n' >"$crlf/mem-loadgen.csv"
+for i in $(seq 0 39); do
+  printf '%d,10:00:00,900000,12,40,%d\r\n' "$i" "$(( 100000 + i * 5000 ))" >>"$crlf/mem-loadgen.csv"
+done
+out=$(LG_DRIFT_SETTLE_SECS=0 "$here/summary.sh" "$crlf")
+lacks "a CRLF file with rss_kb last is not reported as empty" "$out" "(no samples)"
+contains "its samples are all counted" "$out" "(40 samples)"
+
+# Same for the MCP series, whose rss_kb is not last — so this pins the strip
+# rather than the column order.
+printf 't_sec,wall_ts,rss_kb,vm_kb,threads,open_fds\r\n' >"$crlf/mem.csv"
+printf '0,10:00:00,178000,900000,14,52\r\n1,10:00:01,179000,900000,14,52\r\n' >>"$crlf/mem.csv"
+out=$("$here/summary.sh" "$crlf")
+contains "and the MCP series reads a CRLF file too" "$out" "(2 samples)"
+
+# Without a usable t_sec the ramp cannot be located, and awk would coerce the
+# missing column to 0 — accepting every row while still claiming a skip.
+notsec="$tmp/run-no-tsec"
+mkdir -p "$notsec"
+{
+  echo "wall_ts,rss_kb,vm_kb,threads,open_fds"
+  for i in $(seq 0 39); do echo "10:00:00,$(( 100000 + i * 5000 )),900000,12,40"; done
+} >"$notsec/mem-loadgen.csv"
+out=$("$here/summary.sh" "$notsec")
+contains "a series with no t_sec refuses the drift" "$out" "drift=n/a"
+contains "and names the missing column" "$out" "no usable t_sec"
+lacks "rather than claiming a skip it could not apply" "$out" "skipped as ramp-up"
+
+echo "== the settle knob is validated, and blamed when it is wrong"
+
+# banana string-compared against t_sec; -1 collided with the record sentinel.
+# Either way the report blamed the run record for the operator's typo.
+for bad_settle in banana -1 1.5; do
+  out=$(LG_DRIFT_SETTLE_SECS="$bad_settle" "$here/summary.sh" "$crlf" 2>/dev/null)
+  contains "LG_DRIFT_SETTLE_SECS=$bad_settle refuses the drift" "$out" "drift=n/a"
+  contains "and names the env var, not the run record ($bad_settle)" \
+    "$out" "LG_DRIFT_SETTLE_SECS is not a whole number"
+done
+warn_out=$(LG_DRIFT_SETTLE_SECS=banana "$here/summary.sh" "$crlf" 2>&1 >/dev/null)
+contains "and says so on stderr" "$warn_out" "LG_DRIFT_SETTLE_SECS='banana'"
+
+echo "== a fractional warm-up the runners accept is accepted here too"
+
+# perf_duration_secs accepts 1.1h; the duplicated conversion this file used to
+# exercise rejected it, because 1.1 * 3600 is 3960.0000000000005.
+warm="$tmp/run-warm-11h"
+mkdir -p "$warm"
+{
+  echo "t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds"
+  for i in $(seq 0 4000 4000); do :; done
+  for i in $(seq 0 3999); do echo "$i,10:00:00,$(( i < 3960 ? 100000 + i * 100 : 500000 )),900000,12,40"; done
+} >"$warm/mem-loadgen.csv"
+{ echo "record_version=1"; echo "role=loadgen"; echo "stats_warmup=1.1h"; } >"$warm/run-record.loadgen"
+out=$("$here/summary.sh" "$warm" 2>/dev/null)
+contains "a 1.1h warm-up resolves to 3960s plus the 30s margin" "$out" "first 3990s skipped as ramp-up"
+
+echo "== the gctrace probe agrees with the gctrace parser"
+
+# Anchored at ^, a capture whose every gctrace line was prefixed by an
+# interleaved slog record skipped the entire section and reported no loss.
+allpre="$tmp/run-all-prefixed"
+mkdir -p "$allpre"
+{
+  echo '{"msg":"config loaded","log_level":"info"}'
+  for t in 10 20 30; do
+    printf '{"time":"x","msg":"tool call"}gc %d @%d.000s 0%%: x, y, 58->56->52 MB, 60 MB goal, 8 P\n' "$t" "$t"
+  done
+} >"$allpre/mcp.log"
+{ echo "record_version=1"; echo "role=mcp"; } >"$allpre/run-record.mcp"
+out=$("$here/summary.sh" "$allpre")
+contains "a wholly interleaved capture still reports the section" "$out" "gctrace"
+contains "and reports the lines it could not read" "$out" "unparsable"
 
 echo
 if (( skip )); then

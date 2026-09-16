@@ -356,6 +356,9 @@ cleanup() {
       # never began.
       perf_record_kv "$mcp_record" run_refused "$run_refused"
       perf_record_kv "$mcp_record" fd_peak_source refused
+      # This runner writes both records. Marking only the MCP one leaves a
+      # consumer of the loadgen record unable to tell that no load ever ran.
+      perf_record_kv "$lg_record" run_refused "$run_refused"
     else
       perf_record_kv "$mcp_record" run_terminated true
       perf_record_kv "$mcp_record" fd_peak_source partial

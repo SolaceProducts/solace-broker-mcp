@@ -631,7 +631,19 @@ perf_record_log_level() {
     [[ -r "$config_used" ]] && level=$(perf_yaml_top_value "$config_used" log_level)
   else
     [[ -r "$config_used" ]] && level=$(perf_yaml_top_value "$config_used" log_level)
-    [[ -n "$level" ]] && source=config-file
+    if [[ -n "$level" ]]; then
+      source=config-file
+    elif [[ -r "$config_used" ]] && grep -qE '^log_level[[:space:]]*:' "$config_used"; then
+      # The key is in the file but the narrow reader could not extract it — a
+      # shape it does not handle (flow style, an anchor, a value on the next
+      # line). This is the case perf_record_admission calls
+      # `config-file-unparsed`, and for its stated reason: the value IS
+      # written down, we just failed to read it, and
+      # `unreported-server-default` would be a lie about provenance that the
+      # volume projection then trusts.
+      echo "   WARNING: log_level is set in $(basename "$config_used") but lib.sh could not parse it" >&2
+      source=config-file-unparsed
+    fi
   fi
 
   if [[ -z "$level" ]]; then
@@ -751,13 +763,22 @@ perf_project_log_volume() {
   projected=$(( rate * secs / 3600 ))
 
   # Free space the caller could not read is not "no space" and not "infinite
-  # space" — it is no answer, and there is nothing to compare against.
-  if [[ ! "$avail" =~ ^[0-9]+$ ]] || (( avail <= 0 )); then
+  # space" — it is no answer, and there is nothing to compare against. A
+  # reported ZERO is a different thing: the volume is full, which is the most
+  # emphatic `over` there is. Folding it into `unknown` meant the one state the
+  # guard exists for — no room left — was the one it waved through.
+  if [[ ! "$avail" =~ ^[0-9]+$ ]]; then
     printf '%s unknown %s\n' "$projected" "$basis"
     return 0
   fi
+  if (( 10#$avail == 0 )); then
+    printf '%s over %s\n' "$projected" "$basis"
+    return 0
+  fi
 
-  if (( projected * 100 > avail * PERF_LOG_VOLUME_MAX_FRACTION )); then
+  # 10# on avail: the regex above admits a leading zero, which bash arithmetic
+  # would otherwise read as octal — `08` errors, `010` is eight.
+  if (( projected * 100 > 10#$avail * PERF_LOG_VOLUME_MAX_FRACTION )); then
     printf '%s over %s\n' "$projected" "$basis"
   else
     printf '%s ok %s\n' "$projected" "$basis"
@@ -892,7 +913,10 @@ perf_guard_log_volume() {
 perf_filter_godebug() {
   [[ -z "${GODEBUG:-}" ]] && return 0
   local kept
-  kept=$(printf '%s' "$GODEBUG" | tr ',' '\n' | grep -E '^gctrace=[1-9]' | paste -sd, -) || true
+  # Anchored at both ends: `^gctrace=[1-9]` alone also matched `gctrace=1junk`,
+  # which the runtime ignores — so the value survived the filter, no gctrace
+  # was emitted, and the report implied a live-heap capture that never ran.
+  kept=$(printf '%s' "$GODEBUG" | tr ',' '\n' | grep -E '^gctrace=[1-9][0-9]*$' | paste -sd, -) || true
   if [[ "$kept" != "$GODEBUG" ]]; then
     echo "   WARNING: GODEBUG reduced to '${kept:-<empty>}' — this runner captures child" >&2
     echo "            stderr into archived logs, and non-gctrace values (http2debug) write" >&2
@@ -1184,7 +1208,7 @@ perf_record_runtime_cpu() {
 # line it cannot parse. No derived value is echoed: bytes are bytes, and a
 # reader who wants MiB can divide. The caller labels the absence.
 perf_cgroup_binding_memory() {
-  local root=${1%/} dir best="" best_dir="" raw
+  local root=${1%/} dir best="" best_dir="" raw unread=
   [[ -z "$root" ]] && root=/
   dir="$root${2%/}"
   while :; do
@@ -1197,6 +1221,12 @@ perf_cgroup_binding_memory() {
       # A trailing newline is already stripped by the substitution; what is
       # left must be all digits. `max`, an empty file and a partial write all
       # fail this and are skipped.
+      # `max` is the v2 spelling of "no limit" and is a real answer. Anything
+      # else that is not a byte count is a file we could not read — a torn
+      # write, or a read that raced a teardown — and that is not the same as
+      # finding no limit. Tracked, so the caller can keep `unknown` and `none`
+      # apart the way the record requires.
+      if [[ "$raw" != max && ! "$raw" =~ ^[0-9]+$ ]]; then unread=1; fi
       if [[ "$raw" =~ ^[0-9]+$ ]]; then
         if [[ -z "$best" ]] || (( raw < best )); then
           best=$raw
@@ -1209,7 +1239,15 @@ perf_cgroup_binding_memory() {
     [[ "$dir" == "$root" || "$dir" == "/" ]] && break
     dir=$(dirname "$dir")
   done
-  [[ -n "$best" ]] && printf '%s %s\n' "$best_dir" "$best"
+  if [[ -n "$best" ]]; then
+    printf '%s %s\n' "$best_dir" "$best"
+  elif [[ -n "$unread" ]]; then
+    # Nothing parsed, and at least one file on the path was unreadable: the
+    # limit could not be established. `none` here would claim this process is
+    # uncapped, and a soak arm that was actually capped would archive as one
+    # that was not — leaving a later OOM unexplained.
+    printf 'unknown\n'
+  fi
   return 0
 }
 
@@ -1266,6 +1304,11 @@ perf_record_runtime_mem() {
   fi
 
   binding=$(perf_cgroup_binding_memory "$cg_root" "$cg")
+  if [[ "$binding" == unknown ]]; then
+    perf_record_kv "$record" cgroup_memory_max unknown
+    perf_record_kv "$record" cgroup_memory_max_from unknown
+    return 0
+  fi
   if [[ -z "$binding" ]]; then
     # Reaching the root without finding a byte count is an answer, not a gap:
     # the v2 root cgroup sets no memory.max by design, so nothing on the path
