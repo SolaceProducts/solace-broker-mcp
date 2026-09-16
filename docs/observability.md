@@ -2096,6 +2096,10 @@ They are a convention, not an API: they do nothing unless your Prometheus config
 relabel rules that read them, as the widely copied `kubernetes-service-endpoints` example job
 does. Prometheus Operator ignores them; under the Operator the ServiceMonitor is the mechanism.
 
+Unlike the ServiceMonitor, which names the Service's `metrics` port and so follows it
+automatically, `prometheus.io/port` is a literal. If you move the listener off `:9091`, change
+this value too, or you get a target that scrapes the wrong port.
+
 #### The NetworkPolicy
 
 `networkpolicy.yaml` selects the server's pods with `policyTypes: [Ingress]` and two rules:
@@ -2108,16 +2112,24 @@ does. Prometheus Operator ignores them; under the Operator the ServiceMonitor is
    label Kubernetes (1.22+) sets on every namespace. Edit the name if your Prometheus runs
    elsewhere; add a `podSelector` beside it to narrow to the Prometheus pods.
 
-Once the pod is isolated for ingress, anything not listed is denied. Ports are numeric because
-a named port here resolves against the pod's `containerPort` names and CNI support for that
-varies.
+Once the pod is isolated for ingress, anything this policy does not list is denied. Ports are
+numeric because a named port here resolves against the pod's `containerPort` names and CNI
+support for that varies.
+
+**"Denied" means by this policy, not by the cluster.** NetworkPolicies are additive: a pod's
+allowed traffic is the union of every policy that selects it, and there is no precedence or
+deny rule to override one. So another ingress policy selecting these pods — a namespace-wide
+default, a platform-team policy, a chart you install later — can admit `:9091` from anywhere,
+and nothing in this file can stop it. Treat this policy as "we do not open the metrics port to
+the cluster", not as proof the port is closed. `kubectl get networkpolicy -A -o wide` lists
+every policy that could widen it; audit those before treating the endpoint as restricted.
 
 **The ports follow the config.** A port the policy does not list is denied outright, not merely
 unprotected, so `9091` must move with `metrics_bind_address` (and the `metrics` port in
 `service.yaml` and `deployment.yaml`), and `9090` with `port` in `configmap.yaml` (and the
 `http` containerPort). For `:9091` the symptom is a scrape that stops; for `:9090` it is the
-MCP endpoint itself. `TestShippedMetricsPortTracksDefault` pins the shipped files to the
-compiled default, so moving the default in code without the manifests fails the build.
+MCP endpoint itself. `TestShippedPortsTrackCompiledDefaults` pins all four files to the
+compiled defaults, so moving a default in code without the manifests fails the build.
 
 **Egress is deliberately not in this policy.** With `policyTypes: [Ingress]`, broker SEMP, the
 IdP, DNS, and the OTLP push are untouched. Listing `Egress` with an allow-list would
@@ -2140,11 +2152,27 @@ NetworkPolicy stays the control, or run a mesh-aware Prometheus that presents a 
 certificate. Istio's own `prometheus.io/*` annotation rewriting applies only to the annotation
 path, not to a ServiceMonitor.
 
-**When your CNI does not enforce NetworkPolicy.** Calico, Cilium, and the GKE, AKS, and EKS
-native CNIs enforce it; kind's default `kindnet` and several others accept the object and
-enforce nothing, and `kubectl get networkpolicy` looks identical either way. Verify with a
-`curl` to a pod IP on `:9091` from a pod *outside* the allowed namespace: it should be refused
-or hang. Where enforcement is unavailable the restriction has to come from elsewhere — bind the
+**Enforcement is a cluster feature, and on most managed platforms it is off until you turn it
+on.** Every cluster *accepts* a NetworkPolicy object, because the API is built in; only the CNI
+enforces one, and `kubectl get networkpolicy` looks identical either way. **An accepted policy
+is not an enforced boundary.** On the managed platforms the feature is generally a
+cluster-creation choice that cannot be flipped on a running cluster:
+
+| Platform | Enforces NetworkPolicy? |
+|---|---|
+| Calico, Cilium (self-managed) | Yes, that is what they are for |
+| GKE | Only with Dataplane V2, or the legacy `--enable-network-policy` add-on. Neither is the default on every cluster |
+| AKS | Only when a network policy engine (`azure`, `calico`, or `cilium`) was selected at cluster creation |
+| EKS | Only with the VPC CNI's network-policy feature enabled (v1.14+), or Calico/Cilium installed alongside. The VPC CNI does **not** enforce by default |
+| OpenShift | Yes. OVN-Kubernetes is the default plugin and enforces NetworkPolicy; the legacy OpenShiftSDN plugin defaulted to its `networkpolicy` isolation mode and was removed in 4.17, so any supported release enforces |
+| kind (default `kindnet`), and others | No. The object is accepted and silently does nothing |
+
+**Verify rather than infer, whatever the table says.** From a pod *outside* the `monitoring`
+namespace, `curl` a server pod IP on `:9091`: it should hang or be refused. A `200` with the
+policy applied means your cluster is not enforcing it. This is the only check that answers the
+question, and it is worth doing once per cluster.
+
+Where enforcement is unavailable the restriction has to come from elsewhere — bind the
 listener to loopback (`metrics_bind_address: "127.0.0.1:9091"`) and scrape through a
 co-located sidecar, a service-mesh authorization policy, or the node or cloud-network firewall
 in front of the pod CIDR. Treat one of them as required, not optional; the exposure note under

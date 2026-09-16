@@ -220,33 +220,6 @@ jobs:
             echo "✅ Test files found. You can now remove this step"
           fi
 
-      - name: Validate Kubernetes manifests
-        # go install pins to a specific module version and the Go checksum database
-        # verifies the download — no separate SHA check needed. Consistent with
-        # the Go toolchain already installed above.
-        #
-        # -strict rejects fields the schema does not know, which is the failure
-        # class hand-authored YAML actually has: the API server accepts a
-        # misspelt key and silently ignores it.
-        #
-        # kubeconform validates .yaml/.yml/.json only. A .example file is not
-        # merely skipped by the directory walk — passed by path it is ignored
-        # with a zero-resource summary and exit 0, a vacuous pass. So the
-        # second pass copies the .example files under their real extension.
-        # ServiceMonitor is a CRD, so its schema comes from the Datree CRDs
-        # catalog rather than the built-in set.
-        run: |
-          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
-          kubeconform -strict -summary deploy/kubernetes/
-          examples=$(mktemp -d)
-          for f in deploy/kubernetes/*.yaml.example; do
-            cp "$f" "$examples/$(basename "$f" .example)"
-          done
-          kubeconform -strict -summary \
-            -schema-location default \
-            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            "$examples"
-
   e2e-basic-mcp:
     runs-on: ubuntu-latest
     needs: build

@@ -2,12 +2,20 @@
 # alone, so egress — broker SEMP, IdP, DNS, OTLP push — is untouched. Read the
 # note at the bottom before adding an `egress:` section.
 #
-# Enforced only by a CNI that supports NetworkPolicy. Calico, Cilium, and the
-# GKE, AKS, and EKS native CNIs do; kind's default kindnet accepts the object
-# and enforces nothing. Verify with a curl to a pod IP on :9091 from a pod
-# outside the allowed namespace, not with `kubectl get networkpolicy`. Without
-# an enforcing CNI, restrict :9091 another way — docs/observability.md
-# § "Scraping and securing the metrics endpoint".
+# TWO REASONS AN APPLIED POLICY MAY PROTECT NOTHING, neither visible in
+# `kubectl get networkpolicy`:
+#
+#   1. Only the CNI enforces it. Calico, Cilium, and OpenShift's OVN-Kubernetes
+#      do; on GKE, AKS, and EKS it is a cluster feature that is off unless it
+#      was turned on, usually at creation; kind's kindnet enforces nothing.
+#   2. Policies are additive with no deny rule, so another policy selecting
+#      these pods can re-open :9091 and nothing here overrides it.
+#
+# So verify rather than assume: from a pod OUTSIDE the monitoring namespace,
+# curl a pod IP on :9091 — it should hang or be refused — and audit
+# `kubectl get networkpolicy -A`. docs/observability.md § "Scraping and
+# securing the metrics endpoint" carries the per-platform table and, where
+# enforcement is unavailable, the fallbacks.
 #
 # Ports are numeric because named-port support varies by CNI. Once applied, a
 # port this file does not list is denied, not merely unprotected, so both must

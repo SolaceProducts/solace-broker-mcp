@@ -137,9 +137,16 @@ from day one:
    directory and admits `:9091` only from the `monitoring` namespace. `:9090`
    stays open to every source, because the kubelet's probes arrive from the
    node and no selector can name them. It restricts ingress only; broker, IdP,
-   and OTLP egress are untouched. It needs a CNI that enforces NetworkPolicy
-   (Calico, Cilium, GKE/AKS/EKS native) — kind's default CNI accepts it and
-   enforces nothing, so verify with a `curl` from a pod outside `monitoring`.
+   and OTLP egress are untouched.
+
+   **Two reasons an applied policy may not be protecting anything.** Only the
+   CNI enforces it, and on GKE, AKS, and EKS that is a cluster-level feature
+   normally chosen at creation time, while kind's default CNI accepts the object
+   and enforces nothing. And because policies are additive with no deny rule,
+   another policy selecting these pods can re-open `:9091` regardless of this
+   one. So verify with a `curl` to a pod IP on `:9091` from a pod outside
+   `monitoring`, and audit `kubectl get networkpolicy -A`. Both are covered in
+   [Scraping and securing the metrics endpoint](../../docs/observability.md#scraping-and-securing-the-metrics-endpoint).
 3. **Point Prometheus at it.** `servicemonitor.yaml.example` is the Prometheus
    Operator manifest: copy it, edit the `release:` label, apply it to the same
    namespace as the Service. It is `.example` because the CRD is not on every

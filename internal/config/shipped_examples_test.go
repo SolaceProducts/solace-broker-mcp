@@ -269,152 +269,398 @@ func TestShippedGOMEMLIMITTracksMemoryLimit(t *testing.T) {
 	}
 }
 
-// TestShippedMetricsPortTracksDefault guards the metrics port that
-// deploy/kubernetes/ spells in three places — the Service's `metrics` port, the
-// Deployment's named containerPort it targets, and the NetworkPolicy's allow
-// rule — against the listener's compiled default (SOL-152424). Only manifest
-// comments say they must agree, and a comment is not a guard. Drift reaches an
-// operator as a scrape that silently stops: once the policy isolates the pod
-// for ingress, a port it does not list is denied, not merely unprotected.
+// The shipped label every manifest in deploy/kubernetes/ selects on. The Service
+// and the NetworkPolicy select pods by it; the ServiceMonitor selects the
+// Service by it.
+const shippedSelectorLabel = "app.kubernetes.io/name"
+
+// shippedMonitoringNamespace is the namespace networkpolicy.yaml admits
+// /metrics scrapes from, matched on the kubernetes.io/metadata.name label that
+// Kubernetes sets on every namespace automatically.
+const shippedMonitoringNamespace = "monitoring"
+
+// k8sSelector is the podSelector/namespaceSelector shape these manifests use.
+type k8sSelector struct {
+	MatchLabels map[string]string `yaml:"matchLabels"`
+}
+
+// npPeer is one entry of a NetworkPolicy ingress rule's `from` list. All three
+// peer kinds are decoded, not just the one we ship, so a rule that swaps a
+// namespaceSelector for a wide-open ipBlock is visible to the assertions below
+// rather than silently indistinguishable from it.
+type npPeer struct {
+	NamespaceSelector *k8sSelector `yaml:"namespaceSelector"`
+	PodSelector       *k8sSelector `yaml:"podSelector"`
+	IPBlock           *struct {
+		CIDR string `yaml:"cidr"`
+	} `yaml:"ipBlock"`
+}
+
+type shippedDeployment struct {
+	Spec struct {
+		Template struct {
+			Metadata struct {
+				Labels map[string]string `yaml:"labels"`
+			} `yaml:"metadata"`
+			Spec struct {
+				Containers []struct {
+					Ports []struct {
+						Name          string `yaml:"name"`
+						ContainerPort int    `yaml:"containerPort"`
+					} `yaml:"ports"`
+				} `yaml:"containers"`
+			} `yaml:"spec"`
+		} `yaml:"template"`
+	} `yaml:"spec"`
+}
+
+type shippedService struct {
+	Metadata struct {
+		Labels map[string]string `yaml:"labels"`
+	} `yaml:"metadata"`
+	Spec struct {
+		Ports []struct {
+			Name       string `yaml:"name"`
+			Port       int    `yaml:"port"`
+			TargetPort string `yaml:"targetPort"`
+		} `yaml:"ports"`
+		Selector map[string]string `yaml:"selector"`
+	} `yaml:"spec"`
+}
+
+type shippedNetworkPolicy struct {
+	Spec struct {
+		PodSelector k8sSelector `yaml:"podSelector"`
+		PolicyTypes []string    `yaml:"policyTypes"`
+		Egress      []any       `yaml:"egress"`
+		Ingress     []struct {
+			From  []npPeer `yaml:"from"`
+			Ports []struct {
+				Port int `yaml:"port"`
+			} `yaml:"ports"`
+		} `yaml:"ingress"`
+	} `yaml:"spec"`
+}
+
+type shippedServiceMonitor struct {
+	Spec struct {
+		Selector  k8sSelector `yaml:"selector"`
+		Endpoints []struct {
+			Port          string `yaml:"port"`
+			Path          string `yaml:"path"`
+			Interval      string `yaml:"interval"`
+			ScrapeTimeout string `yaml:"scrapeTimeout"`
+		} `yaml:"endpoints"`
+	} `yaml:"spec"`
+}
+
+// containerPorts returns the Deployment's single container's named ports,
+// failing the test if the manifest stops having exactly one container (these
+// tests read the first one).
+func (d shippedDeployment) containerPorts(t *testing.T) map[string]int {
+	t.Helper()
+	containers := d.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("deploy/kubernetes/deployment.yaml has %d containers, want 1; "+
+			"these tests read the first one's ports", len(containers))
+	}
+	ports := map[string]int{}
+	for _, p := range containers[0].Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	return ports
+}
+
+// loadShippedManifests parses the four manifests these tests reason about
+// together. servicemonitor.yaml.example is included even though the
+// directory-wide `kubectl apply` skips it: an operator applies it by hand, so
+// it has to agree with the Service it scrapes.
+func loadShippedManifests(t *testing.T) (shippedDeployment, shippedService, shippedNetworkPolicy, shippedServiceMonitor) {
+	t.Helper()
+	var dep shippedDeployment
+	var svc shippedService
+	var np shippedNetworkPolicy
+	var sm shippedServiceMonitor
+	readManifest(t, "deploy/kubernetes/deployment.yaml", &dep)
+	readManifest(t, "deploy/kubernetes/service.yaml", &svc)
+	readManifest(t, "deploy/kubernetes/networkpolicy.yaml", &np)
+	readManifest(t, "deploy/kubernetes/servicemonitor.yaml.example", &sm)
+	return dep, svc, np, sm
+}
+
+// TestShippedPortsTrackCompiledDefaults guards the two ports deploy/kubernetes/
+// spells in four places — the embedded ConfigMap's `port`, the Deployment's
+// named containerPorts, the Service's ports, and the NetworkPolicy's allow
+// rules — against the server's own compiled defaults (SOL-152424). Only
+// manifest comments say they must agree, and a comment is not a guard.
 //
-// It also pins three properties of the shipped policy: ingress-only, because
-// an egress allow-list default-denies every destination it omits (brokers,
-// IdP, DNS) and, policies being additive, cannot override a customer's own
-// default-deny anyway; the `http` port still admitted, or isolating the pod
-// denies the MCP endpoint; and the metrics port admitted from a named source,
-// which is the policy's whole purpose. See docs/observability.md § "Scraping
-// and securing the metrics endpoint".
-func TestShippedMetricsPortTracksDefault(t *testing.T) {
+// Both directions of drift reach an operator as silence rather than an error,
+// but they are not symmetric, which is why the policy is checked against the
+// compiled default and not merely against the other manifests:
+//
+//   - A stale containerPort is caught loudly by Kubernetes itself, because the
+//     probes target `port: http` — the pod crash-loops or never goes Ready.
+//   - A stale port in networkpolicy.yaml has no such safety net. Kubelet probes
+//     reach the pod on the node path, which the CNI does not police, so the pod
+//     reports Ready while real client traffic to the true port is denied. For
+//     :9091 that is a scrape that stops; for :9090 it is the MCP endpoint
+//     itself, with a larger blast radius.
+func TestShippedPortsTrackCompiledDefaults(t *testing.T) {
 	_, portStr, err := net.SplitHostPort(defaults.DefaultMetricsBindAddress)
 	if err != nil {
 		t.Fatalf("defaults.DefaultMetricsBindAddress=%q is not host:port: %v",
 			defaults.DefaultMetricsBindAddress, err)
 	}
-	wantPort, err := strconv.Atoi(portStr)
+	wantMetrics, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("defaults.DefaultMetricsBindAddress=%q has a non-numeric port: %v",
+			defaults.DefaultMetricsBindAddress, err)
+	}
+	wantHTTP := defaults.DefaultPort
+
+	dep, svc, np, _ := loadShippedManifests(t)
+
+	// The ConfigMap's server port. deploy/kubernetes/README.md documents editing
+	// this as the supported way to move the MCP port, so it is the value the
+	// other three files have to follow.
+	var cm struct {
+		Data struct {
+			ConfigYAML string `yaml:"config.yaml"`
+		} `yaml:"data"`
+	}
+	readManifest(t, "deploy/kubernetes/configmap.yaml", &cm)
+	var embedded struct {
+		Port int `yaml:"port"`
+	}
+	if err := yaml.Unmarshal([]byte(cm.Data.ConfigYAML), &embedded); err != nil {
+		t.Fatalf("parse the config.yaml embedded in deploy/kubernetes/configmap.yaml: %v", err)
+	}
+	if embedded.Port != wantHTTP {
+		t.Errorf("deploy/kubernetes/configmap.yaml sets port: %d; the compiled default is %d. "+
+			"The shipped example is meant to run on the defaults — if the default moved, move "+
+			"this and the http port in deployment.yaml, service.yaml, and networkpolicy.yaml with it",
+			embedded.Port, wantHTTP)
+	}
+
+	ports := dep.containerPorts(t)
+	for _, tc := range []struct {
+		name string
+		want int
+		hint string
+	}{
+		{"http", wantHTTP, "defaults.DefaultPort"},
+		{"metrics", wantMetrics, "defaults.DefaultMetricsBindAddress"},
+	} {
+		got, ok := ports[tc.name]
+		if !ok {
+			t.Errorf("deploy/kubernetes/deployment.yaml declares no containerPort named %q; "+
+				"service.yaml targets it by that name", tc.name)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("deploy/kubernetes/deployment.yaml %q containerPort is %d, want %d (%s)",
+				tc.name, got, tc.want, tc.hint)
+		}
+	}
+
+	svcPorts := map[string]int{}
+	for _, p := range svc.Spec.Ports {
+		svcPorts[p.Name] = p.Port
+		// targetPort names the containerPort rather than repeating the number,
+		// so the Service and Deployment cannot drift apart independently.
+		if p.TargetPort != p.Name {
+			t.Errorf("deploy/kubernetes/service.yaml port %q has targetPort %q, want the "+
+				"identically named containerPort so the two cannot drift apart", p.Name, p.TargetPort)
+		}
+	}
+	for name, want := range map[string]int{"http": wantHTTP, "metrics": wantMetrics} {
+		got, ok := svcPorts[name]
+		if !ok {
+			t.Errorf("deploy/kubernetes/service.yaml exposes no port named %q", name)
+			continue
+		}
+		if got != want {
+			t.Errorf("deploy/kubernetes/service.yaml %q port is %d, want %d", name, got, want)
+		}
+	}
+
+	policyPorts := map[int]bool{}
+	for _, rule := range np.Spec.Ingress {
+		for _, p := range rule.Ports {
+			policyPorts[p.Port] = true
+		}
+	}
+	for _, want := range []int{wantHTTP, wantMetrics} {
+		if !policyPorts[want] {
+			t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for port %d. With "+
+				"the pod isolated for ingress, a port the policy does not list is denied, not "+
+				"merely unprotected, and the kubelet probes do not reveal it", want)
+		}
+	}
+}
+
+// TestShippedNetworkPolicyRestrictsMetricsIngress pins the security invariant
+// networkpolicy.yaml exists for, which the port test above cannot see: that
+// :9091 is admitted from the monitoring namespace and nowhere else, while
+// :9090 stays reachable and egress stays untouched.
+//
+// Asserting the selector's contents rather than merely that a `from` list
+// exists is the point. A typo'd label value, a different label key, or a
+// `from: [{ipBlock: {cidr: 0.0.0.0/0}}]` all leave a non-empty `from` while
+// defeating the policy's whole purpose.
+func TestShippedNetworkPolicyRestrictsMetricsIngress(t *testing.T) {
+	_, portStr, err := net.SplitHostPort(defaults.DefaultMetricsBindAddress)
+	if err != nil {
+		t.Fatalf("defaults.DefaultMetricsBindAddress=%q is not host:port: %v",
+			defaults.DefaultMetricsBindAddress, err)
+	}
+	metricsPort, err := strconv.Atoi(portStr)
 	if err != nil {
 		t.Fatalf("defaults.DefaultMetricsBindAddress=%q has a non-numeric port: %v",
 			defaults.DefaultMetricsBindAddress, err)
 	}
 
-	// Deployment: the named containerPort the Service's targetPort resolves to.
-	var dep struct {
-		Spec struct {
-			Template struct {
-				Spec struct {
-					Containers []struct {
-						Ports []struct {
-							Name          string `yaml:"name"`
-							ContainerPort int    `yaml:"containerPort"`
-						} `yaml:"ports"`
-					} `yaml:"containers"`
-				} `yaml:"spec"`
-			} `yaml:"template"`
-		} `yaml:"spec"`
-	}
-	readManifest(t, "deploy/kubernetes/deployment.yaml", &dep)
-	if n := len(dep.Spec.Template.Spec.Containers); n != 1 {
-		t.Fatalf("deploy/kubernetes/deployment.yaml has %d containers, want 1", n)
-	}
-	containerPorts := map[string]int{}
-	for _, p := range dep.Spec.Template.Spec.Containers[0].Ports {
-		containerPorts[p.Name] = p.ContainerPort
-	}
-	depPort, ok := containerPorts["metrics"]
-	if !ok {
-		t.Fatal("deploy/kubernetes/deployment.yaml declares no containerPort named `metrics`; " +
-			"service.yaml's `metrics` port targets it by that name")
-	}
-	if depPort != wantPort {
-		t.Errorf("deploy/kubernetes/deployment.yaml `metrics` containerPort is %d; the listener's "+
-			"compiled default is %q", depPort, defaults.DefaultMetricsBindAddress)
-	}
-	// The MCP port the probes and the Service's `http` port use. The policy must
-	// allow it too, or isolating the pod for ingress takes the whole endpoint down.
-	httpPort, ok := containerPorts["http"]
-	if !ok {
-		t.Fatal("deploy/kubernetes/deployment.yaml declares no containerPort named `http`; " +
-			"the probes and service.yaml target it by that name")
-	}
+	dep, _, np, _ := loadShippedManifests(t)
 
-	// Service: the port servicemonitor.yaml.example names.
-	var svc struct {
-		Spec struct {
-			Ports []struct {
-				Name       string `yaml:"name"`
-				Port       int    `yaml:"port"`
-				TargetPort string `yaml:"targetPort"`
-			} `yaml:"ports"`
-		} `yaml:"spec"`
-	}
-	readManifest(t, "deploy/kubernetes/service.yaml", &svc)
-	svcFound := false
-	for _, p := range svc.Spec.Ports {
-		if p.Name != "metrics" {
-			continue
-		}
-		svcFound = true
-		if p.Port != wantPort {
-			t.Errorf("deploy/kubernetes/service.yaml `metrics` port is %d; the listener's compiled "+
-				"default is %q", p.Port, defaults.DefaultMetricsBindAddress)
-		}
-		if p.TargetPort != "metrics" {
-			t.Errorf("deploy/kubernetes/service.yaml `metrics` targetPort is %q, want the named "+
-				"containerPort `metrics` so the two cannot drift apart", p.TargetPort)
-		}
-	}
-	if !svcFound {
-		t.Fatal("deploy/kubernetes/service.yaml exposes no port named `metrics`; " +
-			"servicemonitor.yaml.example scrapes it by that name")
-	}
-
-	// NetworkPolicy: ingress-only, the http port still admitted, and the
-	// metrics port admitted from a named source rather than from everywhere.
-	var np struct {
-		Spec struct {
-			PolicyTypes []string `yaml:"policyTypes"`
-			Egress      []any    `yaml:"egress"`
-			Ingress     []struct {
-				From  []any `yaml:"from"`
-				Ports []struct {
-					Port int `yaml:"port"`
-				} `yaml:"ports"`
-			} `yaml:"ingress"`
-		} `yaml:"spec"`
-	}
-	readManifest(t, "deploy/kubernetes/networkpolicy.yaml", &np)
+	// Ingress-only. An egress allow-list default-denies every destination it
+	// omits (brokers, IdP, DNS), and because policies are additive it could not
+	// override a customer's own default-deny anyway — so the OTLP egress rule
+	// stays a commented template. See docs/observability.md § "Scraping and
+	// securing the metrics endpoint".
 	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != "Ingress" || len(np.Spec.Egress) != 0 {
-		t.Errorf("deploy/kubernetes/networkpolicy.yaml policyTypes=%v with %d egress rules; the shipped "+
-			"policy is ingress-only. An egress allow-list default-denies every destination it omits "+
-			"(brokers, IdP, DNS), and cannot override a customer's own default-deny because policies "+
-			"are additive — keep the OTLP egress rule a commented template",
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml policyTypes=%v with %d egress rules; the "+
+			"shipped policy is ingress-only. Adding an egress section default-denies brokers, "+
+			"IdP, and DNS — keep the OTLP rule a commented template",
 			np.Spec.PolicyTypes, len(np.Spec.Egress))
 	}
-	httpRule, metricsRule := false, false
+
+	// The policy must select the pods it is meant to protect. A selector that
+	// matches nothing fails the isolation *open*, with nothing else to catch it.
+	podLabels := dep.Spec.Template.Metadata.Labels
+	for k, v := range np.Spec.PodSelector.MatchLabels {
+		if podLabels[k] != v {
+			t.Errorf("deploy/kubernetes/networkpolicy.yaml podSelector wants %s=%q but "+
+				"deployment.yaml's pod template has %s=%q; a policy that selects no pods "+
+				"enforces nothing and fails open", k, v, k, podLabels[k])
+		}
+	}
+	if len(np.Spec.PodSelector.MatchLabels) == 0 {
+		t.Error("deploy/kubernetes/networkpolicy.yaml has an empty podSelector, which selects " +
+			"every pod in the namespace rather than this server's")
+	}
+
+	httpPort := dep.containerPorts(t)["http"]
+	var sawHTTP, sawMetrics bool
 	for _, rule := range np.Spec.Ingress {
 		for _, p := range rule.Ports {
 			switch p.Port {
 			case httpPort:
-				httpRule = true
-			case wantPort:
-				metricsRule = true
-				if len(rule.From) == 0 {
-					t.Errorf("deploy/kubernetes/networkpolicy.yaml admits port %d with no `from`, i.e. from "+
-						"every source; restricting that port to the monitoring namespace is the policy's "+
-						"whole purpose", wantPort)
+				sawHTTP = true
+				// Deliberately reachable from anywhere: the kubelet's probes
+				// arrive from the node's own address, which no selector can name.
+				if len(rule.From) != 0 {
+					t.Errorf("deploy/kubernetes/networkpolicy.yaml restricts port %d to %d peer(s); "+
+						"it ships open to all sources because the kubelet probes cannot be named "+
+						"by any selector. Narrowing it is an operator's choice, not the shipped default",
+						httpPort, len(rule.From))
 				}
+			case metricsPort:
+				sawMetrics = true
+				assertMetricsPeersRestricted(t, metricsPort, rule.From)
 			}
 		}
 	}
-	if !httpRule {
-		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for the `http` containerPort "+
-			"%d. With the pod isolated for ingress that denies the MCP endpoint itself, and on CNIs "+
-			"that police node traffic the kubelet probes too", httpPort)
+	if !sawHTTP {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for the http port %d", httpPort)
 	}
-	if !metricsRule {
-		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for port %d (the listener's "+
-			"compiled default, %q). With the pod isolated for ingress, an unlisted metrics port is "+
-			"denied, not merely unprotected — the only symptom is a scrape that stops",
-			wantPort, defaults.DefaultMetricsBindAddress)
+	if !sawMetrics {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml has no ingress rule for the metrics port %d", metricsPort)
+	}
+}
+
+// assertMetricsPeersRestricted checks that the metrics-port rule admits exactly
+// the monitoring namespace: at least one peer, every peer a namespaceSelector
+// naming that namespace, and no ipBlock peer widening it.
+func assertMetricsPeersRestricted(t *testing.T, port int, peers []npPeer) {
+	t.Helper()
+	if len(peers) == 0 {
+		t.Errorf("deploy/kubernetes/networkpolicy.yaml admits port %d with no `from`, i.e. from "+
+			"every source; restricting it to the monitoring namespace is the policy's whole purpose", port)
+		return
+	}
+	for i, peer := range peers {
+		if peer.IPBlock != nil {
+			t.Errorf("deploy/kubernetes/networkpolicy.yaml from[%d] on port %d is an ipBlock (%s); "+
+				"the shipped policy admits a namespace, and a CIDR peer can silently widen that "+
+				"to the whole cluster", i, port, peer.IPBlock.CIDR)
+			continue
+		}
+		if peer.NamespaceSelector == nil {
+			t.Errorf("deploy/kubernetes/networkpolicy.yaml from[%d] on port %d has no "+
+				"namespaceSelector; without one the peer matches pods in this server's own "+
+				"namespace instead of the monitoring namespace", i, port)
+			continue
+		}
+		const nsLabel = "kubernetes.io/metadata.name"
+		if got := peer.NamespaceSelector.MatchLabels[nsLabel]; got != shippedMonitoringNamespace {
+			t.Errorf("deploy/kubernetes/networkpolicy.yaml from[%d] on port %d selects %s=%q, "+
+				"want %q. docs/observability.md and deploy/kubernetes/README.md both document "+
+				"this namespace as the shipped default, and a wrong value is a scrape that "+
+				"silently never happens", i, port, nsLabel, got, shippedMonitoringNamespace)
+		}
+	}
+}
+
+// TestShippedServiceMonitorMatchesService ties servicemonitor.yaml.example to
+// the Service it scrapes. kubeconform proves the object is well-formed against
+// the CRD schema; it cannot tell that a port name, label selector, or path
+// points somewhere real. Each of these failures leaves Prometheus with no
+// target and nothing logged anywhere.
+func TestShippedServiceMonitorMatchesService(t *testing.T) {
+	_, svc, _, sm := loadShippedManifests(t)
+
+	// The ServiceMonitor selects the Service by label, so its selector has to be
+	// satisfied by the Service's own metadata labels (not the Service's pod selector).
+	for k, v := range sm.Spec.Selector.MatchLabels {
+		if svc.Metadata.Labels[k] != v {
+			t.Errorf("servicemonitor.yaml.example selects %s=%q but service.yaml's labels have "+
+				"%s=%q; the ServiceMonitor would match no Service and Prometheus would show no target",
+				k, v, k, svc.Metadata.Labels[k])
+		}
+	}
+	if len(sm.Spec.Selector.MatchLabels) == 0 {
+		t.Error("servicemonitor.yaml.example has an empty selector")
+	}
+	if _, ok := sm.Spec.Selector.MatchLabels[shippedSelectorLabel]; !ok {
+		t.Errorf("servicemonitor.yaml.example does not select on %s, the label every other "+
+			"shipped manifest keys off", shippedSelectorLabel)
+	}
+
+	if n := len(sm.Spec.Endpoints); n != 1 {
+		t.Fatalf("servicemonitor.yaml.example declares %d endpoints, want 1", n)
+	}
+	ep := sm.Spec.Endpoints[0]
+
+	// endpoints[].port names a SERVICE port, not a container port — the single
+	// most common way to author a ServiceMonitor that never produces a target.
+	svcPortNames := map[string]bool{}
+	for _, p := range svc.Spec.Ports {
+		svcPortNames[p.Name] = true
+	}
+	if !svcPortNames[ep.Port] {
+		t.Errorf("servicemonitor.yaml.example scrapes port %q, which service.yaml does not "+
+			"expose (it has %v). endpoints[].port names a Service port", ep.Port, svcPortNames)
+	}
+	if ep.Path != "/metrics" {
+		t.Errorf("servicemonitor.yaml.example scrapes path %q, want /metrics — the only path the "+
+			"metrics listener serves (cmd/server serveMetricsEndpoint)", ep.Path)
+	}
+	// AC 3 of SOL-152424: sensible scrape defaults, and the timeout must stay
+	// under the interval or Prometheus rejects the scrape config outright.
+	if ep.Interval != "15s" || ep.ScrapeTimeout != "10s" {
+		t.Errorf("servicemonitor.yaml.example has interval=%q scrapeTimeout=%q, want 15s/10s as "+
+			"documented; scrapeTimeout must also stay below interval or Prometheus rejects the config",
+			ep.Interval, ep.ScrapeTimeout)
 	}
 }
 
