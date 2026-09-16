@@ -32,8 +32,19 @@ pass=0
 fail=0
 skip=0
 
-ok()   { printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
+# $BASHPID differs from $$ inside a subshell, and that is where an assertion's
+# result goes to die: `bad` increments `fail` in the child, the parent's tally
+# never sees it, and the suite exits 0 through a real failure. Seven
+# assertions here did exactly that — the suite printed 377 ok lines and
+# reported 370. Recorded to a FILE rather than a counter, because a file is
+# the one thing that survives the subshell.
+assert_shell_check() {
+  [[ "$BASHPID" == "$$" ]] && return 0
+  printf '%s\n' "$1" >>"$tmp/subshell-assertions"
+  return 0
+}
+ok()   { assert_shell_check "$1"; printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
+bad()  { assert_shell_check "$1"; printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
 # Counted, not just printed. A section that skips silently looks like coverage
 # in CI output, which is worse than a visible gap.
 skip() { printf '  skip  %s\n' "$1"; skip=$((skip + 1)); }
@@ -1903,30 +1914,51 @@ wired "and stamps the gctrace anchor" \
   run.sh 'perf_record_kv "$mcp_record" mcp_start_epoch'
 wired "and guards its own log volume" \
   run.sh 'perf_guard_log_volume "$mcp_record"'
+# run.sh writes both records, so a refusal has to mark both: a consumer of the
+# loadgen record otherwise cannot tell that no load ever ran. Nothing held this
+# in place — the line could be deleted with all three suites green.
+wired "and marks the loadgen record refused too, not just the MCP one" \
+  run.sh 'perf_record_kv "$lg_record" run_refused'
 
 echo "== perf_filter_godebug keeps only the setting this harness asks for"
 
 # The runners capture child stderr into archived logs, and loadgen, fidelity
 # and the server all send an Authorization header. http2debug=2 would print it.
-( GODEBUG="gctrace=1,http2debug=2"; perf_filter_godebug 2>/dev/null
-  eq "http2debug is dropped and gctrace kept" "${GODEBUG:-<unset>}" "gctrace=1" )
-( GODEBUG="http2debug=2"; perf_filter_godebug 2>/dev/null
-  eq "a GODEBUG with nothing to keep is unset entirely" "${GODEBUG:-<unset>}" "<unset>" )
+# The isolation is necessary — perf_filter_godebug mutates GODEBUG in its
+# caller — but running `eq` INSIDE the subshell threw the result away: bad()
+# incremented `fail` in the child, so the parent's tally never saw it and the
+# suite exited 0. Seven assertions were decorative, and a real regression to
+# this allowlist printed FAIL while the suite reported 370 passed / 0 failed.
+#
+# So: run the filter in a subshell, print the value out of it, assert in the
+# parent. The `ok` count and the tally must agree — if they diverge again,
+# an assertion has gone back to being a decoration.
+filtered_godebug() { # <input, or the literal UNSET>
+  if [[ "$1" == UNSET ]]; then
+    ( unset GODEBUG; perf_filter_godebug 2>/dev/null; printf '%s' "${GODEBUG:-<unset>}" )
+  else
+    ( GODEBUG="$1"; perf_filter_godebug 2>/dev/null; printf '%s' "${GODEBUG:-<unset>}" )
+  fi
+}
+eq "http2debug is dropped and gctrace kept" \
+  "$(filtered_godebug 'gctrace=1,http2debug=2')" "gctrace=1"
+eq "a GODEBUG with nothing to keep is unset entirely" \
+  "$(filtered_godebug 'http2debug=2')" "<unset>"
 # gctrace=0 passes a naive ^gctrace= filter, emits nothing, and would cost an
 # operator a ten-hour soak's live-heap series they believed they had captured.
-( GODEBUG="gctrace=0"; perf_filter_godebug 2>/dev/null
-  eq "gctrace=0 is dropped as the no-op it is" "${GODEBUG:-<unset>}" "<unset>" )
-( GODEBUG="gctrace=2"; perf_filter_godebug 2>/dev/null
-  eq "but a higher gctrace level is kept" "${GODEBUG:-<unset>}" "gctrace=2" )
+eq "gctrace=0 is dropped as the no-op it is" \
+  "$(filtered_godebug 'gctrace=0')" "<unset>"
+eq "but a higher gctrace level is kept" \
+  "$(filtered_godebug 'gctrace=2')" "gctrace=2"
 # A prefix match kept gctrace=1junk, which the runtime ignores — so the value
 # survived, no gctrace was emitted, and the report implied a capture that
 # never ran.
-( GODEBUG="gctrace=1junk"; perf_filter_godebug 2>/dev/null
-  eq "a gctrace value with trailing junk is not a gctrace value" "${GODEBUG:-<unset>}" "<unset>" )
-( GODEBUG="gctrace=10"; perf_filter_godebug 2>/dev/null
-  eq "a multi-digit level still survives" "${GODEBUG:-<unset>}" "gctrace=10" )
-( unset GODEBUG; perf_filter_godebug 2>/dev/null
-  eq "an unset GODEBUG stays unset" "${GODEBUG:-<unset>}" "<unset>" )
+eq "a gctrace value with trailing junk is not a gctrace value" \
+  "$(filtered_godebug 'gctrace=1junk')" "<unset>"
+eq "a multi-digit level still survives" \
+  "$(filtered_godebug 'gctrace=10')" "gctrace=10"
+eq "an unset GODEBUG stays unset" \
+  "$(filtered_godebug UNSET)" "<unset>"
 godebug_warn=$( GODEBUG="gctrace=1,http2debug=2"; perf_filter_godebug 2>&1 >/dev/null )
 contains "and the reduction is reported, not silent" "$godebug_warn" "GODEBUG reduced to"
 
@@ -2110,6 +2142,15 @@ mkdir -p "$allpre"
 out=$("$here/summary.sh" "$allpre")
 contains "a wholly interleaved capture still reports the section" "$out" "gctrace"
 contains "and reports the lines it could not read" "$out" "unparsable"
+
+# Any assertion that ran in a subshell had its result discarded, so the tally
+# below is not the whole story and a green run cannot be trusted.
+if [[ -s "$tmp/subshell-assertions" ]]; then
+  echo
+  echo "  FAIL  $(wc -l <"$tmp/subshell-assertions") assertion(s) ran in a subshell; their results were discarded:"
+  awk '{ print "          " $0 }' "$tmp/subshell-assertions"
+  fail=$((fail + $(wc -l <"$tmp/subshell-assertions")))
+fi
 
 echo
 if (( skip )); then

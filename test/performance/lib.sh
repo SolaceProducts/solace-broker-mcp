@@ -870,7 +870,10 @@ perf_guard_log_volume() {
       ;;
   esac
   if [[ "$basis" != none && "$basis" != shed-dependent ]]; then
-    if [[ -n "${avail:-}" ]] && (( avail > 0 )); then
+    # 10# here too, for the same reason as the threshold comparison below it:
+    # only the displayed figure depends on this one, but two readings of the
+    # same value in one function should not disagree.
+    if [[ -n "${avail:-}" ]] && (( 10#${avail:-0} > 0 )); then
       printf '               free on the log volume: %s   threshold: %s%%\n' \
         "$(perf_human_bytes "$avail")" "$PERF_LOG_VOLUME_MAX_FRACTION"
     else

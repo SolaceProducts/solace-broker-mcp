@@ -531,7 +531,12 @@ fi
 for rec in "$runs"/run-record.*; do
   [[ -r "$rec" ]] || continue
   lg_warm=$(awk -F= '/^stats_warmup=/ {print $2; exit}' "$rec")
-  [[ -z "$lg_warm" || "$lg_warm" == none ]] && break
+  # `continue`, not `break`: the sibling reader for mcp_start_epoch scans on
+  # when a record lacks the field, and stopping at the first record here leaned
+  # on run-record.loadgen sorting first — true of every layout the runners
+  # write today, and written down nowhere.
+  [[ -z "$lg_warm" ]] && continue
+  [[ "$lg_warm" == none ]] && break
   # Converted in awk, not by stripping a suffix into `$(( ))`. The runners
   # accept any duration perf_duration_secs accepts, and that includes
   # fractional notation landing on a whole second — `1.5m` is documented as
