@@ -18,10 +18,17 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
+
+// ProxyDirect is the EffectiveProxy label for a destination that bypasses the
+// proxy — either because no proxy variable is set, or because NO_PROXY exempts
+// it. A fixed label rather than an empty string so the log field is always
+// present and `proxy != direct` is a usable query.
+const ProxyDirect = "direct"
 
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool
 // before the client closes it. Matches the value in http.DefaultTransport.
@@ -178,4 +185,47 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 		ResponseHeaderTimeout: sempCfg.RequestTimeoutDuration / 2,
 		ExpectContinueTimeout: expectContinueTimeout,
 	}
+}
+
+// EffectiveProxy reports which proxy the transport above will use for rawURL,
+// as a label for logging: a sanitized proxy URL, or ProxyDirect. It answers the
+// question the reroute in NewTunedTransport otherwise leaves unanswerable —
+// whether an inherited HTTPS_PROXY has put a proxy in front of this broker —
+// which is visible on the wire only as a terse `proxyconnect tcp:` dial error.
+//
+// The result is safe to log. A proxy URL may carry credentials
+// (http://user:password@proxy:3128), so it goes through
+// config.SanitizeURLString, which drops userinfo. One consequence: that helper
+// only recognizes http and https, so a socks5 proxy logs as an unparseable-URL
+// placeholder. That still answers "a proxy is in play" — the diagnostic that
+// matters here — and failing closed is the right direction for a value that can
+// hold a password.
+//
+// Resolution matches the transport by construction: both call
+// http.ProxyFromEnvironment, so this cannot drift from what the transport does,
+// including NO_PROXY and the loopback exemption. An unparseable rawURL reports
+// ProxyDirect rather than an error — config validation rejects such a URL long
+// before this runs, and a log label is not the place to surface it.
+func EffectiveProxy(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ProxyDirect
+	}
+	proxyURL, err := http.ProxyFromEnvironment(&http.Request{URL: u})
+	if err != nil {
+		return ProxyDirect
+	}
+	return proxyLabel(proxyURL)
+}
+
+// proxyLabel renders a resolved proxy URL as a log-safe label. Split from
+// EffectiveProxy so the credential-stripping step is testable directly:
+// ProxyFromEnvironment caches the environment behind a sync.Once, so a test
+// that tried to reach this path by setting HTTPS_PROXY would depend on nothing
+// else in the binary having resolved a proxy first.
+func proxyLabel(proxyURL *url.URL) string {
+	if proxyURL == nil {
+		return ProxyDirect
+	}
+	return config.SanitizeURLString(proxyURL.String())
 }

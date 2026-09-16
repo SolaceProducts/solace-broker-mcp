@@ -574,10 +574,13 @@ Credentials go in the proxy URL: `HTTPS_PROXY=http://user:password@proxy.example
 Supply it the same way as other secrets — via the environment or the `.env` file, not a YAML
 literal — since the value contains a password.
 
-This server's own log statements never include proxy URLs. One caveat is outside its control:
-if you set `GRPC_GO_LOG_SEVERITY_LEVEL=info` to debug OTLP export, grpc-go logs the detected
-proxy URL to stderr unredacted, password included. Prefer an unauthenticated proxy, or an
-allow-list on the proxy side, if that debugging path is one your operators will use.
+This server strips userinfo from every proxy URL it logs, so the `proxy` field described below
+carries a host and port but never a password. One caveat is outside its control: with **both**
+`GRPC_GO_LOG_SEVERITY_LEVEL=info` and `GRPC_GO_LOG_VERBOSITY_LEVEL=2` set — the combination
+needed to debug OTLP export, since the line is behind a verbosity-2 gate — grpc-go writes the
+detected proxy URL to stderr unredacted, password included. Neither variable is set by default.
+Prefer an unauthenticated proxy, or an allow-list on the proxy side, if that debugging path is
+one your operators will use.
 
 ### Limits of the environment-variable approach
 
@@ -586,9 +589,25 @@ allow-list on the proxy side, if that debugging path is one your operators will 
 - **Process-wide.** The setting applies to every broker in `brokers:`, to the IdP, and to OTLP
   export alike. Per-broker or per-role proxy configuration does not exist; `NO_PROXY` is the
   only way to carve out a destination.
-- **Silent when wrong.** Nothing logs the effective proxy, and a `NO_PROXY` entry that matches
-  nothing produces no warning — traffic simply goes through the proxy. After setting a proxy,
-  an unreachable broker surfaces only as a `proxyconnect tcp:` dial error, and a tunneled
-  collector surfaces only as OTLP export failures ([OTLP Export
-  Health](observability.md#otlp-export-health)). Check every host form against the tables above
-  before looking elsewhere.
+- **A `NO_PROXY` miss is not an error.** An entry that matches nothing produces no warning —
+  traffic simply goes through the proxy. Confirm what actually took effect from the `proxy`
+  field below rather than from the variables you set.
+
+### Confirming which brokers are proxied
+
+Each broker logs its effective proxy once, when its connection is first created:
+
+```
+level=INFO msg="broker connection created" broker=prod-01 url=https://broker-01.internal.example.com:943
+  auth_mode=basic proxy=direct
+```
+
+`proxy` is either `direct` — no proxy variable applies, or `NO_PROXY` exempts this broker — or
+the proxy's URL with any userinfo stripped. Grep for `proxy=` at startup to see every broker's
+resolved state, and alert on `proxy!=direct` if brokers are meant to be reached directly. A
+broker that is unexpectedly unreachable after a proxy is introduced shows `proxy=<the proxy>`
+here and a `proxyconnect tcp:` dial error on the failing call.
+
+OTLP export has no equivalent line, because grpc-go resolves that proxy internally; a tunneled
+collector surfaces only as export failures
+([OTLP Export Health](observability.md#otlp-export-health)).

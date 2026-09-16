@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,5 +312,62 @@ func TestNewTunedTransport_HonorsProxyEnvironment(t *testing.T) {
 	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
 	if got != want {
 		t.Error("Proxy is not http.ProxyFromEnvironment; broker traffic no longer follows the standard proxy environment variables")
+	}
+}
+
+// TestProxyLabel_StripsProxyCredentials pins that the label logged for a
+// broker's effective proxy carries no credentials (SOL-153295). HTTP_PROXY and
+// HTTPS_PROXY accept userinfo — http://user:password@proxy:3128 is the
+// documented way to authenticate to a proxy — so this value reaches the log
+// stream one sanitizer away from a password.
+//
+// proxyLabel is exercised directly rather than through EffectiveProxy because
+// ProxyFromEnvironment caches the environment behind a sync.Once; reaching this
+// path by setting HTTPS_PROXY would depend on nothing else in the binary having
+// resolved a proxy first.
+func TestProxyLabel_StripsProxyCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"password is dropped", "http://user:password@proxy.example.com:3128", "http://proxy.example.com:3128"},
+		{"username alone is dropped", "http://user@proxy.example.com:3128", "http://proxy.example.com:3128"},
+		{"credentialless URL is unchanged", "http://proxy.example.com:3128", "http://proxy.example.com:3128"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.raw)
+			if err != nil {
+				t.Fatalf("parsing %q: %v", tc.raw, err)
+			}
+			got := proxyLabel(u)
+			if got != tc.want {
+				t.Errorf("proxyLabel(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+			if strings.Contains(got, "password") || strings.Contains(got, "user@") {
+				t.Errorf("proxyLabel(%q) = %q, which leaks credentials into the log stream", tc.raw, got)
+			}
+		})
+	}
+}
+
+// TestEffectiveProxy_DirectCases pins the two branches that resolve the same way
+// whatever the ambient proxy environment is, so this test is order-independent:
+// a loopback destination (net/http exempts localhost and loopback IPs from
+// proxying unconditionally) and a URL that does not parse.
+//
+// A nil proxy and an unparseable URL both report ProxyDirect rather than an
+// error, because the caller is a log field. ProxyDirect is a fixed label, not
+// "", so `proxy != direct` stays a usable query.
+func TestEffectiveProxy_DirectCases(t *testing.T) {
+	for _, raw := range []string{
+		"https://localhost:1943",
+		"https://127.0.0.1:1943",
+		"://not-a-url",
+	} {
+		if got := EffectiveProxy(raw); got != ProxyDirect {
+			t.Errorf("EffectiveProxy(%q) = %q, want %q", raw, got, ProxyDirect)
+		}
 	}
 }
