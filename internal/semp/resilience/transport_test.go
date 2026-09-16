@@ -334,6 +334,15 @@ func TestProxyLabel_StripsProxyCredentials(t *testing.T) {
 		{"password is dropped", "http://user:password@proxy.example.com:3128", "http://proxy.example.com:3128"},
 		{"username alone is dropped", "http://user@proxy.example.com:3128", "http://proxy.example.com:3128"},
 		{"credentialless URL is unchanged", "http://proxy.example.com:3128", "http://proxy.example.com:3128"},
+		// SanitizeURLString only recognizes http and https, so a scheme it does
+		// not know degrades to a placeholder rather than being passed through.
+		// socks5 is a legitimate HTTPS_PROXY value — httpproxy's portMap lists
+		// it — so this is reachable, and the EffectiveProxy doc comment names
+		// the behaviour. Pinned here because the interesting half is the second
+		// case: an unrecognized scheme must fail closed, not fall back to
+		// emitting the raw URL with its password intact.
+		{"unrecognized scheme degrades to a placeholder", "socks5://proxy.example.com:1080", "<unparseable url>"},
+		{"unrecognized scheme fails closed on credentials", "socks5://user:password@proxy.example.com:1080", "<unparseable url>"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

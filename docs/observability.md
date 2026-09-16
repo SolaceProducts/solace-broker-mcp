@@ -2443,7 +2443,10 @@ because a gauge is scraped rather than sampled by the process.
 **Joining the two lines:** the per-request line identifies a broker by sanitized URL and
 the periodic line by configured alias, because each reuses the identifier already
 established in its own layer. The `broker connection created` line logged at first use
-carries both, which is what maps one to the other. The metric form will carry `broker`
+carries both, which is what maps one to the other. That same line also reports the broker's
+effective `proxy`, which is the only place the server says whether an `HTTP_PROXY`/`HTTPS_PROXY`
+in the environment routes a given broker — see
+[Configuration § Outbound HTTP Proxy](configuration.md#outbound-http-proxy). The metric form will carry `broker`
 (alias) and `server_address` on the same series and remove the need — see
 [Decided Since the First Draft](#decided-since-the-first-draft).
 

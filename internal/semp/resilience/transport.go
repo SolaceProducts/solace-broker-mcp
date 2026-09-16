@@ -30,6 +30,14 @@ import (
 // present and `proxy != direct` is a usable query.
 const ProxyDirect = "direct"
 
+// proxyResolver is the one symbol both the transport's Proxy field and
+// EffectiveProxy read, so the label a broker logs cannot drift from the
+// resolution that transport actually performs. They resolved identically when
+// written — both named http.ProxyFromEnvironment — but nothing tied them
+// together, so a future change to one was free to leave the other behind.
+// Changing the source of truth now means changing this line.
+var proxyResolver = http.ProxyFromEnvironment
+
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool
 // before the client closes it. Matches the value in http.DefaultTransport.
 // Without this, an idle connection lives until the broker closes it — which
@@ -176,7 +184,7 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 	return &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 		DialContext:           newSEMPDialer(sempCfg.RequestTimeoutDuration).DialContext,
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxyResolver,
 		MaxConnsPerHost:       sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
@@ -201,9 +209,9 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 // matters here — and failing closed is the right direction for a value that can
 // hold a password.
 //
-// Resolution matches the transport by construction: both call
-// http.ProxyFromEnvironment, so this cannot drift from what the transport does,
-// including NO_PROXY and the loopback exemption. An unparseable rawURL reports
+// Resolution matches the transport by construction: both read proxyResolver,
+// so this cannot drift from what the transport does, including NO_PROXY and the
+// loopback exemption. An unparseable rawURL reports
 // ProxyDirect rather than an error — config validation rejects such a URL long
 // before this runs, and a log label is not the place to surface it.
 func EffectiveProxy(rawURL string) string {
@@ -211,7 +219,7 @@ func EffectiveProxy(rawURL string) string {
 	if err != nil {
 		return ProxyDirect
 	}
-	proxyURL, err := http.ProxyFromEnvironment(&http.Request{URL: u})
+	proxyURL, err := proxyResolver(&http.Request{URL: u})
 	if err != nil {
 		return ProxyDirect
 	}
