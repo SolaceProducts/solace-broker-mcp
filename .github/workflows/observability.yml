@@ -1,9 +1,18 @@
 name: Observability
 
-# Runs the OTel collector tracing E2E suite once a day, after the dev nightly
-# build publishes a fresh ghcr.io/solaceproducts/solace-broker-mcp-dev:dev
-# image. Kept separate from build-and-test.yml because the test targets the
-# nightly image, not the commit under test, so it cannot be a required PR check.
+# Runs the E2E suites that verify the published observability surface once a
+# day, after the dev nightly build publishes a fresh
+# ghcr.io/solaceproducts/solace-broker-mcp-dev:dev image. Kept separate from
+# build-and-test.yml because these tests target the nightly image, not the
+# commit under test, so neither can be a required PR check.
+#
+# e2e-tracing verifies the reference OTel collector's traces pipeline
+# end to end. e2e-dashboard (SOL-154545) verifies the reference Grafana
+# dashboard (deploy/grafana/) and the same collector's metrics pipeline
+# (deploy/otel-collector/), on both metrics ingestion paths — see
+# test/e2e-dashboard/run-all.sh. Both were, before this, proven only by
+# static schema checks (cmd/server/grafana_dashboard_test.go) or by hand,
+# once, in the PR that shipped them.
 
 # zizmor flags workflow_run as a dangerous trigger. It is safe here: "Dev build
 # (unstable)" is schedule + workflow_dispatch only, so no untrusted code can
@@ -16,10 +25,10 @@ on: # zizmor: ignore[dangerous-triggers]
     types: [completed]
   workflow_dispatch:
 
-# One run at a time — the nightly fires once a day and the suite takes ~5 min,
-# so there is no meaningful queue to drain.
+# One run at a time — the nightly fires once a day and both suites together
+# take well under an hour, so there is no meaningful queue to drain.
 concurrency:
-  group: e2e-tracing
+  group: observability-nightly
   cancel-in-progress: false
 
 permissions:
@@ -69,3 +78,60 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f test/e2e-tracing/docker-compose.yml down -v
+
+  e2e-dashboard:
+    # Same guard as e2e-tracing: only proceed on a successful dev build, or
+    # always on a manual dispatch.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Uncomments the real, committed otlphttp/prometheus exporter and
+      # metrics: pipeline in deploy/otel-collector/docker/otelcol.yaml — the
+      # point of this suite's Path B is that the published config is what
+      # runs, not a hand-maintained copy of it.
+      - name: Uncomment the collector's metrics pipeline
+        run: bash test/e2e-dashboard/uncomment-metrics-pipeline.sh
+        working-directory: test/e2e-dashboard
+
+      - name: Start stack
+        run: docker compose -f test/e2e-dashboard/docker-compose.yml up -d
+
+      - name: Run dashboard E2E tests
+        run: bash test/e2e-dashboard/run-all.sh
+        working-directory: test/e2e-dashboard
+
+      - name: MCP server logs (on failure)
+        if: failure()
+        run: docker logs mcp-server-e2e-dashboard 2>&1 | tail -200
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: docker logs solace-e2e-dashboard 2>&1 | tail -100
+
+      - name: Collector logs (on failure)
+        if: failure()
+        run: docker logs otel-collector-e2e-dashboard 2>&1 | tail -100
+
+      - name: Prometheus (scrape) logs (on failure)
+        if: failure()
+        run: docker logs prometheus-scrape-e2e-dashboard 2>&1 | tail -100
+
+      - name: Prometheus (OTLP) logs (on failure)
+        if: failure()
+        run: docker logs prometheus-otlp-e2e-dashboard 2>&1 | tail -100
+
+      - name: Grafana logs (on failure)
+        if: failure()
+        run: docker logs grafana-e2e-dashboard 2>&1 | tail -100
+
+      # Same convention as e2e-tracing: a red run is visible in the Actions
+      # tab, no email, no tracking issue.
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/e2e-dashboard/docker-compose.yml down -v

@@ -1,0 +1,125 @@
+services:
+  solace:
+    image: solace/solace-pubsub-standard:latest
+    container_name: solace-e2e-dashboard
+    hostname: solace-e2e-dashboard
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=${BROKER_PASSWORD:-admin}
+    ports:
+      - "${BROKER_SEMP_PORT:-8096}:8080"
+    shm_size: 1g
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u admin:${BROKER_PASSWORD:-admin} http://localhost:8080/SEMP/v2/config/about || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  # One server, both metrics egresses on at once (independent flags — see
+  # docs/observability.md, Metrics): prometheus-scrape scrapes it directly,
+  # and it also pushes OTLP to otel-collector, which forwards to
+  # prometheus-otlp. Tracing is on too, so the latency histograms carry
+  # exemplars (Path A step 6) — no Tempo needed for that, see run-all.sh.
+  mcp-server:
+    image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
+    container_name: mcp-server-e2e-dashboard
+    environment:
+      - CONFIG_FILE=/etc/mcp-server/config.yaml
+      - MCP_DEV_TOKEN=${MCP_DEV_TOKEN:-e2e-dev-token}
+      - BROKER_PASSWORD=${BROKER_PASSWORD:-admin}
+      - OBS_METRICS_ENABLED=true
+      - OBS_METRICS_OTLP_ENABLED=true
+      - OBS_TRACING_ENABLED=true
+      - OTEL_TRACES_SAMPLER=always_on
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      # Standard OTel SDK env var, read directly by the metrics PeriodicReader
+      # with no code change needed (internal/observability/metrics/otlp.go
+      # sets no WithInterval, so the SDK default — 60s — otherwise applies).
+      # 5s keeps this suite's Path B wait bounded instead of adding a minute
+      # of dead time to every nightly run.
+      - OTEL_METRIC_EXPORT_INTERVAL=5000
+    volumes:
+      - ./mcp-config.yaml:/etc/mcp-server/config.yaml:ro
+    ports:
+      - "${MCP_PORT:-9096}:9090"
+    depends_on:
+      solace:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  # Path A: scrapes mcp-server directly. --enable-feature=exemplar-storage is
+  # required for the exemplar check (step 6) — OpenMetrics negotiation alone
+  # is not sufficient; Prometheus silently drops a negotiated exemplar
+  # without this flag (verified in SOL-152092).
+  prometheus-scrape:
+    image: prom/prometheus:v3.0.1
+    container_name: prometheus-scrape-e2e-dashboard
+    volumes:
+      - ./prometheus-scrape.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --enable-feature=exemplar-storage
+    ports:
+      - "${PROM_SCRAPE_PORT:-9092}:9090"
+
+  # Path B: never scraped directly. Only reachable through otel-collector's
+  # otlphttp/prometheus exporter, exactly as an operator's Prometheus would
+  # be. --web.enable-otlp-receiver is required — see docs/observability.md,
+  # "Ingesting OTLP metrics into Prometheus (collector required)".
+  prometheus-otlp:
+    image: prom/prometheus:v3.0.1
+    container_name: prometheus-otlp-e2e-dashboard
+    volumes:
+      - ./prometheus-otlp.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+    ports:
+      - "${PROM_OTLP_PORT:-9093}:9090"
+
+  # Runs the REAL, committed deploy/otel-collector/docker/otelcol.yaml, with
+  # only its metrics: pipeline and otlphttp/prometheus exporter uncommented
+  # by uncomment-metrics-pipeline.sh (run before `docker compose up` — see
+  # run-all.sh) — this is the point of Path B: the published config is what
+  # runs, not a hand-maintained copy of it. The traces pipeline still points
+  # at OTEL_BACKEND_ENDPOINT (default: an address nothing listens on in this
+  # suite); that pipeline's export failures are harmless here — no Tempo is
+  # needed for the exemplar check (see run-all.sh) — and do not affect the
+  # independent metrics pipeline.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: otel-collector-e2e-dashboard
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      - OTEL_BACKEND_ENDPOINT=${OTEL_BACKEND_ENDPOINT:-tempo-not-run-in-this-suite:4317}
+      - PROMETHEUS_OTLP_ENDPOINT=http://prometheus-otlp:9090/api/v1/otlp
+    volumes:
+      - ./bin/otelcol-uncommented.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - prometheus-otlp
+
+  # Path A only (step 5) — Path B's assertions are direct Prometheus API
+  # calls and need no Grafana. Datasource is provisioned by file; the
+  # dashboard itself is imported by run-all.sh via the /api/dashboards/import
+  # HTTP endpoint, because that is the only Grafana mechanism that resolves
+  # the dashboard JSON's ${DS_PROMETHEUS} templating (see
+  # grafana-provisioning/datasources/prometheus.yaml).
+  grafana:
+    image: grafana/grafana:9.5.20
+    container_name: grafana-e2e-dashboard
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus-scrape

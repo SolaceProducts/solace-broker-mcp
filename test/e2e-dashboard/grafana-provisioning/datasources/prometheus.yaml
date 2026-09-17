@@ -1,0 +1,16 @@
+# Provisions the Prometheus datasource file-based — this part of Grafana's
+# provisioning mechanism has no involvement with the dashboard JSON's
+# ${DS_PROMETHEUS} templating, so a plain file works here. The dashboard
+# itself is NOT provisioned this way: Grafana's file-based dashboard
+# provisioning does not resolve __inputs/${DS_PROMETHEUS}, only the
+# /api/dashboards/import HTTP endpoint does — run-all.sh imports it via that
+# API instead, the same call shape already verified live in SOL-152092.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus-Scrape
+    type: prometheus
+    access: proxy
+    url: http://prometheus-scrape:9090
+    isDefault: true
+    editable: false
