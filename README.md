@@ -36,13 +36,13 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 
 ## Overview
 
-solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 43 tools: 25 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 18 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
+solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 47 tools: 29 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 18 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
 MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **25 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
+- **29 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, client usernames and profiles, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
 - **18 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, queue subscriptions, topic endpoints, and REST Delivery Points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no authentication), static bearer tokens, or OAuth 2.1/OpenID Connect (OIDC) with JSON Web Token (JWT) validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured event brokers
@@ -70,7 +70,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 25 read + 18 write    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 29 read + 18 write    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘  basic/bearer/oauth  └──────────────────┘
@@ -97,14 +97,14 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
 | Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-queue-subscription`, `delete-queue-subscription`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 18 write tools in total (four action, 14 management), on top of the 25 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 18 write tools in total (four action, 14 management), on top of the 29 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol; whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 43 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 47 tools
 - [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, rate-limit/retry settings, and outbound HTTP proxy support
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients

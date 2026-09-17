@@ -430,6 +430,111 @@ test_list_client_subscriptions_b() { test_list_client_subscriptions "broker-b" "
 test_list_client_subscriptions_pagination_a() { test_list_client_subscriptions_pagination "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_pagination_b() { test_list_client_subscriptions_pagination "broker-b" "$F3_CLIENT_NAME_B"; }
 
+# ── Client-username / client-profile reads (provisioned config objects) ──────
+# These read the provisioned client-username and client-profile config objects,
+# distinct from the connected-session tools above. Every broker ships a
+# "default" client-username and "default" client-profile, so we assert against
+# those rather than a fixture. Security check: the username reads must never
+# surface a password field (SEMP monitor never returns one).
+
+test_list_client_usernames() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-client-usernames" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" \
+        '(.clientUsernames.data | map(.clientUsername) | index("default")) != null' "true" \
+        "list-client-usernames [$broker]: default client-username must be present" || return 1
+    assert_json_field "$content" '.clientUsernames.data | all(.msgVpnName == "default")' "true" \
+        "list-client-usernames [$broker]: every username must be scoped to the default VPN" || return 1
+    # Guard the password check against a vacuous pass: all() is true on [].
+    assert_json_field "$content" '(.clientUsernames.data | length) > 0' "true" \
+        "list-client-usernames [$broker]: expected at least one username to check" || return 1
+    assert_json_field "$content" '.clientUsernames.data | all(has("password") | not)' "true" \
+        "list-client-usernames [$broker]: no username may expose a password field" || return 1
+}
+
+test_get_client_username() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-client-username" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientUsername:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.clientUsername.data.clientUsername' "default" \
+        "get-client-username [$broker]: must return the default client-username" || return 1
+    assert_json_field "$content" '(.clientUsername.data | has("password")) | not' "true" \
+        "get-client-username [$broker]: must not surface a password field" || return 1
+}
+
+test_list_client_profiles() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-client-profiles" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" \
+        '(.clientProfiles.data | map(.clientProfileName) | index("default")) != null' "true" \
+        "list-client-profiles [$broker]: default client-profile must be present" || return 1
+    assert_json_field "$content" '.clientProfiles.data | all(.msgVpnName == "default")' "true" \
+        "list-client-profiles [$broker]: every profile must be scoped to the default VPN" || return 1
+}
+
+test_get_client_profile() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-client-profile" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientProfileName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.clientProfile.data.clientProfileName' "default" \
+        "get-client-profile [$broker]: must return the default client-profile" || return 1
+    assert_json_field "$content" '(.clientProfile.data.allowGuaranteedMsgSendEnabled | type) == "boolean"' "true" \
+        "get-client-profile [$broker]: allowGuaranteedMsgSendEnabled must be a boolean" || return 1
+}
+
+test_get_client_username_not_found() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "get-client-username" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientUsername:"nonexistent-client-username"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "get-client-username [$broker]: nonexistent username should return an error result" || return 1
+    assert_json_field "$response" ".result.structuredContent.retryable" "false" \
+        "get-client-username [$broker]: a not-found error is deterministic, so retryable should be false" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "get-client-username [$broker]: original SEMP status should be preserved" || return 1
+    assert_contains "$response" "nonexistent-client-username" \
+        "get-client-username [$broker]: translated message should name the object that was not found" || return 1
+}
+
+test_get_client_profile_not_found() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "get-client-profile" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientProfileName:"nonexistent-client-profile"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "get-client-profile [$broker]: nonexistent profile should return an error result" || return 1
+    assert_json_field "$response" ".result.structuredContent.retryable" "false" \
+        "get-client-profile [$broker]: a not-found error is deterministic, so retryable should be false" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "get-client-profile [$broker]: original SEMP status should be preserved" || return 1
+    assert_contains "$response" "nonexistent-client-profile" \
+        "get-client-profile [$broker]: translated message should name the object that was not found" || return 1
+}
+
+test_list_client_usernames_a() { test_list_client_usernames "broker-a"; }
+test_list_client_usernames_b() { test_list_client_usernames "broker-b"; }
+test_get_client_username_a()   { test_get_client_username "broker-a"; }
+test_get_client_username_b()   { test_get_client_username "broker-b"; }
+test_get_client_username_not_found_a() { test_get_client_username_not_found "broker-a"; }
+test_get_client_username_not_found_b() { test_get_client_username_not_found "broker-b"; }
+test_list_client_profiles_a()  { test_list_client_profiles "broker-a"; }
+test_list_client_profiles_b()  { test_list_client_profiles "broker-b"; }
+test_get_client_profile_a()    { test_get_client_profile "broker-a"; }
+test_get_client_profile_b()    { test_get_client_profile "broker-b"; }
+test_get_client_profile_not_found_a() { test_get_client_profile_not_found "broker-a"; }
+test_get_client_profile_not_found_b() { test_get_client_profile_not_found "broker-b"; }
+
 # ── Tool 7: get-message-rates (F4 sustained traffic; VPN-level) ──────────────
 # Value check (AC 10): under F4's sustained ~100 msg/s load the default VPN's
 # rxMsgRate (publish-side aggregate, ~1100+) sits well above 80 and is read
@@ -1486,5 +1591,18 @@ run_test "Tool 19 — get-kafka-sender-status failing (broker-a)"     test_get_k
 run_test "Tool 19 — get-kafka-sender-status failing (broker-b)"     test_get_kafka_sender_status_failing_b
 run_test "Tool 19 — get-kafka-sender-status not found (broker-a)"   test_get_kafka_sender_status_not_found_a
 run_test "Tool 19 — get-kafka-sender-status not found (broker-b)"   test_get_kafka_sender_status_not_found_b
+
+run_test "Tool 20 — list-client-usernames (broker-a)"   test_list_client_usernames_a
+run_test "Tool 20 — list-client-usernames (broker-b)"   test_list_client_usernames_b
+run_test "Tool 21 — get-client-username (broker-a)"     test_get_client_username_a
+run_test "Tool 21 — get-client-username (broker-b)"     test_get_client_username_b
+run_test "Tool 21 — get-client-username not found (broker-a)" test_get_client_username_not_found_a
+run_test "Tool 21 — get-client-username not found (broker-b)" test_get_client_username_not_found_b
+run_test "Tool 22 — list-client-profiles (broker-a)"    test_list_client_profiles_a
+run_test "Tool 22 — list-client-profiles (broker-b)"    test_list_client_profiles_b
+run_test "Tool 23 — get-client-profile (broker-a)"      test_get_client_profile_a
+run_test "Tool 23 — get-client-profile (broker-b)"      test_get_client_profile_b
+run_test "Tool 23 — get-client-profile not found (broker-a)" test_get_client_profile_not_found_a
+run_test "Tool 23 — get-client-profile not found (broker-b)" test_get_client_profile_not_found_b
 
 print_summary "MCP tool tests"
