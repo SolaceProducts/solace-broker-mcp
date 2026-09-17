@@ -463,3 +463,153 @@ and below `max_queue_wait`. Set it at or above `max_queue_wait` and the signal
 is silently dead, because the request is shed before the warning fires. Neither
 bound is validated. See
 [Observability](observability.md#load-and-saturation-visibility--interim--logs-only).
+
+## Observability Settings
+
+The observability on/off switches are `OBS_*` environment variables, not YAML — see
+[Observability § Flag Defaults at GA](observability.md#flag-defaults-at-ga). The
+`observability:` block carries only the tunables and identity fields below. Every key has a
+default, so the block may be omitted entirely, and every value supports `${VAR}` substitution.
+
+| YAML field | Env var | Default | Description |
+|---|---|---|---|
+| `observability.metrics_bind_address` | — | `:9091` | Address the Prometheus `/metrics` listener binds when `OBS_METRICS_ENABLED` is set. Must not share the MCP `port`; config load rejects the collision. The shipped Kubernetes `networkpolicy.yaml`, `service.yaml`, and `deployment.yaml` spell this port and must move with it — see [Observability § Scraping and securing the metrics endpoint](observability.md#scraping-and-securing-the-metrics-endpoint). |
+| `observability.shutdown_drain_delay_s` | — | `10` | Seconds the server waits after flipping `/readyz` to 503 on SIGTERM, before draining in-flight requests, so the orchestrator deregisters the pod first. Raise `terminationGracePeriodSeconds` with it. |
+| `observability.saturation_threshold_ms` | — | `1000` | Queue wait above which a `broker admission slow` warning fires, when `OBS_SATURATION_EVENTS_ENABLED` is set. Sizing guidance under [When a broker is too busy](#when-a-broker-is-too-busy). |
+| `observability.otel_self_stats_interval_s` | — | `60` | Interval of the `otel self stats` log line, emitted when tracing is on but no meter provider exists — see [Observability § otel self stats](observability.md#otel-self-stats--periodic-when-metrics-are-off). |
+| `observability.progress_signal_threshold_ms` | — | `5000` | Reserved. Parsed and defaulted, but no signal consumes it yet. |
+| `observability.service_name` | — | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. |
+| `observability.service_instance_id` | — | pod name, else hostname | OTel `service.instance.id`. Set only when neither the downward-API pod name nor the hostname identifies the instance. |
+| `observability.deployment_environment` | — | none | OTel `deployment.environment.name`. Omitted from telemetry when empty. |
+| `observability.cloud_region` | — | none | OTel `cloud.region`. Omitted from telemetry when empty. |
+
+The identity fields are described under
+[Observability § Resource Attributes](observability.md#resource-attributes--implemented).
+
+```yaml
+observability:
+  metrics_bind_address: ":9091"
+  shutdown_drain_delay_s: 10
+  deployment_environment: "production"
+  cloud_region: "us-east-1"
+```
+
+## Outbound HTTP Proxy
+
+Operators behind a mandatory egress proxy point the server's outbound traffic at it with the
+standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables — the same mechanism
+Terraform and most Go tooling uses. There is no YAML equivalent and no per-broker setting; see
+[Limits](#limits-of-the-environment-variable-approach).
+
+Either case works (`HTTPS_PROXY` or `https_proxy`). If both are set the upper-case form wins.
+
+### What the variables govern
+
+| Outbound traffic | Proxied | Notes |
+|---|---|---|
+| Broker SEMP (all tools, SEMPv1 and SEMPv2) | Yes | `https://` broker URLs follow `HTTPS_PROXY`, `http://` follows `HTTP_PROXY`. |
+| IdP / OIDC — discovery, JWKS refresh, RFC 8693 token exchange | Yes | Has always followed these variables, including before broker traffic did. |
+| OTLP telemetry export (traces and metrics) | Yes | **Always `HTTPS_PROXY`, whatever `OTEL_EXPORTER_OTLP_ENDPOINT` says.** Export is gRPC, and grpc-go resolves its proxy against a synthesized `https` target, so an `http://collector:4317` endpoint is *not* governed by `HTTP_PROXY`. Exempt the collector in `NO_PROXY` — see below. |
+| `--health` probe | No | Loopback only, and loopback is never proxied (see below). |
+| Inbound MCP requests | N/A | Not outbound traffic. Running the server behind a reverse proxy is a separate concern — see [`tls_terminated_upstream`](#server-settings). |
+
+All three proxied paths read the same process-wide environment. You cannot proxy one and not
+another by role.
+
+### Separating traffic by destination
+
+The only separation axis is the **destination**. `NO_PROXY` exempts destinations from the proxy;
+nothing selects by role, and the `HTTP_PROXY`/`HTTPS_PROXY` split is by URL **scheme**, not by
+role. SEMP over TLS, a cloud IdP, and OTLP export all land on `HTTPS_PROXY`, so that split is
+not a way to separate them.
+
+The common topology is internal brokers and an internal collector with an external IdP: proxy
+the IdP, go direct to everything else. **List the collector explicitly** — a telemetry endpoint
+that matches no `NO_PROXY` entry is CONNECT-tunneled to a proxy that usually cannot reach it,
+and export then fails silently.
+
+```bash
+# Brokers at broker-01.internal.example.com, broker-02.internal.example.com
+# Collector at otel-collector:4317 (OTEL_EXPORTER_OTLP_ENDPOINT)
+# IdP at login.microsoftonline.com
+HTTPS_PROXY=http://proxy.example.com:3128
+NO_PROXY=.internal.example.com,otel-collector
+```
+
+The inverse — brokers reached through the proxy for allow-listing, IdP and collector direct:
+
+```bash
+HTTPS_PROXY=http://proxy.example.com:3128
+NO_PROXY=login.microsoftonline.com,otel-collector
+```
+
+A single-label host like `otel-collector` needs its own entry; it matches no dotted suffix. In
+Kubernetes, prefer the form the endpoint actually uses — `otel-collector.monitoring` or
+`.svc.cluster.local` — since `NO_PROXY` matches the host as written, not after resolution.
+
+### How `NO_PROXY` entries match
+
+Comma-separated. Which entries can match a broker depends on **how that broker's `url:` is
+written**, and the two families are mutually exclusive:
+
+| Entry form | Matches | Does not match |
+|---|---|---|
+| `example.com` | `example.com` and any subdomain (`broker.example.com`) | any IP-literal host |
+| `.example.com`, `*.example.com` | subdomains only — **not** the apex `example.com` | any IP-literal host |
+| `example.com:943` | as above, but only on port 943 | other ports |
+| `10.1.2.3`, `10.1.2.3:943` | that IP literal, optionally port-scoped | hostnames |
+| `10.0.0.0/8` | IP literals inside the block; **port cannot be scoped** | hostnames |
+| `*` | everything — disables proxying entirely | — |
+
+**A CIDR entry only applies to a broker addressed by IP literal.** A broker configured as
+`url: "https://broker.example.com:943"` is never matched by `NO_PROXY=10.0.0.0/8`, even when
+that name resolves inside the block — Go matches `NO_PROXY` against the host as written in the
+URL and performs no DNS resolution. Since the documented broker form is a hostname, prefer a
+domain suffix; reach for CIDR only if your `brokers:` entries genuinely use IP literals. The
+converse also holds: a domain entry never matches an IP-literal host.
+
+`localhost` and any loopback address are never proxied, regardless of `NO_PROXY`.
+
+### Proxy authentication
+
+Credentials go in the proxy URL: `HTTPS_PROXY=http://user:password@proxy.example.com:3128`.
+Supply it the same way as other secrets — via the environment or the `.env` file, not a YAML
+literal — since the value contains a password.
+
+This server strips userinfo from every proxy URL it logs, so the `proxy` field described below
+carries a host and port but never a password. One caveat is outside its control: with **both**
+`GRPC_GO_LOG_SEVERITY_LEVEL=info` and `GRPC_GO_LOG_VERBOSITY_LEVEL=2` set — the combination
+needed to debug OTLP export, since the line is behind a verbosity-2 gate — grpc-go writes the
+detected proxy URL to stderr unredacted, password included. Neither variable is set by default.
+Prefer an unauthenticated proxy, or an allow-list on the proxy side, if that debugging path is
+one your operators will use.
+
+### Limits of the environment-variable approach
+
+- **Restart-scoped.** Go resolves these variables once per process and caches the result, so
+  changing them requires a server restart. They are not re-read on config reload.
+- **Process-wide.** The setting applies to every broker in `brokers:`, to the IdP, and to OTLP
+  export alike. Per-broker or per-role proxy configuration does not exist; `NO_PROXY` is the
+  only way to carve out a destination.
+- **A `NO_PROXY` miss is not an error.** An entry that matches nothing produces no warning —
+  traffic simply goes through the proxy. Confirm what actually took effect from the `proxy`
+  field below rather than from the variables you set.
+
+### Confirming which brokers are proxied
+
+Each broker logs its effective proxy once, when its connection is first created:
+
+```
+level=INFO msg="broker connection created" broker=prod-01 url=https://broker-01.internal.example.com:943
+  auth_mode=basic proxy=direct
+```
+
+`proxy` is either `direct` — no proxy variable applies, or `NO_PROXY` exempts this broker — or
+the proxy's URL with any userinfo stripped. Grep for `proxy=` at startup to see every broker's
+resolved state, and alert on `proxy!=direct` if brokers are meant to be reached directly. A
+broker that is unexpectedly unreachable after a proxy is introduced shows `proxy=<the proxy>`
+here and a `proxyconnect tcp:` dial error on the failing call.
+
+OTLP export has no equivalent line, because grpc-go resolves that proxy internally; a tunneled
+collector surfaces only as export failures
+([OTLP Export Health](observability.md#otlp-export-health)).

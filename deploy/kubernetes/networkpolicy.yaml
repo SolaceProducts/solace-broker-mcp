@@ -1,0 +1,77 @@
+# Who may reach the pod (SOL-152424). Ingress only: policyTypes lists Ingress
+# alone, so egress — broker SEMP, IdP, DNS, OTLP push — is untouched. Read the
+# note at the bottom before adding an `egress:` section.
+#
+# TWO REASONS AN APPLIED POLICY MAY PROTECT NOTHING, neither visible in
+# `kubectl get networkpolicy`:
+#
+#   1. Only the CNI enforces it. Calico, Cilium, and OpenShift's OVN-Kubernetes
+#      do; on GKE, AKS, and EKS it is a cluster feature that is off unless it
+#      was turned on, usually at creation; kind's kindnet enforces nothing.
+#   2. Policies are additive with no deny rule, so another policy selecting
+#      these pods can re-open :9091 and nothing here overrides it.
+#
+# So verify rather than assume: from a pod OUTSIDE the monitoring namespace,
+# curl a pod IP on :9091 — it should hang or be refused — and audit
+# `kubectl get networkpolicy -A`. docs/observability.md § "Scraping and
+# securing the metrics endpoint" carries the per-platform table and, where
+# enforcement is unavailable, the fallbacks.
+#
+# Ports are numeric because named-port support varies by CNI. Once applied, a
+# port this file does not list is denied, not merely unprotected, so both must
+# follow the config: 9090 tracks `port` in configmap.yaml (and the `http`
+# containerPort in deployment.yaml); 9091 tracks
+# observability.metrics_bind_address (and the `metrics` port in service.yaml
+# and deployment.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: solace-broker-mcp
+  labels:
+    app.kubernetes.io/name: solace-broker-mcp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: solace-broker-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    # :9090 (MCP, /livez, /readyz) from any source — no `from` means all. The
+    # kubelet's probes come from the node's own address, which no selector can
+    # name, and this policy exists to protect :9091, not to change who may
+    # reach the MCP endpoint. Tighten only if you know every source.
+    - ports:
+        - protocol: TCP
+          port: 9090
+    # :9091 (/metrics) from the monitoring namespace only. EDIT the name if
+    # your Prometheus runs elsewhere; kubernetes.io/metadata.name is set on
+    # every namespace automatically (Kubernetes 1.22+). Add a podSelector
+    # beside the namespaceSelector to narrow to the Prometheus pods.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9091
+# OTLP egress (OBS_METRICS_OTLP_ENABLED, OBS_TRACING_ENABLED). Needed only if
+# something else already restricts this pod's egress; this policy does not.
+# Do not add it here: an `egress:` section default-denies every destination it
+# omits (brokers, IdP, DNS), and NetworkPolicies are additive, so an allow in
+# this file cannot override a default-deny elsewhere anyway. Add a rule shaped
+# like this to YOUR egress policy, with your collector's labels and TCP 4317 —
+# the gRPC port. This pod pushes OTLP over gRPC only; 4318 is not a valid
+# target for it:
+#
+#   egress:
+#     - to:
+#         - podSelector:
+#             matchLabels:
+#               app.kubernetes.io/name: otel-collector
+#       ports:
+#         - protocol: TCP
+#           port: 4317
+#
+# That policy also needs a DNS rule (UDP and TCP 53 to kube-dns) or the
+# collector's name never resolves. A blocked dial fails silently —
+# docs/observability.md § "OTLP Export Health" names the counters that show it.

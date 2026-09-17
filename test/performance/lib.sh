@@ -570,6 +570,369 @@ perf_yaml_semp_value() {
   ' "$1"
 }
 
+# perf_yaml_top_value <config> <key> — the value of one scalar key at column 0.
+#
+# perf_yaml_semp_value's sibling for the top level. Separate rather than
+# parameterised because the two have opposite predicates: that one only reads
+# inside the `semp:` block, this one only reads outside every block. A
+# `log_level` nested under `semp:` is a different setting from the server's own
+# log level, and conflating them would report a value the server never applied.
+perf_yaml_top_value() {
+  awk -v want="$2" '
+    {
+      line = $0
+      sub(/#.*/, "", line)                 # strip trailing comment
+      if (line !~ /^[A-Za-z_]+:/) next     # column 0 only
+      k = line; sub(/:.*/, "", k)
+      if (k != want) next
+      v = line; sub(/^[^:]*:[[:space:]]*/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^["'\''"]|["'\''"]$/, "", v)
+      if (v != "") { print v; exit }
+    }
+  ' "$1"
+}
+
+# perf_record_log_level <record> <mcp_log> <config_used> — the level the server
+# actually ran at, and where that was established.
+#
+# The level is the input to the volume projection below, so a wrong one
+# projects a confident wrong number and either refuses a run that would have
+# fit or admits one that fills the disk. It therefore carries a `_source` on
+# exactly the same terms as the admission settings, with the same meanings —
+# see perf_record_admission for what each label promises.
+#
+# Unlike those four, this one really is on the `config loaded` line
+# (cmd/server/main.go logs log_level beside fair_scheduling), so the common
+# path is `server-log`: the server's own report of what it resolved, after its
+# own defaults were applied.
+perf_record_log_level() {
+  local record=$1 mcp_log=$2 config_used=$3
+  local line="" level="" source=""
+
+  if [[ -r "$mcp_log" ]]; then
+    line=$(grep -m1 '"msg":"config loaded"' "$mcp_log" 2>/dev/null) || true
+  fi
+  if [[ -n "$line" ]]; then
+    level=$(printf '%s' "$line" | sed -n 's/.*"log_level":"\([^"]*\)".*/\1/p')
+  fi
+
+  if [[ -n "$level" ]]; then
+    source=server-log
+  elif [[ -n "$line" ]]; then
+    # The line is there and the field is not. Two-stage for the same reason
+    # perf_record_admission is: collapsing "never logged" and "field renamed"
+    # into one answer would let a log-schema change degrade every future run
+    # with no signal. Fall back to the config file for the value, but never
+    # claim the server reported it.
+    echo "   WARNING: the server logged 'config loaded' but no log_level field —" >&2
+    echo "            the log schema changed and lib.sh's reader needs updating." >&2
+    source=server-log-schema-changed
+    [[ -r "$config_used" ]] && level=$(perf_yaml_top_value "$config_used" log_level)
+  else
+    [[ -r "$config_used" ]] && level=$(perf_yaml_top_value "$config_used" log_level)
+    if [[ -n "$level" ]]; then
+      source=config-file
+    elif [[ -r "$config_used" ]] && grep -qE '^log_level[[:space:]]*:' "$config_used"; then
+      # The key is in the file but the narrow reader could not extract it — a
+      # shape it does not handle (flow style, an anchor, a value on the next
+      # line). This is the case perf_record_admission calls
+      # `config-file-unparsed`, and for its stated reason: the value IS
+      # written down, we just failed to read it, and
+      # `unreported-server-default` would be a lie about provenance that the
+      # volume projection then trusts.
+      echo "   WARNING: log_level is set in $(basename "$config_used") but lib.sh could not parse it" >&2
+      source=config-file-unparsed
+    fi
+  fi
+
+  if [[ -z "$level" ]]; then
+    # Not written down and not reported: the server applied its own default and
+    # this harness cannot prove which. A wrong value here is worse than an
+    # absent one, because the projection would trust it.
+    level=unknown
+    [[ -z "$source" ]] && source=unreported-server-default
+  else
+    # Folded to lower case, because the server folds it before validating
+    # (internal/config lowercases the configured value) — so `INFO` in a config
+    # file is a run at `info`, not a level this harness has never heard of.
+    # Without this, a legal config reached the projection as an unknown level,
+    # the guard printed "cannot project", and a ten-hour info-level run was
+    # admitted — the exact outcome the projection exists to prevent. It also
+    # split one campaign's records into INFO and info buckets.
+    level=$(printf '%s' "$level" | tr '[:upper:]' '[:lower:]')
+  fi
+
+  perf_record_kv "$record" log_level "$level"
+  perf_record_kv "$record" log_level_source "$source"
+  return 0
+}
+
+# perf_human_bytes <bytes> — a byte count for a human, or `unknown`.
+#
+# Decimal units on purpose. The measurement these projections come from is
+# quoted in GB (1.1 GB in 30 minutes), and printing a projection in GiB beside
+# a GB measurement invites a reader to think the two disagree by 7% when they
+# do not. Anything that is not a plain byte count prints `unknown` rather than
+# a number derived from nothing.
+perf_human_bytes() {
+  local b=${1:-}
+  [[ "$b" =~ ^[0-9]+$ ]] || { printf 'unknown\n'; return 0; }
+  awk -v b="$b" 'BEGIN {
+    if (b < 1000)          { printf "%d B\n", b }
+    else if (b < 1000000)  { printf "%.1f KB\n", b / 1000 }
+    else if (b < 1000000000) { printf "%.1f MB\n", b / 1000000 }
+    else if (b < 1000000000000) { printf "%.1f GB\n", b / 1000000000 }
+    else                   { printf "%.1f TB\n", b / 1000000000000 }
+  }'
+}
+
+# PERF_LOG_BYTES_PER_HOUR_INFO — the one log-volume rate that was ever measured.
+#
+# SOL-154158's 30-minute control at log_level info: 1.1 GB and 4,512,819 lines
+# at 2,507 calls/s, so ~2.2 GB/h. RSS was unaffected (174.4 vs 174.6 MB) — this
+# is a disk failure mode, not a memory one, and a full disk kills the run and
+# its samplers together.
+#
+# It scales with the call rate, and the MCP box does not know the call rate:
+# the load runs on the other box by design. So this is a projection at roughly
+# 2,500 calls/s and nothing more, and every caller prints that caveat beside
+# the number rather than presenting it as a prediction.
+PERF_LOG_BYTES_PER_HOUR_INFO=2200000000
+
+# PERF_LOG_VOLUME_MAX_FRACTION — refuse when the projection exceeds this much
+# of the free space on the log volume. Half, because the run directory also
+# takes the sampler CSVs, the fidelity capture and the mock's own log, and a
+# projection that is right to within a factor of two is still useful at half.
+PERF_LOG_VOLUME_MAX_FRACTION=50
+
+# perf_project_log_volume <level> <duration_secs> <avail_bytes> — echoes
+# "<projected_bytes> <verdict> <basis>".
+#
+#   verdict  ok       the projection fits within the threshold
+#            over     it does not, and the caller should refuse
+#            unknown  it could not be projected — an unestablished or unknown
+#                     level, or free space the caller could not read
+#   basis    measured the rate came from a real measurement at this level
+#            floor    the rate is a lower bound; the real figure is higher
+#            shed-dependent
+#                     no per-call line while healthy, but one per shed request
+#                     under admission pressure — not projectable from here
+#            none     nothing was projected
+#
+# Pure arithmetic over its three arguments so it can be tested without a server
+# or a disk. `unknown` never refuses: blocking a campaign over a value nobody
+# measured is a worse failure than letting a run fill a volume the operator can
+# see the projection for.
+perf_project_log_volume() {
+  local level=$1 secs=$2 avail=$3
+  local rate basis projected
+
+  case "$level" in
+    info)         rate=$PERF_LOG_BYTES_PER_HOUR_INFO; basis=measured ;;
+    # Never measured, and cannot be quieter than info — it adds lines, it does
+    # not remove them. info's rate is therefore a floor, and the label says so
+    # so nobody quotes the number as a measurement.
+    debug)        rate=$PERF_LOG_BYTES_PER_HOUR_INFO; basis=floor ;;
+    # No per-call line at these levels in a *healthy* run — the SOL-154158
+    # control measured startup lines and nothing else. But the shed and
+    # slow-admission paths log at warn once per SEMP request
+    # (internal/semp/resilience/sender.go: "request shed: broker admission
+    # bound exceeded", "broker admission slow"), and driving a broker past
+    # semp.max_concurrent_per_broker is precisely what this harness's admission
+    # knobs exist to do. At 2,000 shed/s those lines outweigh the info figure
+    # this guard refuses on.
+    #
+    # So volume here is a function of the shed rate, which this box cannot
+    # know, and the honest answer is that it cannot be projected — not a
+    # confident zero that would admit the run that fills the disk at hour
+    # three.
+    warn|error)   printf '0 unknown shed-dependent\n'; return 0 ;;
+    *)            printf '0 unknown none\n'; return 0 ;;
+  esac
+
+  if [[ ! "$secs" =~ ^[0-9]+$ ]] || (( secs <= 0 )); then
+    # `unknown`, not `ok`: nothing was projected, and the contract above
+    # reserves ok/over for a figure that was. Both runners validate DURATION
+    # long before reaching here, so this is a contract guarantee for the next
+    # caller rather than a path in use today.
+    printf '0 unknown none\n'
+    return 0
+  fi
+
+  projected=$(( rate * secs / 3600 ))
+
+  # Free space the caller could not read is not "no space" and not "infinite
+  # space" — it is no answer, and there is nothing to compare against. A
+  # reported ZERO is a different thing: the volume is full, which is the most
+  # emphatic `over` there is. Folding it into `unknown` meant the one state the
+  # guard exists for — no room left — was the one it waved through.
+  if [[ ! "$avail" =~ ^[0-9]+$ ]]; then
+    printf '%s unknown %s\n' "$projected" "$basis"
+    return 0
+  fi
+  if (( 10#$avail == 0 )); then
+    printf '%s over %s\n' "$projected" "$basis"
+    return 0
+  fi
+
+  # 10# on avail: the regex above admits a leading zero, which bash arithmetic
+  # would otherwise read as octal — `08` errors, `010` is eight.
+  if (( projected * 100 > 10#$avail * PERF_LOG_VOLUME_MAX_FRACTION )); then
+    printf '%s over %s\n' "$projected" "$basis"
+  else
+    printf '%s ok %s\n' "$projected" "$basis"
+  fi
+  return 0
+}
+
+# perf_guard_log_volume <record> <mcp_log> <config_used> <runs_dir> <secs>
+# — record the effective log level, print the projected log volume, and refuse
+# a run that cannot fit. Returns non-zero when the caller should stop.
+#
+# Both runners call this, because both can fill the volume: the skill-side soak
+# driver already refuses an info-level config for a long run and the repo
+# runners did not. The projection is printed on every path, including the ones
+# that do not refuse — the number is useful even when it is comfortable, and it
+# is the only place the run says what its logging is expected to cost.
+#
+# ALLOW_VERBOSE_LOGS=1 overrides the refusal. Deliberately an override and not
+# a threshold knob: someone who wants 22 GB of logs on purpose says so once,
+# rather than tuning a fraction until the check passes.
+#
+# PERF_LOG_AVAIL_BYTES is a test seam and nothing else. A real run reads df on
+# the run directory; no test can control that without filling a disk.
+perf_guard_log_volume() {
+  local record=$1 mcp_log=$2 config_used=$3 runs_dir=$4 secs=$5
+  # Where the load runs, which decides only whether the printed caveat blames
+  # the other box for the unknown call rate. "local" for the single-host
+  # runner, where the generator is on this box; "remote" (the default) for the
+  # split-host MCP box, which genuinely cannot know the rate.
+  local locality=${6:-remote}
+  local level src avail proj verdict basis
+
+  perf_record_log_level "$record" "$mcp_log" "$config_used"
+  level=$(awk -F= '/^log_level=/ {print $2; exit}' "$record")
+  src=$(awk -F= '/^log_level_source=/ {print $2; exit}' "$record")
+
+  if [[ -n "${PERF_LOG_AVAIL_BYTES:-}" ]]; then
+    avail=$PERF_LOG_AVAIL_BYTES
+  else
+    # Free space on the volume the log is actually written to, not on $PWD.
+    # `|| true` and the digit filter: an unreadable df is no answer, and it
+    # must not arrive as an empty string that later reads as a full disk.
+    avail=$( { df -B1 --output=avail "$runs_dir" 2>/dev/null || true; } | tail -1 | tr -dc '0-9')
+    # `--output` is GNU coreutils only. Without the fallback the guard degrades
+    # to advisory-only on a busybox or BSD jump box — it still prints, but the
+    # refusal AC5 asks for is quietly gone. POSIX `df -k` is 1K blocks, avail
+    # in column 4.
+    if [[ -z "$avail" ]]; then
+      # -P: POSIX output, one line per filesystem. Without it a long device
+      # name wraps onto its own line, the data line has five fields, and $4 is
+      # the capacity percentage — which fails the digit test and leaves the
+      # guard advisory-only on exactly the hosts this fallback exists for.
+      avail=$( { df -Pk "$runs_dir" 2>/dev/null || true; } | tail -1 \
+               | awk '{ if ($4 ~ /^[0-9]+$/) printf "%d", $4 * 1024 }')
+    fi
+  fi
+
+  read -r proj verdict basis <<<"$(perf_project_log_volume "$level" "$secs" "${avail:-0}")"
+
+  echo "   log volume: level=$level ($src) over ${secs}s"
+  # One branch per basis, rather than splicing the basis token into one
+  # sentence written for `measured`. Spliced, a warn-level run printed
+  # "projected ~0 B (none at ~2,500 calls/s ...)", which is not a sentence and
+  # told the operator the opposite of what the zero meant.
+  case "$basis" in
+    shed-dependent)
+      echo "               cannot project at this level: no per-call line while healthy,"
+      echo "               but one per shed request under admission pressure — and the"
+      echo "               shed rate is not knowable here. Watch the volume yourself."
+      ;;
+    none)
+      echo "               cannot project — the level was not established ($src)"
+      ;;
+    *)
+      printf '               projected ~%s, %s at ~2,500 calls/s\n' \
+        "$(perf_human_bytes "$proj")" "$basis"
+      if [[ "$locality" == remote ]]; then
+        echo "               (scales with the call rate, which this box does not know —"
+        echo "                the load runs on the other box)"
+      else
+        echo "               (scales with the call rate)"
+      fi
+      # gctrace goes to the same mcp.log when GODEBUG is set for a run, and it
+      # is not in this projection: the README recommends the flag for exactly
+      # the long runs this guard is sizing, so say what is excluded instead of
+      # modelling a second rate nobody measured.
+      echo "               Server log lines only: GODEBUG=gctrace output lands in the"
+      echo "               same file and is not counted (~190 B per GC cycle)."
+      ;;
+  esac
+  if [[ "$basis" != none && "$basis" != shed-dependent ]]; then
+    # 10# here too, for the same reason as the threshold comparison below it:
+    # only the displayed figure depends on this one, but two readings of the
+    # same value in one function should not disagree.
+    if [[ -n "${avail:-}" ]] && (( 10#${avail:-0} > 0 )); then
+      printf '               free on the log volume: %s   threshold: %s%%\n' \
+        "$(perf_human_bytes "$avail")" "$PERF_LOG_VOLUME_MAX_FRACTION"
+    else
+      echo "               free space on the log volume could not be read"
+    fi
+  fi
+
+  if [[ "$verdict" == over ]]; then
+    if [[ "${ALLOW_VERBOSE_LOGS:-}" == "1" ]]; then
+      echo "               ALLOW_VERBOSE_LOGS=1 — running anyway"
+      return 0
+    fi
+    echo "   REFUSING: the projected log volume exceeds ${PERF_LOG_VOLUME_MAX_FRACTION}% of the free space" >&2
+    echo "             on the log volume. Lower log_level in the config this run uses," >&2
+    echo "             shorten the run, free space, or set ALLOW_VERBOSE_LOGS=1 to run anyway." >&2
+    return 1
+  fi
+  return 0
+}
+
+# perf_filter_godebug — reduce GODEBUG to the one setting this harness asks
+# for, in place, before any child is launched.
+#
+# The runners capture their children's stderr into archived files: mcp.log,
+# loadgen.log, fidelity.log, mock.log. GODEBUG is a general knob, and
+# `http2debug=2` makes the Go HTTP/2 client print every frame it sends —
+# including the `Authorization` header that loadgen and fidelity set from
+# MCP_DEV_TOKEN, and that the MCP server sends to the broker. Raw
+# Authorization values are on the never-log list in
+# docs/internal/secure-logging-rules.md, and slog's ReplaceAttr safety net
+# cannot reach them: that output comes from the runtime's own printf path.
+#
+# Enforced rather than documented, which is the rule the rest of this file
+# follows — mcp_url has its userinfo stripped before it reaches a record, and
+# perf_record_kv substitutes `=` rather than asking callers not to type one.
+#
+# gctrace=0 is dropped too, with its own warning: it passes a naive
+# `^gctrace=` filter, produces no output, and would cost an operator a
+# ten-hour soak's live-heap series they believed they had captured.
+perf_filter_godebug() {
+  [[ -z "${GODEBUG:-}" ]] && return 0
+  local kept
+  # Anchored at both ends: `^gctrace=[1-9]` alone also matched `gctrace=1junk`,
+  # which the runtime ignores — so the value survived the filter, no gctrace
+  # was emitted, and the report implied a live-heap capture that never ran.
+  kept=$(printf '%s' "$GODEBUG" | tr ',' '\n' | grep -E '^gctrace=[1-9][0-9]*$' | paste -sd, -) || true
+  if [[ "$kept" != "$GODEBUG" ]]; then
+    echo "   WARNING: GODEBUG reduced to '${kept:-<empty>}' — this runner captures child" >&2
+    echo "            stderr into archived logs, and non-gctrace values (http2debug) write" >&2
+    echo "            request headers into them. gctrace=0 is dropped as a no-op too." >&2
+  fi
+  if [[ -n "$kept" ]]; then
+    export GODEBUG="$kept"
+  else
+    unset GODEBUG
+  fi
+  return 0
+}
+
 # perf_record_proc_nofile <record> <pid> — the descriptor limit the sampled
 # process actually runs under.
 #
@@ -719,7 +1082,11 @@ perf_cgroup_binding_quota() {
   dir="$root${2%/}"
   while :; do
     if [[ -r "$dir/cpu.max" ]]; then
-      raw=$(cat "$dir/cpu.max")
+      # `|| true` with the redirect silenced: the -r test above and this read
+      # are two moments, and a cgroup torn down between them (a server dying
+      # during startup, a scope removed) makes cat fail — which inside a
+      # command substitution aborts the caller under set -e, mid-record.
+      raw=$( { cat "$dir/cpu.max" || true; } 2>/dev/null )
       cores=$(perf_cgroup_quota_cores "$raw")
       if [[ "$cores" != none && "$cores" != unknown ]]; then
         if [[ -z "$best" ]] || awk -v a="$cores" -v b="$best" 'BEGIN { exit !(a < b) }'; then
@@ -827,6 +1194,139 @@ perf_record_runtime_cpu() {
   # process's own cgroup is the tightest; an ancestor otherwise, and that
   # difference is the whole reason the walk reads every level.
   perf_record_kv "$record" cgroup_cpu_quota_from "$from"
+  return 0
+}
+
+# perf_cgroup_binding_memory <root> <cgroup_path> — the memory limit that
+# actually binds, echoed as "<cgroup> <raw>", empty when nothing sets one.
+#
+# Same hierarchy rule as cpu.max and the same reason for walking it: a v2
+# parent's limit bounds its whole subtree, so a 1 GiB leaf under a 256 MiB
+# parent gets 256 MiB and reporting the leaf would overstate it fourfold.
+#
+# memory.max is one token, unlike cpu.max's two: a byte count, or `max` for no
+# limit. `max` is an answer and is skipped as "no limit here"; anything that is
+# neither `max` nor a plain byte count is skipped as unread rather than treated
+# as permission — the same rule perf_cgroup_quota_cores applies to a cpu.max
+# line it cannot parse. No derived value is echoed: bytes are bytes, and a
+# reader who wants MiB can divide. The caller labels the absence.
+perf_cgroup_binding_memory() {
+  local root=${1%/} dir best="" best_dir="" raw unread=
+  [[ -z "$root" ]] && root=/
+  dir="$root${2%/}"
+  while :; do
+    if [[ -r "$dir/memory.max" ]]; then
+      # `|| true` with the redirect silenced: the -r test above and this read
+      # are two moments, and a cgroup torn down between them (a server dying
+      # during startup, a scope removed) makes cat fail — which inside a
+      # command substitution aborts the caller under set -e, mid-record.
+      raw=$( { cat "$dir/memory.max" || true; } 2>/dev/null )
+      # A trailing newline is already stripped by the substitution; what is
+      # left must be all digits. `max`, an empty file and a partial write all
+      # fail this and are skipped.
+      # `max` is the v2 spelling of "no limit" and is a real answer. Anything
+      # else that is not a byte count is a file we could not read — a torn
+      # write, or a read that raced a teardown — and that is not the same as
+      # finding no limit. Tracked, so the caller can keep `unknown` and `none`
+      # apart the way the record requires.
+      if [[ "$raw" != max && ! "$raw" =~ ^[0-9]+$ ]]; then unread=1; fi
+      if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        if [[ -z "$best" ]] || (( raw < best )); then
+          best=$raw
+          # Relative to the root, which is what /proc/<pid>/cgroup names.
+          best_dir=${dir#"$root"}
+          [[ -z "$best_dir" ]] && best_dir=/
+        fi
+      fi
+    fi
+    [[ "$dir" == "$root" || "$dir" == "/" ]] && break
+    dir=$(dirname "$dir")
+  done
+  if [[ -n "$best" ]]; then
+    printf '%s %s\n' "$best_dir" "$best"
+  elif [[ -n "$unread" ]]; then
+    # Nothing parsed, and at least one file on the path was unreadable: the
+    # limit could not be established. `none` here would claim this process is
+    # uncapped, and a soak arm that was actually capped would archive as one
+    # that was not — leaving a later OOM unexplained.
+    printf 'unknown\n'
+  fi
+  return 0
+}
+
+# perf_record_runtime_mem <record> <pid> — how much memory the Go runtime in
+# <pid> was entitled to, as separately sourced facts.
+#
+# The memory half of perf_record_runtime_cpu, and it exists for a measured
+# reason: the SOL-154158 GOMEMLIMIT ladder ran four arms differing only in that
+# variable and produced records identical in every field, distinguishable only
+# by a tag typed in by hand. A campaign that cannot tell its own arms apart
+# from the artefacts cannot be re-read later.
+#
+# Two independent facts, never one derived "effective limit", for the same
+# reason the CPU side refuses to derive GOMAXPROCS:
+#
+#   * GOMEMLIMIT is a soft target the runtime honours by collecting harder;
+#     cgroup memory.max is a hard wall the kernel enforces by killing. They are
+#     different mechanisms with different failure modes, and a single number
+#     would hide which one a run was actually up against.
+#   * Either can be absent, and absence is a measured answer in both cases.
+#
+# cgroup v2 only, same as the CPU fields: a v1 or hybrid host writes `unknown`
+# rather than guessing at a layout it did not read. cgroup_path is deliberately
+# not written here — perf_record_runtime_cpu already records it for this same
+# pid, and a record with the key twice is a record a parser has to guess at.
+perf_record_runtime_mem() {
+  local record=$1 pid=$2
+  local env_val cg binding
+  perf_record_comment "$record" "runtime memory entitlement (GOMEMLIMIT is a soft target, cgroup memory.max a hard wall — separate facts)"
+
+  # As the process was actually launched, from its own environment. Guarded the
+  # same way the CPU side is: the readability check and the open below are two
+  # moments, and a process that exits between them makes the redirect fail,
+  # which inside a command substitution aborts the whole run under `set -e`.
+  if [[ -r "/proc/$pid/environ" ]]; then
+    env_val=$( { tr '\0' '\n' <"/proc/$pid/environ" || true; } 2>/dev/null \
+               | awk -F= '$1 == "GOMEMLIMIT" { print substr($0, index($0, "=") + 1); exit }')
+    # `unset` is a measured third value, not an absence: the variable was
+    # looked for and was not there, which is what leaves the runtime with no
+    # soft target at all.
+    perf_record_kv "$record" gomemlimit_env "$(perf_or_unknown "${env_val:-unset}")"
+  else
+    perf_record_kv "$record" gomemlimit_env unknown
+  fi
+
+  # PERF_CGROUP_ROOT is a test seam and nothing else; unset in every real run,
+  # where the root is the mount point and the mount type is checked.
+  local cg_root=${PERF_CGROUP_ROOT:-/sys/fs/cgroup}
+  cg=$(awk -F: '$1 == "0" { print $3; exit }' "/proc/$pid/cgroup" 2>/dev/null) || true
+  if [[ -z "$cg" ]] || { [[ -z "${PERF_CGROUP_ROOT:-}" ]] && [[ "$(stat -fc %T "$cg_root" 2>/dev/null)" != cgroup2fs ]]; }; then
+    perf_record_kv "$record" cgroup_memory_max unknown
+    perf_record_kv "$record" cgroup_memory_max_from unknown
+    return 0
+  fi
+
+  binding=$(perf_cgroup_binding_memory "$cg_root" "$cg")
+  if [[ "$binding" == unknown ]]; then
+    perf_record_kv "$record" cgroup_memory_max unknown
+    perf_record_kv "$record" cgroup_memory_max_from unknown
+    return 0
+  fi
+  if [[ -z "$binding" ]]; then
+    # Reaching the root without finding a byte count is an answer, not a gap:
+    # the v2 root cgroup sets no memory.max by design, so nothing on the path
+    # caps this process and mem_total_kb on the rig line is the only ceiling.
+    # The mount-type check above is what separates this from "we looked in the
+    # wrong place".
+    perf_record_kv "$record" cgroup_memory_max none
+    perf_record_kv "$record" cgroup_memory_max_from none
+    return 0
+  fi
+  perf_record_kv "$record" cgroup_memory_max "$(printf '%s' "$binding" | cut -d' ' -f2-)"
+  # Which cgroup on the path actually binds. Equal to cgroup_path when the
+  # process's own cgroup is the tightest; an ancestor otherwise, and that
+  # difference is the whole reason the walk reads every level.
+  perf_record_kv "$record" cgroup_memory_max_from "$(printf '%s' "$binding" | cut -d' ' -f1)"
   return 0
 }
 

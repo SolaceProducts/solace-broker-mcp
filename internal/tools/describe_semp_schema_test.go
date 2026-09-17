@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
@@ -302,6 +304,28 @@ func assertDescribeSempSchemaErrorType(t *testing.T, logBuf *bytes.Buffer, p *me
 	}
 }
 
+// assertInvalidParams checks that a describe-semp-schema bad-input call came
+// back as a JSON-RPC error carrying -32602 with the tool's own wording intact.
+// Before SOL-153692 the code was 0, which the SDK emits for any bare Go error
+// and which no JSON-RPC revision defines. The in-memory client hands back the
+// wire error itself as a *jsonrpc.Error, so both fields are read directly.
+func assertInvalidParams(t *testing.T, err error, wantSubstr string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected a protocol-level error containing %q, got nil", wantSubstr)
+	}
+	var wire *jsonrpc.Error
+	if !errors.As(err, &wire) {
+		t.Fatalf("error is %T, want *jsonrpc.Error: %v", err, err)
+	}
+	if wire.Code != jsonrpc.CodeInvalidParams {
+		t.Errorf("error.code = %d, want %d (Invalid Params)", wire.Code, jsonrpc.CodeInvalidParams)
+	}
+	if !strings.Contains(wire.Message, wantSubstr) {
+		t.Errorf("error.message = %q, want it to contain %q", wire.Message, wantSubstr)
+	}
+}
+
 // TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric
 // covers describe_semp_schema.go's json.Unmarshal-failure branch: the
 // "arguments" field is present on the wire but is not a JSON object, so
@@ -316,9 +340,8 @@ func TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric(
 	ctx := context.Background()
 	// forceMalformedArguments overwrites Arguments right before send, so the
 	// value supplied here is irrelevant to what actually reaches the wire.
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: describeSempSchemaToolName}); err == nil {
-		t.Fatalf("expected a protocol-level error for unparseable arguments, got nil")
-	}
+	_, err := session.CallTool(ctx, &mcp.CallToolParams{Name: describeSempSchemaToolName})
+	assertInvalidParams(t, err, "parsing tool arguments")
 
 	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
 }
@@ -331,12 +354,11 @@ func TestDescribeSempSchema_MissingOperation_ErrorTypeReachesAuditAndMetric(t *t
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+	_, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      describeSempSchemaToolName,
 		Arguments: map[string]any{},
-	}); err == nil {
-		t.Fatalf("expected a protocol-level error for a missing 'operation' parameter, got nil")
-	}
+	})
+	assertInvalidParams(t, err, "missing required parameter 'operation'")
 
 	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
 }
@@ -349,15 +371,14 @@ func TestDescribeSempSchema_InvalidView_ErrorTypeReachesAuditAndMetric(t *testin
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+	_, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: describeSempSchemaToolName,
 		Arguments: map[string]any{
 			"operation": "config/createMsgVpnQueue",
 			"view":      "bogus",
 		},
-	}); err == nil {
-		t.Fatalf("expected a protocol-level error for an invalid 'view' parameter, got nil")
-	}
+	})
+	assertInvalidParams(t, err, "invalid view")
 
 	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
 }
@@ -372,14 +393,13 @@ func TestDescribeSempSchema_UnknownOperation_ErrorTypeReachesAuditAndMetric(t *t
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+	_, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: describeSempSchemaToolName,
 		Arguments: map[string]any{
 			"operation": "config/thisDoesNotExist",
 		},
-	}); err == nil {
-		t.Fatalf("expected a protocol-level error for an unknown operation, got nil")
-	}
+	})
+	assertInvalidParams(t, err, "unknown operation")
 
 	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeNotFound)
 }

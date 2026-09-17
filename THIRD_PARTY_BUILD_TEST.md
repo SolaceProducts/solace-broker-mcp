@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-14; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-15; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -179,7 +179,7 @@ note spells out.
 | `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `37fe631` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.3.0/LICENSE) |
-| `docker/setup-qemu-action` | `96fe6ef` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.2.0/LICENSE) |
+| `docker/setup-qemu-action` | `1f40c72` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.3.0/LICENSE) |
 | `github/codeql-action/analyze` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
 | `github/codeql-action/init` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
@@ -240,6 +240,8 @@ published artifact; see [Scope](#scope).
 | `solace/solace-pubsub-standard` | `latest` | Broker fixture for e2e suites | Solace, proprietary |
 | `quay.io/keycloak/keycloak` | `26.2.5` | identity provider (IdP) fixture for the OAuth e2e suite | Apache-2.0 |
 | `apache/kafka` | `3.7.0` | Broker fixture for e2e suites | Apache-2.0 |
+| `otel/opentelemetry-collector-contrib` | `0.111.0` | OTel collector for e2e-tracing suite and reference deployment | Apache-2.0 |
+| `grafana/tempo` | `2.6.0` | Trace backend for e2e-tracing suite and reference deployment | Apache-2.0 |
 
 "Upstream license" is the license of the project that publishes the image. A
 container image is a stack of filesystem layers, and the layers carry operating

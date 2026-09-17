@@ -17,6 +17,10 @@ package resilience
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,5 +278,105 @@ func TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap(t *testing.T) {
 	// ForceAttemptHTTP2 staying false.
 	if tr.TLSClientConfig == nil {
 		t.Error("TLSClientConfig = nil re-enables Go's automatic HTTP/2, breaking the MaxConnsPerHost concurrency bound")
+	}
+}
+
+// TestNewTunedTransport_HonorsProxyEnvironment pins that broker traffic follows
+// HTTP_PROXY/HTTPS_PROXY/NO_PROXY (SOL-153295). A nil Proxy means net/http never
+// proxies rather than consulting the environment, which is why the omission was
+// silent.
+//
+// Identity rather than behaviour: ProxyFromEnvironment caches the environment
+// behind a sync.Once, so a t.Setenv test would pass or fail on whether an
+// earlier test in this binary already tripped it. Non-nil alone is too weak —
+// a func that never returns a proxy satisfies it, which is the defect. Func
+// pointers are not a unique identity per reflect.Value.Pointer, so this is a
+// strong signal rather than a proof.
+//
+// The HTTP/2 risk is pinned by
+// TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap, which fails if
+// anyone swaps this field for a DefaultTransport clone.
+func TestNewTunedTransport_HonorsProxyEnvironment(t *testing.T) {
+	brokerCfg := &config.BrokerConfig{URL: "https://broker.example.com:1943"}
+	sempCfg := &config.SEMPConfig{
+		MaxConcurrentPerBroker: defaults.DefaultMaxConcurrentPerBroker,
+		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
+	}
+
+	tr := NewTunedTransport(brokerCfg, sempCfg)
+
+	if tr.Proxy == nil {
+		t.Fatal("Proxy = nil, want http.ProxyFromEnvironment; a nil Proxy means net/http never proxies, so HTTP_PROXY/HTTPS_PROXY are silently ignored for all broker traffic")
+	}
+	got := reflect.ValueOf(tr.Proxy).Pointer()
+	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
+	if got != want {
+		t.Error("Proxy is not http.ProxyFromEnvironment; broker traffic no longer follows the standard proxy environment variables")
+	}
+}
+
+// TestProxyLabel_StripsProxyCredentials pins that the label logged for a
+// broker's effective proxy carries no credentials (SOL-153295). HTTP_PROXY and
+// HTTPS_PROXY accept userinfo — http://user:password@proxy:3128 is the
+// documented way to authenticate to a proxy — so this value reaches the log
+// stream one sanitizer away from a password.
+//
+// proxyLabel is exercised directly rather than through EffectiveProxy because
+// ProxyFromEnvironment caches the environment behind a sync.Once; reaching this
+// path by setting HTTPS_PROXY would depend on nothing else in the binary having
+// resolved a proxy first.
+func TestProxyLabel_StripsProxyCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"password is dropped", "http://user:password@proxy.example.com:3128", "http://proxy.example.com:3128"},
+		{"username alone is dropped", "http://user@proxy.example.com:3128", "http://proxy.example.com:3128"},
+		{"credentialless URL is unchanged", "http://proxy.example.com:3128", "http://proxy.example.com:3128"},
+		// SanitizeURLString only recognizes http and https, so a scheme it does
+		// not know degrades to a placeholder rather than being passed through.
+		// socks5 is a legitimate HTTPS_PROXY value — httpproxy's portMap lists
+		// it — so this is reachable, and the EffectiveProxy doc comment names
+		// the behaviour. Pinned here because the interesting half is the second
+		// case: an unrecognized scheme must fail closed, not fall back to
+		// emitting the raw URL with its password intact.
+		{"unrecognized scheme degrades to a placeholder", "socks5://proxy.example.com:1080", "<unparseable url>"},
+		{"unrecognized scheme fails closed on credentials", "socks5://user:password@proxy.example.com:1080", "<unparseable url>"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.raw)
+			if err != nil {
+				t.Fatalf("parsing %q: %v", tc.raw, err)
+			}
+			got := proxyLabel(u)
+			if got != tc.want {
+				t.Errorf("proxyLabel(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+			if strings.Contains(got, "password") || strings.Contains(got, "user@") {
+				t.Errorf("proxyLabel(%q) = %q, which leaks credentials into the log stream", tc.raw, got)
+			}
+		})
+	}
+}
+
+// TestEffectiveProxy_DirectCases pins the two branches that resolve the same way
+// whatever the ambient proxy environment is, so this test is order-independent:
+// a loopback destination (net/http exempts localhost and loopback IPs from
+// proxying unconditionally) and a URL that does not parse.
+//
+// A nil proxy and an unparseable URL both report ProxyDirect rather than an
+// error, because the caller is a log field. ProxyDirect is a fixed label, not
+// "", so `proxy != direct` stays a usable query.
+func TestEffectiveProxy_DirectCases(t *testing.T) {
+	for _, raw := range []string{
+		"https://localhost:1943",
+		"https://127.0.0.1:1943",
+		"://not-a-url",
+	} {
+		if got := EffectiveProxy(raw); got != ProxyDirect {
+			t.Errorf("EffectiveProxy(%q) = %q, want %q", raw, got, ProxyDirect)
+		}
 	}
 }

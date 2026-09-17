@@ -748,6 +748,7 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 - Verify the `issuer` URL is correct and reachable from the server
 - If using Keycloak locally, ensure the container is running and healthy before starting the MCP server
 - The MCP server connects to the issuer's `/.well-known/openid-configuration` at startup to fetch JWKS keys
+- If egress to a cloud IdP requires an HTTP proxy, set `HTTPS_PROXY` — see [Outbound HTTP proxy](configuration.md#outbound-http-proxy). The same variable also governs broker SEMP traffic, so use `NO_PROXY` to keep internal brokers direct
 
 ### "403 Forbidden" with a Valid Token
 

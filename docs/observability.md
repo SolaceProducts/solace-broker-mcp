@@ -34,13 +34,16 @@
 | Find out what is actually live today | [Implementation Status](#implementation-status) |
 | Tell us to rename something before the freeze | [How to Give Feedback](#how-to-give-feedback) |
 | Understand naming rules, units, and what we commit to | [Conventions](#conventions) · [Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy) |
-| Build a Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
+| Import a starter Grafana dashboard | [Grafana Dashboard](#grafana-dashboard--implemented) |
+| Build a custom Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
 | Alert when the IdP token-exchange breaker is open | [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented) |
 | Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) · [Canonical Audit Queries](#canonical-audit-queries) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
 | Check this works with your existing stack | [Vendor Neutrality](#vendor-neutrality) |
 | Deploy to Kubernetes | [Deployment Topology and Resource Policy](#deployment-topology-and-resource-policy--implemented) |
+| Scrape `/metrics` from Prometheus, and keep everyone else off it | [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) |
+| Respond to an alert, or work a live incident | [Operator Runbook](#operator-runbook) |
 | See what is still open, and what we already decided | [Open Items for This Review](#open-items-for-this-review) · [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review) |
 | Map this to PCI DSS, SOC 2, SOX, or ISO 27001 | [Standards This Schema Supports](#standards-this-schema-supports) |
 | Understand load shedding and saturation | [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only) |
@@ -48,9 +51,7 @@
 **Not in this document yet.** These are deliberately listed as plain text, not links, because
 they do not exist to link to. Each names the story that lands it:
 
-- Tracing setup and the reference OTel collector deployment, with a tested-backend matrix —
-  lands with Story 40 (SOL-152423).
-- Operator runbook by failure mode — lands with Story 36 (SOL-152098).
+- [Tracing setup and the reference OTel collector deployment, with a tested-backend matrix](#stand-up-tracing-in-30-minutes) — shipped with Story 40 (SOL-152423).
 - Reference SLO sheet — lands with Story 38.
 
 The Broker MCP Server is designed to emit three observability signals:
@@ -420,8 +421,9 @@ version, schema versions, and — once tools run — tool names already public i
 metrics, and usage timing), with two exceptions: `mcp_auth_failure_total{reason}` exposes a
 readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_total{tool}`
 tells a reader which tools authorization is refusing. Treat restricting the listener as the
-default posture, not optional hardening. The listener is absent entirely unless
-`OBS_METRICS_ENABLED` is set.
+default posture, not optional hardening: `deploy/kubernetes/networkpolicy.yaml` ships it — see
+[Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint). The
+listener is absent entirely unless `OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
@@ -794,7 +796,10 @@ design.
 **A NetworkPolicy egress rule to the collector's host and port is required** if your cluster
 enforces default-deny egress — a blocked gRPC dial fails silently rather than at startup, so the
 first sign of a missing rule is telemetry that never arrives, not an error anywhere in this
-server's own logs. The failure signature to alert on:
+server's own logs. The shipped `deploy/kubernetes/networkpolicy.yaml` restricts ingress only and
+carries this rule as a commented template to add to *your* egress policy — [Scraping and securing
+the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) explains why it cannot live in
+ours. The failure signature to alert on:
 `mcp_otel_metrics_dropped_total{reason="export_error"}` rising while
 `mcp_otel_metrics_exported_total` stays flat.
 
@@ -836,10 +841,14 @@ you skip correlating by timestamp. The matching `_total` counters carry them too
 Four things to know. Each is a reason exemplars can be missing from a scrape that is
 otherwise perfectly healthy, and none of them is visible from the scrape itself:
 
-- **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
-  older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
-  default; if yours does not, exemplars will be silently absent from an otherwise healthy
-  scrape. To confirm by hand:
+- **Your Prometheus must negotiate OpenMetrics to receive them, and have exemplar storage
+  enabled to keep them.** Exemplars are not part of the older Prometheus text exposition
+  format. Recent Prometheus versions request OpenMetrics by default; if yours does not,
+  exemplars will be silently absent from an otherwise healthy scrape. Storage is a separate
+  switch, off by default: `--enable-feature=exemplar-storage`, or under Prometheus Operator
+  `spec.enableFeatures: [exemplar-storage]` on the Prometheus object — a setting on that
+  object, not one a ServiceMonitor or this server can supply. To confirm the negotiation by
+  hand:
 
   ```
   curl -H 'Accept: application/openmetrics-text; version=1.0.0; charset=utf-8' \
@@ -893,6 +902,122 @@ directly against the Prometheus `client_golang` registry, never through the OTel
 the `mcp_*` instruments share — so the OTLP reader, which only observes what passes through that
 meter provider, never sees them. An OTLP-native APM ingesting this server's pushed metrics will
 not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
+
+### Grafana Dashboard — [Implemented]
+
+> _Status: **[Implemented]** (SOL-152092, Story 37). `deploy/grafana/solace-broker-mcp-overview.json`
+> is a committed, importable dashboard. Every panel's metric name, label keys, and template
+> variable are checked in CI (`cmd/server/grafana_dashboard_test.go`) against Story 14's golden
+> file, not against this prose — a dashboard and a scrape cannot disagree without failing the
+> build._
+
+A starter dashboard so a customer NOC operator sees the service from day one without authoring
+panels: tool RED, an active-requests gauge alongside it, SEMP RED-per-attempt, an auth-failure
+rate broken out by reason, an `error_type` breakdown, Go runtime, and build info.
+
+**Import it.** In Grafana, **Dashboards → New → Import**, upload
+`deploy/grafana/solace-broker-mcp-overview.json`. Grafana prompts for one input — the Prometheus
+data source to bind the dashboard's `${DS_PROMETHEUS}` variable to — and the dashboard is ready.
+No manual panel edits, no datasource UID to hand-patch.
+
+**Panels, and what they answer:**
+
+| Panel | Query | Answers |
+|---|---|---|
+| Tool call rate / error rate / latency | `mcp_tool_invocation_total` / `_duration_seconds`, by `outcome` | Is the service up, and how fast? |
+| Active requests | `mcp_http_active_requests` (Decision #15) | Is a latency spike a capacity problem? Placed beside tool RED on purpose — read them together. |
+| SEMP request rate / error rate / latency | `mcp_semp_request_total` / `_duration_seconds`, per attempt | Is the broker the bottleneck, and is it retrying? |
+| Auth failure rate by reason | `mcp_auth_failure_total`, stacked by `reason` | Which failure mode — `signature_invalid` (Decision #7) isolates a JWKS-rotation symptom from a malformed-token one. |
+| Tool errors by `error_type` | `sum by (error_type) (rate(mcp_tool_invocation_total{outcome="error"}[5m]))` (ADR-009) | "Show me every crash" — `error_type="panic"` answers it directly. This panel is the visible payoff of splitting cause out of `outcome`. |
+| Go runtime / build info | `go_*`, `process_*`, `mcp_build_info` | Memory pressure, goroutine leaks, which build is running. |
+
+**Deliberately absent: retry outcomes, broker pool gauges, saturation events** (Stories 17, 18,
+28, 29). Those metrics do not exist in any registry yet — a panel built against one would import
+broken. They land in this dashboard when those stories ship, not before.
+
+**Variables**, top of dashboard — `$service_name`, `$cloud_region`, `$broker` — filter **every**
+panel, not just the ones that name a metric with an obvious matching label: every panel's query
+joins against `target_info` (or filters on `broker` directly, where the underlying metric carries
+one) so the three selectors apply dashboard-wide. Two different sourcing mechanisms, deliberately:
+
+- `$cloud_region` and `$service_name` come from the **[Resource Attributes](#resource-attributes--implemented)**
+  `target_info` series, joined the same way that section documents — **with one correction
+  learned by testing both egresses live, not assumed from the resource-attribute table alone**:
+  `$service_name`'s query is `label_values(target_info, job)`, **not**
+  `label_values(target_info, service_name)`. On a scrape-fed Prometheus, `target_info` does carry
+  an explicit `service_name` label, exactly as that section describes. On an OTLP-fed Prometheus,
+  it does not — Prometheus's OTLP-to-TSDB translator folds `service.name` into the standard `job`
+  label on `target_info` instead of also duplicating it there, while every *other*
+  `promote_resource_attributes`-listed attribute (`cloud.region` included) lands on `target_info`
+  normally. `job` returns the identical value on both egresses, so this is the one query that
+  works unmodified on both; a `service_name`-keyed query would silently return an empty dropdown
+  on the OTLP path, which is exactly the "customer choosing OTLP gets a broken dashboard" failure
+  this dashboard is committed to avoid.
+  **This assumes your scrape config's `job_name` maps 1:1 to this service.** `job` is Prometheus
+  scrape metadata (`scrape_config.job_name`, an operator-chosen string) on the scrape path — it
+  is not derived from `service.name` there, only synthesized from it on the OTLP path. If your
+  Prometheus scrapes several different services under one `job_name` (legal, if unusual), the
+  variable reflects that shared job label, not per-service identity, and stops actually
+  isolating one service despite the name — give each service its own scrape job to keep this
+  selector meaningful.
+- `$broker` is an ordinary per-series label already on `mcp_tool_invocation_total` and
+  `mcp_semp_request_total` (`label_values(mcp_tool_invocation_total, broker)`) — it is **not** a
+  resource attribute, and querying it against `target_info` would return nothing. Metrics with no
+  `broker` dimension (`mcp_http_active_requests`, `mcp_auth_failure_total`, the Go runtime
+  collectors, `mcp_build_info`) are still scoped by `$service_name`/`$cloud_region` via the
+  `target_info` join; they simply have no `broker` axis to also filter on.
+
+**Exemplars.** The two latency panels (tool call, SEMP request) carry `"exemplar": true` on
+their Prometheus query targets, so a slow bucket can link straight to the trace that produced it
+— see [Trace Exemplars](#trace-exemplars--implemented) for what has to be true on the server
+side (tracing enabled, a sampled span, OpenMetrics negotiation). Two more things have to be true
+on **your** Prometheus and Grafana specifically, neither of which is optional and neither of
+which fails loudly if missed:
+
+- **Prometheus needs `--enable-feature=exemplar-storage`.** Without it, Prometheus scrapes the
+  exemplar off the wire and silently discards it before it ever reaches storage — OpenMetrics
+  negotiation alone is not sufficient. Verified live: identical traffic produced zero results
+  from `/api/v1/query_exemplars` without the flag and a correctly stored, queryable exemplar
+  with it.
+- **Your Prometheus data source in Grafana needs an Exemplars mapping** (Data source settings →
+  Exemplars → map the `trace_id` label to your Tempo, Jaeger, or other trace data source). See
+  [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes) for standing up a reference
+  Tempo/Jaeger backend if you don't already have one.
+
+With either piece missing, the two latency panels render as plain histograms with no exemplar
+markers — verified live, not merely asserted. Nothing breaks; the panel simply carries no
+clickable link. No Tempo/Jaeger data source UID is hardcoded in the committed dashboard JSON,
+deliberately: it varies per customer, and baking one in would either import broken (an unknown
+UID) or silently point at the wrong trace backend.
+
+**Works against both ingestion paths (ADR-010) — with the OTLP path requiring a collector,
+verified, not assumed:**
+
+- **A Prometheus that scrapes `/metrics`.** Works with no extra configuration.
+- **A Prometheus that ingests this server's OTLP metrics push.** Two things are required, and
+  a customer choosing this path should not discover either by trial and error:
+  1. **A collector in front of Prometheus — mandatory, not optional.** This server's OTLP
+     metrics exporter is gRPC-only (`internal/observability/metrics/otlp.go`); Prometheus's
+     native OTLP receiver (`--web.enable-otlp-receiver`) only speaks OTLP/HTTP. Pointing this
+     server directly at a bare Prometheus **does not work** — verified live: the export fails
+     with `mcp_otel_metrics_dropped_total{reason="export_timeout"}` on every attempt, because
+     the gRPC client's connection to an HTTP/1.1-only endpoint never completes. See
+     ["Ingesting OTLP metrics into Prometheus (collector required)"](#ingesting-otlp-metrics-into-prometheus-collector-required)
+     above (Story 40, SOL-152423) for the full requirement list — corrected 2026-09-15 to lead
+     with this one, since the other four are moot without it. Deploy the reference collector from
+     [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes) (its metrics pipeline is
+     commented out by default; enable it with an `otlphttp` exporter pointed at
+     `http(s)://<prometheus>/api/v1/otlp`) rather than attempting a direct push.
+  2. **`promote_resource_attributes` on that Prometheus**, covering at minimum `service.name`,
+     `service.instance.id`, `deployment.environment.name`, and `cloud.region` — otherwise this
+     dashboard's `$service_name`/`$cloud_region` variables return empty dropdowns, per
+     [Resource Attributes](#resource-attributes--implemented)'s own note that resource
+     attributes are not promoted to labels by default on the OTLP path.
+- **One known, structural difference between the two paths on this dashboard**: the Go runtime
+  panels (goroutines, heap, CPU) show **no data** on the OTLP-ingested path. This is not a
+  dashboard defect — see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics) above:
+  `go_*`/`process_*` are registered outside the OTel meter provider and structurally never reach
+  the OTLP egress. Every other panel on this dashboard works on both paths.
 
 ---
 
@@ -1376,6 +1501,135 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
   your AI agent continues unbroken through the server into the broker.
 - **Propagation:** W3C Trace Context. When an inbound `traceparent` header is present, the
   server's entry span is a child of your agent's span; when absent, it starts a new root.
+
+### Stand up tracing in 30 minutes
+
+**The collector is optional.** If your APM already accepts OTLP directly (Datadog, New Relic,
+and others), skip the collector entirely: set `OTEL_EXPORTER_OTLP_ENDPOINT` to your APM's
+ingestion endpoint and flip `OBS_TRACING_ENABLED=true`. The reference collector below removes
+the "where do I start?" friction for operators who don't already have an OTLP endpoint.
+
+#### Deploy the reference collector
+
+A reference Kubernetes deployment lives in `deploy/otel-collector/kubernetes/`. Apply all
+three manifests:
+
+```
+kubectl apply -f deploy/otel-collector/kubernetes/
+```
+
+The collector listens for OTLP on port 4317 (gRPC) and 4318 (HTTP). It defaults to exporting
+to a Grafana Tempo instance at `tempo:4317`. Edit `collector-configmap.yaml` to point at your
+backend — see the [Tested backends](#tested-backends) section for the exporter config for each
+supported backend.
+
+For local development, `deploy/otel-collector/docker/docker-compose.yaml` starts the collector,
+the MCP server, and Grafana Tempo together. Run these from the
+`deploy/otel-collector/docker/` directory:
+
+```
+# Tempo (default)
+docker compose up
+
+# Jaeger — the env file sets the profile and the collector endpoint together
+docker compose --env-file .env.jaeger up
+```
+
+#### Point the MCP server at the collector
+
+Set the following environment variables on the MCP server deployment:
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+OBS_TRACING_ENABLED=true
+OBS_METRICS_ENABLED=true
+OBS_METRICS_OTLP_ENABLED=true
+```
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` is the standard OpenTelemetry SDK variable — no code change is
+needed. For a deployment without TLS between the server and collector, also set
+`OTEL_EXPORTER_OTLP_INSECURE=true`.
+
+`OBS_METRICS_OTLP_ENABLED` pushes metrics over OTLP to the same collector endpoint. It
+requires `OBS_METRICS_ENABLED=true` (which also enables the Prometheus scrape endpoint on
+`/metrics`). Omit both flags if you only want traces.
+
+#### Verify traces are arriving
+
+Make any tool call (for example, `list-brokers`) and open your backend's UI:
+
+- **Tempo:** search for `service.name = solace-broker-mcp` in the Explore view.
+- **Jaeger:** select service `solace-broker-mcp` on the Search page.
+
+You should see a trace with root span `POST /mcp` and child spans for each layer of the call.
+If no traces appear after 10 seconds, check the MCP server logs for `otel self stats` — the
+`spans_exported_total` field shows how many spans reached the collector.
+
+#### Tested backends
+
+"Tested" means a trace was produced by this server and seen in that backend's UI — not just
+that the exporter config compiles or that the vendor documents OTLP support.
+
+| Backend | Version tested | Traces verified | Metrics verified | Collector exporter config |
+|---|---|---|---|---|
+| Grafana Tempo | 2.6.0 | Yes (2026-09-11) | N/A — traces only | `otlp/tempo: endpoint: <tempo-host>:4317` (insecure) |
+| Jaeger | 1.60 | Yes (2026-09-11) | N/A — traces only | `otlp/jaeger: endpoint: <jaeger-host>:4317` (insecure) |
+| Datadog | SaaS, via collector-contrib `datadog` exporter 0.111.0 | Yes (2026-09-11) | Yes (2026-09-11) | `datadog: api: key: ${env:DD_API_KEY} site: datadoghq.com` |
+
+Datadog is a hosted service with no pinned version; what was tested is the collector's
+`datadog` exporter at 0.111.0 against the `datadoghq.com` site.
+
+**Verification step per backend** (after a tool call, e.g. `list-brokers`):
+
+- **Tempo:** `curl "http://<tempo>:3200/api/search?tags=service.name%3Dsolace-broker-mcp"` returns a non-empty `traces` array, or search the service in Grafana's Explore view.
+- **Jaeger:** `curl "http://<jaeger>:16686/api/services"` lists `solace-broker-mcp`, or select it on the Jaeger Search page.
+- **Datadog:** open **APM → Traces** and filter service `solace-broker-mcp` for traces; open **Metrics → Explorer** and search `mcp.` for metrics.
+
+For each backend, the collector `config.yaml` exporter block is in
+`deploy/otel-collector/kubernetes/collector-configmap.yaml` — Jaeger and Datadog blocks are
+commented out and can be swapped in for the Tempo default.
+
+#### Ingesting OTLP metrics into Prometheus (collector required)
+
+> **Corrected 2026-09-15 (SOL-152092):** this section originally read "no collector" and omitted
+> the one prerequisite that makes the other four moot without it. Verified live: pointing this
+> server's OTLP metrics exporter straight at a bare Prometheus does not work, and cannot be made
+> to work by adjusting Prometheus-side configuration alone. The corrected requirement is below,
+> first, because it is load-bearing for everything that follows it.
+
+If you only need metrics in Prometheus, **scraping `/metrics` needs no OTLP and no collector** —
+see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint),
+the shortest path for most Prometheus deployments. The rest of this section is for running one
+OTLP pipeline that carries both signals.
+
+With `OBS_METRICS_OTLP_ENABLED=true`, the server pushes metrics over OTLP as well as serving the
+Prometheus scrape endpoint. Ingesting those push metrics into Prometheus requires five things,
+the first of which is not optional:
+
+1. **A collector in front of Prometheus.** This server's OTLP metrics exporter is gRPC-only
+   (`internal/observability/metrics/otlp.go`, `otlpmetricgrpc`); Prometheus's native OTLP
+   receiver (`--web.enable-otlp-receiver`, item 2 below) only speaks OTLP/HTTP, and never opens a
+   gRPC listener. Pointing this server directly at a bare Prometheus therefore **does not work**
+   — verified live: every export attempt fails with
+   `mcp_otel_metrics_dropped_total{reason="export_timeout"}`, because the gRPC client's
+   connection to an HTTP/1.1-only endpoint never completes. Route through an OTel Collector
+   instead: an `otlp` gRPC receiver (what this server can talk to) and an `otlphttp` exporter
+   pointed at `http(s)://<prometheus>/api/v1/otlp` (what Prometheus can talk to) is sufficient.
+   The reference collector under [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes)
+   ships exactly this: an `otlphttp/prometheus` exporter and the metrics pipeline that uses it,
+   both commented out by default (Tempo/Jaeger are traces-only, so the collector's *trace*
+   exporter — `otlp/backend` or `otlp/tempo` — is gRPC and cannot serve this purpose; do not
+   point the metrics pipeline at it). Uncomment both the exporter and the pipeline, and set the
+   exporter's endpoint to your Prometheus's OTLP path.
+2. **The OTLP receiver is off by default.** Start Prometheus with `--web.enable-otlp-receiver`.
+3. **Delta temporality requires an experimental feature flag.** The server ships cumulative
+   temporality to avoid this requirement — no flag needed on your side.
+4. **Resource attributes are not promoted to labels by default.** Configure
+   `promote_resource_attributes` in the Prometheus config, or use the `target_info` join
+   described in the [Resource Attributes](#resource-attributes--implemented) section.
+5. **`storage.tsdb.out_of_order_time_window` may need tuning.** OTLP push can arrive slightly
+   out of order relative to scrape data. Set a small window (for example `10m`) to avoid
+   rejected samples.
 
 ### Spans
 
@@ -2031,6 +2285,145 @@ roughly the non-heap overhead the 25% reserve exists to pay for — so that cros
 and not diagnostic on its own. `limits.memory` remains the threshold worth alarming on; use
 the Go heap metrics above to say whether the runtime is holding its own limit.
 
+### Scraping and securing the metrics endpoint
+
+`/metrics` listens on its own port (`observability.metrics_bind_address`, default `:9091`),
+unauthenticated and on all interfaces — see the exposure note under [Server and Scrape
+Health](#server-and-scrape-health). The shipped manifests make it scrapeable and restricted at
+once (SOL-152424):
+
+| Piece | File | In `kubectl apply -f deploy/kubernetes/`? |
+|---|---|---|
+| A `metrics` Service port and the named `containerPort` it targets | `service.yaml`, `deployment.yaml` | Yes. Resolves to `connection refused` until `OBS_METRICS_ENABLED` is set |
+| Ingress to `:9091` admitted from the monitoring namespace only | `networkpolicy.yaml` | Yes. A built-in API, safe on any cluster; enforced only by a CNI that supports it |
+| Prometheus Operator discovery | `servicemonitor.yaml.example` | No. The CRD is not on every cluster, and one missing kind fails the whole apply. Copy, edit, apply by hand |
+
+Nothing flips `OBS_METRICS_ENABLED`: it stays off per [Flag Defaults at GA](#flag-defaults-at-ga)
+and ships as a commented env entry in `deployment.yaml`.
+
+#### With Prometheus Operator
+
+Apply the ServiceMonitor in the Service's namespace — it selects Services in its own namespace
+unless told otherwise — then check Prometheus's *Status → Targets* page, because the two most
+common failures produce no error anywhere:
+
+- **The `release:` label.** kube-prometheus-stack installs its Prometheus with
+  `serviceMonitorSelectorNilUsesHelmValues: true`, so it selects only ServiceMonitors carrying
+  `release: <your Helm release name>`. The shipped `release: kube-prometheus-stack` is a
+  placeholder to edit; alternatively set that Helm value to `false` to select every
+  ServiceMonitor in scope.
+- **The namespace selector.** `serviceMonitorNamespaceSelector` on the Prometheus object left
+  unset means its own namespace only; `{}` means all. With Prometheus in `monitoring` and this
+  server elsewhere, it must be `{}` or match the server's namespace.
+
+An unselected ServiceMonitor is simply absent from the targets page — not down, not logged.
+Confirm with a scrape you can see (`mcp_metrics_scrape_total` rising), not with
+`kubectl get servicemonitor`, which only shows the object exists. For exemplar links the
+Prometheus object also needs exemplar storage and OpenMetrics negotiation, both covered under
+[Trace Exemplars](#trace-exemplars--implemented); without them the scrape succeeds and the
+exemplars are silently absent.
+
+#### Without Prometheus Operator
+
+A Prometheus using `kubernetes_sd_configs` directly discovers targets through the
+`prometheus.io/*` annotation convention. Add these to `service.yaml`'s `metadata` for the
+`endpoints` role, or to the pod template in `deployment.yaml` for the `pod` role:
+
+```yaml
+metadata:
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/metrics"
+```
+
+They are a convention, not an API: they do nothing unless your Prometheus config carries the
+relabel rules that read them, as the widely copied `kubernetes-service-endpoints` example job
+does. Prometheus Operator ignores them; under the Operator the ServiceMonitor is the mechanism.
+
+Unlike the ServiceMonitor, which names the Service's `metrics` port and so follows it
+automatically, `prometheus.io/port` is a literal. If you move the listener off `:9091`, change
+this value too, or you get a target that scrapes the wrong port.
+
+#### The NetworkPolicy
+
+`networkpolicy.yaml` selects the server's pods with `policyTypes: [Ingress]` and two rules:
+
+1. **`:9090` from any source.** The rule has no `from`, which means all sources. The kubelet's
+   probes arrive from the node's own address, which no `podSelector` or `namespaceSelector` can
+   name, and this policy exists to protect `:9091`, not to change who may reach the MCP
+   endpoint. Tighten it only if you know every source.
+2. **`:9091` from the `monitoring` namespace**, matched on the `kubernetes.io/metadata.name`
+   label Kubernetes (1.22+) sets on every namespace. Edit the name if your Prometheus runs
+   elsewhere; add a `podSelector` beside it to narrow to the Prometheus pods.
+
+Once the pod is isolated for ingress, anything this policy does not list is denied. Ports are
+numeric because a named port here resolves against the pod's `containerPort` names and CNI
+support for that varies.
+
+**"Denied" means by this policy, not by the cluster.** NetworkPolicies are additive: a pod's
+allowed traffic is the union of every policy that selects it, and there is no precedence or
+deny rule to override one. So another ingress policy selecting these pods — a namespace-wide
+default, a platform-team policy, a chart you install later — can admit `:9091` from anywhere,
+and nothing in this file can stop it. Treat this policy as "we do not open the metrics port to
+the cluster", not as proof the port is closed. `kubectl get networkpolicy -A -o wide` lists
+every policy that could widen it; audit those before treating the endpoint as restricted.
+
+**The ports follow the config.** A port the policy does not list is denied outright, not merely
+unprotected, so `9091` must move with `metrics_bind_address` (and the `metrics` port in
+`service.yaml` and `deployment.yaml`), and `9090` with `port` in `configmap.yaml` (and the
+`http` containerPort). For `:9091` the symptom is a scrape that stops; for `:9090` it is the
+MCP endpoint itself. `TestShippedPortsTrackCompiledDefaults` pins all four files to the
+compiled defaults, so moving a default in code without the manifests fails the build.
+
+**Egress is deliberately not in this policy.** With `policyTypes: [Ingress]`, broker SEMP, the
+IdP, DNS, and the OTLP push are untouched. Listing `Egress` with an allow-list would
+default-deny every destination not named — a full outage disguised as hardening — and the
+destinations are yours, not ours to ship. NetworkPolicies are additive (a pod's allowed traffic
+is the union of every policy selecting it), so if your cluster applies default-deny egress an
+allow in this file could not override it anyway. The OTLP egress rule that [OTLP Export
+Health](#otlp-export-health) requires therefore sits at the bottom of `networkpolicy.yaml` as a
+commented template to add to **your** egress policy: your collector's pod selector and TCP
+`4317`, the gRPC port — this pod pushes OTLP over gRPC only, so opening `4318` instead leaves
+the push blocked. That policy also needs a DNS rule (UDP and TCP `53` to kube-dns),
+which the template does not show, or the collector's name never resolves. None of this is
+needed unless something already restricts this pod's egress, whatever `OBS_METRICS_OTLP_ENABLED`
+or `OBS_TRACING_ENABLED` are set to.
+
+**Under a service mesh.** A sidecar that owns the pod's inbound ports — Istio in strict mTLS
+mode, for example — refuses a plaintext scrape of `:9091` from a Prometheus outside the mesh.
+Either exempt the port from mTLS (a `PeerAuthentication` with `portLevelMtls` for `9091`, or
+`traffic.sidecar.istio.io/excludeInboundPorts: "9091"` on the pod template) so the
+NetworkPolicy stays the control, or run a mesh-aware Prometheus that presents a workload
+certificate. Istio's own `prometheus.io/*` annotation rewriting applies only to the annotation
+path, not to a ServiceMonitor.
+
+**Enforcement is a cluster feature, and on most managed platforms it is off until you turn it
+on.** Every cluster *accepts* a NetworkPolicy object, because the API is built in; only the CNI
+enforces one, and `kubectl get networkpolicy` looks identical either way. **An accepted policy
+is not an enforced boundary.** On the managed platforms the feature is generally a
+cluster-creation choice that cannot be flipped on a running cluster:
+
+| Platform | Enforces NetworkPolicy? |
+|---|---|
+| Calico, Cilium (self-managed) | Yes, that is what they are for |
+| GKE | Only with Dataplane V2, or the legacy `--enable-network-policy` add-on. Neither is the default on every cluster |
+| AKS | Only when a network policy engine (`azure`, `calico`, or `cilium`) was selected at cluster creation |
+| EKS | Only with the VPC CNI's network-policy feature enabled (v1.14+), or Calico/Cilium installed alongside. The VPC CNI does **not** enforce by default |
+| OpenShift | Yes. OVN-Kubernetes is the default plugin and enforces NetworkPolicy; the legacy OpenShiftSDN plugin defaulted to its `networkpolicy` isolation mode and was removed in 4.17, so any supported release enforces |
+| kind (default `kindnet`), and others | No. The object is accepted and silently does nothing |
+
+**Verify rather than infer, whatever the table says.** From a pod *outside* the `monitoring`
+namespace, `curl` a server pod IP on `:9091`: it should hang or be refused. A `200` with the
+policy applied means your cluster is not enforcing it. This is the only check that answers the
+question, and it is worth doing once per cluster.
+
+Where enforcement is unavailable the restriction has to come from elsewhere — bind the
+listener to loopback (`metrics_bind_address: "127.0.0.1:9091"`) and scrape through a
+co-located sidecar, a service-mesh authorization policy, or the node or cloud-network firewall
+in front of the pod CIDR. Treat one of them as required, not optional; the exposure note under
+[Server and Scrape Health](#server-and-scrape-health) says what the endpoint reveals.
+
 ---
 
 ## Open Items for This Review
@@ -2193,9 +2586,660 @@ because a gauge is scraped rather than sampled by the process.
 **Joining the two lines:** the per-request line identifies a broker by sanitized URL and
 the periodic line by configured alias, because each reuses the identifier already
 established in its own layer. The `broker connection created` line logged at first use
-carries both, which is what maps one to the other. The metric form will carry `broker`
+carries both, which is what maps one to the other. That same line also reports the broker's
+effective `proxy`, which is the only place the server says whether an `HTTP_PROXY`/`HTTPS_PROXY`
+in the environment routes a given broker — see
+[Configuration § Outbound HTTP Proxy](configuration.md#outbound-http-proxy). The metric form will carry `broker`
 (alias) and `server_address` on the same series and remove the need — see
 [Decided Since the First Draft](#decided-since-the-first-draft).
+
+---
+
+## Operator Runbook
+
+One entry per operator-visible failure mode. Each gives a **symptom** you can see from a
+metric, a log line, or a probe; the **likely cause**; a **first response** a Tier-1 operator
+can carry out unaided; and when to **escalate**.
+
+Two things to know before using it. Most symptoms here are metrics, and metrics are off by
+default — see [Flag Defaults at GA](#flag-defaults-at-ga) for what is live in your deployment
+and [Implementation Status](#implementation-status) for what exists at all. And several
+entries describe a failure that **presents as silence**: nothing errors, nothing restarts, a
+signal simply stops arriving. Those are marked, because they are the ones a Tier-1 operator
+is most likely to mis-read as healthy.
+
+| What you are seeing | Entry |
+|---|---|
+| A broker's tools all fail; reachability gauge is `0` | [Broker unreachable](#broker-unreachable) |
+| A broker's tools fail with 401 or 403 | [Broker credentials rejected](#broker-credentials-rejected) |
+| One broker fails; others on the same host are fine | [Broker TLS handshake failure](#broker-tls-handshake-failure) |
+| Callers see `401`; auth failures rising | [Caller tokens rejected](#caller-tokens-rejected) |
+| Auth failures rising, all `signature_invalid` | [Signature verification failing after a key rotation](#signature-verification-failing-after-a-key-rotation) |
+| Token exchange failing; breaker gauge is `1` or `2` | [IdP unreachable or token exchange failing](#idp-unreachable-or-token-exchange-failing) |
+| `mcp_panic_recovered_total` rising | [Panic recovered](#panic-recovered) |
+| Container restarting; `OOMKilled` in the event log | [Pod OOM-killed](#pod-oom-killed) |
+| Pod takes the full grace period to terminate; in-flight calls cut | [SIGTERM never reaches the process](#sigterm-never-reaches-the-process) |
+| Traffic routed to a pod that is not ready | [`/health` and `/livez` are liveness only](#health-and-livez-are-liveness-only) |
+| Prometheus target down, or absent from the targets page | [Metrics endpoint not being scraped](#metrics-endpoint-not-being-scraped) |
+| Server refuses to start, port-collision error | [Metrics port collides with the MCP port](#metrics-port-collides-with-the-mcp-port) |
+| `/metrics` reachable from pods that should not see it | [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) |
+| Slow tool calls under load; no metric to show it | [Requests queueing behind the broker limit](#requests-queueing-behind-the-broker-limit) |
+| OTLP push on, collector receiving nothing | [OTLP metrics push arrives nowhere](#otlp-metrics-push-arrives-nowhere) |
+| Server refuses to start after enabling OTLP push | [OTLP push enabled while metrics are disabled](#otlp-push-enabled-while-metrics-are-disabled) |
+| Pushing to Prometheus directly; nothing arrives | [Ingesting OTLP into Prometheus without a collector](#ingesting-otlp-into-prometheus-without-a-collector) |
+| `go_*` and `process_*` absent from an OTLP backend | [Runtime metrics missing from the OTLP pipeline](#runtime-metrics-missing-from-the-otlp-pipeline) |
+| Traces stop arriving; spans dropped | [OTLP collector unreachable](#otlp-collector-unreachable) |
+| Need to diagnose tracing with metrics turned off | [Diagnosing tracing export without metrics](#diagnosing-tracing-export-without-metrics) |
+| Trace volume or collector cost too high | [Tuning the trace sampler](#tuning-the-trace-sampler) |
+| Audit records not reaching the SIEM | [Audit records not arriving](#audit-records-not-arriving) |
+| Server stalls; log throughput collapsed | [Log-shipper or stderr backpressure](#log-shipper-or-stderr-backpressure) |
+| Dashboard panels empty after an upgrade | [A dashboard broke after an upgrade](#a-dashboard-broke-after-an-upgrade) |
+| Latency panels have no exemplar links at all | [Exemplar links missing from latency panels](#exemplar-links-missing-from-latency-panels) |
+| Latency panels have a few exemplars, most buckets none | [Most buckets carry no exemplar](#most-buckets-carry-no-exemplar) |
+
+---
+
+### Broker unreachable
+
+**Symptom.** `mcp_broker_reachable{broker="..."} == 0`, with
+`mcp_broker_unreachable_reason{broker="...", reason="unreachable"} == 1`. Every tool call
+against that broker fails. `mcp_broker_last_result_timestamp_seconds` keeps **advancing**
+through the outage — it is stamped on every call result, transport failures included, so it
+measures traffic recency rather than broker health. A moving timestamp is not evidence the
+broker is up.
+
+The gauge is set from the result of real calls, not from a heartbeat, so a broker that has
+had no call since the pod started is **absent from it entirely** rather than `0`. Alert on
+`absent(mcp_broker_reachable{broker="..."})` alongside `== 0`, or a broker nothing has tried
+to reach looks the same as a healthy one.
+
+**Likely cause.** Connection refused, DNS failure, or an I/O timeout — the broker is down,
+the SEMP service is not listening, or the network path is broken.
+
+**First response.** Confirm the broker is up and SEMP is answering from somewhere else
+(`curl -sk https://<broker>:943/SEMP/v2/config/about`). Check DNS resolution and any egress
+policy on the pod. The server retries on its own; no restart is needed and a restart will
+not help.
+
+**Escalate.** To the broker's owning team if SEMP does not answer from any client. To the
+platform team if it answers elsewhere but not from this pod.
+
+See [Broker Reachability](#broker-reachability) for the full `reason` vocabulary.
+
+---
+
+### Broker credentials rejected
+
+**Symptom.** `mcp_broker_unreachable_reason{reason="credential_invalid"} == 1` — the broker
+returned 401 or 403.
+
+**Likely cause.** The configured SEMP username or password is wrong, expired, or the account
+was disabled or locked out on the broker.
+
+**First response.** Verify the credentials in the Secret against the broker's management
+user. Check the broker for a locked or disabled account. After correcting the Secret, restart
+the pod so it re-reads the value.
+
+**Escalate.** To the broker's owning team if the account is valid and unlocked but still
+rejected — that points at broker-side authorization rather than the credential.
+
+**Note.** This is the broker rejecting *us*. A caller's token being rejected is a different
+entry: [Caller tokens rejected](#caller-tokens-rejected).
+
+---
+
+### Broker TLS handshake failure
+
+**Symptom.** `mcp_broker_unreachable_reason{reason="unreachable"} == 1` — the same value a
+DNS failure or a refused connection produces. The metric alone cannot tell you it was TLS.
+The distinguishing evidence is in the logs: the failing call's error `tool invoked` record
+carries the handshake error in its `detail` field. There is no dedicated connection-failure
+line — `broker connection created` is emitted only when a client is built successfully, and
+the SEMP layer logs no error of its own.
+
+**Likely cause.** The broker's certificate expired, its chain changed, or the CA bundle the
+server trusts does not cover it.
+
+**First response.** Read the failing call's error `tool invoked` record and check its
+`detail` for a certificate or handshake error, to confirm it is TLS and not connectivity. Check the certificate's expiry
+(`openssl s_client -connect <broker>:943 </dev/null 2>/dev/null | openssl x509 -noout -dates`).
+If it has expired or rotated, the broker's certificate needs renewing, or the CA bundle
+mounted into this pod needs updating.
+
+**Escalate.** To the team that owns the broker's certificates. Certificate renewal is not a
+change an MCP operator can make.
+
+**Why there is no dedicated reason value.** The `reason` vocabulary is deliberately coarse
+(`credential_invalid`, `unreachable`, `broker_error_NNN`) to keep label cardinality bounded.
+TLS failures land in `unreachable` with everything else at the transport layer.
+
+---
+
+### Caller tokens rejected
+
+**Symptom.** `mcp_auth_failure_total{reason="expired"}` rising; callers see `401`. Other
+`reason` values (`invalid_token`, `audience_mismatch`, `missing`) point elsewhere — see
+[Authentication Failures](#authentication-failures--implemented).
+
+**Likely cause.** A long-lived agent session holding a token past its expiry, or clock skew
+between this pod and the IdP large enough to make a valid token look expired.
+
+**First response.** Confirm the caller refreshes its token rather than caching one for the
+session. Check clock skew on the node (`date -u` against the IdP's clock); anything past a
+minute or two is worth correcting via NTP.
+
+**Escalate.** To the client team if their agent is not refreshing. To the platform team for
+node clock skew.
+
+---
+
+### Signature verification failing after a key rotation
+
+**Symptom.** A sharp rise in `mcp_auth_failure_total{reason="signature_invalid"}`, typically
+affecting all callers at once rather than one.
+
+**Likely cause.** The IdP rotated its signing keys and our cached JWKS is stale, so tokens
+signed with the new key fail verification against the old one. A deliberate signing-key
+change produces the same pattern.
+
+**First response.** **Do not restart the pod.** The key set refreshes itself: the verifier
+re-fetches the JWKS when it meets a `kid` it does not hold, so a routine rotation heals
+without intervention. A restart drops every in-flight session and fixes nothing. Failures
+that persist past a few seconds are not a stale cache — check, in order:
+
+1. The IdP's JWKS endpoint serves the `kid` the failing tokens carry. Compare the `kid`
+   header of a rejected token against the published key set.
+2. The pod can reach that endpoint. The refresh is bounded only by the HTTP client's
+   timeout, so a slow or unreachable JWKS endpoint makes the refresh fail quietly and
+   leaves the old keys in use — the same symptom, a different cause.
+3. The token's `iss` matches the configured issuer. An issuer mismatch does **not** land in
+   this bucket — it is classified `invalid_token` — so pursue this only if the
+   `signature_invalid` rise does not account for all the failures you are seeing.
+
+**Escalate.** To the IdP team if its published key set does not contain the `kid` its own
+tokens are signed with, or if it rotated without publishing. To the platform team if the
+JWKS endpoint is unreachable from the pod.
+
+**Tell it apart from an expiry spike.** `signature_invalid` means the signature did not
+verify; `expired` means it verified and the token was out of date. A rotation hits every
+caller simultaneously; expiries arrive spread out.
+
+---
+
+### IdP unreachable or token exchange failing
+
+**Symptom.** `mcp_token_exchange_circuit_breaker_state{state="open"} == 1`. The metric is a
+one-hot gauge, not a numeric state: all three series (`closed`, `open`, `half-open`) are
+emitted on every scrape, `1` for the current state and `0` for the other two. Tool calls
+needing an exchanged token fail while the breaker is open.
+
+**Likely cause.** The IdP is down or unreachable, the token endpoint is rejecting our client
+credentials, or the egress path to the IdP is blocked.
+
+**First response.** Check the IdP's own health. Confirm the pod can reach the token endpoint
+and that DNS resolves. Check the client credentials have not expired or been rotated. The
+breaker recovers on its own once exchanges succeed — do not restart to force it.
+
+**Escalate.** To the IdP team if the IdP is unhealthy or the credentials were rotated without
+notice. To the platform team if the egress path is blocked.
+
+**`open` does not always mean the next call is rejected.** The breaker moves
+`open` → `half-open` lazily, when a live exchange next reaches it — elapsed time alone does
+not change the stored state. So the gauge can read `open` past its timeout while the next
+exchange would in fact be admitted as a recovery probe. Read it as breaker state, not as IdP
+health. The gauge is also per-process: replicas can legitimately disagree, so alert per
+target rather than summing them.
+
+See [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)
+for the full semantics, including when the family is absent altogether — absence does not
+mean closed.
+
+---
+
+### Panic recovered
+
+**Symptom.** `mcp_panic_recovered_total{boundary="..."}` increments; a log line carries
+`event="panic_recovered"`. The caller receives an error result; the server keeps running.
+
+**Likely cause.** A bug. A recovered panic is always a defect, never a configuration problem.
+
+**First response.** Capture the log line with its `correlation_id` and stack trace, and note
+which `boundary` fired (`http` or `tool`). Identify the tool and arguments from the
+correlating request. The process is healthy and needs no restart.
+
+**Escalate.** To engineering, always, with the correlation ID. A single recovered panic is
+not an outage; a rising count under normal traffic is.
+
+---
+
+### Pod OOM-killed
+
+**Symptom.** `OOMKilled` in the Kubernetes event log and a container restart. In metrics, a
+rising `go_memstats_heap_inuse_bytes` trend approaching the container limit before each
+restart.
+
+**Likely cause.** The memory limit is set too low for the workload, or there is a leak.
+
+**First response.** Compare the heap trend against the container limit. If usage is stable
+and simply above the limit, raise the limit — see
+[Resource requests and limits](#resource-requests-and-limits) for the sizing guidance. If
+usage climbs steadily under flat traffic, it is a leak; raise the limit to buy time and
+capture the trend.
+
+**Escalate.** To engineering with the heap trend if it points at a leak. A limit that is
+merely undersized is an operator fix.
+
+---
+
+### SIGTERM never reaches the process
+
+**Symptom.** The pod takes the full `terminationGracePeriodSeconds` to terminate instead of
+draining promptly, and in-flight calls are cut rather than completing. `/readyz` never
+returns 503 during shutdown, and no `draining before shutdown` line appears in the logs —
+that line is the first thing the drain sequence emits, so its absence is the clean signal
+that SIGTERM never landed.
+
+**Likely cause.** The server is not PID 1. Kubernetes sends SIGTERM to PID 1 only; in a
+sidecar, an init-system image, or a pod using `shareProcessNamespace`, PID 1 may be a shell
+or a supervisor that never forwards the signal. The in-process drain only runs once the Go
+process itself receives SIGTERM.
+
+**First response.** Check what PID 1 actually is. The shipped image is distroless, so it
+carries no shell and no `ps` — `kubectl exec` cannot run them. Use an ephemeral debug
+container instead:
+
+```
+kubectl debug <pod> -it --image=busybox:1.36 --target=<container> -- ps -o pid,comm
+```
+
+If it is not the server, either run the server as PID 1 — the shipped `deployment.yaml` does —
+or make PID 1 forward the signal: a supervisor configured to propagate it, or
+`pkill -TERM solace-broker-mcp` from the init system's shutdown hook.
+
+**Escalate.** To whoever owns the deviation from the shipped manifest. This is a deployment
+shape problem, not a server defect.
+
+---
+
+### `/health` and `/livez` are liveness only
+
+**Symptom.** Traffic is routed to a pod that is not ready to serve it, or an alert on
+"health" stays green through a readiness problem.
+
+**Likely cause.** An alert or a load-balancer check is pointed at `/health` or `/livez`.
+Both report only that the process is alive. Neither reflects readiness.
+
+**First response.** Point traffic-routing decisions and readiness alerts at **`/readyz`**.
+Keep liveness probes on `/livez`. `/health` is retained for tooling compatibility and is
+**not** a body-identical alias of `/livez` — it returns `{"status":"healthy"}` where
+`/livez` returns `{"status":"alive"}`, so a check asserting on the body cannot be
+repointed without editing the assertion.
+
+**Escalate.** Not applicable — this is a configuration correction.
+
+**Why it matters during shutdown.** `/readyz` returns 503 as soon as SIGTERM arrives, which
+is what takes the pod out of rotation before it stops accepting work. A router watching
+`/livez` keeps sending traffic to a draining pod.
+
+---
+
+### Metrics endpoint not being scraped
+
+**Symptom.** The Prometheus target is down, or — more often — **absent from the targets page
+entirely**, which presents as silence rather than an error. `mcp_metrics_scrape_total` is
+flat or missing.
+
+**Likely cause.** In order of likelihood: `OBS_METRICS_ENABLED` is off, so `:9091` is not
+listening at all and the target shows `connection refused`; the ServiceMonitor is not
+selected by your Prometheus; or the NetworkPolicy does not admit your Prometheus's namespace.
+
+**First response.** Check `OBS_METRICS_ENABLED` first — it is off by default and ships
+commented out in `deployment.yaml`. Then confirm the target appears in Prometheus's
+*Status → Targets*. An unselected ServiceMonitor is simply not listed — not down, not logged.
+Verify with `mcp_metrics_scrape_total` rising, not with `kubectl get servicemonitor`, which
+only proves the object exists.
+
+**Escalate.** To the monitoring team for selector and namespace configuration on the
+Prometheus object.
+
+Full walkthrough, including the two selector failures that produce no error anywhere:
+[Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint).
+
+---
+
+### Metrics port collides with the MCP port
+
+**Symptom.** The server refuses to start, with an explicit configuration error naming the
+collision.
+
+**Likely cause.** `observability.metrics_bind_address` was set to the same port as the MCP
+listener (`port`, default `9090`).
+
+**First response.** Set the two to different ports. The default pairing is `9090` for MCP and
+`:9091` for metrics. If you move either, move it in `configmap.yaml`, `service.yaml`,
+`deployment.yaml`, **and** `networkpolicy.yaml` — a port the NetworkPolicy does not list is
+denied outright, not merely unprotected.
+
+**Escalate.** Not applicable — the server refuses to start rather than coming up
+misconfigured, so this is caught before deployment rather than in production.
+
+---
+
+### Requests queueing behind the broker limit
+
+**Symptom.** Tool calls slow under load with no errors. `WARN` lines reading
+`broker admission slow: request still waiting to be admitted`, and periodic
+`broker in-flight occupancy` lines.
+
+**Likely cause.** Concurrent requests to one broker exceed the configured in-flight limit, so
+requests wait for admission rather than failing.
+
+**First response.** Read the occupancy lines to see how close to the limit the broker is
+running. Either raise the per-broker limit or reduce concurrent load. Confirm the broker
+itself is not the bottleneck first — a slow broker and a tight limit look the same from here.
+
+**Escalate.** To engineering if occupancy is well under the limit and calls are still slow;
+that points at the broker or the network, not at admission control.
+
+**This signal is logs only, and off by default.** There is no metric for it today, and the
+log lines require `OBS_SATURATION_EVENTS_ENABLED`. Do not build an alert expecting a metric —
+see [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only).
+
+---
+
+### OTLP metrics push arrives nowhere
+
+**Symptom.** **Silence, not an error.** The process starts cleanly, `/metrics` looks healthy,
+and the collector receives nothing. This is the most likely first-deployment problem with
+OTLP push.
+
+**Likely cause.** Blocked egress to the collector, a wrong endpoint, or a collector-side
+receiver that is not configured for what we send.
+
+**First response.** Read `mcp_otel_metrics_dropped_total{reason}` **from the scrape
+endpoint** — the scrape path and the push path fail independently by design, precisely so the
+push can be diagnosed from the scrape. Then, in order:
+
+1. Egress to the collector. The shipped `networkpolicy.yaml` is **ingress-only** and does
+   not restrict egress — so if the push is blocked, the rule is in *your* egress policy, not
+   ours. That policy also needs a DNS rule (UDP and TCP 53 to kube-dns) or the collector's
+   name never resolves. A blocked dial is silent on the wire but **not** in the logs: a
+   failed export writes `OTLP metrics export failed` at `WARN` with its reason and
+   data-point count, rate-limited to once every five minutes. Read that alongside the
+   counter — it is the faster route to the cause.
+2. `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`), including
+   scheme and port. The port is `4317`: this server pushes OTLP over gRPC only, so an
+   OTLP/HTTP endpoint on `4318` is never the right target.
+3. The collector's receiver configuration.
+
+**Escalate.** To the team that owns the collector once the counters show we are exporting and
+they are not receiving.
+
+See [OTLP Export Health](#otlp-export-health) for the counters and their `reason` values.
+
+---
+
+### OTLP push enabled while metrics are disabled
+
+**Symptom.** The server refuses to start, with an error naming both flags.
+
+**Likely cause.** `OBS_METRICS_OTLP_ENABLED=true` with `OBS_METRICS_ENABLED=false`.
+
+**First response.** Set `OBS_METRICS_ENABLED=true` as well, or turn the OTLP flag off.
+
+**Escalate.** Not applicable.
+
+**Why it is an error rather than a no-op.** Both egresses read from the same meter provider.
+With metrics disabled there is no provider, so the push would have nothing to send — and
+would do it silently. Failing at config load turns a silent nothing into an explicit message.
+
+---
+
+### Ingesting OTLP into Prometheus without a collector
+
+**Symptom.** Push configured straight at Prometheus; nothing arrives at all.
+
+**Likely cause.** This route does not work with this server. Prometheus's OTLP receiver
+(`--web.enable-otlp-receiver`) accepts OTLP over **HTTP**; this server pushes OTLP over
+**gRPC** only, with no protocol override. No configuration on either side connects the two,
+so the four Prometheus-side prerequisites are beside the point — satisfying all of them still
+yields nothing.
+
+**First response.** Pick one of the two routes that do work:
+
+1. **Scrape `/metrics`.** No OTLP involved, no collector, nothing to configure beyond the
+   scrape job — see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint).
+2. **Put a collector in between.** The reference config in `deploy/otel-collector/` receives
+   gRPC on `4317` and ships an `otlphttp/prometheus` exporter alongside the metrics pipeline
+   that uses it, both commented out — uncomment both and point the exporter at your
+   Prometheus's OTLP path. Do not repoint the metrics pipeline at the gRPC trace exporter; see
+   [Ingesting OTLP metrics into Prometheus (collector required)](#ingesting-otlp-metrics-into-prometheus-collector-required).
+
+**Escalate.** To the MCP server team if neither route suits your environment and OTLP/HTTP
+egress is a requirement for you. It is not a setting that can be turned on today.
+
+**On temporality.** We emit **cumulative** only. Delta temporality in Prometheus is behind an
+experimental feature flag, which is why we do not use it.
+
+---
+
+### Runtime metrics missing from the OTLP pipeline
+
+**Symptom.** `go_*` and `process_*` series are absent from an OTLP-fed backend, while `mcp_*`
+series arrive normally.
+
+**Likely cause.** Expected behaviour, not a defect. Runtime metrics come from Prometheus
+collectors and are **scrape-only** — they are not on the OTLP path.
+
+**First response.** Point OTLP-only consumers at the `mcp_*` set plus resource attributes. If
+you need `go_*`, scrape `/metrics` for them; the two egresses can run side by side.
+
+**Escalate.** Not applicable.
+
+See [Go Runtime and Process Metrics](#go-runtime-and-process-metrics).
+
+---
+
+### OTLP collector unreachable
+
+**Symptom.** Traces stop appearing. `mcp_otel_spans_dropped_total{reason}` rising, with
+`reason` either `export_error` or `export_timeout`. With metrics off, the same information
+arrives in the periodic `event=otel_self_stats` log line.
+
+**Likely cause.** The collector is down, the endpoint is wrong, or egress to it is blocked.
+
+**First response.** Check the collector's health and that the pod can reach its endpoint.
+Confirm `OTEL_EXPORTER_OTLP_ENDPOINT`. Check DNS resolution — a name that does not resolve
+fails the same way a refused connection does.
+
+**Escalate.** To the team that owns the collector.
+
+**Expected operator-visible outcome.** The server keeps serving. Spans are dropped, the
+counters record it, and no tool call fails because of it — trace export is best-effort by
+design. A collector outage should never look like an MCP outage.
+
+---
+
+### Diagnosing tracing export without metrics
+
+**Symptom.** You need to know whether spans are being exported, but `OBS_METRICS_ENABLED` is
+off so the counters are not available.
+
+**Likely cause.** Not a fault — this is the intended path when metrics are disabled.
+
+**First response.** Read the periodic `event=otel_self_stats` INFO line from the pod logs.
+It carries the totals as **separate fields, one per reason**:
+
+| Field | Meaning |
+|---|---|
+| `spans_exported_total` | Spans successfully exported |
+| `spans_dropped_queue_full_total` | Reserved; **never increments in this release** — the SDK exposes no queue-overflow count, so a full queue is not observable here |
+| `spans_dropped_export_timeout_total` | The export call timed out |
+| `spans_dropped_export_error_total` | The export call failed |
+| `spans_dropped_shutdown_total` | Spans still queued when the process shut down |
+
+An unreachable collector presents as `export_error` or `export_timeout`.
+
+**Escalate.** Per [OTLP collector unreachable](#otlp-collector-unreachable) once you know
+which reason is rising.
+
+**Note the shape.** The log line uses flat per-reason fields; the metric
+`mcp_otel_spans_dropped_total` uses a `reason` label for the same closed set — `queue_full`,
+`export_timeout`, `export_error`, `shutdown`. Query accordingly; a SIEM rule written against
+a `reason` field will not match the log line.
+
+---
+
+### Tuning the trace sampler
+
+**Symptom.** Trace volume or collector cost is higher than wanted, or — the reverse —
+too few traces to diagnose with.
+
+**Likely cause.** The sampler is at its default rate for your traffic level.
+
+**First response.** Set `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`; we follow the
+standard OpenTelemetry environment contract, so the values are the usual ones
+(`parentbased_traceidratio` with a ratio argument being the common choice). Lower the ratio
+to cut volume, raise it to see more.
+
+**Escalate.** Not applicable — this is an operator lever.
+
+**It trades against exemplars.** An exemplar can only point at a sampled trace, so lowering
+the ratio reduces exemplar coverage on the latency panels. See
+[Most buckets carry no exemplar](#most-buckets-carry-no-exemplar).
+
+---
+
+### Audit records not arriving
+
+**Symptom.** Destructive tool calls are running, but no `operation` records appear in the
+SIEM.
+
+**Likely cause.** In order: `OBS_AUDIT_LOG_ENABLED` is off (it is off by default); the
+server's `log_level` is above `INFO`, which filters `operation` records out; the log shipper
+is not collecting this container's stderr; or records are dropped between stderr and the
+index.
+
+**First response.** Confirm the flag is on and `log_level` is `INFO` or lower. Then read the
+pod's stderr directly (`kubectl logs <pod>`) and look for the audit records there. That single
+check splits the problem: present in stderr means the shipper or the index is the problem,
+absent means the server is not emitting. Search the same output for
+`audit_event_type=audit_drop` — a drop record names what could not be written, and its
+`dropped_audit_event_type`, `tool`, and `broker` fields attribute the gap.
+
+**Escalate.** To the logging team if records are in stderr but not in the index. To
+engineering if they are absent from stderr with the flag on.
+
+**Alert on the drop record, not on a counter.** A record the server cannot write produces an
+`audit_drop` record instead — `event="audit"` unchanged, `audit_event_type="audit_drop"`,
+emitted at `ERROR` so it survives every supported `log_level`, including the level that
+suppressed the record it reports. That record is the signal: alert on it. The
+`mcp_audit_events_dropped_total` counter in this schema is **not registered**, and whether it
+ships is still open — see [Implementation Status](#implementation-status). Do not build a
+dashboard panel or an alert rule expecting the series. [Canonical Audit Queries](#canonical-audit-queries) covers querying the stream.
+
+---
+
+### Log-shipper or stderr backpressure
+
+**Symptom.** The server slows or stalls under normal load, with log throughput collapsing at
+the same time. Tool calls time out without a corresponding broker or network fault.
+
+**Likely cause.** Whatever consumes stderr has stopped draining it. A full pipe buffer blocks
+the writer, and since audit records and application logs share stderr, a stuck shipper
+becomes backpressure on the process itself.
+
+**First response.** Check the log shipper on the node — is it running, and is its own
+destination accepting? Check node disk if the runtime buffers logs to disk. Restarting the
+shipper usually clears it; restarting the MCP pod does not address the cause and will stall
+again.
+
+**Escalate.** To the logging or platform team. This is a log-pipeline fault that presents as
+an application fault.
+
+**Expected operator-visible outcome.** This is the one observability failure that can affect
+serving, which is why it has its own entry rather than sitting under
+[Audit records not arriving](#audit-records-not-arriving). Metrics and traces degrade
+independently and do not block requests; stderr can.
+
+---
+
+### A dashboard broke after an upgrade
+
+**Symptom.** Panels that worked before an upgrade are empty, or a query returns no series.
+
+**Likely cause.** A metric or label the dashboard queries was renamed or removed.
+
+**First response.** Check `mcp_schema_version` — it carries both the metrics and audit schema
+versions, so you can see what changed and when. Then read the `CHANGELOG.md` entry for the
+version you moved to and look for a deprecation notice naming the series.
+
+**Escalate.** To engineering if a series disappeared with no deprecation notice — that is a
+policy violation, not an expected migration.
+
+**What we commit to.** Within a MAJOR version the schema is additive-only. Anything removed
+is announced first and dual-emitted for at least two minor releases, so a break should never
+be a surprise. See
+[Compatibility and Deprecation Policy](#compatibility-and-deprecation-policy).
+
+---
+
+### Exemplar links missing from latency panels
+
+**Symptom.** Latency panels render correctly but carry **no** exemplar links at all — not a
+few, none. The scrape succeeds and the metrics are right, so it presents as a broken
+dashboard rather than a configuration gap.
+
+**Likely cause.** One of four things: exemplars are switched off outright by
+`OTEL_METRICS_EXEMPLAR_FILTER=always_off`; tracing is off, leaving no span for an exemplar to
+point at; Prometheus is not negotiating the OpenMetrics exposition, which carries them; or
+Grafana's Prometheus data source has no Exemplars mapping, so a stored exemplar never renders
+as a link. Recent Prometheus versions request OpenMetrics by default, so negotiation is the
+likely cause only on an older version or a hand-written scrape config — check the two local
+causes first.
+
+**First response.** Five checks, in order:
+
+1. `OTEL_METRICS_EXEMPLAR_FILTER` is unset or not `always_off` — that value suppresses every
+   exemplar even under full sampling.
+2. `OBS_TRACING_ENABLED` is on — an exemplar needs a span to point at.
+3. The scrape config negotiates OpenMetrics.
+4. Exemplar storage is enabled on the Prometheus side (`--enable-feature=exemplar-storage`);
+   without it Prometheus discards the exemplar at scrape time.
+5. Grafana's Prometheus data source maps the `trace_id` label to your trace backend — see
+   [Grafana Dashboard](#grafana-dashboard--implemented).
+
+**Escalate.** To the monitoring team for the last three.
+
+**Tell it apart from sampling.** No exemplars *anywhere* is this entry. A few exemplars with
+most buckets empty is [the next one](#most-buckets-carry-no-exemplar). These are the two
+causes an operator has to distinguish, and they have completely different fixes.
+
+See [Trace Exemplars](#trace-exemplars--implemented).
+
+---
+
+### Most buckets carry no exemplar
+
+**Symptom.** Latency panels show exemplar links, but only on a few buckets; most have none.
+
+**Likely cause.** Expected behaviour under low sampling, not a defect. An exemplar can only
+reference a **sampled** trace, so at a low `OTEL_TRACES_SAMPLER_ARG` most buckets never see
+one.
+
+**First response.** Nothing, unless exemplar coverage matters more to you than collector
+volume. If it does, raise `OTEL_TRACES_SAMPLER_ARG` — see
+[Tuning the trace sampler](#tuning-the-trace-sampler).
+
+**Escalate.** Not applicable. This is a sampling trade-off, not a bug, and it is stated here
+because "exemplars are missing" is otherwise a plausible false bug report.
+
+---
+
+**A note on the TCP keep-alive.** The SEMP HTTP client's dialer sets a 30-second TCP
+keep-alive, matching Go's `http.DefaultTransport`. It is a compiled constant, not a
+configuration lever, so there is nothing to tune here — listed only so that an operator
+looking for a keep-alive setting stops looking.
 
 ---
 
@@ -2241,10 +3285,11 @@ Three things follow, and each is a commitment rather than an accident of the cur
   use a documented Solace-*named* metric or field, carried over the standard transport like
   every other one.
 - **Grafana is a reference implementation, not a requirement.** This document mentions Grafana
-  because it is the most common way to consume these signals, and a reference dashboard is
-  planned (Story 37, SOL-152092). Nothing in the schema depends on it. Trace exemplars are the
-  one place a dashboard feature is described, and they are an OpenMetrics feature any
-  conforming backend can read — see [Trace Exemplars](#trace-exemplars--implemented).
+  because it is the most common way to consume these signals, and a committed reference
+  dashboard ships as of this change — see [Grafana Dashboard](#grafana-dashboard--implemented)
+  (Story 37, SOL-152092). Nothing in the schema depends on it. Trace exemplars are the one place
+  a dashboard feature is described, and they are an OpenMetrics feature any conforming backend
+  can read — see [Trace Exemplars](#trace-exemplars--implemented).
 
 **Backends in scope.** The four we design and check against are Prometheus with Grafana,
 Grafana Tempo, Jaeger, and Datadog. Be precise about what "check against" means today, because
@@ -2255,12 +3300,9 @@ the two levels are different:
 | Prometheus (with Grafana) | The scrape surface itself is pinned by test: golden-file exposition output, OpenMetrics negotiation, exemplar emission, and the suppressed `otel_scope_*` labels. Grafana is then an ordinary Prometheus data source. |
 | Grafana Tempo, Jaeger, Datadog | Reached over standard OTLP, with no backend-specific code path in this server. Verified at the protocol level, not yet as an end-to-end matrix per backend. |
 
-**A per-backend tested matrix, and a reference OTel collector deployment to sit in front of
-it, land with Story 40 (SOL-152423).** Until then, treat the second row as "should work
-because the format is standard" rather than as an attested integration. That list is a
-starting point, not a compatibility boundary: any backend that ingests OTLP or scrapes
-Prometheus text exposition should work, and we would rather hear about one that does not than
-have you assume it is unsupported.
+The per-backend tested matrix and the reference OTel collector deployment shipped with Story 40
+(SOL-152423) — see [Stand up tracing in 30 minutes](#stand-up-tracing-in-30-minutes). Any
+backend that ingests OTLP should work; the matrix records which ones were verified end to end.
 
 ---
 

@@ -27,6 +27,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 bin="$here/bin"
+# Sourced for perf_filter_godebug alone. This script otherwise keeps its own
+# helpers (see wait_for_http below) — lib.sh defines functions and two
+# constants and nothing else at load time, so there is nothing to collide with.
+# shellcheck source=lib.sh
+source "$here/lib.sh"
 config="${CONFIG_FILE:-$repo_root/broker-config.yaml}"
 broker_alias="${BROKER_ALIAS:-my-broker}"
 vpn="${VPN:-default}"
@@ -156,6 +161,12 @@ fi
 : "${BROKER_USERNAME:?BROKER_USERNAME unset (missing from $repo_root/.env and shell env)}"
 : "${BROKER_PASSWORD:?BROKER_PASSWORD unset (missing from $repo_root/.env and shell env)}"
 export BROKER_URL BROKER_USERNAME BROKER_PASSWORD
+
+# Filtered before the server starts, and this is the script where it matters
+# most: the credentials below are a real appliance's, and this launch captures
+# the server's stderr into an archived mcp.log. GODEBUG=http2debug=2 would put
+# the broker's Authorization header in that file. See perf_filter_godebug.
+perf_filter_godebug
 
 echo "== 1. MCP server on :9090 (config: $config)"
 setsid bash -c "cd '$repo_root' && CONFIG_FILE='$config' exec '$bin/mcp-server'" \

@@ -11,6 +11,10 @@ name: Dev build (unstable)
 # `packages: write` is repo-scoped — that isolation is by construction, not by
 # permission.)
 
+# Do not add pull_request or pull_request_target here. observability.yml runs on
+# workflow_run of this workflow with write scope; it is safe only because these
+# triggers keep untrusted code from starting this build. A PR trigger here would
+# make observability.yml exploitable and must be reworked first.
 on:
   schedule:
     # 03:17 UTC year-round (cron is UTC), so 10:17 PM EST / 11:17 PM EDT — both

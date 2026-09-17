@@ -219,10 +219,19 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	// already rejects credentialed URLs, but this keeps that guarantee from
 	// being the only thing standing between a broker URL and the log stream
 	// (SOL-152979).
+	// proxy names whether an HTTP_PROXY/HTTPS_PROXY in the environment routes
+	// this broker's SEMP traffic, or NO_PROXY exempts it (SOL-153295). Logged
+	// here because this line already fires exactly once per broker, and because
+	// the reroute is not opt-in: an operator who set a proxy for IdP egress, or
+	// inherited one from a base container image, otherwise sees only a
+	// `proxyconnect tcp:` dial error against a config that worked before the
+	// upgrade. Already sanitized by EffectiveProxy — a proxy URL can carry
+	// credentials.
 	slog.Info("broker connection created",
 		slog.String("broker", cfg.DisplayName()),
 		slog.String("url", config.SanitizeURLString(cfg.URL)),
-		slog.String("auth_mode", cfg.Auth.Mode))
+		slog.String("auth_mode", cfg.Auth.Mode),
+		slog.String("proxy", resilience.EffectiveProxy(cfg.URL)))
 	return client, nil
 }
 

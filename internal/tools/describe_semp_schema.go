@@ -26,6 +26,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -482,14 +483,21 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 			if uErr := json.Unmarshal(req.Params.Arguments, &args); uErr != nil {
 				errorType = metrics.ErrorTypeBadRequest
 				toolErr = fmt.Errorf("parsing tool arguments: %w", uErr)
-				return nil, toolErr
+				// This and the next three returns are the caller's mistake, so
+				// they leave as -32602 (Invalid Params) rather than the -32603
+				// withRecovery would otherwise assign (SOL-153692). Only the
+				// returned value is coded: toolErr stays bare so the audit,
+				// metric, and span defers above see the error they always
+				// have. Still a JSON-RPC error rather than an isError result;
+				// that classification is SOL-153693's to change.
+				return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
 			}
 		}
 		operation, _ := args["operation"].(string)
 		if operation == "" {
 			errorType = metrics.ErrorTypeBadRequest
 			toolErr = fmt.Errorf("missing required parameter 'operation'")
-			return nil, toolErr
+			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
 		}
 		view, _ := args["view"].(string)
 		if view == "" {
@@ -498,19 +506,20 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		if view != "trimmed" && view != "raw" {
 			errorType = metrics.ErrorTypeBadRequest
 			toolErr = fmt.Errorf("invalid view %q; expected 'trimmed' or 'raw'", view)
-			return nil, toolErr
+			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
 		}
 
 		structured, dErr := reg.describe(operation, view)
 		if dErr != nil {
 			errorType = metrics.ErrorTypeNotFound
 			toolErr = dErr
-			return nil, toolErr
+			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
 		}
 		resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
 		if mErr != nil {
 			errorType = metrics.ErrorTypeMarshalError
 			toolErr = fmt.Errorf("marshalling schema slice: %w", mErr)
+			// Server-side failure: left to withRecovery's -32603 default.
 			return nil, toolErr
 		}
 		return &mcp.CallToolResult{
