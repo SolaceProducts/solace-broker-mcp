@@ -180,6 +180,100 @@ eq "and marks the peak partial rather than letting it be quoted as complete" \
 eq "the load window is still declared, not guessed" \
   "$(field load_window_source)" "split-host-load-on-other-box"
 
+# The wiring, not the helpers. Every provenance field added for SOL-154339 is
+# one line in this runner, and lib.test.sh exercises the helpers against
+# synthetic pids — so deleting the call from run-mcp.sh left every assertion
+# in all three shell suites green. These four close that seam: they fail if a call is dropped,
+# or moved above the point where $mcp_pid exists.
+[[ -n "$(field gomemlimit_env)" ]] && ok "the record carries gomemlimit_env" \
+  || bad "gomemlimit_env is missing — perf_record_runtime_mem is not wired into run-mcp.sh"
+[[ -n "$(field cgroup_memory_max)" ]] && ok "and cgroup_memory_max beside it" \
+  || bad "cgroup_memory_max is missing — perf_record_runtime_mem is not wired into run-mcp.sh"
+# Integer, not merely present: this is the anchor summary.sh converts a
+# program-relative gctrace stamp with, and a non-integer silently excluded
+# every cycle before summary.sh learned to refuse it.
+if [[ "$(field mcp_start_epoch)" =~ ^[0-9]+$ ]]; then
+  ok "mcp_start_epoch is recorded as integer seconds"
+else
+  bad "mcp_start_epoch is missing or not integer seconds: [$(field mcp_start_epoch)]"
+fi
+[[ -n "$(field log_level_source)" ]] && ok "and the log level carries its source" \
+  || bad "log_level_source is missing — the log-volume guard is not wired into run-mcp.sh"
+
+# The stub server logs no `config loaded` line, so the level cannot come from
+# the server's own report — it has to fall back to the config the run copied
+# into the run directory, and say so. This exercises the whole fallback chain
+# through the runner, which no library test can.
+eq "the level falls back to the config the run used" "$(field log_level)" "info"
+eq "and is labelled as coming from the file, not from the server" \
+  "$(field log_level_source)" "config-file"
+
+echo "== a run whose logs cannot fit is refused, and says which it was"
+
+# The refusal itself, not the library predicate underneath it. Making the call
+# advisory (`|| true`) left every assertion in all three suites green while the
+# ten-hour run still filled the disk — so the wiring is asserted here, where
+# the runner actually runs.
+#
+# PERF_LOG_AVAIL_BYTES is lib.sh's test seam for free space; no test can shrink
+# a real volume.
+# `timeout` because the assertion is that this run does NOT start: if the
+# refusal regresses to advisory, the runner holds for DURATION and the suite
+# hangs for ten minutes instead of failing. A test for a refusal has to fail
+# fast when the refusal is gone.
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=600s PERF_LOG_AVAIL_BYTES=1000000 \
+    timeout 20 ./run-mcp.sh >"$work/refused.log" 2>&1 ) || rc=$?
+eq "a projection over the threshold exits 2" "$rc" "2"
+if grep -q "REFUSING" "$work/refused.log"; then
+  ok "and says it is refusing rather than failing obscurely"
+else
+  bad "the refusal did not print REFUSING"
+  sed -n '1,20p' "$work/refused.log"
+fi
+if grep -q "ALLOW_VERBOSE_LOGS=1" "$work/refused.log"; then
+  ok "and names the override"
+else
+  bad "the refusal did not name ALLOW_VERBOSE_LOGS"
+fi
+
+refrec=$(find "$work/bin/runs" -name 'run-record.mcp' 2>/dev/null | sort | tail -1)
+if [[ -n "$refrec" ]]; then
+  rfield() { awk -F= -v k="$1" '$1 == k {print $2; exit}' "$refrec"; }
+  eq "the record says the run was refused, not interrupted" "$(rfield run_refused)" "log-volume"
+  eq "and marks the peak source accordingly" "$(rfield fd_peak_source)" "refused"
+  eq "run_terminated is NOT set — it never began" "$(rfield run_terminated)" ""
+else
+  bad "the refused run wrote no record"
+fi
+
+# The override has to actually override, or the knob is decoration.
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=600s PERF_LOG_AVAIL_BYTES=1000000 \
+    ALLOW_VERBOSE_LOGS=1 timeout 12 ./run-mcp.sh >"$work/override.log" 2>&1 ) || rc=$?
+if grep -q "running anyway" "$work/override.log"; then
+  ok "ALLOW_VERBOSE_LOGS=1 proceeds past the same projection"
+else
+  bad "ALLOW_VERBOSE_LOGS=1 did not proceed"
+  sed -n '1,20p' "$work/override.log"
+fi
+eq "and the run is not refused with 2" "$([[ "$rc" == 2 ]] && echo refused || echo proceeded)" "proceeded"
+
+echo "== GODEBUG is filtered before it reaches an archived log"
+
+# gctrace is the one value this harness asks for. http2debug=2 writes the SEMP
+# client's Authorization header into the same captured mcp.log, which is
+# archived and shared — so the runner strips it rather than trusting prose.
+rc=0
+( cd "$work" && MOCK_HOST=127.0.0.1 DURATION=600s PERF_LOG_AVAIL_BYTES=1000000 \
+    GODEBUG=gctrace=1,http2debug=2 timeout 20 ./run-mcp.sh >"$work/godebug.log" 2>&1 ) || rc=$?
+if grep -q "GODEBUG reduced to 'gctrace=1'" "$work/godebug.log"; then
+  ok "a non-gctrace GODEBUG key is dropped, and the drop is reported"
+else
+  bad "http2debug was not stripped from GODEBUG"
+  sed -n '1,10p' "$work/godebug.log"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
