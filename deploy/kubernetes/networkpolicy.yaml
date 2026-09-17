@@ -59,8 +59,9 @@ spec:
 # Do not add it here: an `egress:` section default-denies every destination it
 # omits (brokers, IdP, DNS), and NetworkPolicies are additive, so an allow in
 # this file cannot override a default-deny elsewhere anyway. Add a rule shaped
-# like this to YOUR egress policy, with your collector's labels and OTLP port
-# (gRPC 4317, HTTP 4318):
+# like this to YOUR egress policy, with your collector's labels and TCP 4317 —
+# the gRPC port. This pod pushes OTLP over gRPC only; 4318 is not a valid
+# target for it:
 #
 #   egress:
 #     - to:
