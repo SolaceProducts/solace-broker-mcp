@@ -143,6 +143,17 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Default 100 results, max 500. |
 | `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does NOT flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
 
+### Client Access
+
+These read the provisioned client-username and client-profile configuration objects — distinct from the Clients tools above, which read live connections. A username or profile exists whether or not anyone is connected with it; passwords are never returned.
+
+| Tool | Description |
+|---|---|
+| `list-client-usernames` | List the client usernames provisioned in a VPN with their enabled state, client profile, ACL profile, and `dynamic` flag. A `dynamic=true` username is broker-auto-provisioned (OAuth or client certificate) and may be ephemeral. Default 100 results, max 500. |
+| `get-client-username` | Configuration of a single provisioned client username: enabled state, client profile, ACL profile, and permission flags. Reflects configuration, not a live connection. |
+| `list-client-profiles` | List the client profiles in a VPN with their guaranteed-messaging permission flags and per-username limits. A client profile is the permission template a client username points at. Default 100 results, max 500. |
+| `get-client-profile` | Configuration of a single client profile: the guaranteed-messaging allow flags and the per-username connection, endpoint, flow, subscription, and transaction limits (configured and effective). A profile with guaranteed-messaging send/receive disabled silently blocks it for every username that uses it. |
+
 ### REST Delivery Points
 
 | Tool | Description |
