@@ -30,7 +30,9 @@
       "could ?n(o|')t find",
       "unable to (find|locate)",
       "not present",
-      "already gone"
+      "already gone",
+      "already absent",
+      "no changes? (was |were )?made"
     ],
     "forbidden_substrings": [
       "(deleted|removed|dropped) successfully",
