@@ -3010,7 +3010,10 @@ yields nothing.
 1. **Scrape `/metrics`.** No OTLP involved, no collector, nothing to configure beyond the
    scrape job — see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint).
 2. **Put a collector in between.** The reference config in `deploy/otel-collector/` receives
-   gRPC on `4317` and re-exports to Prometheus.
+   gRPC on `4317` and ships an `otlphttp/prometheus` exporter alongside the metrics pipeline
+   that uses it, both commented out — uncomment both and point the exporter at your
+   Prometheus's OTLP path. Do not repoint the metrics pipeline at the gRPC trace exporter; see
+   [Ingesting OTLP metrics into Prometheus (collector required)](#ingesting-otlp-metrics-into-prometheus-collector-required).
 
 **Escalate.** To the MCP server team if neither route suits your environment and OTLP/HTTP
 egress is a requirement for you. It is not a setting that can be turned on today.
