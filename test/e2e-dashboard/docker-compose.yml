@@ -26,7 +26,14 @@ services:
   # prometheus-otlp. Tracing is on too, so the latency histograms carry
   # exemplars (Path A step 6) — no Tempo needed for that, see run-all.sh.
   mcp-server:
-    image: ${MCP_IMAGE:-ghcr.io/solaceproducts/solace-broker-mcp-dev:dev}
+    # Bare reference, not ${MCP_IMAGE:-...}: this suite is CI-only and always
+    # wants the nightly dev image, with no local-override use case (unlike
+    # deploy/otel-collector/docker/docker-compose.yaml, a dev convenience).
+    # The override wrapper also defeats build-test-licenses-check.sh's own
+    # -image exclusion regex (IMAGE_OURS_RE matches "ghcr.io/solace..." at
+    # the start of the string, which "${MCP_IMAGE:-ghcr.io/solace...}" is
+    # not), so it was misreported as an unlisted third-party image.
+    image: ghcr.io/solaceproducts/solace-broker-mcp-dev:dev
     container_name: mcp-server-e2e-dashboard
     environment:
       - CONFIG_FILE=/etc/mcp-server/config.yaml

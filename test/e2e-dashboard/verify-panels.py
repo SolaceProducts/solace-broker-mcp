@@ -11,6 +11,16 @@ and adding new panels are covered for free, with zero changes here.
 Not a PromQL parser — a regex over each target's `expr` string, exactly like
 cmd/server/grafana_dashboard_test.go's approach, proportionate to what this
 script needs (does the panel return data?), not full query analysis.
+
+KEEP IN SYNC: METRIC_NAME_RE and the label_values(...) regex in
+load_template_vars are hand-mirrored from metricNameRe/labelValuesRe in
+cmd/server/grafana_dashboard_test.go — two independent parsers for the same
+dashboard-JSON shape, in two languages, deliberately (a shared JSON-fixture
+pipeline was considered and is a bigger change than this script's own scope
+justifies today; see the PR review this note responds to). A future edit to
+either file's parsing rules — a new template-variable form, a new metric-name
+family — must be mirrored in the other, or the two suites can silently
+disagree about what a "supported" panel or variable looks like.
 """
 import argparse
 import json
@@ -46,7 +56,8 @@ def load_targets(dashboard_path: str):
     the same shape cmd/server/grafana_dashboard_test.go's loadDashboardTargets
     walks, for the same reason: a collapsed row nests its panels under its
     own "panels" array."""
-    doc = json.load(open(dashboard_path))
+    with open(dashboard_path) as f:
+        doc = json.load(f)
     out = []
 
     def walk(panels):
@@ -61,23 +72,53 @@ def load_targets(dashboard_path: str):
     return out
 
 
+LABEL_VALUES_RE = re.compile(r"^label_values\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)$")
+
+
 def load_template_vars(dashboard_path: str):
-    """Returns [(name, metric, label), ...] for every label_values(metric,
-    label) template variable query in the dashboard."""
-    doc = json.load(open(dashboard_path))
-    label_values_re = re.compile(r"^label_values\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)$")
-    out = []
+    """Returns (checkable, unrecognized): checkable is [(name, metric,
+    label), ...] for every label_values(metric, label) template variable
+    query in the dashboard; unrecognized is [(name, query), ...] for any
+    variable whose query this script does not know how to translate into a
+    direct Prometheus API call.
+
+    A variable landing in `unrecognized` must not be silently dropped: an
+    earlier version of this function did exactly that (`continue`d past
+    anything that didn't match), which means a future variable added in some
+    other form would never be checked at all, and this suite would stay
+    green while that variable's real-world resolution was never verified —
+    the caller decides what to do with `unrecognized`, but "nothing" isn't
+    an option."""
+    with open(dashboard_path) as f:
+        doc = json.load(f)
+    checkable, unrecognized = [], []
     for v in doc.get("templating", {}).get("list", []):
-        m = label_values_re.match(v.get("query", "").strip())
-        if not m:
-            continue
-        out.append((v["name"], m.group(1), m.group(2)))
-    return out
+        query = v.get("query", "").strip()
+        m = LABEL_VALUES_RE.match(query)
+        if m:
+            checkable.append((v["name"], m.group(1), m.group(2)))
+        else:
+            unrecognized.append((v["name"], query))
+    return checkable, unrecognized
 
 
 def http_get_json(url: str):
+    """Fetches url and returns the parsed JSON body, after checking
+    Prometheus's own top-level "status" field. Every Prometheus HTTP API
+    response carries status: "success" or "error" — without checking it, a
+    malformed query (e.g. a PromQL syntax error from a bad substitution)
+    returns {"status":"error",...} with no "data.result", which this script
+    would otherwise report as the misleading "expected non-empty data, got
+    none" instead of surfacing the real problem: the query itself was
+    rejected."""
     with urllib.request.urlopen(url, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+        result = json.loads(resp.read().decode())
+    if result.get("status") != "success":
+        raise RuntimeError(
+            f"Prometheus returned status={result.get('status')!r}: "
+            f"{result.get('error', '<no error field>')} (errorType={result.get('errorType')}) — url: {url}"
+        )
+    return result
 
 
 def prometheus_query(base_url: str, query: str):
@@ -100,10 +141,25 @@ def prometheus_query_exemplars(base_url: str, query: str, lookback_seconds: int 
 
 
 def expects_empty(expr: str, empty_prefixes) -> bool:
+    """True only when EVERY real metric name in expr matches an empty
+    prefix — not when ANY does. A panel is only "structurally empty on this
+    path" if it measures nothing but go_*/process_* metrics; a panel that
+    mixed one of those with a real mcp_* metric (a future ratio/combination
+    panel, say) must still be required to return data for its mcp_* half,
+    or a regression there would be silently masked as "correctly empty" —
+    exactly the kind of silent-pass this suite exists to prevent.
+
+    target_info is excluded from the check: it's the join partner present on
+    nearly every panel via the `* on (...) group_left(...) target_info{...}`
+    pattern (see docs/observability.md, Resource Attributes), not a metric
+    being measured, so its presence must not affect the classification
+    either way."""
     if not empty_prefixes:
         return False
-    names = METRIC_NAME_RE.findall(expr)
-    return bool(names) and any(any(n.startswith(p) for p in empty_prefixes) for n in names)
+    names = [n for n in METRIC_NAME_RE.findall(expr) if n != "target_info"]
+    if not names:
+        return False
+    return all(any(n.startswith(p) for p in empty_prefixes) for n in names)
 
 
 def main() -> int:
@@ -167,7 +223,14 @@ def main() -> int:
                 print(f'PASS: panel "{title}" returned {len(series)} series')
 
     if args.check_variables:
-        for name, metric, label in load_template_vars(args.dashboard):
+        checkable_vars, unrecognized_vars = load_template_vars(args.dashboard)
+        for name, query in unrecognized_vars:
+            failures.append(
+                f'variable "${name}": query {query!r} is not a label_values(metric, label) call — '
+                f"this script only knows how to check that form; extend load_template_vars rather "
+                f"than leaving a new form silently unchecked"
+            )
+        for name, metric, label in checkable_vars:
             try:
                 result = prometheus_label_values(args.prometheus_url, label, metric)
             except Exception as exc:  # noqa: BLE001

@@ -91,19 +91,27 @@ jobs:
         with:
           persist-credentials: false
 
+      # verify-panels.py's own parsing/classification logic, against
+      # synthetic input — no infra needed, seconds to run. Fails fast on a
+      # bug in the checker itself, before spending the rest of this job's
+      # time budget standing up containers.
+      - name: Unit test verify-panels.py
+        run: python3 test_verify_panels.py -v
+        working-directory: test/e2e-dashboard
+
       # Uncomments the real, committed otlphttp/prometheus exporter and
       # metrics: pipeline in deploy/otel-collector/docker/otelcol.yaml — the
       # point of this suite's Path B is that the published config is what
       # runs, not a hand-maintained copy of it.
       - name: Uncomment the collector's metrics pipeline
-        run: bash test/e2e-dashboard/uncomment-metrics-pipeline.sh
+        run: bash uncomment-metrics-pipeline.sh
         working-directory: test/e2e-dashboard
 
       - name: Start stack
         run: docker compose -f test/e2e-dashboard/docker-compose.yml up -d
 
       - name: Run dashboard E2E tests
-        run: bash test/e2e-dashboard/run-all.sh
+        run: bash run-all.sh
         working-directory: test/e2e-dashboard
 
       - name: MCP server logs (on failure)
@@ -114,6 +122,11 @@ jobs:
         if: failure()
         run: docker logs solace-e2e-dashboard 2>&1 | tail -100
 
+      # Expect connection-refused/export-failure noise here for the traces
+      # pipeline — it's pointed at a host nothing runs in this suite (only
+      # the metrics pipeline is exercised; see docker-compose.yml,
+      # OTEL_BACKEND_ENDPOINT). That noise is unrelated to whatever actually
+      # broke — look past it to whatever the metrics pipeline logged.
       - name: Collector logs (on failure)
         if: failure()
         run: docker logs otel-collector-e2e-dashboard 2>&1 | tail -100

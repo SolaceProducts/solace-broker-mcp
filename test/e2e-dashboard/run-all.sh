@@ -85,9 +85,6 @@ semp_error_response=$(mcp_call "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools
 echo "$semp_error_response" | grep -q '"isError"[[:space:]]*:[[:space:]]*true' || fail "expected a tool error querying a nonexistent VPN's status, got: $semp_error_response"
 pass "deliberate SEMP-level error call produced isError:true (populates the SEMP error-rate panel)"
 
-# ── 4. Wait for Path A (scrape) to have >=2 samples, then verify every panel,
-#    every template variable, and the exemplar, straight against Prometheus ──
-echo "Waiting for the scrape-path Prometheus to have collected traffic..."
 # Polls the actual rate() form every panel query uses, not just the raw
 # counter's presence: rate() needs the SAME series scraped at least twice to
 # compute anything, so a wait that only checks "has this metric appeared at
@@ -96,17 +93,23 @@ echo "Waiting for the scrape-path Prometheus to have collected traffic..."
 # had its own second scrape — which is exactly what happened the first time
 # this suite ran end to end: the error-outcome panels intermittently failed
 # with "expected non-empty data, got none" even though the raw counter was
-# already visible.
+# already visible. One function, parameterized on the Prometheus URL, used
+# for both paths below — the two were originally byte-identical copies that
+# only closed over a different URL variable.
 prom_rate_nonempty() {
-    local result count
-    result=$(curl -sf "$PROM_SCRAPE_URL/api/v1/query" --data-urlencode "query=$1" 2>/dev/null) || return 1
+    local url="$1" query="$2" result count
+    result=$(curl -sf "$url/api/v1/query" --data-urlencode "query=$query" 2>/dev/null) || return 1
     count=$(echo "$result" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('data',{}).get('result',[])))" 2>/dev/null) || return 1
     [ "${count:-0}" -gt 0 ]
 }
+
+# ── 4. Wait for Path A (scrape) to have >=2 samples, then verify every panel,
+#    every template variable, and the exemplar, straight against Prometheus ──
+echo "Waiting for the scrape-path Prometheus to have collected traffic..."
 for i in $(seq 1 12); do
     sleep 5
-    prom_rate_nonempty 'sum(rate(mcp_tool_invocation_total{outcome="error"}[5m]))' \
-        && prom_rate_nonempty 'sum(rate(mcp_semp_request_total{http_response_status_code!~"2.."}[5m]))' \
+    prom_rate_nonempty "$PROM_SCRAPE_URL" 'sum(rate(mcp_tool_invocation_total{outcome="error"}[5m]))' \
+        && prom_rate_nonempty "$PROM_SCRAPE_URL" 'sum(rate(mcp_semp_request_total{http_response_status_code!~"2.."}[5m]))' \
         && break
     [ "$i" -eq 12 ] && fail "scrape-path Prometheus never computed a rate for both the tool-error and SEMP-error series after 60s"
 done
@@ -123,18 +126,38 @@ pass "Path A (Prometheus scrape): every panel, every variable, and the exemplar 
 # ── 5. Import the real dashboard JSON into Grafana via the API — the only ───
 #    mechanism that resolves its ${DS_PROMETHEUS} templating (see
 #    grafana-provisioning/datasources/prometheus.yaml) — and assert it
-#    produced no provisioning errors.
+#    produced no provisioning errors. Path A's traffic generation and wait
+#    loop above already take 60s+, which in practice is long past Grafana's
+#    own startup — but that was implicit timing luck, not a real wait, so
+#    poll its health endpoint explicitly rather than rely on it.
+echo "Waiting for Grafana..."
+for i in $(seq 1 30); do
+    if curl -sf "$GRAFANA_URL/api/health" > /dev/null 2>&1; then
+        break
+    fi
+    [ "$i" -eq 30 ] && fail "Grafana did not become ready in time"
+    sleep 2
+done
+pass "Grafana ready"
+
 echo "Importing the dashboard into Grafana..."
-import_payload=$(python3 -c "
-import json
-dash = json.load(open('$DASHBOARD_JSON'))
+# Dashboard path and datasource name passed via argv, not interpolated into
+# the Python source, matching uncomment-metrics-pipeline.sh's convention —
+# these are fixed local values today, not attacker input, but building the
+# payload from argv rather than string-embedding is the same habit either
+# way and costs nothing.
+import_payload=$(python3 - "$DASHBOARD_JSON" "Prometheus-Scrape" <<'PYEOF'
+import json, sys
+dashboard_path, datasource_name = sys.argv[1], sys.argv[2]
+dash = json.load(open(dashboard_path))
 payload = {
-    'dashboard': dash,
-    'overwrite': True,
-    'inputs': [{'name': 'DS_PROMETHEUS', 'type': 'datasource', 'pluginId': 'prometheus', 'value': 'Prometheus-Scrape'}],
+    "dashboard": dash,
+    "overwrite": True,
+    "inputs": [{"name": "DS_PROMETHEUS", "type": "datasource", "pluginId": "prometheus", "value": datasource_name}],
 }
 print(json.dumps(payload))
-")
+PYEOF
+)
 import_response=$(curl -sf -u "admin:$GRAFANA_PASSWORD" -X POST "$GRAFANA_URL/api/dashboards/import" \
     -H 'Content-Type: application/json' -d "$import_payload") || fail "Grafana import request failed"
 
@@ -170,20 +193,14 @@ pass "dashboard imported into Grafana with no provisioning errors ($dashboard_ui
 #    then re-run the same panel/variable checks, asserting go_*/process_*
 #    come back EMPTY (the documented structural gap).
 echo "Waiting for the OTLP-ingesting Prometheus to receive pushed metrics..."
-prom_otlp_rate_nonempty() {
-    local result count
-    result=$(curl -sf "$PROM_OTLP_URL/api/v1/query" --data-urlencode "query=$1" 2>/dev/null) || return 1
-    count=$(echo "$result" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('data',{}).get('result',[])))" 2>/dev/null) || return 1
-    [ "${count:-0}" -gt 0 ]
-}
 # Same rate()-needs-two-samples reasoning as the scrape-path wait above,
 # applied on the OTLP-ingesting side: Prometheus still needs two ingested
 # data points of a series to compute a rate over it, regardless of how that
-# data arrived.
+# data arrived. Same prom_rate_nonempty function, just the other URL.
 for i in $(seq 1 12); do
     sleep 5
-    prom_otlp_rate_nonempty 'sum(rate(mcp_tool_invocation_total{outcome="error"}[5m]))' \
-        && prom_otlp_rate_nonempty 'sum(rate(mcp_semp_request_total{http_response_status_code!~"2.."}[5m]))' \
+    prom_rate_nonempty "$PROM_OTLP_URL" 'sum(rate(mcp_tool_invocation_total{outcome="error"}[5m]))' \
+        && prom_rate_nonempty "$PROM_OTLP_URL" 'sum(rate(mcp_semp_request_total{http_response_status_code!~"2.."}[5m]))' \
         && break
     [ "$i" -eq 12 ] && fail "OTLP-ingesting Prometheus never computed a rate for both error series after 60s — the published collector metrics pipeline did not deliver metrics"
 done

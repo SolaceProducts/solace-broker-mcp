@@ -15,8 +15,13 @@
 # leaving the pipeline commented out.
 set -euo pipefail
 
-SRC="${SRC:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../deploy/otel-collector/docker" && pwd)/otelcol.yaml}"
-OUT="${OUT:-bin/otelcol-uncommented.yaml}"
+# Both resolved relative to this script's own location (BASH_SOURCE), not
+# the caller's CWD — SRC always did this; OUT now matches, so this script
+# behaves identically regardless of what directory it's invoked from (e.g.
+# whether or not a CI step sets working-directory).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="${SRC:-$(cd "$SCRIPT_DIR/../../deploy/otel-collector/docker" && pwd)/otelcol.yaml}"
+OUT="${OUT:-$SCRIPT_DIR/bin/otelcol-uncommented.yaml}"
 
 mkdir -p "$(dirname "$OUT")"
 

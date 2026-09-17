@@ -118,6 +118,13 @@ var histogramSuffixes = []string{"_bucket", "_sum", "_count"}
 // PromQL expression. Regex over the expression text, not a PromQL parser:
 // proportionate to what this lint needs (does the dashboard name something
 // real?), not a full query-correctness checker.
+//
+// KEEP IN SYNC: mirrored by hand in test/e2e-dashboard/verify-panels.py
+// (METRIC_NAME_RE) — the SOL-154545 nightly's own dashboard-JSON parser,
+// independently implemented in Python rather than sharing this one. A
+// change here (a new metric-name family) must be mirrored there too, or the
+// static test and the live nightly can silently disagree about what a
+// "supported" panel looks like.
 var metricNameRe = regexp.MustCompile(`\b(?:mcp_[a-zA-Z0-9_]*|go_[a-zA-Z0-9_]*|process_[a-zA-Z0-9_]*|target_info)\b`)
 
 // braceRe finds the contents of every {...} selector. Sufficient for this
@@ -144,6 +151,10 @@ var groupingRe = regexp.MustCompile(`\b(?:by|without|on|ignoring|group_left|grou
 // label) query — distinct syntax from a panel's PromQL selector, so it
 // needs its own extraction rather than braceRe/groupingRe (which find
 // nothing in a string that contains no "{" or "by(...)"-style clause).
+//
+// KEEP IN SYNC: mirrored by hand as LABEL_VALUES_RE in
+// test/e2e-dashboard/verify-panels.py — see metricNameRe's comment above for
+// why these two parsers exist independently rather than sharing one source.
 var labelValuesRe = regexp.MustCompile(`^label_values\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)$`)
 
 // dashboardTarget, dashboardPanel, and templatingVar mirror only the subset
