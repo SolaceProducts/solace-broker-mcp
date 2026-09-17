@@ -3190,21 +3190,26 @@ be a surprise. See
 few, none. The scrape succeeds and the metrics are right, so it presents as a broken
 dashboard rather than a configuration gap.
 
-**Likely cause.** One of three things: exemplars are switched off outright by
+**Likely cause.** One of four things: exemplars are switched off outright by
 `OTEL_METRICS_EXEMPLAR_FILTER=always_off`; tracing is off, leaving no span for an exemplar to
-point at; or Prometheus is not negotiating the OpenMetrics exposition, which carries them.
-Recent Prometheus versions request OpenMetrics by default, so negotiation is the likely cause
-only on an older version or a hand-written scrape config — check the two local causes first.
+point at; Prometheus is not negotiating the OpenMetrics exposition, which carries them; or
+Grafana's Prometheus data source has no Exemplars mapping, so a stored exemplar never renders
+as a link. Recent Prometheus versions request OpenMetrics by default, so negotiation is the
+likely cause only on an older version or a hand-written scrape config — check the two local
+causes first.
 
-**First response.** Four checks, in order:
+**First response.** Five checks, in order:
 
 1. `OTEL_METRICS_EXEMPLAR_FILTER` is unset or not `always_off` — that value suppresses every
    exemplar even under full sampling.
 2. `OBS_TRACING_ENABLED` is on — an exemplar needs a span to point at.
 3. The scrape config negotiates OpenMetrics.
-4. Exemplar storage is enabled on the Prometheus side.
+4. Exemplar storage is enabled on the Prometheus side (`--enable-feature=exemplar-storage`);
+   without it Prometheus discards the exemplar at scrape time.
+5. Grafana's Prometheus data source maps the `trace_id` label to your trace backend — see
+   [Grafana Dashboard](#grafana-dashboard--implemented).
 
-**Escalate.** To the monitoring team for the last two.
+**Escalate.** To the monitoring team for the last three.
 
 **Tell it apart from sampling.** No exemplars *anywhere* is this entry. A few exemplars with
 most buckets empty is [the next one](#most-buckets-carry-no-exemplar). These are the two
