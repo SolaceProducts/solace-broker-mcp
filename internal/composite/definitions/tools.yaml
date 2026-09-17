@@ -417,7 +417,9 @@ tools:
       (credentials + permission wiring), not a live session — it exists whether
       or not anyone is connected with it. Use this to discover which usernames
       exist before creating a queue owned by one or provisioning a new app. This
-      never returns passwords; the broker does not expose them. For currently
+      never returns passwords; the broker does not expose them. A dynamic=true
+      entry was auto-provisioned by the broker (OAuth or client certificate) and
+      may be ephemeral — do not rely on it for provisioning. For currently
       connected sessions, use list-clients instead.
     annotations:
       readOnly: true
@@ -441,6 +443,7 @@ tools:
           - aclProfileName
           - clientProfileName
           - clientUsername
+          - dynamic
           - enabled
           - guaranteedEndpointPermissionOverrideEnabled
           - msgVpnName

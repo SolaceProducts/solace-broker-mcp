@@ -546,14 +546,16 @@ per client: `clientName`, `clientUsername`, `clientAddress`, `platform`,
 
 These read the provisioned client-username and client-profile configuration
 objects — distinct from the connected-session tools above (`list-clients`,
-`get-client-details`), which read live connections. A username or profile exists
-whether or not anyone is connected with it. Passwords are never returned.
+`get-client-details`), which read live connections. A configured (static)
+username or profile exists whether or not anyone is connected with it; a
+`dynamic=true` username is auto-provisioned by the broker and may be ephemeral.
+Passwords are never returned.
 
 ### list-client-usernames
 
 List the client usernames provisioned in a VPN with their enabled state, client
-profile, and ACL profile. A client username is a configured login, not a live
-session. For currently connected sessions, use `list-clients`.
+profile, ACL profile, and `dynamic` flag. A client username is a configured
+login, not a live session. For currently connected sessions, use `list-clients`.
 
 **Parameters:**
 
@@ -565,8 +567,8 @@ session. For currently connected sessions, use `list-clients`.
 
 **Returns:** step-keyed envelope, step `clientUsernames` (array). Selected fields
 per username: `clientUsername`, `enabled`, `clientProfileName`, `aclProfileName`,
-`guaranteedEndpointPermissionOverrideEnabled`, `subscriptionManagerEnabled`,
-`msgVpnName`.
+`dynamic`, `guaranteedEndpointPermissionOverrideEnabled`,
+`subscriptionManagerEnabled`, `msgVpnName`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
@@ -586,7 +588,7 @@ connection. For connected sessions use `get-client-details`.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the client username. |
-| `clientUsername` | string | yes | The client username name. |
+| `clientUsername` | string | yes | The name of the client username. |
 
 **Returns:** step-keyed envelope, step `clientUsername`. Selected fields:
 `clientUsername`, `enabled`, `clientProfileName`, `aclProfileName`,

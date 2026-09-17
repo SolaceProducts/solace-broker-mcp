@@ -39,7 +39,7 @@ func listClientUsernamesTool() CompositeTool {
 				"msgVpnName": "{{.Params.msgVpnName}}",
 				"count":      "100",
 			},
-			Select: []string{"aclProfileName", "clientProfileName", "clientUsername", "enabled", "guaranteedEndpointPermissionOverrideEnabled", "msgVpnName", "subscriptionManagerEnabled"},
+			Select: []string{"aclProfileName", "clientProfileName", "clientUsername", "dynamic", "enabled", "guaranteedEndpointPermissionOverrideEnabled", "msgVpnName", "subscriptionManagerEnabled"},
 		}},
 		Result: ResultStrategy{Strategy: "collect"},
 	}

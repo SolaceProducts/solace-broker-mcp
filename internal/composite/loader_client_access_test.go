@@ -37,12 +37,15 @@ func stepSelectFields(step *Step) map[string]bool {
 	return out
 }
 
-// TestLoadTools_ClientAccessSelectFields pins the documented select fields for
-// the four client-access read tools against the shipped YAML. These fields are
-// the tools' contract (docs + CHANGELOG), but the executor tests exercise
-// hand-built fixtures — so without this, dropping a field from the YAML would
-// fail no unit test. The `password` guard is the load-bearing one: a monitor
-// read must never request a credential field.
+// TestLoadTools_ClientAccessSelectFields pins the exact select projection for
+// the four client-access read tools against the shipped YAML. `want` is the
+// complete field list per tool, compared both directions — so dropping OR
+// adding a field fails the test, and the projection can't silently drift from
+// the docs + CHANGELOG contract. The password guard is the load-bearing one: a
+// monitor read must never request a credential field. It also asserts the
+// readOnly annotation, which is what keeps these tools out of the
+// enable_write_tools gate — a dropped annotation would make them vanish when
+// writes are disabled, despite the advertised always-on contract.
 func TestLoadTools_ClientAccessSelectFields(t *testing.T) {
 	tools, err := LoadTools(definitions.FS, "tools.yaml")
 	if err != nil {
@@ -54,21 +57,32 @@ func TestLoadTools_ClientAccessSelectFields(t *testing.T) {
 		want       []string
 	}{
 		{"list-client-usernames", "clientUsernames", []string{
-			"clientUsername", "enabled", "clientProfileName", "aclProfileName",
-			"guaranteedEndpointPermissionOverrideEnabled", "subscriptionManagerEnabled",
+			"aclProfileName", "clientProfileName", "clientUsername", "dynamic",
+			"enabled", "guaranteedEndpointPermissionOverrideEnabled", "msgVpnName",
+			"subscriptionManagerEnabled",
 		}},
 		{"get-client-username", "clientUsername", []string{
-			"clientUsername", "enabled", "clientProfileName", "aclProfileName", "dynamic",
-			"guaranteedEndpointPermissionOverrideEnabled", "subscriptionManagerEnabled",
+			"aclProfileName", "clientProfileName", "clientUsername", "dynamic",
+			"enabled", "guaranteedEndpointPermissionOverrideEnabled", "msgVpnName",
+			"subscriptionManagerEnabled",
 		}},
 		{"list-client-profiles", "clientProfiles", []string{
-			"clientProfileName", "allowGuaranteedMsgSendEnabled",
-			"allowGuaranteedMsgReceiveEnabled", "allowGuaranteedEndpointCreateEnabled",
-			"maxSubscriptionCount",
+			"allowGuaranteedEndpointCreateEnabled", "allowGuaranteedMsgReceiveEnabled",
+			"allowGuaranteedMsgSendEnabled", "clientProfileName",
+			"maxConnectionCountPerClientUsername", "maxEndpointCountPerClientUsername",
+			"maxSubscriptionCount", "msgVpnName",
 		}},
 		{"get-client-profile", "clientProfile", []string{
-			"clientProfileName", "allowGuaranteedMsgSendEnabled",
-			"allowGuaranteedMsgReceiveEnabled", "maxEffectiveSubscriptionCount",
+			"allowBridgeConnectionsEnabled", "allowGuaranteedEndpointCreateDurability",
+			"allowGuaranteedEndpointCreateEnabled", "allowGuaranteedMsgReceiveEnabled",
+			"allowGuaranteedMsgSendEnabled", "allowSharedSubscriptionsEnabled",
+			"allowTransactedSessionsEnabled", "clientProfileName", "compressionEnabled",
+			"elidingEnabled", "maxConnectionCountPerClientUsername",
+			"maxEffectiveEndpointCount", "maxEffectiveRxFlowCount",
+			"maxEffectiveSubscriptionCount", "maxEffectiveTransactedSessionCount",
+			"maxEffectiveTransactionCount", "maxEffectiveTxFlowCount", "maxEgressFlowCount",
+			"maxEndpointCountPerClientUsername", "maxIngressFlowCount", "maxSubscriptionCount",
+			"maxTransactedSessionCount", "maxTransactionCount", "msgVpnName",
 		}},
 	}
 
@@ -78,18 +92,33 @@ func TestLoadTools_ClientAccessSelectFields(t *testing.T) {
 			t.Errorf("%s: tool not found", tc.tool)
 			continue
 		}
+		if tool.Annotations.ReadOnly == nil || !*tool.Annotations.ReadOnly {
+			t.Errorf("%s: expected readOnly: true annotation (keeps the tool out of the enable_write_tools gate)", tc.tool)
+		}
 		step := findStep(tool, tc.step)
 		if step == nil {
 			t.Errorf("%s: step %q not found", tc.tool, tc.step)
 			continue
 		}
+
 		have := stepSelectFields(step)
+		want := map[string]bool{}
 		for _, f := range tc.want {
+			want[f] = true
+		}
+		for f := range want {
 			if !have[f] {
-				t.Errorf("%s select is missing %q — it is part of the tool's documented contract", tc.tool, f)
+				t.Errorf("%s select is missing %q — part of the documented contract", tc.tool, f)
 			}
 		}
-		// A monitor read must never request a credential field.
+		for f := range have {
+			if !want[f] {
+				t.Errorf("%s select has undocumented field %q — update want or the YAML", tc.tool, f)
+			}
+		}
+		// Kept as a separate, explicitly named assertion even though full
+		// equality would also catch it: a monitor read must never surface a
+		// credential.
 		if have["password"] {
 			t.Errorf("%s select requests password — a monitor read must never surface a credential", tc.tool)
 		}
