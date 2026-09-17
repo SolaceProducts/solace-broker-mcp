@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -1097,5 +1099,104 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	}
 	if hasAuthzAuditLine(t, &logBuf, "list-brokers") {
 		t.Errorf("list-brokers emitted a tool-authorization audit line; the wrapper must not be composed on the exempt tool: %s", logBuf.String())
+	}
+}
+
+// TestWithRecovery_ErrorsLeaveWithAJSONRPCCode covers SOL-153692. The SDK's
+// toWireError emits "code": 0 — not a JSON-RPC 2.0 code — for any handler
+// error that does not wrap a *jsonrpc.Error, and withRecovery is the one seam
+// every handler error crosses. A bare error must leave with CodeInternalError;
+// a code the handler chose must not be overwritten by that default; and in
+// both cases the message and the original error chain must be untouched.
+func TestWithRecovery_ErrorsLeaveWithAJSONRPCCode(t *testing.T) {
+	bare := errors.New("handler failed")
+	tests := []struct {
+		name       string
+		handlerErr error
+		wantCode   int64
+	}{
+		{"bare error gets the internal-error default", bare, jsonrpc.CodeInternalError},
+		{"handler-supplied code survives the seam", withJSONRPCCode(bare, jsonrpc.CodeInvalidParams), jsonrpc.CodeInvalidParams},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := withRecovery("coded-tool", func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return nil, tc.handlerErr
+			})
+			result, err := h(context.Background(), &mcp.CallToolRequest{})
+			if result != nil {
+				t.Errorf("result = %+v, want nil alongside a protocol error", result)
+			}
+			var wire *jsonrpc.Error
+			if !errors.As(err, &wire) {
+				t.Fatalf("error %T carries no *jsonrpc.Error; toWireError would emit code 0", err)
+			}
+			if wire.Code != tc.wantCode {
+				t.Errorf("code = %d, want %d", wire.Code, tc.wantCode)
+			}
+			if got := err.Error(); got != bare.Error() {
+				t.Errorf("message = %q, want %q unchanged", got, bare.Error())
+			}
+			if !errors.Is(err, bare) {
+				t.Error("original error is no longer in the chain")
+			}
+		})
+	}
+}
+
+// TestWithRecovery_NilErrorStaysNil pins the seam's lower boundary: a
+// successful call must not acquire a phantom protocol error. The panic path
+// (err forced to nil, isError result) is covered by TestPanicAuditedAsError.
+func TestWithRecovery_NilErrorStaysNil(t *testing.T) {
+	want := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}
+	h := withRecovery("ok-tool", func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return want, nil
+	})
+	got, err := h(context.Background(), &mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if got != want {
+		t.Errorf("result = %p, want the handler's own %p", got, want)
+	}
+}
+
+// TestWithRecovery_BareErrorReachesTheWireAsInternalError drives a bare
+// handler error through the real SDK rather than calling the wrapper
+// directly, because the claim being pinned is about toWireError, not about
+// our code: that the *jsonrpc.Error withRecovery adds is the one it reads the
+// code from, and that the message survives the trip. Before SOL-153692 this
+// arrived as "code": 0.
+func TestWithRecovery_BareErrorReachesTheWireAsInternalError(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	server.AddTool(
+		&mcp.Tool{Name: "bare-error-tool", InputSchema: map[string]any{"type": "object"}},
+		withRecovery("bare-error-tool", func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return nil, errors.New("handler failed")
+		}),
+	)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	_, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "bare-error-tool", Arguments: map[string]any{}})
+	var wire *jsonrpc.Error
+	if !errors.As(err, &wire) {
+		t.Fatalf("CallTool error = %T (%v), want *jsonrpc.Error", err, err)
+	}
+	if wire.Code != jsonrpc.CodeInternalError {
+		t.Errorf("wire code = %d, want %d", wire.Code, jsonrpc.CodeInternalError)
+	}
+	if wire.Message != "handler failed" {
+		t.Errorf("wire message = %q, want %q", wire.Message, "handler failed")
 	}
 }

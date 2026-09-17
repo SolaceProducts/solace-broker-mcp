@@ -32,6 +32,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -69,6 +70,16 @@ const metaKeyCorrelationID = "correlation_id"
 // here (rather than across CallTool's many return paths) guarantees all three
 // result kinds carry it; when the capability is off correlation.From(ctx)
 // returns "" and no Meta key is added.
+//
+// Being the chokepoint also makes it where a protocol-level error gets its
+// JSON-RPC code (SOL-153692). The SDK's toWireError copies the code only from
+// a *jsonrpc.Error found in the returned error's chain and otherwise leaves it
+// at 0, which no JSON-RPC 2.0 revision defines. Every error escaping a handler
+// therefore leaves here carrying one: a code the handler set itself
+// (describe-semp-schema's bad-input paths use CodeInvalidParams) is kept, and
+// anything else gets CodeInternalError, the one code that is correct for "the
+// handler failed" without knowing why. Only the error value is wrapped; the
+// message the client reads is unchanged (see codedError).
 //
 // Which ID that is: a tool handler's context descends from the POST that
 // established the session, not the one carrying this call, so it does not
@@ -124,7 +135,11 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 			// no result body to annotate, so it is left untouched.
 			stampCorrelationID(ctx, result)
 		}()
-		return h(ctx, req)
+		result, err = h(ctx, req)
+		if err != nil {
+			err = withJSONRPCCode(err, jsonrpc.CodeInternalError)
+		}
+		return result, err
 	}
 }
 
@@ -146,6 +161,36 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 		result.Meta = mcp.Meta{}
 	}
 	result.Meta[metaKeyCorrelationID] = id
+}
+
+// codedError attaches a JSON-RPC error code to an error without changing what
+// the client reads. The SDK's toWireError (internal/jsonrpc2/messages.go)
+// takes the wire message from the OUTER error's Error() and the code from the
+// first *jsonrpc.Error that errors.As finds in the chain, so Error() delegates
+// to the original and Unwrap exposes both it and a bare *jsonrpc.Error holding
+// the code. The two obvious alternatives are both worse: wrapping with
+// fmt.Errorf("%w", &jsonrpc.Error{Code: c}) suffixes the message with ": "
+// (jsonrpc.Error's Error() is its empty Message), and replacing the error with
+// a *jsonrpc.Error outright drops the original from the chain for anything
+// that errors.Is on the way out.
+type codedError struct {
+	err  error
+	code int64
+}
+
+func (e codedError) Error() string   { return e.err.Error() }
+func (e codedError) Unwrap() []error { return []error{e.err, &jsonrpc.Error{Code: e.code}} }
+
+// withJSONRPCCode returns err carrying code on the wire, or err itself if it
+// already carries one: a caller nearer the failure knows better than
+// withRecovery's default what went wrong, and that code must survive the seam
+// (SOL-153692).
+func withJSONRPCCode(err error, code int64) error {
+	var existing *jsonrpc.Error
+	if errors.As(err, &existing) {
+		return err
+	}
+	return codedError{err: err, code: code}
 }
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP
