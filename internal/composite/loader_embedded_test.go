@@ -81,7 +81,7 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 
 	t.Run("count", func(t *testing.T) {
 		// Exact count guards against silent drops and accidental additions — update deliberately.
-		const wantToolCount = 37
+		const wantToolCount = 41
 		if len(tools) != wantToolCount {
 			t.Errorf("tool count: got %d, want %d", len(tools), wantToolCount)
 		}

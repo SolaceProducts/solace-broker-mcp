@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **25 read-only tools** plus **18 write tools** — four action
+The server exposes **29 read-only tools** plus **18 write tools** — four action
 tools and 14 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -51,7 +51,8 @@ List tools accept an optional `maxResults` integer: **default 100, maximum 500**
 event broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items. Event brokers
 with more than 500 matching objects require a narrower query. Applies to:
 `list-vpns`, `list-queues`, `list-clients`, `list-client-subscriptions`,
-`list-slow-subscribers`, `list-rdps`, `list-queue-discards`.
+`list-slow-subscribers`, `list-client-usernames`, `list-client-profiles`,
+`list-rdps`, `list-queue-discards`.
 
 ### Rate Limiting and Retries
 
@@ -115,6 +116,7 @@ queue subscriptions) are gated behind the same flag and documented under
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics), [`list-queue-subscriptions`](#list-queue-subscriptions) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
+| Client Access | [`list-client-usernames`](#list-client-usernames), [`get-client-username`](#get-client-username), [`list-client-profiles`](#list-client-profiles), [`get-client-profile`](#get-client-profile) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
 | Bridges | [`list-bridges`](#list-bridges), [`get-bridge-status`](#get-bridge-status) | — |
 | Kafka | [`list-kafka-receivers`](#list-kafka-receivers), [`get-kafka-receiver-status`](#get-kafka-receiver-status), [`list-kafka-senders`](#list-kafka-senders), [`get-kafka-sender-status`](#get-kafka-sender-status) | — |
@@ -537,6 +539,123 @@ per client: `clientName`, `clientUsername`, `clientAddress`, `platform`,
 ```
 
 **Example request:** "Are there any slow subscribers on `<your-vpn-name>`?"
+
+---
+
+## Client Access
+
+These read the provisioned client-username and client-profile configuration
+objects — distinct from the connected-session tools above (`list-clients`,
+`get-client-details`), which read live connections. A configured (static)
+username or profile exists whether or not anyone is connected with it; a
+`dynamic=true` username is auto-provisioned by the broker and may be ephemeral.
+Passwords are never returned.
+
+### list-client-usernames
+
+List the client usernames provisioned in a VPN with their enabled state, client
+profile, ACL profile, and `dynamic` flag. A client username is a configured
+login, not a live session. For currently connected sessions, use `list-clients`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max usernames to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, step `clientUsernames` (array). Selected fields
+per username: `clientUsername`, `enabled`, `clientProfileName`, `aclProfileName`,
+`dynamic`, `guaranteedEndpointPermissionOverrideEnabled`,
+`subscriptionManagerEnabled`, `msgVpnName`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
+```
+
+**Example request:** "What client usernames are provisioned on the default VPN?"
+
+### get-client-username
+
+Configuration of a single provisioned client username: its enabled state, client
+profile, ACL profile, and permission flags. Reflects configuration, not a live
+connection. For connected sessions use `get-client-details`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the client username. |
+| `clientUsername` | string | yes | The name of the client username. |
+
+**Returns:** step-keyed envelope, step `clientUsername`. Selected fields:
+`clientUsername`, `enabled`, `clientProfileName`, `aclProfileName`,
+`guaranteedEndpointPermissionOverrideEnabled`, `subscriptionManagerEnabled`,
+`dynamic`, `msgVpnName`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "clientUsername": "app-user" }
+```
+
+**Example request:** "Show the app-user client username on the default VPN."
+
+### list-client-profiles
+
+List the client profiles in a VPN with their headline permission flags — whether
+clients using the profile may send/receive guaranteed messages and create
+endpoints — plus per-username connection, endpoint, and subscription limits. A
+client profile is the permission template a client username points at. For the
+full attribute set of one profile, use `get-client-profile`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max profiles to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, step `clientProfiles` (array). Selected fields
+per profile: `clientProfileName`, `allowGuaranteedMsgSendEnabled`,
+`allowGuaranteedMsgReceiveEnabled`, `allowGuaranteedEndpointCreateEnabled`,
+`maxConnectionCountPerClientUsername`, `maxEndpointCountPerClientUsername`,
+`maxSubscriptionCount`, `msgVpnName`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
+```
+
+**Example request:** "List the client profiles on the default VPN."
+
+### get-client-profile
+
+Configuration of a single client profile, including the guaranteed-messaging
+allow flags (send, receive, endpoint create) and per-username connection,
+endpoint, flow, subscription, and transaction limits. A profile with
+`allowGuaranteedMsgSendEnabled` or `allowGuaranteedMsgReceiveEnabled` false
+silently blocks guaranteed messaging for every username that uses it.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the client profile. |
+| `clientProfileName` | string | yes | The client profile name. |
+
+**Returns:** step-keyed envelope, step `clientProfile`. Selected fields include
+`clientProfileName`, the `allowGuaranteed*` flags, `allowSharedSubscriptionsEnabled`,
+`allowTransactedSessionsEnabled`, the configured `max*` per-username limits, and the
+`maxEffective*` limits actually in force (a configured `max*` can be capped lower by a
+broker-level ceiling).
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "clientProfileName": "default" }
+```
+
+**Example request:** "What does the default client profile allow?"
 
 ---
 
