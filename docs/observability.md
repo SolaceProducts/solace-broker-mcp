@@ -909,7 +909,14 @@ not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
 > is a committed, importable dashboard. Every panel's metric name, label keys, and template
 > variable are checked in CI (`cmd/server/grafana_dashboard_test.go`) against Story 14's golden
 > file, not against this prose — a dashboard and a scrape cannot disagree without failing the
-> build._
+> build. That check is static, though — it proves the dashboard and the schema agree on paper,
+> not that a panel actually returns data. **The nightly `e2e-dashboard` job** (SOL-154545,
+> `.github/workflows/observability.yml`) covers that: it imports this exact file into a real
+> Grafana, drives real tool traffic against a live broker, and asserts every panel query, every
+> template variable, and an exemplar all return real data — on both metrics ingestion paths. The
+> same nightly run also uncomments and executes the real, committed
+> `deploy/otel-collector/docker/otelcol.yaml` metrics pipeline (see below), so the OTLP
+> ingestion path's collector config is proven too, not just published._
 
 A starter dashboard so a customer NOC operator sees the service from day one without authoring
 panels: tool RED, an active-requests gauge alongside it, SEMP RED-per-attempt, an auth-failure
@@ -1596,6 +1603,13 @@ commented out and can be swapped in for the Tempo default.
 > server's OTLP metrics exporter straight at a bare Prometheus does not work, and cannot be made
 > to work by adjusting Prometheus-side configuration alone. The corrected requirement is below,
 > first, because it is load-bearing for everything that follows it.
+>
+> **Verified nightly, not just once (SOL-154545):** the `e2e-dashboard` job in
+> `.github/workflows/observability.yml` uncomments the real `otlphttp/prometheus` exporter and
+> `metrics:` pipeline in the committed `deploy/otel-collector/docker/otelcol.yaml` — the same
+> file this section describes editing by hand — and asserts metrics actually land in a
+> `--web.enable-otlp-receiver` Prometheus behind it. A regression here fails CI, not just a
+> future customer's first attempt.
 
 If you only need metrics in Prometheus, **scraping `/metrics` needs no OTLP and no collector** —
 see [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint),

@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: solace-broker-mcp
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["mcp-server:9091"]
