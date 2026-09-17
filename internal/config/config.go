@@ -975,7 +975,11 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 // as a limitation. A value prefixed by both an anchor and a tag together
 // (e.g. `&pw !!str "v"`) skips back over only the nearer one; this is rare
 // enough in practice (this repo's schema uses neither anchors nor tags) that
-// it is accepted rather than chased with a skip-back loop.
+// it is accepted rather than chased with a skip-back loop. A literal `{` or
+// `[` inside plain unquoted text — e.g. `a{'b` or `a['b` — is indistinguishable
+// at this seam from a real flow-collection opener, so a quote right after one
+// still wrongly opens; this repo's config schema has no field whose value
+// contains a brace or bracket, so it is accepted as a residual.
 func splitYAMLComment(line []byte) (active, comment []byte) {
 	inSingle := false
 	inDouble := false
