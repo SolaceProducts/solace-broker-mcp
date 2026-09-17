@@ -40,6 +40,17 @@ data:
       #     key: ${env:DD_API_KEY}
       #     site: datadoghq.com
 
+      # Alternative: Prometheus with its native OTLP receiver
+      # (--web.enable-otlp-receiver) — requires OTLP/HTTP, not gRPC, so this
+      # is a separate exporter from otlp/tempo above, not a swap of it.
+      # Update the endpoint to your Prometheus service, e.g.
+      # http://prometheus.monitoring:9090/api/v1/otlp (the base path; this
+      # exporter appends /v1/metrics itself).
+      # otlphttp/prometheus:
+      #   endpoint: http://prometheus.monitoring:9090/api/v1/otlp
+      #   tls:
+      #     insecure: true
+
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
@@ -52,9 +63,12 @@ data:
           processors: [batch]
           exporters: [otlp/tempo]
         # Metrics pipeline — Tempo and Jaeger are traces-only backends. Enable
-        # and swap the exporter when using a metrics-capable backend (Datadog,
-        # Prometheus with --web.enable-otlp-receiver).
+        # this only when using a metrics-capable backend: swap in the datadog
+        # exporter above for Datadog, or the otlphttp/prometheus exporter
+        # above for Prometheus with --web.enable-otlp-receiver. otlp/tempo
+        # (gRPC, pointed at Tempo/Jaeger) is NOT a valid metrics exporter for
+        # either — do not just uncomment this pipeline as-is.
         # metrics:
         #   receivers: [otlp]
         #   processors: [batch]
-        #   exporters: [otlp/tempo]
+        #   exporters: [otlphttp/prometheus]
