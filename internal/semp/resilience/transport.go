@@ -18,10 +18,25 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
+
+// ProxyDirect is the EffectiveProxy label for a destination that bypasses the
+// proxy — either because no proxy variable is set, or because NO_PROXY exempts
+// it. A fixed label rather than an empty string so the log field is always
+// present and `proxy != direct` is a usable query.
+const ProxyDirect = "direct"
+
+// proxyResolver is the one symbol both the transport's Proxy field and
+// EffectiveProxy read, so the label a broker logs cannot drift from the
+// resolution that transport actually performs. They resolved identically when
+// written — both named http.ProxyFromEnvironment — but nothing tied them
+// together, so a future change to one was free to leave the other behind.
+// Changing the source of truth now means changing this line.
+var proxyResolver = http.ProxyFromEnvironment
 
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool
 // before the client closes it. Matches the value in http.DefaultTransport.
@@ -149,15 +164,27 @@ func newSEMPDialer(requestTimeout time.Duration) *net.Dialer {
 // Clone would copy ForceAttemptHTTP2: true, which overrides the conservative
 // auto-disable that the custom TLSClientConfig above relies on — HTTP/2 would
 // then multiplex several in-flight requests onto one connection and invalidate
-// the MaxConnsPerHost sizing described above. It would also bring
-// Proxy: ProxyFromEnvironment, making SEMP traffic newly sensitive to
-// HTTPS_PROXY. Supplying our own DialContext is HTTP/2-neutral: net/http lists
-// a custom DialContext in the same conservative-disable set as a custom
-// TLSClientConfig.
+// the MaxConnsPerHost sizing described above. Supplying our own DialContext is
+// HTTP/2-neutral: net/http lists a custom DialContext in the same
+// conservative-disable set as a custom TLSClientConfig.
+//
+// Proxy is therefore named explicitly (SOL-153295). A nil Proxy means "never
+// proxy" rather than "consult the environment", so before this the server
+// ignored HTTPS_PROXY for broker traffic with no error and no log line, while
+// IdP traffic honoured it — internal/idpclient does clone DefaultTransport.
+// ProxyFromEnvironment does not disturb the HTTP/2 posture above: net/http's
+// auto-disable keys off TLSClientConfig and DialContext, not off Proxy.
+//
+// Two limits, both under "Outbound HTTP Proxy" in docs/configuration.md: the
+// environment is read once per process and cached, so this is restart-scoped
+// and cannot vary per broker; and NO_PROXY matches the host as written in the
+// URL, so a CIDR entry exempts only a broker addressed by IP literal, never
+// one addressed by hostname.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 		DialContext:           newSEMPDialer(sempCfg.RequestTimeoutDuration).DialContext,
+		Proxy:                 proxyResolver,
 		MaxConnsPerHost:       sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
@@ -166,4 +193,47 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 		ResponseHeaderTimeout: sempCfg.RequestTimeoutDuration / 2,
 		ExpectContinueTimeout: expectContinueTimeout,
 	}
+}
+
+// EffectiveProxy reports which proxy the transport above will use for rawURL,
+// as a label for logging: a sanitized proxy URL, or ProxyDirect. It answers the
+// question the reroute in NewTunedTransport otherwise leaves unanswerable —
+// whether an inherited HTTPS_PROXY has put a proxy in front of this broker —
+// which is visible on the wire only as a terse `proxyconnect tcp:` dial error.
+//
+// The result is safe to log. A proxy URL may carry credentials
+// (http://user:password@proxy:3128), so it goes through
+// config.SanitizeURLString, which drops userinfo. One consequence: that helper
+// only recognizes http and https, so a socks5 proxy logs as an unparseable-URL
+// placeholder. That still answers "a proxy is in play" — the diagnostic that
+// matters here — and failing closed is the right direction for a value that can
+// hold a password.
+//
+// Resolution matches the transport by construction: both read proxyResolver,
+// so this cannot drift from what the transport does, including NO_PROXY and the
+// loopback exemption. An unparseable rawURL reports
+// ProxyDirect rather than an error — config validation rejects such a URL long
+// before this runs, and a log label is not the place to surface it.
+func EffectiveProxy(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ProxyDirect
+	}
+	proxyURL, err := proxyResolver(&http.Request{URL: u})
+	if err != nil {
+		return ProxyDirect
+	}
+	return proxyLabel(proxyURL)
+}
+
+// proxyLabel renders a resolved proxy URL as a log-safe label. Split from
+// EffectiveProxy so the credential-stripping step is testable directly:
+// ProxyFromEnvironment caches the environment behind a sync.Once, so a test
+// that tried to reach this path by setting HTTPS_PROXY would depend on nothing
+// else in the binary having resolved a proxy first.
+func proxyLabel(proxyURL *url.URL) string {
+	if proxyURL == nil {
+		return ProxyDirect
+	}
+	return config.SanitizeURLString(proxyURL.String())
 }
