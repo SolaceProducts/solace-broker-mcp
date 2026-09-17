@@ -1138,9 +1138,9 @@ func assertConformantErrorResult(t *testing.T, env jsonRPCEnvelope, wantMessages
 //   - describe-semp-schema hand-checks its own arguments and returns a Go
 //     error, which the SDK turns into a JSON-RPC error. MCP 2025-11-25 puts
 //     input-validation failures in the tool-result bucket, so the model is
-//     handed a protocol error it cannot act on. The code makes it worse: a
-//     plain error from an untyped handler serialises as `"code":0`, which is
-//     not a JSON-RPC error code at all.
+//     handed a protocol error it cannot act on. (Until SOL-153692 the code
+//     on that error was 0, which is not a JSON-RPC error code at all; it is
+//     -32602 now, which fixes the code and nothing else.)
 //   - list-brokers validates nothing, so an argument that its schema does not
 //     declare is silently accepted.
 //
@@ -1204,11 +1204,15 @@ func TestToolsCall_ValidationOutsideToolManagerIsNotConformant(t *testing.T) {
 				t.Errorf("error.message = %q, want it to contain %q",
 					env.Error.Message, tc.wantMessage)
 			}
-			// Pinned, not endorsed: 0 is not a JSON-RPC error code. It is what
-			// the SDK emits for a bare Go error from an untyped handler. If
-			// this ever becomes a real code the gap has been worked on and the
-			// classification above should be re-checked.
-			assertErrorCode(t, env.Error.Code, 0)
+			// -32602 is the right code for this wrong kind of error, and it is
+			// NOT evidence the gap is closed: a JSON-RPC error with a valid
+			// code is still a JSON-RPC error, and the spec wants schema-invalid
+			// tool input answered as an isError tool result. SOL-153692 fixed
+			// the code (it was 0, which no JSON-RPC revision defines);
+			// SOL-153693 owns the classification and is what deletes this
+			// test. Do not read a clean code here as either ticket being done
+			// early.
+			assertErrorCode(t, env.Error.Code, codeInvalidParams)
 		})
 	}
 
