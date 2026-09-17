@@ -48,15 +48,16 @@ The Solace Event Broker MCP Server requires:
 
 ### Deployment
 
-The server can be deployed in three ways. See the [README](../README.md#quickstart) for detailed setup instructions:
+The server can be deployed several ways. See the [README](../README.md#quickstart) for detailed setup instructions:
 
 | Environment | Notes |
 |---|---|
-| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment |
+| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick. |
 | **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check |
-| **Development** | Run from source with Go for development and testing |
+| **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH` |
+| **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/` |
 
-All methods use the same YAML configuration file and `.env` credentials. Configuration must be completed before starting the server.
+Binary, Docker, and `go install` use the same YAML configuration file and `.env` credentials — configuration must be completed before starting the server. Kubernetes carries the equivalent settings in its own ConfigMap and Secret manifests instead. Contributors running from source instead of a tagged release should see [Development Setup](../README.md#development-setup).
 
 ### Connecting an MCP Client
 
@@ -70,7 +71,9 @@ For details on securing this connection with a static token or OAuth/OIDC, see [
 
 ### Example Queries
 
-After connecting, try these example queries:
+After connecting, try these example queries. Replace `<your-vpn-name>` with an
+actual Message VPN name — see [Natural-Language Queries](examples.md#natural-language-queries)
+for how to find yours.
 
 **Check event broker status:**
 ```
@@ -79,17 +82,17 @@ Get the status of my-broker
 
 **List queues:**
 ```
-Show me all queues in the default VPN on my-broker
+Show me all queues in <your-vpn-name> on my-broker
 ```
 
 **Diagnose a slow consumer:**
 ```
-Get client details for client-name in default VPN on my-broker
+Get client details for client-name in <your-vpn-name> on my-broker
 ```
 
 **Monitor message rates:**
 ```
-What are the current message rates for default VPN on my-broker?
+What are the current message rates for <your-vpn-name> on my-broker?
 ```
 
 ## Tools Reference

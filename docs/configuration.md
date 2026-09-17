@@ -30,6 +30,8 @@ brokers:
 
 The server resolves variables at startup. The `.env` file loads automatically before substitution. Precedence: environment variable > `.env` file > YAML literal value.
 
+Substitution runs on the raw configuration text, one line at a time, before the result is handed to the YAML parser. It skips YAML comments on a best-effort basis: a `${VAR_NAME}` reference inside a real `#` comment is normally not substituted and doesn't need the variable set. This is a hand-written line scanner, not a full YAML parser, so it is not a security boundary — quote any value containing `'`, `"`, `#`, or `:` (as the examples above do) so it parses as the single scalar you intend rather than being split by one of those characters.
+
 ## Server Settings
 
 | YAML field | Env var | Default | Description |

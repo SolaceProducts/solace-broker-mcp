@@ -34,6 +34,16 @@ The accepted values are the event broker aliases from your configuration. Call `
 to discover them. Alias matching is case-insensitive; original casing is
 preserved in output.
 
+### The `msgVpnName` Parameter
+
+Most tools also take a required `msgVpnName` identifying which Message VPN to
+query — a per-broker configuration value, not a universal constant. See
+[Natural-Language Queries](examples.md#natural-language-queries) for how to
+find yours. Both the JSON **example invocation** blocks and the
+natural-language **Example request** quotes below write `<your-vpn-name>`
+where a real VPN name is needed — replace it with one from your own event
+broker before trying the call.
+
 ### Pagination
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
@@ -260,10 +270,10 @@ useful "has replication been flaky recently?" signal.
 `replicationActiveTransitionToSyncIneligibleCount`, and related counters.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "Is replication in sync for the default VPN on prod-broker?"
+**Example request:** "Is replication in sync for `<your-vpn-name>` on prod-broker?"
 
 ---
 
@@ -313,10 +323,10 @@ Reports raw state, not a health verdict.
 discard counts.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "Is the default VPN on prod-broker operational?"
+**Example request:** "Is `<your-vpn-name>` on prod-broker operational?"
 
 ### get-message-rates
 
@@ -334,10 +344,10 @@ Current and average message and byte throughput rates for a VPN.
 equivalents.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "What are the current message rates on the default VPN?"
+**Example request:** "What are the current message rates on `<your-vpn-name>`?"
 
 ---
 
@@ -366,10 +376,10 @@ discard/redelivery counters, use `get-queue-metrics`.
 `lowPriorityMsgCongestionState`, `ingressEnabled`, `egressEnabled`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "maxResults": 100 }
 ```
 
-**Example request:** "Show queues with a backlog on the default VPN."
+**Example request:** "Show queues with a backlog on `<your-vpn-name>`."
 
 ### get-queue-metrics
 
@@ -394,7 +404,7 @@ flip for slow ACKs).
 (`accessType`, `durable`, `owner`, `maxTtl`, `maxRedeliveryCount`, `maxMsgSize`).
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" }
 ```
 
 **Example request:** "Why is orders.q backing up on prod-broker?"
@@ -419,7 +429,7 @@ an empty list.
 broker).
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" }
 ```
 
 **Example request:** "What topics is orders.q subscribed to on prod-broker?"
@@ -449,10 +459,10 @@ client: `clientName`, `clientUsername`, `clientAddress`, `platform`, `rxMsgRate`
 `txMsgRate`, `slowSubscriber`, `uptime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "maxResults": 100 }
 ```
 
-**Example request:** "List the connected clients on the default VPN."
+**Example request:** "List the connected clients on `<your-vpn-name>`."
 
 ### get-client-details
 
@@ -476,10 +486,10 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 `txFlowCount`, `elidingTopicCount`, `keepalive`, `uptime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Get details for client consumer-7 on the default VPN."
+**Example request:** "Get details for client consumer-7 on `<your-vpn-name>`."
 
 ### list-client-subscriptions
 
@@ -498,7 +508,7 @@ List topic subscriptions for a specific client.
 records as returned by the event broker).
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
 ```
 
 **Example request:** "What topics is consumer-7 subscribed to?"
@@ -523,10 +533,10 @@ per client: `clientName`, `clientUsername`, `clientAddress`, `platform`,
 `rxMsgRate`, `txMsgRate`, `txDiscardedMsgCount`, `slowSubscriber`, `uptime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "Are there any slow subscribers on the default VPN?"
+**Example request:** "Are there any slow subscribers on `<your-vpn-name>`?"
 
 ---
 
@@ -550,10 +560,10 @@ last failure reason. For full detail use `get-rdp-status`.
 `lastFailureTime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "List the RDPs on the default VPN and flag any that are down."
+**Example request:** "List the RDPs on `<your-vpn-name>` and flag any that are down."
 
 ### get-rdp-status
 
@@ -578,10 +588,10 @@ bindings, and its REST consumers.
   counters, and last-failure fields.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Why is the webhook-rdp on the default VPN failing?"
+**Example request:** "Why is the webhook-rdp on `<your-vpn-name>` failing?"
 
 ---
 
@@ -606,10 +616,10 @@ bridge: `bridgeName`, `bridgeVirtualRouter`, `enabled`, `inboundState`,
 `remoteRouterName`, `uptime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "List the bridges on the default VPN and flag any that are down."
+**Example request:** "List the bridges on `<your-vpn-name>` and flag any that are down."
 
 ### get-bridge-status
 
@@ -633,10 +643,10 @@ pair; most deployments use `bridgeVirtualRouter: "auto"`.
 `remoteRouterName`, `rxConnectionFailureCategory`, `uptime`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "bridgeName": "bridge-to-dr", "bridgeVirtualRouter": "auto" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "bridgeName": "bridge-to-dr", "bridgeVirtualRouter": "auto" }
 ```
 
-**Example request:** "Why is bridge-to-dr on the default VPN down?"
+**Example request:** "Why is bridge-to-dr on `<your-vpn-name>` down?"
 
 ---
 
@@ -663,10 +673,10 @@ fields per receiver: `kafkaReceiverName`, `clientName`, `enabled`, `up`,
 `transportTlsEnabled`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "List the Kafka Receivers on the default VPN and flag any that are down."
+**Example request:** "List the Kafka Receivers on `<your-vpn-name>` and flag any that are down."
 
 ### get-kafka-receiver-status
 
@@ -689,10 +699,10 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 `authenticationScheme`, `transportTlsEnabled`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "kafkaReceiverName": "orders-ingest" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-ingest" }
 ```
 
-**Example request:** "Why is the orders-ingest Kafka Receiver on the default VPN down?"
+**Example request:** "Why is the orders-ingest Kafka Receiver on `<your-vpn-name>` down?"
 
 ### list-kafka-senders
 
@@ -715,10 +725,10 @@ fields per sender: `kafkaSenderName`, `clientName`, `enabled`, `up`,
 `transportTlsEnabled`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "List the Kafka Senders on the default VPN and flag any that are down."
+**Example request:** "List the Kafka Senders on `<your-vpn-name>` and flag any that are down."
 
 ### get-kafka-sender-status
 
@@ -741,10 +751,10 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 `authenticationScheme`, `transportTlsEnabled`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "kafkaSenderName": "orders-export" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-export" }
 ```
 
-**Example request:** "Why is the orders-export Kafka Sender on the default VPN down?"
+**Example request:** "Why is the orders-export Kafka Sender on `<your-vpn-name>` down?"
 
 ---
 
@@ -788,7 +798,7 @@ scope; `vpnName` echoes the requested VPN when scoped.
 ```
 
 ```json
-{ "broker": "prod-broker", "vpnName": "default" }
+{ "broker": "prod-broker", "vpnName": "<your-vpn-name>" }
 ```
 
 **Example request:** "Are we dropping messages anywhere on prod-broker?"
@@ -817,10 +827,10 @@ queue: `queueName`, `maxTtlExpiredDiscardedMsgCount`,
 `xaTransactionNotSupportedDiscardedMsgCount`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
 ```
 
-**Example request:** "Which queues on the default VPN are discarding messages, and why?"
+**Example request:** "Which queues on `<your-vpn-name>` are discarding messages, and why?"
 
 ---
 
@@ -850,10 +860,10 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 **Returns:** `{ disconnect: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Disconnect consumer-7 on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Disconnect consumer-7 on `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-client-stats
 
@@ -867,10 +877,10 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 **Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Reset the stats counters for consumer-7 on the default VPN."
+**Example request:** "Reset the stats counters for consumer-7 on `<your-vpn-name>`."
 
 ### delete-queue-messages
 
@@ -892,10 +902,10 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 **Returns:** `{ deleteMsgs: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "dead-letter.q" }
 ```
 
-**Example request:** "Drain dead-letter.q on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Drain dead-letter.q on `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-queue-stats
 
@@ -910,10 +920,10 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 **Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" }
 ```
 
-**Example request:** "Reset the stats counters for orders.q on the default VPN."
+**Example request:** "Reset the stats counters for orders.q on `<your-vpn-name>`."
 
 ---
 
@@ -1036,10 +1046,10 @@ Annotations: `readOnly: false`, `destructive: false`.
 **Returns:** step-keyed envelope, step `createQueue`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create a queue orders.q in `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-queue
 
@@ -1059,10 +1069,10 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Returns:** step-keyed envelope, step `updateQueue`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on orders.q in the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Turn off egress on orders.q in `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-queue
 
@@ -1081,10 +1091,10 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Returns:** step-keyed envelope, step `deleteQueue`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" }
 ```
 
-**Example request:** "Delete orders.q from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete orders.q from `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-queue-subscription
 
@@ -1105,7 +1115,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 **Returns:** step-keyed envelope, step `createQueueSubscription`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
 ```
 
 **Example request:** "Subscribe orders.q to orders/> on prod-broker." (The tool description instructs the agent to confirm before acting.)
@@ -1129,7 +1139,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Returns:** step-keyed envelope, step `deleteQueueSubscription`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
 ```
 
 **Example request:** "Remove the orders/> subscription from orders.q on prod-broker." (The tool description instructs the agent to confirm before acting.)
@@ -1151,10 +1161,10 @@ Annotations: `readOnly: false`, `destructive: false`.
 **Returns:** step-keyed envelope, step `createTopicEndpoint`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create a topic endpoint orders.te in `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-topic-endpoint
 
@@ -1174,10 +1184,10 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Returns:** step-keyed envelope, step `updateTopicEndpoint`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Turn off egress on the orders.te topic endpoint in `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-topic-endpoint
 
@@ -1195,10 +1205,10 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Returns:** step-keyed envelope, step `deleteTopicEndpoint`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te" }
 ```
 
-**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete the orders.te topic endpoint from `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### create-rdp
 
@@ -1219,10 +1229,10 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 **Returns:** step-keyed envelope, step `createRdp`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
 ```
 
-**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Create an RDP called webhook-rdp in `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-rdp
 
@@ -1241,10 +1251,10 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 **Returns:** step-keyed envelope, step `updateRdp`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
 ```
 
-**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Enable the webhook-rdp RDP on `<your-vpn-name>`." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-rdp
 
@@ -1262,7 +1272,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 **Returns:** step-keyed envelope, step `deleteRdp`.
 
 ```json
-{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+**Example request:** "Delete the webhook-rdp RDP from `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)

@@ -940,32 +940,144 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 // the line OR preceded by whitespace, AND not inside a single- or
 // double-quoted string on the same line.
 //
+// A quote (' or ") only opens a string at a position where YAML actually
+// permits a scalar to start — see isScalarStart. Earlier, either quote
+// character anywhere on the line (including a contraction in plain unquoted
+// text, e.g. "John's" or "don't", or a bare " inside an unquoted word) flipped
+// the in-string flag. With no matching close, the flag stayed true for the
+// rest of the line, so a real # later on the same line was read as "inside a
+// string" and never recognized as a comment marker — silently pulling ${VAR}
+// the author believed was commented out into substitution (SOL-153079).
+//
+// A prior version of isScalarStart gated on the single preceding delimiter
+// character but did not require ':'/'-' to be followed by whitespace, did not
+// track flow-collection depth for ',', and did not skip back over a YAML
+// anchor/alias/tag token. That version regressed two ways a plain per-byte
+// toggle happened to get right by accident (found in review, PR #420):
+// a *second* quote following a real delimiter — e.g. `it's, 'foo # x` — was
+// wrongly treated as a genuine opener (the naive toggle's two flips had
+// cancelled out; this version's smarter-but-still-wrong gate did not), and a
+// quote preceded by an anchor/tag — e.g. `&pw "pre # ${PW}"` — was wrongly
+// treated as NOT an opener, so the real string's own # was misread as a
+// comment and ${PW} was left unsubstituted with no error at all. flowDepth
+// (tracked here, in splitYAMLComment, across unquoted [/{ and ]/}) and the
+// anchor/tag skip-back in isScalarStart close both directions.
+//
 // Limitations: block scalars (|, >) treat # as literal text — this helper
 // does not track block-scalar context. The broker MCP config schema uses only
-// scalar values and nested structs, never block scalars, so this is acceptable.
-// If a block-scalar field is ever added, extend this helper accordingly.
+// scalar values and nested structs, never block scalars, so this is
+// acceptable. If a block-scalar field is ever added, extend this helper
+// accordingly. A quote that sits at a scalar-start position (isScalarStart)
+// but is not actually meant to start a quoted string — a value that itself
+// begins with a quote character, like "'twas" or a bare " prefix — is still
+// misread as an opening delimiter; this is structurally undecidable from
+// position alone (it looks identical to a real quoted scalar) and is accepted
+// as a limitation. A value prefixed by both an anchor and a tag together
+// (e.g. `&pw !!str "v"`) skips back over only the nearer one; this is rare
+// enough in practice (this repo's schema uses neither anchors nor tags) that
+// it is accepted rather than chased with a skip-back loop. A literal `{` or
+// `[` inside plain unquoted text — e.g. `a{'b` or `a['b` — is indistinguishable
+// at this seam from a real flow-collection opener, so a quote right after one
+// still wrongly opens; this repo's config schema has no field whose value
+// contains a brace or bracket, so it is accepted as a residual.
 func splitYAMLComment(line []byte) (active, comment []byte) {
 	inSingle := false
 	inDouble := false
+	flowDepth := 0
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		switch {
 		case c == '"' && !inSingle:
-			// Treat a preceding backslash as escaping the quote (heuristic,
-			// not a full YAML lexer — double-backslash isn't unescaped here).
-			if !inDouble || i == 0 || line[i-1] != '\\' {
-				inDouble = !inDouble
+			switch {
+			case inDouble && i > 0 && line[i-1] == '\\':
+				// Escaped quote (\") inside the string; stays inside. Not a
+				// full YAML lexer — double-backslash isn't unescaped here.
+			case inDouble:
+				// The real closing quote.
+				inDouble = false
+			case isScalarStart(line, i, flowDepth):
+				inDouble = true
 			}
 		case c == '\'' && !inDouble:
-			// YAML escapes ' inside a single-quoted string as ''. A naive
-			// toggle re-enters the string at the second quote, which leaves
-			// the in/out state correct at any later #.
-			inSingle = !inSingle
+			switch {
+			case inSingle && i+1 < len(line) && line[i+1] == '\'':
+				// YAML's '' escape for a literal ' inside a single-quoted
+				// string. Consume both characters and stay inside the string.
+				i++
+			case inSingle:
+				// The real closing quote.
+				inSingle = false
+			case isScalarStart(line, i, flowDepth):
+				inSingle = true
+			}
+		case (c == '[' || c == '{') && !inSingle && !inDouble:
+			flowDepth++
+		case (c == ']' || c == '}') && !inSingle && !inDouble:
+			if flowDepth > 0 {
+				flowDepth--
+			}
 		case c == '#' && !inSingle && !inDouble && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
 			return line[:i], line[i:]
 		}
 	}
 	return line, nil
+}
+
+// isScalarStart reports whether position i in line is a place YAML permits a
+// scalar value to begin, given flowDepth (the number of unclosed unquoted
+// [/{ seen so far on the line, tracked by splitYAMLComment): the start of the
+// line, or — after skipping back over any run of spaces/tabs and then, once,
+// over a single YAML anchor/alias/tag token (&name, *name, or !tag) —
+// one of:
+//   - ':', '-', or '?' immediately followed by whitespace or end of line,
+//     matching YAML's own requirement that these only act as indicators in
+//     that position (so "a:'b" and "a-'b" are correctly NOT scalar starts,
+//     while "key: 'v'" and "- 'v'" are);
+//   - '[' or '{' (a flow collection can open a scalar as its first entry
+//     immediately, with no separating whitespace required); or
+//   - ',' but only when flowDepth > 0 (a bare comma outside any flow
+//     collection is just punctuation in plain text, e.g. "John, Jr. 'test").
+//
+// Skipping back over whitespace (rather than checking only line[i-1]) means a
+// run of spaces after a real delimiter still counts (e.g. "key:   'value'"),
+// while a quote preceded by a word-separating space *inside* an
+// already-started plain scalar (e.g. "it is 'ere") does not: skipping back
+// from that space lands on a letter, not a delimiter, so it is correctly not
+// mistaken for scalar start. A quote anywhere else is text (most commonly a
+// contraction, e.g. "John's") and must not be mistaken for a string
+// delimiter.
+func isScalarStart(line []byte, i, flowDepth int) bool {
+	skipWS := func(j int) int {
+		for j > 0 && (line[j-1] == ' ' || line[j-1] == '\t') {
+			j--
+		}
+		return j
+	}
+	j := skipWS(i)
+	if j == 0 {
+		return true
+	}
+	// Skip back over one anchor/alias/tag token (&name, *name, !tag) so the
+	// delimiter check below sees what precedes *that*, not the token itself.
+	k := j
+	for k > 0 && line[k-1] != ' ' && line[k-1] != '\t' {
+		k--
+	}
+	if k < j && (line[k] == '&' || line[k] == '*' || line[k] == '!') {
+		if j = skipWS(k); j == 0 {
+			return true
+		}
+	}
+	switch line[j-1] {
+	case ':', '-', '?':
+		return j == len(line) || line[j] == ' ' || line[j] == '\t'
+	case '[', '{':
+		return true
+	case ',':
+		return flowDepth > 0
+	default:
+		return false
+	}
 }
 
 // validate checks that the config has all required fields and that values are
