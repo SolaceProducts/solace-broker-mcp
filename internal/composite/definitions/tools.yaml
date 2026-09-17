@@ -409,6 +409,151 @@ tools:
     result:
       strategy: collect
 
+  - name: list-client-usernames
+    description: >
+      List the client usernames provisioned in a Message VPN with their enabled
+      state, client profile, and ACL profile. Returns up to 100 by default
+      (max 500 via maxResults). A client username is a configured login
+      (credentials + permission wiring), not a live session — it exists whether
+      or not anyone is connected with it. Use this to discover which usernames
+      exist before creating a queue owned by one or provisioning a new app. This
+      never returns passwords; the broker does not expose them. For currently
+      connected sessions, use list-clients instead.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list client usernames for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of client usernames to return (default 100, max 500)"
+    steps:
+      - id: clientUsernames
+        operation: monitor/getMsgVpnClientUsernames
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - aclProfileName
+          - clientProfileName
+          - clientUsername
+          - enabled
+          - guaranteedEndpointPermissionOverrideEnabled
+          - msgVpnName
+          - subscriptionManagerEnabled
+    result:
+      strategy: collect
+
+  - name: get-client-username
+    description: >
+      Get the configuration of a single provisioned client username: its enabled
+      state, client profile, ACL profile, and permission flags. Reflects
+      configuration, not a live connection — a username can be enabled with no
+      client connected, or disabled with a stale session still closing. Requires
+      msgVpnName and clientUsername to identify it. Passwords are never returned.
+      A dynamic=true result means the username was auto-provisioned by the broker
+      (OAuth or client certificate) and may not persist. Use list-client-usernames
+      first to discover which usernames exist; for connected sessions, use
+      get-client-details.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the client username"
+      - name: clientUsername
+        type: string
+        required: true
+        description: "The name of the client username"
+    steps:
+      - id: clientUsername
+        operation: monitor/getMsgVpnClientUsername
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientUsername: "{{.Params.clientUsername}}"
+          select: "aclProfileName, clientProfileName, clientUsername, dynamic, enabled, guaranteedEndpointPermissionOverrideEnabled, msgVpnName, subscriptionManagerEnabled"
+    result:
+      strategy: collect
+
+  - name: list-client-profiles
+    description: >
+      List the client profiles in a Message VPN with their headline permission
+      flags — whether clients using the profile may send and receive guaranteed
+      messages, create endpoints, and their per-username connection, endpoint,
+      and subscription limits. Returns up to 100 by default (max 500 via
+      maxResults). A client profile is the permission template a client username
+      points at; it is never a connection itself. Use this to discover which
+      profiles exist before creating or updating a client username. For the full
+      attribute set of one profile, use get-client-profile.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list client profiles for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of client profiles to return (default 100, max 500)"
+    steps:
+      - id: clientProfiles
+        operation: monitor/getMsgVpnClientProfiles
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - allowGuaranteedEndpointCreateEnabled
+          - allowGuaranteedMsgReceiveEnabled
+          - allowGuaranteedMsgSendEnabled
+          - clientProfileName
+          - maxConnectionCountPerClientUsername
+          - maxEndpointCountPerClientUsername
+          - maxSubscriptionCount
+          - msgVpnName
+    result:
+      strategy: collect
+
+  - name: get-client-profile
+    description: >
+      Get the configuration of a single client profile, including the guaranteed
+      messaging permission flags (send, receive, endpoint create),
+      transacted-session and shared-subscription permissions, and the
+      per-username connection, endpoint, flow, subscription, and transaction
+      limits. Requires msgVpnName and clientProfileName. Use this to check
+      exactly what a profile permits before pointing a client username at it — a
+      profile with allowGuaranteedMsgSendEnabled or allowGuaranteedMsgReceiveEnabled
+      false silently blocks guaranteed messaging for every username that uses it.
+      A configured max* limit can be capped lower by a broker-level ceiling; the
+      maxEffective* fields report the limit actually in force.
+      Use list-client-profiles first to discover which profiles exist.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the client profile"
+      - name: clientProfileName
+        type: string
+        required: true
+        description: "The name of the client profile"
+    steps:
+      - id: clientProfile
+        operation: monitor/getMsgVpnClientProfile
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientProfileName: "{{.Params.clientProfileName}}"
+          select: "allowBridgeConnectionsEnabled, allowGuaranteedEndpointCreateDurability, allowGuaranteedEndpointCreateEnabled, allowGuaranteedMsgReceiveEnabled, allowGuaranteedMsgSendEnabled, allowSharedSubscriptionsEnabled, allowTransactedSessionsEnabled, clientProfileName, compressionEnabled, elidingEnabled, maxConnectionCountPerClientUsername, maxEffectiveEndpointCount, maxEffectiveRxFlowCount, maxEffectiveSubscriptionCount, maxEffectiveTransactedSessionCount, maxEffectiveTransactionCount, maxEffectiveTxFlowCount, maxEgressFlowCount, maxEndpointCountPerClientUsername, maxIngressFlowCount, maxSubscriptionCount, maxTransactedSessionCount, maxTransactionCount, msgVpnName"
+    result:
+      strategy: collect
+
   - name: get-message-rates
     description: >
       Get current and average message and byte throughput rates for a Message

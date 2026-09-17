@@ -148,6 +148,26 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clients",
 		},
+		"monitor/getMsgVpnClientUsernames": {
+			ID:     "getMsgVpnClientUsernames",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clientUsernames",
+		},
+		"monitor/getMsgVpnClientUsername": {
+			ID:     "getMsgVpnClientUsername",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clientUsernames/{clientUsername}",
+		},
+		"monitor/getMsgVpnClientProfiles": {
+			ID:     "getMsgVpnClientProfiles",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clientProfiles",
+		},
+		"monitor/getMsgVpnClientProfile": {
+			ID:     "getMsgVpnClientProfile",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clientProfiles/{clientProfileName}",
+		},
 		"monitor/getMsgVpnRestDeliveryPoints": {
 			ID:     "getMsgVpnRestDeliveryPoints",
 			Method: "GET",
