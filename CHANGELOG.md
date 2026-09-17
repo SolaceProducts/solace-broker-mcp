@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CHANGELOG entries are now auto-condensed to 100 words max when drafted via `/changelog`, prioritizing coherence over hitting an exact limit. A new rules doc (`docs/internal/changelog-style.md`) establishes the house voice: ~50 words targeting, ~1–2 sentences, user-facing contract changes only (no implementation detail or rationale). This prevents future releases from having verbose entries like v0.9.0's 286-word median. Tracked under SOL-154315.
 - The shipped Kubernetes deployment now keeps the pod well clear of its own memory limit
   instead of running just under it: `deploy/kubernetes/deployment.yaml` sets
   `GOMEMLIMIT: "384MiB"`, 75% of its unchanged `limits.memory: 512Mi`, as a recommendation an
