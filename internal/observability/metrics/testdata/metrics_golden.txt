@@ -1,3 +1,6 @@
+# HELP mcp_audit_events_dropped_total Number of audit records that could not be produced or written to the log stream.
+# TYPE mcp_audit_events_dropped_total counter
+mcp_audit_events_dropped_total 0
 # HELP mcp_auth_failure_total Number of credentials rejected at the HTTP boundary, by reason.
 # TYPE mcp_auth_failure_total counter
 mcp_auth_failure_total{reason="audience_mismatch"} 0
@@ -38,7 +41,7 @@ mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.2",metrics_schema="1.7"} 1
+mcp_schema_version{audit_schema="1.2",metrics_schema="1.8"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1
