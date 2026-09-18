@@ -43,19 +43,22 @@ the PR like any other change.
 
 ### Step 2: Learn the house voice
 
-Read `CHANGELOG.md` before drafting: the `[Unreleased]` section for what is
+**Reference:** `docs/internal/changelog-style.md` is the source of truth for style,
+length, and content rules. Read it before drafting.
+
+For structural examples, read `CHANGELOG.md`: the `[Unreleased]` section for what is
 pending, and `[0.5.0]` and `[0.3.0]` for the **structure** of a breaking-change entry
-and the **form** of a migration table. Take structure from them, not length — see the
-length bullet below. Match the conventions here, do not impose a generic style:
+and the **form** of a migration table. Take structure from them, not length.
+
+Key conventions:
 
 - Keep a Changelog categories, in this order: **Added**, **Changed**, **Deprecated**,
   **Removed**, **Fixed**, **Security**. Added/Changed/Removed/Fixed are the common
   ones; use Deprecated and Security when the change is genuinely one (see Step 3).
-- Each entry is **one list item (bullet) per logical change**. Most land in 15–30
-  words; ~50 words is the ceiling, reserved for a breaking change that needs old
-  behavior, new behavior, and a migration path. **This is a deliberate change from
-  what the file currently shows.** The `[0.6.0]`–`[0.8.0]` entries run to a median
-  of 93–191 words — do not match their length.
+- Each entry is **one list item (bullet) per logical change**. Target ~50 words
+  (~1 sentence); maximum 100 words (~2 sentences). Prioritize coherence over hitting
+  the exact limit, but never exceed 100 words. (v0.9.0 median was 286 words —
+  do not match that length.)
 - Say what changed and what breaks. **Why** it changed belongs in the commit message,
   and **how** it works belongs in a code comment; an entry that runs long is usually
   carrying one of those. A reader of this file is updating their queries, dashboards,
@@ -110,7 +113,24 @@ by shape:
 Do not emit a table for a one-line migration, and do not cram a multi-case migration
 into one sentence.
 
-### Step 5: Insert and show
+### Step 5: Condense if needed
+
+Word-count the complete draft entry (all bullets under the category, or just the new
+one if editing in-place). If any **single bullet exceeds 100 words**, rewrite it:
+
+- **Prioritize coherence** — do not truncate mid-sentence. Rewrite the whole bullet
+  to be concise, not cut. Keep the core fact (what changed) and user value (why it
+  matters to them); drop mechanics (how it works internally) and rationale (why we
+  built it this way) — those belong in the commit message and code comments.
+- Target: ~50 words. Flex room: up to 100 words if needed for clarity.
+- Verify SOL ticket linkage, category, and any `**BREAKING**` flag survive.
+- **Show the human both versions** — print "Before: [original]" and "After:
+  [condensed]" so they see what was cut and can restore something critical if
+  needed. Reference `docs/internal/changelog-style.md` for the rules.
+
+If no bullet exceeds 100 words, proceed to Step 6 with no changes.
+
+### Step 7: Insert and show
 
 - Insert with a **targeted Edit that adds only the new bullets** under the correct
   subsection, creating the subsection heading (in the Step 2 order) only if absent.
@@ -122,7 +142,7 @@ into one sentence.
   release-notes link is tracked separately). Do not commit, push, or tag.
 - Print the resulting diff.
 
-### Step 6: Check the draft against the tree
+### Step 9: Check the draft against the tree
 
 Two checks, both against the code rather than against what the change was meant to
 do. They exist because the common failure is describing the design as intended
@@ -139,7 +159,7 @@ rather than as shipped, after a later revision moved it.
 - If an identifier is not found, correct it from the tree; if you cannot resolve it,
   flag it to the human rather than guessing.
 - If either check changed the entry, re-print the diff — the human must see the
-  corrected version, not the one from Step 5.
+  corrected version, not the one from Step 7.
 
 Then stop for human review.
 
