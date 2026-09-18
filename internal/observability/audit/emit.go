@@ -76,6 +76,19 @@ type DropContext struct {
 // — use this so the gap is visible in the audit stream rather than inferred
 // from its absence.
 //
+// Every call also counts one drop on mcp_audit_events_dropped_total through
+// the installed DropRecorder (SOL-154569). This is the one place the counter
+// moves: Emit's two failure modes (handler refusal, level filtering) and every
+// caller's constructor-rejection path all arrive here, so the counter and the
+// audit_drop record agree by construction rather than by each emission site
+// remembering to do both. The increment happens first, before the notice is
+// attempted, so a log stream that has failed completely still moves the
+// counter — which is the case the counter exists for. The notice's own
+// delivery is deliberately not counted: it reports a loss already counted,
+// and counting it too would read as two lost records per failure under a
+// dead sink. The counter therefore reads "audit records that did not reach
+// the stream", never "write attempts that failed".
+//
 // The drop record carries only common fields plus DroppedEventType/Tool/Broker
 // from dctx: it reports that a record is missing, and admits just enough
 // context to be actionable inside the audit stream itself
@@ -85,6 +98,7 @@ type DropContext struct {
 // outside the customer's audit filter would go unseen in precisely the
 // situation it exists to report.
 func EmitDrop(ctx context.Context, dctx DropContext) {
+	recordDrop(ctx)
 	drop, err := NewEvent(ctx, Fields{
 		Type:             EventAuditDrop,
 		DroppedEventType: dctx.DroppedEventType,

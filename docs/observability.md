@@ -37,7 +37,8 @@
 | Import a starter Grafana dashboard | [Grafana Dashboard](#grafana-dashboard--implemented) |
 | Build a custom Grafana dashboard or an alert rule | [Metrics](#metrics--planned-with-exceptions) |
 | Alert when the IdP token-exchange breaker is open | [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented) |
-| Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) · [Canonical Audit Queries](#canonical-audit-queries) |
+| Write a SIEM rule for compliance evidence | [Audit Trail](#audit-trail--implemented) · [Canonical Audit Queries](#canonical-audit-queries) |
+| Alert when an audit record is lost | [Audit Pipeline Health](#audit-pipeline-health--implemented) · [Audit Delivery](#audit-delivery) |
 | Diagnose one slow or failed call end to end | [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired) · [Correlation ID](#correlation-id--implemented) |
 | Look up what `outcome` or `error_type` means | [The Outcome Vocabulary](#the-outcome-vocabulary) |
 | Check this works with your existing stack | [Vendor Neutrality](#vendor-neutrality) |
@@ -61,7 +62,7 @@ The Broker MCP Server is designed to emit three observability signals:
   compliance evidence. Note "destructive", not "state-changing": object creation is not
   audited today, and a call that fails broker resolution or argument validation writes no
   record either — see
-  [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) for both
+  [Audit Trail](#audit-trail--implemented) for both
   gaps.
 - **Distributed traces**, exported over OTLP, for end-to-end request diagnosis.
 
@@ -83,8 +84,8 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. **This list is a summary, not the source of truth: the CI-checked list is the blockquote under [Metrics](#metrics--planned-with-exceptions) — update that one first, this one to match.** |
-| Audit trail | **[Interim — records implemented, drop counter not yet wired]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is now emitted. The `mcp_audit_events_dropped_total` counter is the one piece not yet wired. See [Audit Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired). |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_audit_events_dropped_total` (see [Audit Pipeline Health](#audit-pipeline-health--implemented)), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. **This list is a summary, not the source of truth: the CI-checked list is the blockquote under [Metrics](#metrics--planned-with-exceptions) — update that one first, this one to match.** |
+| Audit trail | **[Implemented]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is emitted. The `mcp_audit_events_dropped_total` counter that reports a lost record off the log stream is wired as of SOL-154569, behind `OBS_METRICS_ENABLED` (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). See [Audit Trail](#audit-trail--implemented). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -106,7 +107,7 @@ against a stated test rather than re-argued each release.
 | `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
 | `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
 | `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
-| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. It now flips when the Solace SDLC security review of the audit schema passes (tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040), same ticket as the metrics row above) **and** `mcp_audit_events_dropped_total` is emitted — a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent. |
+| `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. So is the one added later — that `mcp_audit_events_dropped_total` is emitted, because a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent, including when the log stream itself is what failed — as of SOL-154569 (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). It now flips when the Solace SDLC security review of the audit schema passes (tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040), same ticket as the metrics row above). |
 | `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
 | `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is satisfied — see `observability.saturation_threshold_ms`. It now flips when the metric form of this signal replaces the log lines, so operators are not opted into per-request log volume to get it. |
 | `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows `OBS_METRICS_ENABLED` | A counter that `/metrics` does not expose has no consumer. Set it explicitly to override in either direction. |
@@ -195,7 +196,7 @@ So a name you would change is worth flagging now. See
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.7**), surfaced by the `mcp_schema_version` metric.
+- `metrics_schema` (current: **1.8**), surfaced by the `mcp_schema_version` metric.
 - `audit_schema` (current: **1.2**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
@@ -264,7 +265,7 @@ values in one field — technically possible. It still gets notice-then-cutover,
 dual-emitting the discriminator doubles **every** audit record for the whole window, not only
 `operation` records, doubling volume and retention on the one signal you pay a SIEM to
 store — a much larger cost than the [Audit
-Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired) coverage gaps
+Trail](#audit-trail--implemented) coverage gaps
 this schema already tolerates.
 
 **The two schemas version independently, except where a vocabulary is shared.** A metrics
@@ -345,7 +346,8 @@ here can be reconciled.
 > `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented)
 > and [Authorization Denials](#authorization-denials--implemented)),
 > `mcp_broker_authz_denied_total` (see [Broker-Side Authorization
-> Denials](#broker-side-authorization-denials)), `mcp_broker_reachable`,
+> Denials](#broker-side-authorization-denials)), `mcp_audit_events_dropped_total`
+> (see [Audit Pipeline Health](#audit-pipeline-health--implemented)), `mcp_broker_reachable`,
 > `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds`
 > (see [Broker Reachability](#broker-reachability)), and
 > `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit
@@ -661,14 +663,48 @@ denial rather than an MCP-server-side one (SOL-153332, Story 49).
 by the time the broker refused, so the same call also produces an `mcp_tool_invocation_total`
 sample with `outcome=error` and — for a destructive tool — an `operation` audit record.
 Counting denials means summing this counter, not counting calls.
-### Audit Pipeline Health
+### Audit Pipeline Health — [Implemented]
+
+> _Wired in the current build (SOL-154569). Registered whenever `OBS_METRICS_ENABLED` is on —
+> it does **not** also wait on `OBS_AUDIT_LOG_ENABLED`: with the audit log off nothing is
+> emitted, so nothing drops, and a seeded zero is the truthful reading. The series exists at
+> `0` from process start, before any drop, so `increase()` fires on the first one and an
+> absent series means "metrics off" — or, with metrics on, a pre-1.8 binary or a failed
+> registration, see below — never "no drops yet"._
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_audit_events_dropped_total` | Counter | none | Solace |
 
-Increments if an audit event cannot be written (see [Audit Delivery](#audit-delivery)). A
-flat-zero series is your evidence that no audit event was lost. Alert on any increase.
+Increments once per audit record that could not be produced or written, for every cause that
+produces an `audit_drop` record — the list is kept in one place, under [Audit
+Delivery](#audit-delivery). Counter and record move at the same point in the code, so on a
+healthy log stream they agree exactly. The `audit_drop` notice's own delivery is deliberately
+not counted, so a dead log stream reads as one increment per lost record, not two. A flat-zero
+series is your evidence that no audit event was lost. Alert on any increase:
+
+```promql
+increase(mcp_audit_events_dropped_total[5m]) > 0
+```
+
+**Two readings to know before you page on it.** With the audit log on and `log_level` above
+`INFO`, every `operation` and `auth_success` record is filtered out and counted, so this alert
+fires continuously. That is the intended reading, not noise: the audit trail is being lost, and
+the fix is the level (see [Audit Trail](#audit-trail--implemented), "Set `log_level` to `info`
+or lower"). The counter carries no `reason` label to route that case separately — the schema
+row above is `none`, and a label added later changes the series identity, a major
+`metrics_schema` bump. And an **absent** series with metrics on is not "no drops yet": it means
+the binary predates `metrics_schema` 1.8 (check `mcp_schema_version{metrics_schema}`) or the
+counter failed to register (a startup `ERROR` reading `audit drop counter unavailable`). Pair
+the alert with `absent(mcp_audit_events_dropped_total)` so neither state reads as healthy.
+
+**Why a counter when the record already exists.** The `audit_drop` record rides the same
+stderr stream that just failed to carry the record it reports. This counter rides the scrape
+surface, which fails independently — so when the log pipeline itself is what is failing,
+precisely when audit visibility matters most, the counter still reports the gap. It is the
+same reasoning behind the `mcp_otel_*_dropped_total` pairs. The record remains the
+attribution: it names the `dropped_audit_event_type`, `tool`, and `broker`; the counter has
+no labels and answers only "did anything go missing?"
 
 ### Panic Recovery — [Implemented]
 
@@ -748,12 +784,17 @@ of Story 46 (SOL-152418).
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
 > **Registered only when OTLP metrics push is enabled** (`OBS_METRICS_OTLP_ENABLED`, Story 46,
-> SOL-152418). With push off, this pair's series are **absent, not zero** — the same treatment
-> `mcp_audit_events_dropped_total` gets: designed and schema-accepted, but a series only exists
-> once its emitter is both shipped and turned on. Unlike this pair, `mcp_broker_authz_denied_total`
-> needs no separate opt-in flag beyond `OBS_METRICS_ENABLED` itself — see [Broker-Side
-> Authorization Denials](#broker-side-authorization-denials). Alert on the span pair
-> unconditionally, and add the metrics pair once push is enabled in your deployment.
+> SOL-152418). With push off, this pair's series are **absent, not zero**: the emitter is built
+> and shipped, and the series appears the moment the flag is turned on. That is a *flag-gated*
+> absence. Do not read a metric this document lists but no build emits yet in the same terms —
+> the [Metrics](#metrics--planned-with-exceptions) status note names those as not yet emitted,
+> a different state that SOL-154509 found had been described in this same language, letting a
+> schema promise go unexamined for a release cycle. Unlike this pair,
+> `mcp_broker_authz_denied_total` and `mcp_audit_events_dropped_total` need no separate opt-in
+> flag beyond `OBS_METRICS_ENABLED` itself — see [Broker-Side Authorization
+> Denials](#broker-side-authorization-denials) and [Audit Pipeline
+> Health](#audit-pipeline-health--implemented). Alert on the span pair unconditionally, and add
+> the metrics pair once push is enabled in your deployment.
 
 **The span pair's reach depends on both flags, not just one.** The counters are always
 registered in-process while tracing is enabled (`OBS_TRACING_ENABLED`); they reach this scrape
@@ -1028,17 +1069,19 @@ verified, not assumed:**
 
 ---
 
-## Audit Trail — [Interim — records implemented, drop counter not yet wired]
+## Audit Trail — [Implemented]
 
-> _Status: **[Interim]** (SOL-152090, SOL-152096, SOL-152097, SOL-153332). `operation`
-> records for destructive tool calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and
-> the whole record schema below is enforced in code by one constructor. `auth_success`,
-> `auth_failure`, `authz_denied`, and `broker_auth_retry` are also emitted today, behind the
-> same flag (SOL-152097) — see [Authentication Events](#authentication-events).
-> `broker_authz_denied` is emitted as of this change (SOL-153332) — see [Authentication
-> Events](#authentication-events) for its hop-1/hop-2 pairing with `authz_denied`. `audit_drop`
-> is emitted. Every record type in the schema below is now emitted; write your SIEM rules
-> against the schema as the source of truth, not against this status note._
+> _Status: **[Implemented]** (SOL-152090, SOL-152096, SOL-152097, SOL-153332, SOL-154569).
+> `operation` records for destructive tool calls are emitted today behind
+> `OBS_AUDIT_LOG_ENABLED`, and the whole record schema below is enforced in code by one
+> constructor. `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` are also
+> emitted today, behind the same flag (SOL-152097) — see [Authentication
+> Events](#authentication-events). `broker_authz_denied` is emitted (SOL-153332) — see
+> [Authentication Events](#authentication-events) for its hop-1/hop-2 pairing with
+> `authz_denied`. `audit_drop` is emitted, and the `mcp_audit_events_dropped_total` counter
+> that reports a lost record off the log stream is wired (SOL-154569) — see [Audit
+> Delivery](#audit-delivery). Every record type in the schema below is emitted; write your
+> SIEM rules against the schema as the source of truth, not against this status note._
 
 One JSON event is emitted per **destructive** tool call (for example `disconnect-client`,
 `delete-queue`, `delete-message-vpn`), at completion, with the outcome known. Read-only calls
@@ -1394,7 +1437,7 @@ made it. Two limits to state before a reviewer treats this as a complete record 
 - **It is not every state change.** The `create-*` tools and the `clear-*-stats` tools are
   annotated non-destructive and emit no `operation` record, so this query returns zero object
   creations. See the coverage note under [Audit
-  Trail](#audit-trail--interim--records-implemented-drop-counter-not-yet-wired).
+  Trail](#audit-trail--implemented).
 - **`principal.sub` is absent** in a deployment running `mcp_client_auth.mode: disabled`, and
   resolving it to a named human is your IdP's job — see
   [Q-013](#decided-since-the-first-draft).
@@ -1455,16 +1498,24 @@ Delivery is **non-blocking by design**: writing an audit event never stalls or f
 broker operation. The event rides the server's structured JSON log stream on stderr, tagged
 `"event": "audit"`; your log shipper filters on the tag and routes it.
 
-If the local sink backpressures, the event is **dropped rather than buffered**, and every
-drop is recorded as a JSON record carrying `"event": "audit"` and
-`"audit_event_type": "audit_drop"`, so a gap is visible, never silent. Three things produce a
-drop today: the log handler refusing the write, the record's level being filtered out by the
-server's configured log level, and arguments that could not be canonicalized for hashing.
+A sink that **refuses** the write drops the event — **dropped rather than buffered** — and
+every drop is recorded as a JSON record carrying `"event": "audit"` and
+`"audit_event_type": "audit_drop"`, so a gap is visible, never silent. A sink that **stalls**
+is different: a full stderr pipe blocks the writer, nothing fails, nothing is dropped, and the
+counter below does not move — see [Log-shipper or stderr
+backpressure](#log-shipper-or-stderr-backpressure). Every path that produces a drop today, and
+with it an `audit_drop` record and one increment of `mcp_audit_events_dropped_total`: the log
+handler refusing the write, or panicking on it; the record's level being filtered out by the
+server's configured `log_level`; arguments that could not be canonicalized for hashing; and a
+record the schema constructor rejected.
 
-> **The `mcp_audit_events_dropped_total` counter is not registered yet.** The `audit_drop`
-> *record* ships now, with no dependency; the counter that makes drops dashboard-visible
-> waits on the audit instruments being registered against the meter provider. Alert on the
-> record until then.
+> **Every drop is reported twice, on two surfaces that fail independently.** The `audit_drop`
+> *record* rides this stderr stream; `mcp_audit_events_dropped_total` (see [Audit Pipeline
+> Health](#audit-pipeline-health--implemented)) rides the `/metrics` scrape surface, behind
+> `OBS_METRICS_ENABLED`. Both move at the same point in the code, once per lost record. Alert
+> on the counter — it is the signal that survives the log pipeline itself failing, which is
+> when a lost audit record matters most — and use the record for attribution: it names what
+> was lost, the counter does not.
 
 `"event"` stays constant at `"audit"` on every record, drops included, precisely so the one
 filter your shipper routes on cannot miss them — a drop notice that fell outside the audit
@@ -2646,6 +2697,7 @@ is most likely to mis-read as healthy.
 | Need to diagnose tracing with metrics turned off | [Diagnosing tracing export without metrics](#diagnosing-tracing-export-without-metrics) |
 | Trace volume or collector cost too high | [Tuning the trace sampler](#tuning-the-trace-sampler) |
 | Audit records not reaching the SIEM | [Audit records not arriving](#audit-records-not-arriving) |
+| `mcp_audit_events_dropped_total` rising | [Audit records not arriving](#audit-records-not-arriving) |
 | Server stalls; log throughput collapsed | [Log-shipper or stderr backpressure](#log-shipper-or-stderr-backpressure) |
 | Dashboard panels empty after an upgrade | [A dashboard broke after an upgrade](#a-dashboard-broke-after-an-upgrade) |
 | Latency panels have no exemplar links at all | [Exemplar links missing from latency panels](#exemplar-links-missing-from-latency-panels) |
@@ -3127,30 +3179,56 @@ the ratio reduces exemplar coverage on the latency panels. See
 ### Audit records not arriving
 
 **Symptom.** Destructive tool calls are running, but no `operation` records appear in the
-SIEM.
+SIEM — or `mcp_audit_events_dropped_total` is rising.
 
 **Likely cause.** In order: `OBS_AUDIT_LOG_ENABLED` is off (it is off by default); the
-server's `log_level` is above `INFO`, which filters `operation` records out; the log shipper
-is not collecting this container's stderr; or records are dropped between stderr and the
-index.
+server's `log_level` is above `INFO`, which filters `operation` records out; the server cannot
+write to its own stderr at all (a closed descriptor, a broken runtime log pipe), so even the
+`ERROR`-level drop notice is refused; the log shipper is not collecting this container's
+stderr; or records are dropped between stderr and the index.
 
-**First response.** Confirm the flag is on and `log_level` is `INFO` or lower. Then read the
-pod's stderr directly (`kubectl logs <pod>`) and look for the audit records there. That single
-check splits the problem: present in stderr means the shipper or the index is the problem,
-absent means the server is not emitting. Search the same output for
-`audit_event_type=audit_drop` — a drop record names what could not be written, and its
-`dropped_audit_event_type`, `tool`, and `broker` fields attribute the gap.
+**First response.** Confirm the flag is on and `log_level` is `INFO` or lower. With metrics on,
+check `mcp_audit_events_dropped_total` next: rising means the server is producing records and
+losing them (a level or a sink problem, on the server side); flat zero means records are being
+written and the gap is downstream. Then read the pod's stderr directly (`kubectl logs <pod>`)
+and look for the audit records there. That single check splits the problem: present in stderr
+means the shipper or the index is the problem, absent means the server is not emitting. Search
+the same output for `audit_event_type=audit_drop` — a drop record names what could not be
+written, and its `dropped_audit_event_type`, `tool`, and `broker` fields attribute the gap.
 
-**Escalate.** To the logging team if records are in stderr but not in the index. To
-engineering if they are absent from stderr with the flag on.
+**Escalate.** To the logging team if records are in stderr but not in the index. To the
+platform team if the counter rises but `kubectl logs` shows no `audit_drop` records: the
+container's own stderr is failing. To engineering if records are absent from stderr with the
+flag on and the counter is flat.
 
-**Alert on the drop record, not on a counter.** A record the server cannot write produces an
-`audit_drop` record instead — `event="audit"` unchanged, `audit_event_type="audit_drop"`,
-emitted at `ERROR` so it survives every supported `log_level`, including the level that
-suppressed the record it reports. That record is the signal: alert on it. The
-`mcp_audit_events_dropped_total` counter in this schema is **not registered**, and whether it
-ships is still open — see [Implementation Status](#implementation-status). Do not build a
-dashboard panel or an alert rule expecting the series. [Canonical Audit Queries](#canonical-audit-queries) covers querying the stream.
+**Alert on the counter; read the record for attribution.** A record the server cannot write
+produces an `audit_drop` record instead — `event="audit"` unchanged,
+`audit_event_type="audit_drop"`, emitted at `ERROR` so it survives every supported
+`log_level`, including the level that suppressed the record it reports — **and** increments
+`mcp_audit_events_dropped_total` on `/metrics` (SOL-154569; see [Audit Pipeline
+Health](#audit-pipeline-health--implemented)). The two move together, once per lost record.
+Put the alert on the counter, `increase(mcp_audit_events_dropped_total[5m]) > 0`: it is served
+by the metrics listener, not the stderr stream, so it still fires when the stream itself is
+what failed — the case where the record cannot reach you. Then read the records for what was
+lost; the counter carries no labels. Two readings to keep apart. A counter that rises while
+`kubectl logs` shows **no** `audit_drop` records means the server cannot write to its own
+stderr at all — the `ERROR`-level notice was refused too. That is a container or runtime fault
+(the pod's stderr descriptor, the runtime's log driver), not the shipper or the index, and it
+goes to the platform team. A counter that is **absent** from the scrape does not mean nothing
+dropped: with metrics off it is simply not served; with metrics on, the binary predates
+`metrics_schema` 1.8 or registration failed at startup (`audit drop counter unavailable` in
+the log) — pair the alert with `absent()`, as [Audit Pipeline
+Health](#audit-pipeline-health--implemented) describes. [Canonical Audit
+Queries](#canonical-audit-queries) covers querying the stream.
+
+| `mcp_audit_events_dropped_total` reads | It means | Do |
+|---|---|---|
+| Flat `0`, metrics on | No audit record has been lost since process start | Nothing; this is the healthy state |
+| Rising, `audit_drop` records present in stderr | Records are being lost on the server: `log_level` above `INFO`, or the handler refusing writes | Read the records for what was lost; fix the level or the sink |
+| Rising, **no** `audit_drop` records in stderr | The server cannot write to its own stderr at all; the notice was refused too | Container or runtime fault: platform team |
+| Flat while requests stall | stderr is blocked, not failing; nothing drops | See [Log-shipper or stderr backpressure](#log-shipper-or-stderr-backpressure) |
+| Absent, metrics on | Binary predates `metrics_schema` 1.8, or the counter failed to register at startup | Check `mcp_schema_version{metrics_schema}`; look for `audit drop counter unavailable` |
+| Absent, metrics off | Not served | Turn on `OBS_METRICS_ENABLED`, or alert on the record until you do |
 
 ---
 
@@ -3161,7 +3239,9 @@ the same time. Tool calls time out without a corresponding broker or network fau
 
 **Likely cause.** Whatever consumes stderr has stopped draining it. A full pipe buffer blocks
 the writer, and since audit records and application logs share stderr, a stuck shipper
-becomes backpressure on the process itself.
+becomes backpressure on the process itself. `mcp_audit_events_dropped_total` stays flat
+during a stall — a blocked write is not a failed write, so nothing is dropped — and a flat
+counter therefore does not clear the log pipeline here.
 
 **First response.** Check the log shipper on the node — is it running, and is its own
 destination accepting? Check node disk if the runtime buffers logs to disk. Restarting the

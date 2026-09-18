@@ -261,13 +261,15 @@ jobs:
       # the raw evidence has to come back with it. The records are the arrival
       # and header-return timestamps the assertions were computed from, and the
       # per-phase configs say which limits were actually in force (they carry
-      # only ${VAR} placeholders, never resolved credentials).
+      # only ${VAR} placeholders, never resolved credentials). The config glob
+      # also covers the audit-drop scenario's config (SOL-154569), for the same
+      # reason: it says which log_level and metrics address were in force.
       #
       # Deliberately not the MCP server log. This step fires on ANY failure in
       # the job, not just this scenario's, so tailing the server log here would
       # publish it to the Actions log for scenarios that never asked for it, and
       # the suite has not needed it until now.
-      - name: Throttling scenario evidence (on failure)
+      - name: Restart-scenario evidence (on failure)
         if: failure()
         run: |
           for f in test/e2e-basic-mcp/bin/throttle-record-*.csv; do
@@ -275,7 +277,7 @@ jobs:
             echo "=== $f ($(wc -l < "$f") requests) ==="
             cat "$f"
           done
-          for f in test/e2e-basic-mcp/bin/mcp-config-throttle-*.yaml; do
+          for f in test/e2e-basic-mcp/bin/mcp-config-*.yaml; do
             [ -e "$f" ] || continue
             echo "=== $f ==="
             cat "$f"
