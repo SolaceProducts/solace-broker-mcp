@@ -93,9 +93,15 @@ test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 # as zero-connection when the probe returned no rows for it (missing key or
 # empty data[]). This directly mirrors the handler; both rely on the durable
 # `#*` reserved-name contract, not the older `#client counts as one connection`
-# invariant.
+# invariant. That recompute alone cannot catch a wrong probe (SOL-153071: a
+# bug in the probe itself and a recompute over that same wrong probe still
+# agree), so this test also grounds the probe's byKey output for the default
+# VPN (which carries F3's real connected client) against a direct SEMP call
+# the tool never sees — see the SOL-153071 block near the end of the
+# function.
 test_list_vpns_summary() {
     local broker="$1"
+    local broker_url="$2"
     local label="list-vpns [$broker]"
     local response content
     response=$(mcp_call_tool "list-vpns" "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
@@ -145,10 +151,68 @@ test_list_vpns_summary() {
     assert_json_field "$content" \
         '(.summary.zeroConnectionCount) >= 1' "true" \
         "$label: at least one bare enabled+up VPN expected (fixture: test-vpn-empty)" || return 1
+
+    # SOL-153071 regression check. The two assertions above only prove the
+    # summary's arithmetic is internally consistent with .real-clients.byKey —
+    # they cannot catch a bug where the probe itself is wrong, because a wrong
+    # probe and a "recompute" over that same wrong probe still agree (this is
+    # exactly how the count=1 bug shipped undetected: the reserved #client
+    # sorted first, so byKey came back empty for the default VPN too, and
+    # zeroConnectionCount agreed with its own empty byKey). Ground truth here
+    # comes from a direct SEMP call the tool under test never sees, independent
+    # of anything list-vpns computed. The default VPN (BROKER_VPN) is used
+    # rather than a dedicated fixture VPN because this broker image caps
+    # message-VPN count at 3 total (including default), already exhausted by
+    # test-vpn/test-vpn-empty.
+    #
+    # AC4 coverage: F3's real client does not sit alone here. F8's bridges
+    # (the two never-connected ones still register a local-endpoint client
+    # regardless of state) and F9/F10's Kafka Receivers/Senders all register
+    # as `#`-prefixed reserved clients on this same default VPN — lab-measured
+    # against this exact fixture combination: msgVpns/default/clients returns
+    # zero real clients at count=1 or count=2, and only partial real clients
+    # at count=5; count>=10 is needed to see all of them. That is the
+    # production bug shape (SEMP's count bounds objects *scanned*, not matches
+    # *returned*, and reserved clients sort first) reproduced with fixtures
+    # already in this suite — no dedicated VPN needed. The assertions below
+    # make that shape a live, per-run fact rather than a one-off measurement:
+    # first, that this VPN genuinely has multiple reserved clients ahead of
+    # the real one and that a deliberately small count undercounts because of
+    # them (proving the fixture reproduces the bug class); then, that the
+    # tool's own probe — at its production count — does not.
+    local ground_truth real_count reserved_count small_page small_real
+    ground_truth=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients failed"
+        return 1
+    }
+    real_count=$(jq '[.data[] | select((.clientUsername | startswith("#")) | not)] | length' <<<"$ground_truth")
+    reserved_count=$(jq '[.data[] | select(.clientUsername | startswith("#"))] | length' <<<"$ground_truth")
+    if [ "$real_count" -lt 1 ]; then
+        log_fail "$label: ground truth expected >=1 real client on $BROKER_VPN, got $real_count"
+        return 1
+    fi
+    if [ "$reserved_count" -lt 2 ]; then
+        log_fail "$label: ground truth expected >=2 reserved (#*) clients ahead of the real one on $BROKER_VPN (AC4: bridges/Kafka/RDPs), got $reserved_count"
+        return 1
+    fi
+
+    small_page=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=2") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients?count=2 failed"
+        return 1
+    }
+    small_real=$(jq '[.data[] | select((.clientUsername | startswith("#")) | not)] | length' <<<"$small_page")
+    if [ "$small_real" -ge "$real_count" ]; then
+        log_fail "$label: fixture no longer reproduces the SOL-153071 bug shape — count=2 already found all $real_count real client(s) on $BROKER_VPN"
+        return 1
+    fi
+
+    assert_json_field "$content" \
+        '((.["real-clients"].byKey["'"$BROKER_VPN"'"].data // []) | length) >= 1' "true" \
+        "$label: real-clients probe must detect the real client on $BROKER_VPN (SOL-153071)" || return 1
 }
 
-test_list_vpns_summary_a() { test_list_vpns_summary "broker-a"; }
-test_list_vpns_summary_b() { test_list_vpns_summary "broker-b"; }
+test_list_vpns_summary_a() { test_list_vpns_summary "broker-a" "$BROKER_A_URL"; }
+test_list_vpns_summary_b() { test_list_vpns_summary "broker-b" "$BROKER_B_URL"; }
 
 # ── Tool 2: get-vpn-status (F1 multi-VPN; VPN-scoped) ────────────────────────
 # Value check (AC 5): the base `default` VPN reports enabled=true with services

@@ -555,6 +555,18 @@ cleanup_connected_client_on() {
     log_info "Connected-client cleanup on $label deferred to stop_broker_drivers"
 }
 
+# F1b / SOL-153071 regression coverage: the default VPN (BROKER_VPN) already
+# carries both a reserved client (automatic on any enabled+up VPN) and F3's
+# real (non-reserved) connected client — no dedicated fixture is needed. An
+# earlier design provisioned a separate `test-vpn-real-client` VPN for this,
+# but this broker image caps message-VPN count at 3 total (including
+# `default`), already exhausted by test-vpn/test-vpn-empty; a third custom
+# VPN always fails with SEMP error 135 (MAX_NUM_EXCEEDED). Reusing the
+# default VPN's existing F3 client avoids that limit entirely — see
+# verify_real_client_default_vpn_state in verify-fixtures.sh and the
+# SOL-153071 regression block in test_list_vpns_summary
+# (test-monitoring-tools.sh).
+
 # F4 sustained-traffic constants. The topic must be one of F3_SUBSCRIPTIONS
 # so the F3 direct receiver drains the persistent publish — that's how
 # AC 5's txMsgRate threshold becomes reachable.

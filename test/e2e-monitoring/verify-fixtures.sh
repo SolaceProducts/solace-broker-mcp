@@ -76,6 +76,35 @@ verify_empty_enabled_vpn_state() {
 test_empty_enabled_vpn_state_a() { verify_empty_enabled_vpn_state "broker-a" "$BROKER_A_URL"; }
 test_empty_enabled_vpn_state_b() { verify_empty_enabled_vpn_state "broker-b" "$BROKER_B_URL"; }
 
+# The default VPN (`BROKER_VPN`) already carries both the automatic reserved
+# `#client` (present on any enabled+up VPN) and F3's real (non-reserved)
+# connected client — no dedicated VPN fixture is needed for this. Regression
+# fixture for SOL-153071: the real-clients probe's old count=1 scan only ever
+# reached the reserved client (which sorts first alphabetically) and never
+# scanned far enough to see a real one behind it. An earlier design
+# provisioned a separate `test-vpn-real-client` VPN for this, but this
+# broker image caps message-VPN count at 3 total (including `default`),
+# already exhausted by test-vpn/test-vpn-empty — reusing the default VPN's
+# existing F3 client avoids that limit entirely. Ground truth for the
+# GET-clients check comes from this direct SEMP call, not from the tool's
+# own probe under test — see test_list_vpns_summary in
+# test-monitoring-tools.sh for the corresponding tool-level assertion.
+verify_real_client_default_vpn_state() {
+    local label="$1"
+    local broker_url="$2"
+    local client_name="$3"
+    local body
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients/$client_name") || {
+        log_fail "real-client-default-VPN [$label]: GET clients/$client_name failed"
+        return 1
+    }
+    assert_json_field "$body" ".data.clientUsername" "default" \
+        "real-client-default-VPN [$label]: $client_name must authenticate as clientUsername default" || return 1
+}
+
+test_real_client_default_vpn_state_a() { verify_real_client_default_vpn_state "broker-a" "$BROKER_A_URL" "$F3_CLIENT_NAME_A"; }
+test_real_client_default_vpn_state_b() { verify_real_client_default_vpn_state "broker-b" "$BROKER_B_URL" "$F3_CLIENT_NAME_B"; }
+
 # ── AC 3 — F2 multi-queue ───────────────────────────────────────────────────
 # GET .../queues on each broker lists test-queue-2 and test-queue-3 alongside
 # the base test-queue. count=100 covers any system queues without paginating.
@@ -374,6 +403,8 @@ run_test "AC 2 — F1 multi-VPN state (broker-a)" test_ac2_multi_vpn_state_a
 run_test "AC 2 — F1 multi-VPN state (broker-b)" test_ac2_multi_vpn_state_b
 run_test "empty-enabled-VPN state (broker-a)"  test_empty_enabled_vpn_state_a
 run_test "empty-enabled-VPN state (broker-b)"  test_empty_enabled_vpn_state_b
+run_test "real-client-default-VPN state (broker-a)"    test_real_client_default_vpn_state_a
+run_test "real-client-default-VPN state (broker-b)"    test_real_client_default_vpn_state_b
 run_test "AC 3 — F2 multi-queue state (broker-a)" test_ac3_multi_queue_state_a
 run_test "AC 3 — F2 multi-queue state (broker-b)" test_ac3_multi_queue_state_b
 run_test "F8 — bridge state (broker-a)" test_f8_bridge_state_a

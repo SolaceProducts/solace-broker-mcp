@@ -138,6 +138,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `limits.memory` drift apart or if the value stops being one the Go runtime accepts. Tracked
   under SOL-154328, measured under SOL-154158.
 
+### Fixed
+
+- `list-vpns`'s `zeroConnectionCount` no longer miscounts an enabled+up VPN as zero-connection
+  when its only real client sorts behind the automatic reserved `#client`. The underlying probe
+  now scans up to 100 clients per VPN instead of 1. Tracked under SOL-153071.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added
