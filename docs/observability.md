@@ -3221,6 +3221,15 @@ the log) — pair the alert with `absent()`, as [Audit Pipeline
 Health](#audit-pipeline-health--implemented) describes. [Canonical Audit
 Queries](#canonical-audit-queries) covers querying the stream.
 
+| `mcp_audit_events_dropped_total` reads | It means | Do |
+|---|---|---|
+| Flat `0`, metrics on | No audit record has been lost since process start | Nothing; this is the healthy state |
+| Rising, `audit_drop` records present in stderr | Records are being lost on the server: `log_level` above `INFO`, or the handler refusing writes | Read the records for what was lost; fix the level or the sink |
+| Rising, **no** `audit_drop` records in stderr | The server cannot write to its own stderr at all; the notice was refused too | Container or runtime fault: platform team |
+| Flat while requests stall | stderr is blocked, not failing; nothing drops | See [Log-shipper or stderr backpressure](#log-shipper-or-stderr-backpressure) |
+| Absent, metrics on | Binary predates `metrics_schema` 1.8, or the counter failed to register at startup | Check `mcp_schema_version{metrics_schema}`; look for `audit drop counter unavailable` |
+| Absent, metrics off | Not served | Turn on `OBS_METRICS_ENABLED`, or alert on the record until you do |
+
 ---
 
 ### Log-shipper or stderr backpressure

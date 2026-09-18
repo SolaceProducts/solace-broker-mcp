@@ -70,12 +70,18 @@ func SetDropRecorder(r DropRecorder) {
 		dropRecorder.Store(nil)
 		return
 	}
+	// &r, a pointer to the interface value, not the interface itself:
+	// atomic.Pointer[T] holds a *T, and T here is the interface type. Do not
+	// "simplify" this to storing r or its dynamic value; the pointer is what
+	// makes the install/read pair race-free.
 	dropRecorder.Store(&r)
 }
 
 // recordDrop counts one drop on the installed recorder, doing nothing until
 // SetDropRecorder has installed one.
 func recordDrop(ctx context.Context) {
+	// Load returns the *DropRecorder stored above; dereference once to reach
+	// the interface, then call through it.
 	if r := dropRecorder.Load(); r != nil {
 		(*r).RecordAuditDrop(ctx)
 	}
