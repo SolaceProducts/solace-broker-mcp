@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `mcp_audit_events_dropped_total` is now registered and emitted whenever `OBS_METRICS_ENABLED`
-  is on — the one piece of the audit trail PR #381 deferred, and the counter half of the
+- `mcp_audit_events_dropped_total` is now registered and emitted whenever a metrics egress flag
+  (`OBS_METRICS_SCRAPE_ENABLED` or `OBS_METRICS_OTLP_ENABLED`) is on — the one piece of the audit
+  trail PR #381 deferred, and the counter half of the
   `OBS_AUDIT_LOG_ENABLED` GA condition in `docs/observability.md` (SOL-154569, from spike
   SOL-154509). It increments once per audit record that could not be produced or written, for
   every cause that produces an `audit_drop` record (a handler that refuses the write or panics
@@ -58,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `monitoring` namespace, leaving `:9090` and every egress untouched; and a new
   `servicemonitor.yaml.example` (Prometheus Operator, 15s interval / 10s timeout) is `.example`
   because the CRD is not on every cluster and one missing kind fails the whole
-  `kubectl apply -f deploy/kubernetes/`. `OBS_METRICS_ENABLED` is **not** flipped: it stays off
+  `kubectl apply -f deploy/kubernetes/`. `OBS_METRICS_SCRAPE_ENABLED` is **not** flipped: it stays off
   per the door-closing policy and ships as a commented env entry. The policy is ingress-only on
   purpose — listing `Egress` would default-deny brokers, IdP, and DNS, and NetworkPolicies are
   additive, so an allow here could not override a customer's default-deny anyway — so the OTLP
@@ -101,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol-level tool errors now reach the wire with a valid JSON-RPC code instead of `0`: `describe-semp-schema` answers bad input with `-32602`, and any other error escaping a tool handler defaults to `-32603`. Tracked under SOL-153692.
 
 ### Changed
+- **BREAKING**: `OBS_METRICS_ENABLED` is renamed `OBS_METRICS_SCRAPE_ENABLED` and gates only the Prometheus scrape egress (the `/metrics` listener, its registry, and the `go_*`/`process_*` collectors). Either it or `OBS_METRICS_OTLP_ENABLED` alone now builds the meter provider: an OTLP-only deployment loads and binds no listener, the config-load error that required the old flag alongside `OBS_METRICS_OTLP_ENABLED` is gone, and `OBS_AUTH_FAILURE_COUNTER_ENABLED` defaults on when either flag is. The `observability config loaded` startup line reports `metrics_scrape` and `metrics_otlp` instead of `metrics`. The old name is not read; setting it logs one startup `WARN`. Migration: rename the variable wherever it is set, keeping its value; for OTLP-only, drop it. Tracked under SOL-154607.
 - **Broker traffic now follows `HTTPS_PROXY` where it previously went direct.** This is the upgrade-facing half of the proxy support added above, called out separately because it can break broker connectivity with an unchanged configuration file. Any operator whose environment already carries `HTTPS_PROXY` — set for egress to a cloud IdP, or inherited from a base container image — will have SEMP traffic routed through that proxy after upgrading. Brokers are typically internal and such a proxy typically cannot reach them, so the failing call surfaces only as a `proxyconnect tcp:` dial error against a config that worked on the previous release. To make the reroute visible before it bites, the existing per-broker `broker connection created` line now carries a `proxy` field — either `direct` or the proxy URL with userinfo stripped — so `proxy=` at startup shows every broker's resolved state and `proxy!=direct` is alertable. Exempt the brokers with `NO_PROXY` (and the OTLP collector, if telemetry is enabled) before upgrading; the entry forms that actually match are tabulated in `docs/configuration.md` § "Outbound HTTP Proxy". Tracked under SOL-153295.
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.6 rolling release (`10.26.6.12130`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.6.json` and continue to be sourced from the private-extended variant.
 

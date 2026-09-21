@@ -41,7 +41,7 @@ func TestNew_MalformedOTLPHeaders_DoesNotLeakToStderr(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsScrapeEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)

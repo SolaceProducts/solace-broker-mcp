@@ -191,7 +191,7 @@ func TestOTLP_DualEgressAgreement(t *testing.T) {
 	collector := &fakeOTLPCollector{}
 	startFakeOTLPCollector(t, collector)
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestOTLP_CumulativeTemporality_WinsOverEnvOverride(t *testing.T) {
 	collector := &fakeOTLPCollector{}
 	startFakeOTLPCollector(t, collector)
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestOTLP_CumulativeTemporality_WinsOverEnvOverride(t *testing.T) {
 // clearest external evidence available that no OTLP reader (and so no
 // exporter, no connection attempt) was constructed.
 func TestOTLP_FlagOff_NoOTLPInstrumentsRegistered(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestOTLP_UnreachableCollector_ScrapeStaysUpAndDropsAreVisible(t *testing.T)
 	pointAtBlackHole(t)
 	t.Setenv("OTEL_METRIC_EXPORT_TIMEOUT", "300")
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestOTLP_UnreachableCollector_ScrapeStaysUpAndDropsAreVisible(t *testing.T)
 func TestOTLP_Shutdown_RespectsTimeoutBound(t *testing.T) {
 	pointAtBlackHole(t)
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestOTLP_Shutdown_RespectsTimeoutBound(t *testing.T) {
 func TestOTLP_Shutdown_WarnsOnIncompleteFlush(t *testing.T) {
 	pointAtBlackHole(t)
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestOTLP_ResourceAttributesTravelOnTheStream(t *testing.T) {
 		t.Fatalf("sdkresource.Merge: %v", err)
 	}
 
-	p, err := New(testVersion, res, config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, res, config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestOTLP_MalformedHeaders_DoesNotLeakToStderr(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization="+secret)
 	pointAtBlackHole(t)
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -542,5 +542,63 @@ func TestOTLP_MalformedHeaders_DoesNotLeakToStderr(t *testing.T) {
 	got := buf.String()
 	if strings.Contains(got, secret) {
 		t.Fatalf("captured logs contain the raw malformed header value %q, want it suppressed:\n%s", secret, got)
+	}
+}
+
+// TestOTLP_Only_NoScrapePipelineAndExports is SOL-154607's first acceptance
+// criterion at the provider level: OTLP-only builds, exports over OTLP, and
+// has no Prometheus pipeline for cmd/server to bind a listener to. Handler()
+// == nil is the externally visible proof that no registry, exporter, or
+// Go/process collector was constructed — wireMetricsEndpoint never calls it
+// in this configuration (cmd/server/metrics_endpoint_test.go pins that). The
+// security counter registering and arriving at the collector is the fourth
+// criterion ("present in all three provider-bearing configurations") for the
+// one configuration that did not exist before this story.
+func TestOTLP_Only_NoScrapePipelineAndExports(t *testing.T) {
+	collector := &fakeOTLPCollector{}
+	startFakeOTLPCollector(t, collector)
+
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsOTLPEnabled: true})
+	if err != nil {
+		t.Fatalf("New (OTLP-only): %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+	})
+
+	if h := p.Handler(); h != nil {
+		t.Fatalf("Handler() with the scrape egress off = %T, want nil: no Prometheus pipeline should exist", h)
+	}
+
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatalf("ToolMetrics: %v", err)
+	}
+	sm, err := p.SecurityMetrics()
+	if err != nil {
+		t.Fatalf("SecurityMetrics: %v", err)
+	}
+	const calls = 2
+	for range calls {
+		tm.Record(context.Background(), "test-tool", "test-broker", OutcomeSuccess, "", time.Millisecond)
+		sm.RecordAuthzDenied(context.Background(), "test-tool", "test-reason")
+	}
+	if err := p.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if !waitFor(t, 2*time.Second, func() bool { return len(collector.received()) > 0 }) {
+		t.Fatal("fake OTLP collector received nothing within 2s of ForceFlush")
+	}
+	for _, name := range []string{"mcp.tool.invocation", "mcp.authz.denied"} {
+		got, found := sumValue(t, collector.received(), name)
+		if !found {
+			t.Errorf("%s not found in any OTLP export", name)
+			continue
+		}
+		if got != calls {
+			t.Errorf("OTLP %s = %d, want %d", name, got, calls)
+		}
 	}
 }

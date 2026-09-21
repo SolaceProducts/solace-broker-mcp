@@ -37,13 +37,13 @@ import (
 func securityCfg(counterEnabled, metricsEnabled bool) *config.ServerConfig {
 	return &config.ServerConfig{Observability: config.ObservabilityConfig{
 		AuthFailureCounterEnabled: counterEnabled,
-		MetricsEnabled:            metricsEnabled,
+		MetricsScrapeEnabled:      metricsEnabled,
 	}}
 }
 
 func newTestMetricsProvider(t *testing.T) *metrics.Provider {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestBuildSecurityMetrics_FlagOnMetricsOff_NilAndWarns(t *testing.T) {
 	if sm := buildSecurityMetrics(securityCfg(true, false), nil); sm != nil {
 		t.Fatalf("buildSecurityMetrics with metrics off = %v, want nil", sm)
 	}
-	if !strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED is true but OBS_METRICS_ENABLED is false") {
+	if !strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED is true but neither OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED is") {
 		t.Errorf("no WARN naming the flag was logged:\n%s", buf.String())
 	}
 }
@@ -121,7 +121,7 @@ func TestCountingAuthHook_WiredThroughAuthMiddleware(t *testing.T) {
 	sm := buildSecurityMetrics(securityCfg(true, true), p)
 	cfg := &config.ServerConfig{
 		Port:          9090,
-		Observability: config.ObservabilityConfig{AuthFailureCounterEnabled: true, MetricsEnabled: true},
+		Observability: config.ObservabilityConfig{AuthFailureCounterEnabled: true, MetricsScrapeEnabled: true},
 		MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "s3cr3t", ResourceURL: "http://localhost:9090/mcp"},
 	}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

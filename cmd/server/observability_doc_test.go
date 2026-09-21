@@ -111,7 +111,7 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// the actually-representative default (docs/observability.md: "Push is
 	// off by default"), so there's no fidelity lost, only a real hazard
 	// avoided.
-	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

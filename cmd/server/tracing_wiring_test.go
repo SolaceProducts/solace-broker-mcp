@@ -234,7 +234,7 @@ func activeRequestsSeries(t *testing.T, p *metrics.Provider) (float64, bool) {
 // here use.
 func newChainToolMetrics(t *testing.T) (*metrics.ToolMetrics, *metrics.Provider) {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

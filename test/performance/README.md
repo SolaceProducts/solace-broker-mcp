@@ -804,7 +804,7 @@ it is a follow-up rather than part of this.
 Descriptors are sampled from `/proc` and **not** scraped off `/metrics`, for two
 reasons, the second being the stronger: the Go runtime and process collectors on
 `/metrics` carry no scrape test or golden-file exclusion yet, and collecting
-them at all requires running with `OBS_METRICS_ENABLED` on — which changes the
+them at all requires running with `OBS_METRICS_SCRAPE_ENABLED` on — which changes the
 thing under test (a histogram observation per tool invocation, plus a scrape
 listener) and makes the numbers non-comparable with every run measured so far,
 all of which had it off. Reading `/proc` costs nothing and perturbs nothing.

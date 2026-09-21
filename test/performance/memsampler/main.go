@@ -26,7 +26,7 @@
 //
 // Descriptors are sampled here rather than scraped off /metrics, and the
 // reason is not convenience. Collecting the process collector's fd gauge
-// requires running with OBS_METRICS_ENABLED on, which changes the thing under
+// requires running with OBS_METRICS_SCRAPE_ENABLED on, which changes the thing under
 // test — a histogram observation per tool invocation plus a scrape listener —
 // and makes the numbers non-comparable with every run measured so far, all of
 // which had it off. Reading /proc costs nothing and perturbs nothing. What it
