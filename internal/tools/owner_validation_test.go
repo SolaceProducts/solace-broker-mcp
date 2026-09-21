@@ -217,6 +217,41 @@ func TestOwnerValidatingHandler_MissingVpn_FallsThroughInsteadOfBlamingOwner(t *
 	}
 }
 
+// TestOwnerValidatingHandler_VpnCheckItselfFails_ReportsThatFailureNotStaleOwnerError
+// pins a bug found in review: when the disambiguation read (getMsgVpn) fails
+// inconclusively (not NOT_FOUND — a transient 503 here), the error returned
+// must describe THAT failure, not silently fall back to the original
+// ambiguous owner-check NOT_FOUND — which would reintroduce the exact
+// misleading "owner not found" message this fix exists to avoid.
+func TestOwnerValidatingHandler_VpnCheckItselfFails_ReportsThatFailureNotStaleOwnerError(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.errors["getMsgVpn"] = &sempv2.SEMPError{Operation: "getMsgVpn", StatusCode: 503}
+
+	tc := &ToolContext{SEMPv2Client: client}
+	_, err := handler.Handle(context.Background(), tc, map[string]any{
+		"msgVpnName":  "default",
+		"queueName":   "q1",
+		"queueConfig": map[string]any{"owner": "real-user"},
+	})
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	var ownerErr *ownerNotFoundError
+	if errors.As(err, &ownerErr) {
+		t.Fatalf("must not resurface the stale, ambiguous owner-check NOT_FOUND when disambiguation itself failed: %v", err)
+	}
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) || sempErr.Operation != "getMsgVpn" {
+		t.Fatalf("expected the error to trace back to the failed getMsgVpn disambiguation check, got %v", err)
+	}
+	for _, call := range client.calls {
+		if call == "createMsgVpnQueue" {
+			t.Fatalf("queue must never be created when disambiguation itself failed; calls = %v", client.calls)
+		}
+	}
+}
+
 // TestOwnerValidatingHandler_GhostOwner_RejectsForEveryRegisteredTool iterates
 // the real ownerValidatedTools map — not a hand-picked copy of it — so a
 // copy-paste mistake in one entry (e.g. update-queue's configParam

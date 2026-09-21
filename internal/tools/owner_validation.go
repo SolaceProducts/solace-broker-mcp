@@ -161,8 +161,13 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 		if errors.As(vpnErr, &vpnSempErr) && isSEMPStatus(vpnSempErr, "NOT_FOUND", 6) {
 			return h.inner.Handle(ctx, tc, params)
 		}
-		// Inconclusive for the same reason as above: deny on doubt.
-		return nil, fmt.Errorf("checking owner client username %q in VPN %q: %w", owner, msgVpn, err)
+		// Inconclusive for the same reason as above: deny on doubt. Wrap
+		// vpnErr, not the original owner-check err — vpnErr is the actual
+		// reason disambiguation failed, and the original err is just the
+		// ambiguous NOT_FOUND this whole branch exists to not take at face
+		// value; surfacing it here would silently reintroduce the exact
+		// misleading owner-blame message this fix removes.
+		return nil, fmt.Errorf("checking whether Message VPN %q exists, to disambiguate owner client username %q: %w", msgVpn, owner, vpnErr)
 	}
 
 	return nil, &ownerNotFoundError{owner: owner, msgVpn: msgVpn, objectKind: h.spec.objectKind}
