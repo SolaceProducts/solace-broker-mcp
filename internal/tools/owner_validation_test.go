@@ -327,3 +327,209 @@ func TestIsRetryable_OwnerNotFound_IsFalse(t *testing.T) {
 		t.Error("a nonexistent owner is a deterministic caller mistake, not a transient failure — must not be retryable")
 	}
 }
+
+// TestOwnerValidatingHandler_TopLevelOwner_StillGetsChecked pins a real
+// bypass found in review: constructRequestBody spreads ANY top-level scalar
+// param whose name matches a known SEMP body field into the request body —
+// "owner" among them — and these tools' input schemas have no
+// additionalProperties:false, so a bare top-level params["owner"] (outside
+// queueConfig) reaches JSON-schema validation untouched. Before this fix,
+// extractOwner only looked inside the config object, so a top-level owner
+// skipped the check entirely and reached the broker unvalidated — confirmed
+// by running the real handler chain during review before this test existed.
+func TestOwnerValidatingHandler_TopLevelOwner_StillGetsChecked(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.responses["getMsgVpn"] = vpnExistsResponse()
+
+	_, err := handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
+		"msgVpnName":  "default",
+		"queueName":   "q1",
+		"owner":       "ghost-top-level",
+		"queueConfig": map[string]any{"permission": "consume"},
+	})
+	var ownerErr *ownerNotFoundError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("a top-level owner param must still be checked; got %T: %v", err, err)
+	}
+	for _, call := range client.calls {
+		if call == "createMsgVpnQueue" {
+			t.Fatalf("queue must never be created when a top-level owner does not exist; calls = %v", client.calls)
+		}
+	}
+}
+
+// TestOwnerValidatingHandler_NestedOwnerTakesPrecedenceOverTopLevel documents
+// (rather than mandates any particular broker outcome for) the both-present
+// case: constructRequestBody rejects it as an ambiguous request body
+// regardless of which value this package's own check used, so this test
+// only pins that the nested value is what gets validated — not that this
+// ordering has any security consequence, since either ordering is safe.
+func TestOwnerValidatingHandler_NestedOwnerTakesPrecedenceOverTopLevel(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.responses["getMsgVpnClientUsername"] = &sempv2.Result{Data: map[string]any{"clientUsername": "nested-real-user"}, StatusCode: 200}
+
+	owner, msgVpn, ok := extractOwner(map[string]any{
+		"msgVpnName":  "default",
+		"owner":       "top-level-user",
+		"queueConfig": map[string]any{"owner": "nested-real-user"},
+	}, handler.spec.configParam)
+	if !ok || owner != "nested-real-user" || msgVpn != "default" {
+		t.Fatalf("expected nested owner %q to win, got owner=%q ok=%v", "nested-real-user", owner, ok)
+	}
+}
+
+// TestOwnerValidatingHandler_NonStringOwner_SkipsLocalCheck documents the
+// accepted tradeoff for a malformed, non-string "owner": this package treats
+// it as "no owner supplied" rather than rejecting it itself, because
+// constructRequestBody spreads it into the body regardless and the broker's
+// own type check on a string-typed attribute rejects it independently — so
+// duplicating that check here would not close any gap a non-string value
+// could actually exploit.
+func TestOwnerValidatingHandler_NonStringOwner_SkipsLocalCheck(t *testing.T) {
+	_, _, ok := extractOwner(map[string]any{
+		"msgVpnName":  "default",
+		"queueConfig": map[string]any{"owner": 123},
+	}, "queueConfig")
+	if ok {
+		t.Fatal("a non-string owner should not be treated as a valid, checkable owner value")
+	}
+}
+
+func TestBuildErrorMessage_OwnerNotFound_CreateVsUpdateGuidance(t *testing.T) {
+	createErr := &ownerNotFoundError{owner: "ghost", msgVpn: "default", objectKind: "queue", isUpdate: false}
+	updateErr := &ownerNotFoundError{owner: "ghost", msgVpn: "default", objectKind: "queue", isUpdate: true}
+
+	createMsg, _ := buildErrorMessage(createErr, "")
+	updateMsg, _ := buildErrorMessage(updateErr, "")
+
+	if !strings.Contains(createMsg, "create the queue without an owner binding") {
+		t.Errorf("create message should say omitting owner creates without a binding, got: %s", createMsg)
+	}
+	if !strings.Contains(updateMsg, "leave the queue's current owner unchanged") {
+		t.Errorf("update message should say omitting owner leaves the current owner alone, got: %s", updateMsg)
+	}
+	if strings.Contains(updateMsg, "without an owner binding") {
+		t.Errorf("update message must not claim omitting owner clears an existing binding, got: %s", updateMsg)
+	}
+}
+
+// TestBuildErrorMessage_OwnerCheckFailed_SaysNothingWasWritten pins the fix
+// for a real gap found in review: an inconclusive pre-flight failure (a
+// transient network error, timeout, or 5xx) used to be shown to the caller
+// as either the bare underlying-operation failure or the fully generic
+// internal-error message, with no indication that this was a pre-flight
+// read for a write tool and that the write itself never ran.
+func TestBuildErrorMessage_OwnerCheckFailed_SaysNothingWasWritten(t *testing.T) {
+	semp503 := &sempv2.SEMPError{Operation: "getMsgVpnClientUsername", StatusCode: 503}
+	wrapped := &ownerCheckFailedError{cause: semp503, objectKind: "queue"}
+	msg, _ := buildErrorMessage(wrapped, "")
+	if !strings.Contains(msg, "was not created or updated") && !strings.Contains(msg, "nothing was changed") {
+		t.Errorf("expected reassurance that the write never ran, got: %s", msg)
+	}
+	if msg == "getMsgVpnClientUsername returned HTTP 503" {
+		t.Error("the bare underlying message must not reach the caller unframed")
+	}
+
+	generic := &ownerCheckFailedError{cause: errors.New("dial tcp: connection refused"), objectKind: "topic endpoint"}
+	genericMsg, _ := buildErrorMessage(generic, "")
+	if genericMsg == genericInternalMessage {
+		t.Error("must not fall back to the bare generic message with no write-status context at all")
+	}
+}
+
+// TestIsRetryable_OwnerCheckFailed_PropagatesFromCause verifies retryability
+// for an ownerCheckFailedError is computed from its wrapped cause via the
+// existing errors.As/Unwrap chain, with no dedicated case needed in
+// isRetryable itself.
+func TestIsRetryable_OwnerCheckFailed_PropagatesFromCause(t *testing.T) {
+	retryable := &ownerCheckFailedError{cause: &sempv2.SEMPError{StatusCode: 503}, objectKind: "queue"}
+	if !isRetryable(retryable) {
+		t.Error("a 503 on the pre-flight check should be retryable, same as a 503 anywhere else")
+	}
+	notRetryable := &ownerCheckFailedError{cause: errors.New("dial tcp: connection refused"), objectKind: "queue"}
+	if isRetryable(notRetryable) {
+		t.Error("an unclassified network error should not be reported as retryable")
+	}
+}
+
+// TestNewToolManagerFromComposite_InstallsOwnerValidation exercises the
+// actual registration wiring — not a hand-built ownerValidatingHandler the
+// way every test above does — because review found that no test did: the
+// one conditional in NewToolManagerFromComposite that decides whether to
+// wrap a tool at all had zero coverage, so removing it left the entire unit
+// suite green.
+func TestNewToolManagerFromComposite_InstallsOwnerValidation(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	executor := composite.NewCompositeExecutor(operations)
+	mgr := NewToolManagerFromComposite(nil, realTools, executor)
+
+	handler, err := mgr.Route("create-queue")
+	if err != nil {
+		t.Fatalf("Route(create-queue): %v", err)
+	}
+
+	client := newMockClient()
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.responses["getMsgVpn"] = vpnExistsResponse()
+
+	_, err = handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
+		"msgVpnName":  "default",
+		"queueName":   "q1",
+		"queueConfig": map[string]any{"owner": "ghost-user"},
+	})
+	var ownerErr *ownerNotFoundError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("create-queue as registered by NewToolManagerFromComposite did not apply owner validation — got %T: %v", err, err)
+	}
+	for _, call := range client.calls {
+		if call == "createMsgVpnQueue" {
+			t.Fatal("queue must never be created when owner does not exist")
+		}
+	}
+}
+
+// TestOwnerValidatedTools_MatchesBodyFields cross-checks ownerValidatedTools
+// against the embedded catalog's own BodyFields for every write tool's step
+// operation, so a future write tool over an object that accepts "owner" —
+// or a SEMP spec bump that adds "owner" to a different object — cannot ship
+// silently unprotected. Review flagged that the map, by its own comment, is
+// hand-curated with nothing verifying it against reality; this is that
+// verification.
+func TestOwnerValidatedTools_MatchesBodyFields(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+
+	for _, tool := range realTools {
+		hasOwnerField := false
+		for _, step := range tool.Steps {
+			op, ok := operations[step.Operation]
+			if !ok || op.BodyFields == nil {
+				continue
+			}
+			if op.BodyFields["owner"] {
+				hasOwnerField = true
+			}
+		}
+		_, guarded := ownerValidatedTools[tool.Name]
+		if hasOwnerField && !guarded {
+			t.Errorf("tool %q writes an operation whose body accepts \"owner\" but is not in ownerValidatedTools — SOL-153080 regression risk", tool.Name)
+		}
+		if guarded && !hasOwnerField {
+			t.Errorf("tool %q is in ownerValidatedTools but no step operation's body actually accepts \"owner\" — stale entry", tool.Name)
+		}
+	}
+}

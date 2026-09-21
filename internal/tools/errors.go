@@ -172,6 +172,7 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	var busyErr *resilience.BrokerBusyError
 	var exchErr *tokenexchange.ExchangeError
 	var ownerErr *ownerNotFoundError
+	var ownerCheckErr *ownerCheckFailedError
 
 	switch {
 	// Checked before the protocol errors: a shed request never reached the
@@ -213,6 +214,19 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 		structured["attempts"] = retriesErr.Attempts
 	case errors.As(err, &exchErr):
 		structured["error_source"] = "token_exchange"
+	}
+
+	// Layered on top of the switch above, not a case inside it: when err is
+	// an *ownerCheckFailedError, errors.As on the switch's own vars already
+	// found and classified its wrapped cause (a *sempv2.SEMPError's status/
+	// operation/sempCode, a *resilience.BrokerBusyError's retryAfterMs, ...),
+	// exactly as if this wrapper weren't there. This only adds the two
+	// fields specific to the wrapper itself, so a client can tell the failed
+	// read was part of an owner-validation pre-flight without losing the
+	// underlying failure's own machine-readable detail.
+	if errors.As(err, &ownerCheckErr) {
+		structured["error_source"] = "owner_validation_check_failed"
+		structured["objectKind"] = ownerCheckErr.objectKind
 	}
 
 	// Content text mirrors the agent-facing message, with any suggestions
@@ -502,6 +516,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var sempv1Err *sempv1.Error
 	var exchErr *tokenexchange.ExchangeError
 	var ownerErr *ownerNotFoundError
+	var ownerCheckErr *ownerCheckFailedError
 
 	var message string
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
@@ -562,13 +577,24 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 		return exchErr.AgentMessage(brokerAlias), nil
 
 	case errors.As(err, &ownerErr):
+		omitGuidance := fmt.Sprintf("omit \"owner\" to create the %s without an owner binding", ownerErr.objectKind)
+		if ownerErr.isUpdate {
+			omitGuidance = fmt.Sprintf("omit \"owner\" from this update to leave the %s's current owner unchanged", ownerErr.objectKind)
+		}
 		return fmt.Sprintf(
 				"Client username %q does not exist in Message VPN %q, so this %s was not "+
 					"created or updated. Provision the client username first, double-check the "+
-					"name with list-client-usernames, or omit \"owner\" to leave the %s without "+
-					"an owner binding.",
-				ownerErr.owner, ownerErr.msgVpn, ownerErr.objectKind, ownerErr.objectKind),
+					"name with list-client-usernames, or %s.",
+				ownerErr.owner, ownerErr.msgVpn, ownerErr.objectKind, omitGuidance),
 			nil
+
+	case errors.As(err, &ownerCheckErr):
+		underlyingMsg, underlyingSuggestions := buildErrorMessage(ownerCheckErr.cause, brokerAlias)
+		return fmt.Sprintf(
+				"Could not confirm whether the requested owner client username exists, so this "+
+					"%s was not created or updated — nothing was changed. %s",
+				ownerCheckErr.objectKind, underlyingMsg),
+			underlyingSuggestions
 
 	case errors.As(err, &sempv2Err):
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
