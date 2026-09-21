@@ -107,11 +107,21 @@ func (e *ownerNotFoundError) Error() string {
 // Known residual gap: the check and the write are two separate broker
 // round-trips with no atomicity, so a client username deleted in the window
 // between them would still let the write proceed against an owner that no
-// longer exists by the time it lands. SEMP's config API has no conditional/
-// transactional create to close this with. This narrows SOL-153080's window
-// from "always" to "only during a race with a concurrent client-username
-// deletion", which is the best available fix against this API — not a
-// complete elimination of the class.
+// longer exists by the time it lands. This is a limitation of doing the
+// check from this MCP server specifically — it is NOT a limitation of SEMP
+// itself: the broker already enforces this exact kind of reference
+// atomically, in the same request, for other attributes (verified against
+// broker source and live — creating a MsgVpnClientUsername with a
+// nonexistent aclProfileName or clientProfileName is rejected in that same
+// POST with a "does not exist" error; both are modeled with
+// SuggestedValuesSempCollectionReference(..., strict=True), whereas the
+// queue/topic-endpoint "owner" attribute is modeled with strict=False and
+// its only server-side check, Parameter::validateOwner, is syntax-only).
+// The broker could close this completely and atomically by validating
+// "owner" the same way — that would be the real fix; this handler only
+// narrows SOL-153080's window from "always" to "only during a race with a
+// concurrent client-username deletion" because a broker-side change is out
+// of scope for this repository.
 type ownerValidatingHandler struct {
 	inner       ToolHandler
 	spec        ownerValidationSpec
