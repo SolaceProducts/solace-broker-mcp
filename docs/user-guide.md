@@ -268,6 +268,10 @@ Tool errors include structured fields to help diagnose the problem:
 | `kind` | SEMPv1 error classification: `http`, `execute-fail`, `parse`, `permission`, `limit`, or `unknown`. | SEMPv1 |
 | `reasonCode` | SEMPv1 reason code from the event broker response. | SEMPv1 `execute-fail` responses |
 | `attempts` | Number of attempts made before retries were exhausted. | Retries exhausted |
+| `error_source` | Origin tag for an error not carrying a SEMP status/code of its own: `load_shed`, `token_exchange`, `owner_validation` (the requested `owner` doesn't exist), or `owner_validation_check_failed` (the existence check itself could not complete). | When applicable |
+| `owner` | The client username that failed existence validation. | `error_source: owner_validation` |
+| `msgVpnName` | The Message VPN the owner check ran against. | `error_source: owner_validation` |
+| `objectKind` | The object type being created/updated (`queue` or `topic endpoint`) when an `owner` check failed or could not complete. | `error_source: owner_validation` or `owner_validation_check_failed` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:
