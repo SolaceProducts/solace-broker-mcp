@@ -103,6 +103,15 @@ func (e *ownerNotFoundError) Error() string {
 // safe under the composite engine's fail-fast, no-compensation design (that
 // design's own risk is specifically about a write step succeeding before a
 // later step fails; a read that fails first leaves nothing behind).
+//
+// Known residual gap: the check and the write are two separate broker
+// round-trips with no atomicity, so a client username deleted in the window
+// between them would still let the write proceed against an owner that no
+// longer exists by the time it lands. SEMP's config API has no conditional/
+// transactional create to close this with. This narrows SOL-153080's window
+// from "always" to "only during a race with a concurrent client-username
+// deletion", which is the best available fix against this API — not a
+// complete elimination of the class.
 type ownerValidatingHandler struct {
 	inner       ToolHandler
 	spec        ownerValidationSpec
