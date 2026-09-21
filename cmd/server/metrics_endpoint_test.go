@@ -186,9 +186,9 @@ func TestWireMetricsEndpoint_ScrapeOn_Binds(t *testing.T) {
 }
 
 // A provider build failure is reported whichever egress asked for the
-// provider: an OTLP-only deployment whose exporter failed to build has no
-// listener, but it still has nothing exporting, and /readyz is where that has
-// always surfaced.
+// provider, under "metrics_provider" — named for what failed, since an
+// OTLP-only deployment whose exporter failed to build never had an endpoint
+// to bind — while "metrics_endpoint" stays the bind-failure name above.
 func TestWireMetricsEndpoint_BuildErr_Unready(t *testing.T) {
 	cfg := &config.ServerConfig{Observability: config.ObservabilityConfig{MetricsOTLPEnabled: true}}
 	readiness := health.NewReadinessState()
@@ -196,7 +196,7 @@ func TestWireMetricsEndpoint_BuildErr_Unready(t *testing.T) {
 
 	readiness.SetInitialized()
 	_, ready, reason := readiness.Evaluate()
-	if ready || !strings.Contains(reason, "metrics_endpoint") {
-		t.Fatalf("build error: ready=%v reason=%q, want unready naming metrics_endpoint", ready, reason)
+	if ready || !strings.Contains(reason, "metrics_provider") {
+		t.Fatalf("build error: ready=%v reason=%q, want unready naming metrics_provider", ready, reason)
 	}
 }

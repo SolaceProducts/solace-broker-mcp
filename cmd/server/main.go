@@ -576,16 +576,19 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 }
 
 // wireMetricsEndpoint decides what the metrics egress leaves on /readyz. A
-// provider build failure is registered as the "metrics_endpoint" probe so it
-// shows on the first check whichever egress was asked for; a built provider
-// gets its scrape listener only when OBS_METRICS_SCRAPE_ENABLED is on. An
+// provider build failure is registered as the "metrics_provider" probe — named
+// for what failed, since in OTLP-only mode no endpoint was ever going to bind;
+// "metrics_endpoint" (serveMetricsEndpoint) stays the name for a listener that
+// could not bind — so it shows on the first check whichever egress was asked
+// for. A built provider gets its scrape listener only when
+// OBS_METRICS_SCRAPE_ENABLED is on. An
 // OTLP-only deployment (SOL-154607) binds nothing — the OTLP reader inside
 // the provider pushes on its own goroutine — so it leaves readiness untouched
 // here and metrics_bind_address is never opened. Split out of main() so a
 // wiring test can pin that without starting the rest of startup.
 func wireMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, provider *metrics.Provider, buildErr error) {
 	if buildErr != nil {
-		readiness.RegisterListener("metrics_endpoint", func() error { return buildErr })
+		readiness.RegisterListener("metrics_provider", func() error { return buildErr })
 		return
 	}
 	if provider != nil && cfg.Observability.MetricsScrapeEnabled {

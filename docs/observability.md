@@ -105,7 +105,7 @@ against a stated test rather than re-argued each release.
 | Flag | Default | Why, and what would change it |
 |---|---|---|
 | `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
-| `OBS_METRICS_SCRAPE_ENABLED` | `false` | Serves the Prometheus scrape egress: opens a second, unauthenticated listener on `:9091` and publishes every metric name and label in this document as a contract there. Until SOL-154607 this flag was `OBS_METRICS_ENABLED` and also gated the meter provider the OTLP egress pushes from; the two egresses are now independent (see [Metrics](#metrics--planned-with-exceptions)). The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
+| `OBS_METRICS_SCRAPE_ENABLED` | `false` | Serves the Prometheus scrape egress: opens a second, unauthenticated listener on `:9091` and publishes every metric name and label in this document as a contract there — except the OTLP export-health pair, which exists only with `OBS_METRICS_OTLP_ENABLED` (see [OTLP Export Health](#otlp-export-health)). Until SOL-154607 this flag was `OBS_METRICS_ENABLED` and also gated the meter provider the OTLP egress pushes from; the two egresses are now independent (see [Metrics](#metrics--planned-with-exceptions)). The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
 | `OBS_METRICS_OTLP_ENABLED` | `false` | Pushes the same `mcp_*` instruments over OTLP to a collector you run (Story 46, SOL-152418; see [Metrics](#metrics--planned-with-exceptions)). There is no safe default endpoint, so it is opt-in permanently, like tracing. Independent of `OBS_METRICS_SCRAPE_ENABLED` since SOL-154607: either flag alone builds the shared meter provider, and set alone it binds no scrape listener. |
 | `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. So is the one added later — that `mcp_audit_events_dropped_total` is emitted, because a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent, including when the log stream itself is what failed — as of SOL-154569 (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). It now flips when the Solace SDLC security review of the audit schema passes (tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040), same ticket as the metrics row above). |
 | `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
@@ -385,9 +385,13 @@ Health](#otlp-export-health)) ride the OTLP stream in this mode, so a push that 
 outright cannot report itself through them. The rate-limited `WARN` the exporter logs per
 failed export (`OTLP metrics export failed`) is the signal that survives, and an OTLP exporter
 that cannot even be constructed fails provider construction — reported on `/readyz` as
-`metrics_endpoint` — rather than falling back to a scrape surface that was never asked for.
+`metrics_provider` — rather than falling back to a scrape surface that was never asked for.
 See [OTLP-only metrics with nothing arriving](#otlp-only-metrics-with-nothing-arriving) in the
-runbook.
+runbook. The push carries the same labels the scrape listener is fenced off for
+(`mcp_auth_failure_total{reason}`, `mcp_authz_denied_total{tool}`), and its transport posture
+comes entirely from the `OTEL_EXPORTER_OTLP_*` variables, so send it only to a TLS-terminated,
+authenticated collector you control; an `http://` endpoint or `OTEL_EXPORTER_OTLP_INSECURE=true`
+downgrades it to cleartext (see the transport-security note below).
 
 **Temporality is always cumulative, explicitly forced regardless of environment.** This server
 sets it in code rather than relying on the SDK's own default (which happens to already be
@@ -2974,13 +2978,18 @@ is what takes the pod out of rotation before it stops accepting work. A router w
 entirely**, which presents as silence rather than an error. `mcp_metrics_scrape_total` is
 flat or missing.
 
-**Likely cause.** In order of likelihood: `OBS_METRICS_SCRAPE_ENABLED` is off — an OTLP-only
-deployment included — so `:9091` is not
-listening at all and the target shows `connection refused`; the ServiceMonitor is not
-selected by your Prometheus; or the NetworkPolicy does not admit your Prometheus's namespace.
+**Likely cause.** In order of likelihood: the deployment still sets the retired
+`OBS_METRICS_ENABLED` (renamed in SOL-154607), which turns nothing on — the startup log then
+carries `retired observability flag is set and ignored: it enables nothing (no meter provider,
+no /metrics listener, no security counters); rename it to the replacement` with
+`var=OBS_METRICS_ENABLED replacement=OBS_METRICS_SCRAPE_ENABLED`; `OBS_METRICS_SCRAPE_ENABLED`
+is off — an OTLP-only deployment included — so `:9091` is not listening at all and the target
+shows `connection refused`; the ServiceMonitor is not selected by your Prometheus; or the
+NetworkPolicy does not admit your Prometheus's namespace.
 
-**First response.** Check `OBS_METRICS_SCRAPE_ENABLED` first — it is off by default and ships
-commented out in `deployment.yaml`. Then confirm the target appears in Prometheus's
+**First response.** Grep the startup log for `retired observability flag`, then check
+`OBS_METRICS_SCRAPE_ENABLED` — it is off by default and ships commented out in
+`deployment.yaml`. Then confirm the target appears in Prometheus's
 *Status → Targets*. An unselected ServiceMonitor is simply not listed — not down, not logged.
 Verify with `mcp_metrics_scrape_total` rising, not with `kubectl get servicemonitor`, which
 only proves the object exists.
@@ -3077,7 +3086,7 @@ Or the OTLP exporter failed to construct at startup, which in OTLP-only mode fai
 provider rather than falling back to a scrape surface that was never asked for.
 
 **First response.** Check `/readyz`: a provider build failure is reported there as
-`metrics_endpoint`, with `metrics provider build failed` in the startup log. If ready, look for
+`metrics_provider`, with `metrics provider build failed` in the startup log. If ready, look for
 the exporter's rate-limited `WARN` per failed export (`OTLP metrics export failed`, carrying
 `reason` and the data-point count) — that line is the signal that survives when the counters
 cannot. Then work the endpoint checks in the entry above. To put the counters back on a surface

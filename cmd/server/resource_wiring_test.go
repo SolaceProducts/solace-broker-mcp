@@ -60,7 +60,7 @@ func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.
 	// TracingEnabled: true means the OTLP gRPC exporter can attempt a flush
 	// against the default endpoint on shutdown — bounded so that has a
 	// ceiling rather than an unbounded wait (flagged by review).
-	tp, err := tracing.New(config.ObservabilityConfig{TracingEnabled: true, MetricsScrapeEnabled: true}, mp.MeterProvider(), res)
+	tp, err := tracing.New(config.ObservabilityConfig{TracingEnabled: true}, mp.MeterProvider(), res)
 	if err != nil {
 		t.Fatalf("tracing.New() error = %v", err)
 	}

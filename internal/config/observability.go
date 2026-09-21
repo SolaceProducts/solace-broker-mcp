@@ -157,9 +157,12 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o.MetricsOTLPEnabled = envBool(envObsMetricsOTLPEnabled, false, "observability")
 
 	// Names only, never the value: the retired var is not read, so its value
-	// has nothing to say, and the operator's fix is the same either way.
+	// has nothing to say, and the operator's fix is the same either way. The
+	// message states the consequence and the action because this line is the
+	// only thing that distinguishes "renamed and forgotten" from "metrics
+	// deliberately off" — docs/observability.md's runbook quotes it verbatim.
 	if _, ok := os.LookupEnv(envObsMetricsEnabledRetired); ok {
-		slog.Warn("retired observability flag is set and ignored",
+		slog.Warn("retired observability flag is set and ignored: it enables nothing (no meter provider, no /metrics listener, no security counters); rename it to the replacement",
 			slog.String("var", envObsMetricsEnabledRetired),
 			slog.String("replacement", envObsMetricsScrapeEnabled))
 	}

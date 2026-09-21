@@ -35,7 +35,7 @@ func buildSecurityMetrics(cfg *config.ServerConfig, p *metrics.Provider) *metric
 	}
 	if p == nil {
 		if !metrics.Enabled(cfg.Observability) {
-			slog.Warn("OBS_AUTH_FAILURE_COUNTER_ENABLED is true but neither OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED is; mcp_auth_failure_total and mcp_authz_denied_total have no exporter and will not be emitted")
+			slog.Warn("OBS_AUTH_FAILURE_COUNTER_ENABLED is true but neither OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED is enabled; mcp_auth_failure_total and mcp_authz_denied_total have no exporter and will not be emitted")
 		}
 		return nil
 	}
