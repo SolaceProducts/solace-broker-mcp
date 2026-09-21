@@ -115,8 +115,11 @@ into one sentence.
 
 ### Step 5: Condense if needed
 
-Word-count the complete draft entry (all bullets under the category, or just the new
-one if editing in-place). If any **single bullet exceeds 100 words**, rewrite it:
+Word-count only the bullet(s) drafted in Step 1–4 for this change — never a
+pre-existing bullet already in `CHANGELOG.md`, even one over the limit; that
+conflicts with Step 6's "never rewrite an existing bullet" and is a separate,
+one-time cleanup outside this skill's scope. If any **single new bullet exceeds
+100 words**, rewrite it:
 
 - **Prioritize coherence** — do not truncate mid-sentence. Rewrite the whole bullet
   to be concise, not cut. Keep the core fact (what changed) and user value (why it
@@ -130,7 +133,7 @@ one if editing in-place). If any **single bullet exceeds 100 words**, rewrite it
 
 If no bullet exceeds 100 words, proceed to Step 6 with no changes.
 
-### Step 7: Insert and show
+### Step 6: Insert and show
 
 - Insert with a **targeted Edit that adds only the new bullets** under the correct
   subsection, creating the subsection heading (in the Step 2 order) only if absent.
@@ -142,7 +145,7 @@ If no bullet exceeds 100 words, proceed to Step 6 with no changes.
   release-notes link is tracked separately). Do not commit, push, or tag.
 - Print the resulting diff.
 
-### Step 9: Check the draft against the tree
+### Step 7: Check the draft against the tree
 
 Two checks, both against the code rather than against what the change was meant to
 do. They exist because the common failure is describing the design as intended
@@ -159,7 +162,7 @@ rather than as shipped, after a later revision moved it.
 - If an identifier is not found, correct it from the tree; if you cannot resolve it,
   flag it to the human rather than guessing.
 - If either check changed the entry, re-print the diff — the human must see the
-  corrected version, not the one from Step 7.
+  corrected version, not the one from Step 6.
 
 Then stop for human review.
 

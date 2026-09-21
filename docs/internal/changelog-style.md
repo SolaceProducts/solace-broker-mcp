@@ -10,16 +10,23 @@ v0.9.0's 47 CHANGELOG entries had a median of 286 words per bullet (max 1464 wor
 
 This guide ensures future releases are skimmable: a user reading the notes can understand what changed and what action (if any) they need to take in under 5 minutes total.
 
+**This also raises the previous limits.** The prior guidance (15–30 words typical,
+~50-word ceiling) was missed by 5.7× at the median — a rule nobody honors is a
+broken rule. The ~50-word target and 100-word ceiling below are a deliberate
+relaxation to a realistic ceiling, paired with an explicit condense step
+(`/changelog` Step 5) that actually enforces it, rather than an aspirational number
+everyone ignores.
+
 ---
 
 ## Categories
 
-Every entry files under one of these, in this order:
+Every entry falls under one of these categories, in this order:
 
 | Category | When to use | Example |
 |----------|-------------|---------|
 | **Added** | New feature, tool, config field, flag, or user-visible API | "New `get-queue-metrics` tool to retrieve queue depth without polling." |
-| **Changed** | Behavior change, improved performance, internal API change | "Write tools now report desired-state outcomes (already_exists/already_absent) instead of errors." |
+| **Changed** | Behavior change, improved performance, or a notable internal API change that downstream code depends on (state explicitly that on-the-wire behavior is unchanged) | "Write tools now report desired-state outcomes (already_exists/already_absent) instead of errors." |
 | **Deprecated** | Feature/flag/tool still present but will be removed; log a warning | "The `--legacy-auth` flag is deprecated and will be removed in v1.0." |
 | **Removed** | Feature/flag/tool deleted | "Removed the `--legacy-auth` flag." |
 | **Fixed** | Bug fix affecting user- or operator-visible behavior | "Fixed YAML comment substitution that dropped content after certain bracket patterns." |
@@ -32,8 +39,14 @@ Every entry files under one of these, in this order:
 **Priority:** coherence first, length second. Every entry must read as a complete, understandable thought.
 
 **Normal entries (Added/Changed/Fixed/Removed/Deprecated):**
-- **Target:** ~50 words (~1 sentence)
-- **Maximum:** 100 words (~2 sentences) — hard ceiling, never exceed
+- **Target:** ~50 words (~1 sentence) — a guideline, not a floor to write up to. A
+  simple change described in 6–15 words is not under-length; pad nothing.
+- **Maximum:** 100 words (~2 sentences) — hard ceiling, never exceed **for entries
+  drafted under this guide**. This ceiling is prospective: it governs new bullets
+  the `/changelog` skill drafts from here forward, not existing `CHANGELOG.md`
+  content written under the old rules. `/changelog` never rewrites a pre-existing
+  bullet (see its Step 5/6), so condensing any current `[Unreleased]` entries that
+  exceed 100 words is a separate, one-time cleanup outside this skill's scope.
 - **Form:** one list bullet per logical change
 - **What to include:** what changed, what users need to do (if action required)
 - **What to exclude:** why it was built this way, how it works internally, design rationale
@@ -43,7 +56,7 @@ Every entry files under one of these, in this order:
 - **Maximum:** 100 words (~2 sentences, or a short migration table)
 - **Prefix:** `- **BREAKING**: `
 - **Include:** old behavior, new behavior, required migration action
-- **Example:** "**BREAKING**: Queue subscription API renamed; migrate by calling `create-queue-subscription` instead of `add-subscription`. See SOL-12345." (18 words)
+- **Example:** "**BREAKING**: Queue subscription API renamed; migrate by calling `create-queue-subscription` instead of `add-subscription`. Tracked under SOL-12345." (15 words)
 
 ---
 
@@ -93,19 +106,24 @@ Single-line housekeeping items (version bumps, license updates) carry no trailer
 
 ### Good
 
-✅ "Added `list-queue-subscriptions` tool. Tracked under SOL-152847." (9 words)
+✅ "Added `list-queue-subscriptions` tool. Tracked under SOL-152847." (6 words)
 
-✅ "Fixed YAML comment substitution that dropped content after certain bracket patterns. Tracked under SOL-153079." (15 words)
+✅ "Fixed YAML comment substitution that dropped content after certain bracket patterns. Tracked under SOL-153079." (14 words)
 
-✅ "**BREAKING**: Config key `auth.username` renamed to `auth.identity`; update your broker config and re-deploy. Tracked under SOL-150123." (19 words)
+✅ "**BREAKING**: Config key `auth.username` renamed to `auth.identity`; update your broker config and re-deploy. Tracked under SOL-150123." (16 words)
+
+These are simple, single-fact changes — most real entries will run shorter than the
+~50-word target. A change with more moving parts (several affected callers, a
+migration with more than one step) can reasonably use more of the range, up to the
+100-word ceiling; ~50 is where most entries land, not a length to write up to.
 
 ### Too long (what to avoid)
 
-❌ "We now expose tracing at every layer of the request path via OpenTelemetry, which means a failed tool call reads as one trace instead of scattered log lines across different applications. This required us to set the global text map propagator (previously a no-op default, which meant inbound W3C traceparent headers were silently discarded), and to carefully place the tracing middleware outside cross-origin protection but inside correlation so the correlation ID is already present when we stamp the span. Each layer uses its own named tracer so a backend can attribute spans to their source rather than to one server-wide scope. Tracked under SOL-152421." (118 words — **exceeds 100-word hard ceiling**)
+❌ "We now expose tracing at every layer of the request path via OpenTelemetry, which means a failed tool call reads as one trace instead of scattered log lines across different applications. This required us to set the global text map propagator (previously a no-op default, which meant inbound W3C traceparent headers were silently discarded), and to carefully place the tracing middleware outside cross-origin protection but inside correlation so the correlation ID is already present when we stamp the span. Each layer uses its own named tracer so a backend can attribute spans to their source rather than to one server-wide scope. Tracked under SOL-152421." (104 words — **exceeds 100-word hard ceiling**)
 
 **Condense to:**
 
-✅ "Traces now span every layer of the request path, so a failed tool call reads as one trace instead of scattered logs. W3C traceparent headers are now propagated. Tracked under SOL-152421." (33 words)
+✅ "Traces now span every layer of the request path, so a failed tool call reads as one trace instead of scattered logs. W3C traceparent headers are now propagated. Tracked under SOL-152421." (31 words)
 
 ---
 
