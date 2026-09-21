@@ -265,7 +265,7 @@ test_dead_sink_counter_is_the_only_signal() {
 log_info "=== Scenario 5: Audit drop counter (SOL-154569) ==="
 
 export OBS_AUDIT_LOG_ENABLED=true
-export OBS_METRICS_ENABLED=true
+export OBS_METRICS_SCRAPE_ENABLED=true
 
 # Phase 1: level filter. start_server sweeps the MCP port itself; the metrics
 # port is this scenario's own.

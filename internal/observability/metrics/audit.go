@@ -40,7 +40,7 @@ import (
 // major metrics_schema bump, so this is recorded as a decision, not left as
 // an omission.
 //
-// Gated by OBS_METRICS_ENABLED alone (cmd/server/audit_metrics.go), like
+// Gated by the metrics provider existing (cmd/server/audit_metrics.go), like
 // mcp_broker_authz_denied_total and unlike SecurityMetrics, whose nil gate
 // additionally follows OBS_AUTH_FAILURE_COUNTER_ENABLED. It is deliberately
 // not also gated by OBS_AUDIT_LOG_ENABLED: with the audit log off nothing is

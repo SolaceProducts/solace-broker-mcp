@@ -24,8 +24,8 @@ import (
 // is recorded: a recorder iff a metrics provider exists, otherwise nil, which
 // main treats as "leave audit's drop recorder unset" so every audit.EmitDrop
 // stays a metrics no-op and the audit_drop record remains the only drop
-// signal. Gated by OBS_METRICS_ENABLED alone — the provider is nil exactly
-// when that flag is off or the provider build failed, and main has already
+// signal. Gated by the metrics provider existing at all — it is nil exactly
+// when neither metrics egress flag is on or the provider build failed, and main has already
 // logged the latter as an ERROR — and deliberately not by
 // OBS_AUDIT_LOG_ENABLED; see metrics.AuditMetrics for why a seeded zero with
 // the audit log off is the truthful reading. Mirrors buildSecurityMetrics

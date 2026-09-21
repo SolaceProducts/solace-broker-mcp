@@ -33,17 +33,24 @@ import (
 // buildSecurityMetrics returns a recorder iff the resolved flag is true and a
 // provider exists. The flag's derived default is pinned in
 // internal/config/observability_test.go; these tests set the resolved bool.
+//
+// The provider handed in is always a scrape-built one, in the OTLP-only cases
+// too: the seam under test is the cfg gate (metrics.Enabled, the OR of the two
+// egress flags), which never inspects the provider, and an OTLP-only
+// provider's own behaviour is pinned in the metrics package
+// (TestOTLP_Only_NoScrapePipelineAndExports).
 
-func securityCfg(counterEnabled, metricsEnabled bool) *config.ServerConfig {
+func securityCfg(counterEnabled, scrapeEnabled, otlpEnabled bool) *config.ServerConfig {
 	return &config.ServerConfig{Observability: config.ObservabilityConfig{
 		AuthFailureCounterEnabled: counterEnabled,
-		MetricsEnabled:            metricsEnabled,
+		MetricsScrapeEnabled:      scrapeEnabled,
+		MetricsOTLPEnabled:        otlpEnabled,
 	}}
 }
 
 func newTestMetricsProvider(t *testing.T) *metrics.Provider {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,30 +59,30 @@ func newTestMetricsProvider(t *testing.T) *metrics.Provider {
 }
 
 func TestBuildSecurityMetrics_FlagOff_NilEvenWithProvider(t *testing.T) {
-	if sm := buildSecurityMetrics(securityCfg(false, true), newTestMetricsProvider(t)); sm != nil {
+	if sm := buildSecurityMetrics(securityCfg(false, true, false), newTestMetricsProvider(t)); sm != nil {
 		t.Errorf("buildSecurityMetrics with flag off = %v, want nil", sm)
 	}
 }
 
-func TestBuildSecurityMetrics_FlagOnMetricsOff_NilAndWarns(t *testing.T) {
+func TestBuildSecurityMetrics_FlagOnNoEgress_NilAndWarns(t *testing.T) {
 	buf, restore := captureStartupLog(t)
 	defer restore()
 
-	if sm := buildSecurityMetrics(securityCfg(true, false), nil); sm != nil {
-		t.Fatalf("buildSecurityMetrics with metrics off = %v, want nil", sm)
+	if sm := buildSecurityMetrics(securityCfg(true, false, false), nil); sm != nil {
+		t.Fatalf("buildSecurityMetrics with no egress = %v, want nil", sm)
 	}
-	if !strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED is true but OBS_METRICS_ENABLED is false") {
-		t.Errorf("no WARN naming the flag was logged:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED is true but neither OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED is enabled") {
+		t.Errorf("no WARN naming the flags was logged:\n%s", buf.String())
 	}
 }
 
-// Metrics on but no provider means the provider build failed, which main has
+// An egress on but no provider means the provider build failed, which main has
 // already reported; this must not blame the flag on top of it.
 func TestBuildSecurityMetrics_FlagOnProviderBuildFailed_NilAndSilent(t *testing.T) {
 	buf, restore := captureStartupLog(t)
 	defer restore()
 
-	if sm := buildSecurityMetrics(securityCfg(true, true), nil); sm != nil {
+	if sm := buildSecurityMetrics(securityCfg(true, true, false), nil); sm != nil {
 		t.Fatalf("buildSecurityMetrics with no provider = %v, want nil", sm)
 	}
 	if strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED") {
@@ -83,11 +90,36 @@ func TestBuildSecurityMetrics_FlagOnProviderBuildFailed_NilAndSilent(t *testing.
 	}
 }
 
+// OTLP-only (SOL-154607) is the configuration the OR in metrics.Enabled exists
+// for: with a provider the recorder is live, exactly as under the scrape flag.
+// Under the old single-parent gate this case resolved to "counters off" and
+// silently lost both security counters.
+func TestBuildSecurityMetrics_FlagOnOTLPOnlyWithProvider_Records(t *testing.T) {
+	if sm := buildSecurityMetrics(securityCfg(true, false, true), newTestMetricsProvider(t)); sm == nil {
+		t.Fatal("buildSecurityMetrics with flag on, OTLP-only, and a provider = nil, want a recorder")
+	}
+}
+
+// OTLP-only with no provider is a provider build failure, not "no egress": it
+// must stay silent like the scrape case above, not emit the neither-flag WARN,
+// which would send an operator to fix a flag that is set correctly.
+func TestBuildSecurityMetrics_FlagOnOTLPOnlyProviderBuildFailed_NilAndSilent(t *testing.T) {
+	buf, restore := captureStartupLog(t)
+	defer restore()
+
+	if sm := buildSecurityMetrics(securityCfg(true, false, true), nil); sm != nil {
+		t.Fatalf("buildSecurityMetrics OTLP-only with no provider = %v, want nil", sm)
+	}
+	if strings.Contains(buf.String(), "OBS_AUTH_FAILURE_COUNTER_ENABLED") {
+		t.Errorf("flag blamed for an OTLP-only provider build failure:\n%s", buf.String())
+	}
+}
+
 // Flag on with a provider: the recorder is live, every value of the real
 // auth-failure vocabulary is seeded, and samples reach /metrics.
 func TestBuildSecurityMetrics_FlagOnWithProvider_RecordsOnScrape(t *testing.T) {
 	p := newTestMetricsProvider(t)
-	sm := buildSecurityMetrics(securityCfg(true, true), p)
+	sm := buildSecurityMetrics(securityCfg(true, true, false), p)
 	if sm == nil {
 		t.Fatal("buildSecurityMetrics with flag on and a provider = nil, want a recorder")
 	}
@@ -118,10 +150,10 @@ func TestBuildSecurityMetrics_FlagOnWithProvider_RecordsOnScrape(t *testing.T) {
 // verifier at all, so it proves the missing-bearer peek is inside the chain.
 func TestCountingAuthHook_WiredThroughAuthMiddleware(t *testing.T) {
 	p := newTestMetricsProvider(t)
-	sm := buildSecurityMetrics(securityCfg(true, true), p)
+	sm := buildSecurityMetrics(securityCfg(true, true, false), p)
 	cfg := &config.ServerConfig{
 		Port:          9090,
-		Observability: config.ObservabilityConfig{AuthFailureCounterEnabled: true, MetricsEnabled: true},
+		Observability: config.ObservabilityConfig{AuthFailureCounterEnabled: true, MetricsScrapeEnabled: true},
 		MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "s3cr3t", ResourceURL: "http://localhost:9090/mcp"},
 	}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

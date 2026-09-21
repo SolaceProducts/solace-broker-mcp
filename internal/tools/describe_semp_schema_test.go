@@ -226,7 +226,7 @@ func newDescribeSempSchemaSession(t *testing.T, logBuf *bytes.Buffer, clientMidd
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(oldLogger) })
 
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

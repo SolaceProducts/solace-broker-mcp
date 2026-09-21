@@ -164,7 +164,7 @@ func TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency(t *testin
 	}
 	executor := composite.NewCompositeExecutor(operations)
 
-	mp, err := metrics.New("v1.2.3-test", sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	mp, err := metrics.New("v1.2.3-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true, MetricsOTLPEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

@@ -89,7 +89,7 @@ func mcpFamilies(body string) string {
 // instrument like the tool-RED counters above, so it is seeded here the same
 // way: one fixed sample.
 func TestGoldenSchema(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestGoldenSchema(t *testing.T) {
 // TestScrapeCounterIncrements proves mcp_metrics_scrape_total rises by one per
 // served scrape, so support can confirm Prometheus is actually scraping.
 func TestScrapeCounterIncrements(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func scrapeCounterValue(t *testing.T, body string) int {
 // TestExporterFidelity_SharedRegistry covers the same families on an isolated
 // harness registry and the two are not redundant.
 func TestGoAndProcessFamiliesPresent(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestGoAndProcessFamiliesPresent(t *testing.T) {
 
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.
 func TestProviderAccessors(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestProviderAccessors(t *testing.T) {
 // loss this parameter exists to prevent. A caller with no opinion on
 // identity must pass sdkresource.Default() explicitly, not nil.
 func TestNew_NilResourceIsRejected(t *testing.T) {
-	if _, err := New(testVersion, nil, config.ObservabilityConfig{}); err == nil {
+	if _, err := New(testVersion, nil, config.ObservabilityConfig{MetricsScrapeEnabled: true}); err == nil {
 		t.Fatal("New(_, nil) error = nil, want an error")
 	}
 }
@@ -291,5 +291,17 @@ func TestNoDeprecatedExporterOptions(t *testing.T) {
 		if strings.Contains(string(src), banned) {
 			t.Errorf("provider.go uses banned exporter option %s()", banned)
 		}
+	}
+}
+
+// TestNew_NoEgressIsRejected pins the SOL-154607 contract: a config with
+// neither egress flag set is a caller error, not a provider whose instruments
+// record into nothing. cmd/server never reaches New in that state
+// (metrics.Enabled gates the call on the same OR), so the only way to hit
+// this is a test or a future caller that forgot to say which egress it wants
+// — both better told than silently handed an inert provider.
+func TestNew_NoEgressIsRejected(t *testing.T) {
+	if _, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{}); err == nil {
+		t.Fatal("New with neither egress flag: error = nil, want an error")
 	}
 }

@@ -27,7 +27,8 @@ func TestValidate_MetricsBindAddressCollision(t *testing.T) {
 		port           string // top-level `port:` (empty => default 9090)
 		listenAddress  string // `listen_address:` (empty => omitted => default 127.0.0.1)
 		metricsBind    string // observability.metrics_bind_address (empty => omitted => default :9091)
-		metricsEnabled bool
+		metricsEnabled bool   // OBS_METRICS_SCRAPE_ENABLED — the flag that opens the listener
+		otlpEnabled    bool   // OBS_METRICS_OTLP_ENABLED — a provider, but no listener
 		wantErr        bool
 	}{
 		{
@@ -69,13 +70,24 @@ func TestValidate_MetricsBindAddressCollision(t *testing.T) {
 			metricsEnabled: false,
 			wantErr:        false,
 		},
+		{
+			// SOL-154607: OTLP-only builds a provider but never opens the
+			// scrape listener, so the address it would have used is inert.
+			name:        "same port collision is ignored when only the OTLP egress is on",
+			metricsBind: ":9090",
+			otlpEnabled: true,
+			wantErr:     false,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			clearObsEnv(t)
 			if tc.metricsEnabled {
-				t.Setenv("OBS_METRICS_ENABLED", "true")
+				t.Setenv("OBS_METRICS_SCRAPE_ENABLED", "true")
+			}
+			if tc.otlpEnabled {
+				t.Setenv("OBS_METRICS_OTLP_ENABLED", "true")
 			}
 
 			var b strings.Builder

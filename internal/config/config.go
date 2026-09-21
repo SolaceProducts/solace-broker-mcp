@@ -1254,11 +1254,6 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, err)
 	}
 
-	// Reject OTLP metrics push enabled while the metrics capability itself is off.
-	if err := validateMetricsOTLPCoherence(cfg); err != nil {
-		errs = append(errs, err)
-	}
-
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
@@ -1694,9 +1689,11 @@ func isLoopbackHost(host string) bool {
 }
 
 // validateMetricsBindAddress rejects a metrics listener that shares the MCP
-// server's port. Only when metrics are enabled; otherwise no listener starts.
+// server's port. Only when the scrape egress is enabled; otherwise no listener
+// starts — an OTLP-only deployment (SOL-154607) binds nothing, so its
+// metrics_bind_address is inert and a collision there is not an error.
 func validateMetricsBindAddress(cfg *ServerConfig) error {
-	if !cfg.Observability.MetricsEnabled {
+	if !cfg.Observability.MetricsScrapeEnabled {
 		return nil
 	}
 	host, port, err := net.SplitHostPort(cfg.Observability.MetricsBindAddress)
@@ -1712,20 +1709,6 @@ func validateMetricsBindAddress(cfg *ServerConfig) error {
 		return fmt.Errorf(
 			"observability.metrics_bind_address %q collides with the MCP server listener %q (same port): set metrics_bind_address to a free port, or move the MCP server off it",
 			cfg.Observability.MetricsBindAddress, cfg.BindAddress())
-	}
-	return nil
-}
-
-// validateMetricsOTLPCoherence rejects OBS_METRICS_OTLP_ENABLED=true while
-// metrics themselves are off (SOL-152418, Story 46). The OTLP reader attaches
-// to the same meter provider Story 14 builds — there is no provider to attach
-// to when OBS_METRICS_ENABLED is false, so this combination cannot work.
-// Failing at config load beats emitting nothing and leaving an operator to
-// discover it from a silent dashboard.
-func validateMetricsOTLPCoherence(cfg *ServerConfig) error {
-	if cfg.Observability.MetricsOTLPEnabled && !cfg.Observability.MetricsEnabled {
-		return fmt.Errorf(
-			"observability: OBS_METRICS_OTLP_ENABLED=true requires OBS_METRICS_ENABLED=true: the OTLP metrics reader attaches to the same meter provider the Prometheus scrape uses, so there is nothing to push from with metrics disabled")
 	}
 	return nil
 }
