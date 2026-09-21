@@ -129,10 +129,44 @@ func NewToolManager(pool *semp.BrokerPool, opts ...ManagerOption) *ToolManager {
 // NewToolManagerFromComposite creates a ToolManager and registers a
 // CompositeToolHandler for each composite tool definition. This is the
 // standard factory for YAML-driven tools.
+//
+// Every tool named in ownerValidatedTools (SOL-153080) that is actually
+// present in tools is additionally wrapped with an owner-existence check
+// before registration — see ownerValidatingHandler's doc comment. This
+// panics at startup, not at first call, if the catalog backing such a tool
+// is missing getClientUsernameOperationID: that operation is a hard
+// dependency for every entry in ownerValidatedTools, so its absence is a
+// spec-catalog regression that must fail the same way ValidatePostProcess's
+// cross-checks do, before the server ever takes traffic. A catalog that
+// simply doesn't define any owner-validated tool at all (e.g. a test
+// fixture registering an unrelated synthetic tool) is not that regression
+// and must not panic — hence the check is scoped to tools actually being
+// wrapped, not to the catalog in general.
 func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor, opts ...ManagerOption) *ToolManager {
 	mgr := NewToolManager(pool, opts...)
+	// getUsername is resolved lazily, and only via this closure, so a caller
+	// registering zero owner-validated tools (e.g. a test fixture with its
+	// own minimal, possibly nil, executor) never dereferences executor at
+	// all — matching this function's pre-SOL-153080 behavior for that case.
+	var getUsername *sempv2.Operation
+	getUsernameResolved := false
+	resolveGetUsername := func() *sempv2.Operation {
+		if !getUsernameResolved {
+			getUsername = executor.Operations()[getClientUsernameOperationID]
+			getUsernameResolved = true
+		}
+		return getUsername
+	}
 	for i := range tools {
-		mgr.Register(NewCompositeToolHandler(tools[i], executor))
+		var handler ToolHandler = NewCompositeToolHandler(tools[i], executor)
+		if spec, ok := ownerValidatedTools[tools[i].Name]; ok {
+			op := resolveGetUsername()
+			if op == nil {
+				panic(fmt.Sprintf("tool %q requires operation %q for owner validation, not found in the embedded catalog", tools[i].Name, getClientUsernameOperationID))
+			}
+			handler = newOwnerValidatingHandler(handler, spec, op)
+		}
+		mgr.Register(handler)
 	}
 	return mgr
 }

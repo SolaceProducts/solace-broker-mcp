@@ -34,6 +34,13 @@ broker_url_for() {
     esac
 }
 
+semp_config_for() {
+    case "$1" in
+        broker-a) echo "$BROKER_A_SEMP_CONFIG" ;;
+        broker-b) echo "$BROKER_B_SEMP_CONFIG" ;;
+    esac
+}
+
 # Call a config tool and assert it succeeded: no JSON-RPC error and the tool
 # result is not flagged isError. On failure, logs the broker's message.
 #   $1 tool   $2 args_json   $3 description
@@ -130,6 +137,62 @@ test_queue_roundtrip() {
     assert_listed "$broker" "list-queues" "$name" "false" || return 1
 }
 
+# ── Queue owner validation (SOL-153080) ──────────────────────────────────────
+# A queue's "owner" is a bare client-username string SEMP itself never checks
+# for existence, so a caller-supplied owner that names no real client username
+# used to be silently accepted — leaving the queue unscoped, since "permission"
+# (the access level for everyone but the owner) then applies to every real
+# client on the VPN. This exercises both sides: a real, pre-provisioned
+# username is accepted and independently confirmed to exist on the broker (the
+# ticket's own acceptance criterion), and a fabricated one is rejected before
+# the queue is ever created.
+test_queue_owner_validation() {
+    local broker="$1"
+    local owner="e2e-config-owner-$broker"
+    local ok_queue="e2e-config-queue-owner-ok-$broker"
+    local ghost_queue="e2e-config-queue-owner-ghost-$broker"
+    local burl resp text
+    burl=$(broker_url_for "$broker")
+
+    semp_post "$(semp_config_for "$broker")" "msgVpns/$BROKER_VPN/clientUsernames" \
+        "$(jq -nc --arg u "$owner" '{clientUsername:$u}')" \
+        || { log_fail "owner-validation [$broker]: could not provision fixture client username $owner"; return 1; }
+
+    # A real, existing owner is accepted, and the bound username must
+    # independently exist on the broker — not just echoed back by the create
+    # response (the literal regression this ticket asks for).
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$ok_queue" --arg o "$owner" \
+            '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{owner:$o,permission:"consume"}}')" \
+        "owner-validation [$broker]: create-queue with a real owner" || return 1
+    if ! semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/clientUsernames/$owner" >/dev/null 2>&1; then
+        log_fail "owner-validation [$broker]: bound owner $owner does not actually exist on the broker"
+        return 1
+    fi
+    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/queues/$ok_queue" 30 ".data.owner == \"$owner\"" \
+        || { log_fail "owner-validation [$broker]: queue owner not reflected as $owner"; return 1; }
+
+    # A fabricated owner is rejected before the queue is ever created.
+    resp=$(mcp_call_tool "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$ghost_queue" \
+            '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{owner:"e2e-config-ghost-owner-does-not-exist",permission:"consume"}}')") \
+        || { log_fail "owner-validation [$broker]: transport failure on create with a nonexistent owner"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "owner-validation [$broker]: create-queue with a nonexistent owner is rejected" || return 1
+    text=$(jq -r '.result.content[0].text // ""' <<<"$resp" | tr '[:upper:]' '[:lower:]')
+    assert_contains "$text" "does not exist" \
+        "owner-validation [$broker]: rejection names the missing owner" || return 1
+    if semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/queues/$ghost_queue" >/dev/null 2>&1; then
+        log_fail "owner-validation [$broker]: queue $ghost_queue was created despite the rejected owner"
+        return 1
+    fi
+
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$ok_queue" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
+        "owner-validation [$broker]: cleanup $ok_queue" || return 1
+    semp_delete "$(semp_config_for "$broker")" "msgVpns/$BROKER_VPN/clientUsernames/$owner"
+}
+
 # ── Topic-endpoint round-trip (SEMP-direct verify: no monitoring tool) ────────
 
 test_te_roundtrip() {
@@ -156,6 +219,34 @@ test_te_roundtrip() {
         "delete-topic-endpoint [$broker]" || return 1
     if semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name" >/dev/null 2>&1; then
         log_fail "delete-topic-endpoint [$broker]: $name still visible after delete"
+        return 1
+    fi
+}
+
+# ── Topic-endpoint owner validation (SOL-153080) ─────────────────────────────
+# Same defect class and same fix as test_queue_owner_validation above:
+# topicEndpointConfig's "owner" gets the identical pre-flight existence check.
+# The queue test above already covers the accept-a-real-owner path end to end
+# (both tools share the same ownerValidatingHandler code path), so this covers
+# only the rejection this ticket exists for, scoped to create-topic-endpoint's
+# own fixture.
+test_topic_endpoint_owner_validation() {
+    local broker="$1"
+    local ghost_te="e2e-config-te-owner-ghost-$broker"
+    local burl resp text
+    burl=$(broker_url_for "$broker")
+
+    resp=$(mcp_call_tool "create-topic-endpoint" \
+        "$(jq -nc --arg b "$broker" --arg n "$ghost_te" \
+            '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{owner:"e2e-config-ghost-owner-does-not-exist",permission:"consume"}}')") \
+        || { log_fail "owner-validation [$broker]: transport failure on create-topic-endpoint with a nonexistent owner"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "owner-validation [$broker]: create-topic-endpoint with a nonexistent owner is rejected" || return 1
+    text=$(jq -r '.result.content[0].text // ""' <<<"$resp" | tr '[:upper:]' '[:lower:]')
+    assert_contains "$text" "does not exist" \
+        "owner-validation [$broker]: rejection names the missing owner" || return 1
+    if semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$ghost_te" >/dev/null 2>&1; then
+        log_fail "owner-validation [$broker]: topic endpoint $ghost_te was created despite the rejected owner"
         return 1
     fi
 }
@@ -464,8 +555,12 @@ test_vpn_roundtrip_a()   { test_vpn_roundtrip broker-a; }
 test_vpn_roundtrip_b()   { test_vpn_roundtrip broker-b; }
 test_queue_roundtrip_a() { test_queue_roundtrip broker-a; }
 test_queue_roundtrip_b() { test_queue_roundtrip broker-b; }
+test_queue_owner_validation_a() { test_queue_owner_validation broker-a; }
+test_queue_owner_validation_b() { test_queue_owner_validation broker-b; }
 test_te_roundtrip_a()    { test_te_roundtrip broker-a; }
 test_te_roundtrip_b()    { test_te_roundtrip broker-b; }
+test_topic_endpoint_owner_validation_a() { test_topic_endpoint_owner_validation broker-a; }
+test_topic_endpoint_owner_validation_b() { test_topic_endpoint_owner_validation broker-b; }
 test_rdp_roundtrip_a()   { test_rdp_roundtrip broker-a; }
 test_rdp_roundtrip_b()   { test_rdp_roundtrip broker-b; }
 test_queue_subscription_roundtrip_a() { test_queue_subscription_roundtrip broker-a; }
@@ -481,8 +576,12 @@ run_test "VPN round-trip (broker-a)"            test_vpn_roundtrip_a
 run_test "VPN round-trip (broker-b)"            test_vpn_roundtrip_b
 run_test "Queue round-trip (broker-a)"          test_queue_roundtrip_a
 run_test "Queue round-trip (broker-b)"          test_queue_roundtrip_b
+run_test "Queue owner validation (broker-a)"    test_queue_owner_validation_a
+run_test "Queue owner validation (broker-b)"    test_queue_owner_validation_b
 run_test "Topic-endpoint round-trip (broker-a)" test_te_roundtrip_a
 run_test "Topic-endpoint round-trip (broker-b)" test_te_roundtrip_b
+run_test "Topic-endpoint owner validation (broker-a)" test_topic_endpoint_owner_validation_a
+run_test "Topic-endpoint owner validation (broker-b)" test_topic_endpoint_owner_validation_b
 run_test "RDP round-trip (broker-a)"            test_rdp_roundtrip_a
 run_test "RDP round-trip (broker-b)"            test_rdp_roundtrip_b
 run_test "Queue-subscription round-trip (broker-a)" test_queue_subscription_roundtrip_a

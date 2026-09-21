@@ -171,6 +171,7 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	var retriesErr *resilience.RetriesExhaustedError
 	var busyErr *resilience.BrokerBusyError
 	var exchErr *tokenexchange.ExchangeError
+	var ownerErr *ownerNotFoundError
 
 	switch {
 	// Checked before the protocol errors: a shed request never reached the
@@ -185,6 +186,9 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 		// "retry immediately" despite the human-facing message rounding up.
 		structured["retryAfterMs"] = max(1, busyErr.MaxWait.Milliseconds())
 		structured["error_source"] = "load_shed"
+	case errors.As(err, &ownerErr):
+		structured["error_source"] = "owner_validation"
+		structured["owner"] = ownerErr.owner
 	case errors.As(err, &sempv2Err):
 		structured["status"] = sempv2Err.StatusCode
 		structured["operation"] = sempv2Err.Operation
@@ -495,6 +499,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
 	var exchErr *tokenexchange.ExchangeError
+	var ownerErr *ownerNotFoundError
 
 	var message string
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
@@ -553,6 +558,15 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 
 	case errors.As(err, &exchErr):
 		return exchErr.AgentMessage(brokerAlias), nil
+
+	case errors.As(err, &ownerErr):
+		return fmt.Sprintf(
+				"Client username %q does not exist in Message VPN %q, so this %s was not "+
+					"created or updated. Provision the client username first, double-check the "+
+					"name with list-client-usernames, or omit \"owner\" to leave the %s without "+
+					"an owner binding.",
+				ownerErr.owner, ownerErr.msgVpn, ownerErr.objectKind, ownerErr.objectKind),
+			nil
 
 	case errors.As(err, &sempv2Err):
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
