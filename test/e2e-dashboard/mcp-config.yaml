@@ -1,0 +1,21 @@
+port: 9090
+listen_address: "0.0.0.0"
+log_level: info
+
+mcp_client_auth:
+  mode: static
+  dev_token: "${MCP_DEV_TOKEN}"
+
+# Fixed, greppable identity so verify-panels.py has a deterministic value to
+# assert the $service_name/$cloud_region template variables resolve to.
+observability:
+  service_name: solace-broker-mcp-e2e-dashboard
+  cloud_region: e2e-dashboard-region
+
+brokers:
+  solace:
+    url: "http://solace:8080"
+    auth:
+      mode: basic
+      username: "admin"
+      password: "${BROKER_PASSWORD}"

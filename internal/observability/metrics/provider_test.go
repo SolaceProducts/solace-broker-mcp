@@ -134,6 +134,12 @@ func TestGoldenSchema(t *testing.T) {
 	}
 	sec.RecordAuthzDenied(context.Background(), "test-tool", "not_permitted")
 
+	// mcp_audit_events_dropped_total (SOL-154569): seeded at zero on
+	// registration, so registering it is enough — same as panics.Register.
+	if _, err := p.AuditMetrics(); err != nil {
+		t.Fatalf("AuditMetrics() error = %v", err)
+	}
+
 	if err := panics.Register(p.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register() error = %v", err)
 	}

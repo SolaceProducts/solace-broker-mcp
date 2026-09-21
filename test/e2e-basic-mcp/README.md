@@ -45,6 +45,7 @@ test/e2e-basic-mcp/
 ├── test-negative-paths.sh  # Scenario 3: structured-error envelope contract (SOL-150767)
 ├── test-throttling.sh      # Scenario 4: rate limiter + in-flight cap (SOL-153444)
 ├── test-throttling-analysis.sh  # Self-test of scenario 4's record arithmetic (no Docker, ~1s)
+├── test-audit-drop.sh      # Scenario 5: audit drop counter tracks audit_drop records (SOL-154569)
 ├── agent/                  # Go MCP-SDK client program (own go.mod)
 └── bin/                    # Built binaries + pidfile (gitignored)
 ```
@@ -101,8 +102,31 @@ The extras are local to this suite — other suites' server configs stay minimal
   `Sender.Do` drops its semaphore slot, and it is not the same as full
   body-proxy completion.
 
-  This scenario runs last because it takes over port `9090` from the shared
-  server the earlier scenarios use.
+  This scenario runs after the protocol scenarios because it takes over port
+  `9090` from the shared server they use; anything after it starts its own.
+- **Scenario 5 — Audit drop counter (`test-audit-drop.sh`).** SOL-154569. Proves
+  `mcp_audit_events_dropped_total` — the counter that makes a lost audit record
+  visible off the log stream — moves together with the `audit_drop` record, end
+  to end. Discovery's "stderr backpressure" framing is made deterministic here:
+  a full stderr pipe blocks the writer rather than failing the write, so nothing
+  drops, and a closed stderr would swallow the `audit_drop` record too. Instead
+  the scenario starts its own server at `log_level: error` with
+  `OBS_AUDIT_LOG_ENABLED` and `OBS_METRICS_ENABLED` on, a configuration the
+  server accepts and the runbook tells operators to fix, under which every
+  INFO-level audit record is filtered out through the same drop path a refusing
+  handler takes, and asserts: the counter is on `/metrics` at exactly `0` before
+  any drop; a `disconnect-client` call on a nonexistent client (destructive, so
+  it emits an `operation` record whatever the outcome; nothing on the broker
+  changes) leaves `audit_drop` records in the server log — at least one naming
+  `dropped_audit_event_type=operation` — and no `operation` record (the positive
+  control that the level filter is in force); and the counter rose by exactly the
+  number of `audit_drop` records written since the mark. A second phase, Linux
+  only, is the ticket's headline case: the server is restarted at `log_level:
+  info` with stderr on `/dev/full`, which fails every write at once, and the
+  scenario asserts the destructive call still completes and the counter still
+  moves although no record could be written anywhere. Skipped where `/dev/full`
+  does not exist (macOS). Runs last because it starts and stops its own servers;
+  the metrics listener uses `:9091` (`MCP_METRICS_PORT` to override).
 
 ## Fixtures
 
@@ -154,5 +178,6 @@ Distinct from `e2e-monitoring` so both suites can run concurrently:
 `semp-tap` is a host-side process, not a container: the throttling scenario's
 recording reverse proxy (`SEMP_TAP_PORT` in `.env`).
 
-The MCP server listens on `9090` (override with `MCP_PORT`). All broker ports are
+The MCP server listens on `9090` (override with `MCP_PORT`); scenario 5's metrics
+listener on `9091` (override with `MCP_METRICS_PORT`). All broker ports are
 override-able via `.env` (`BROKER_A_SEMP_PORT`, `BROKER_B_SEMP_PORT`).

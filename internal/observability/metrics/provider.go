@@ -67,6 +67,10 @@ type Provider struct {
 	securityMetrics     *SecurityMetrics
 	securityMetricsErr  error
 
+	auditMetricsOnce sync.Once
+	auditMetrics     *AuditMetrics
+	auditMetricsErr  error
+
 	brokerMetricsOnce sync.Once
 	brokerMetrics     *BrokerMetrics
 	brokerMetricsErr  error
@@ -330,6 +334,15 @@ func (p *Provider) SecurityMetrics() (*SecurityMetrics, error) {
 		p.securityMetrics, p.securityMetricsErr = NewSecurityMetrics(p.Meter(instrumentScope))
 	})
 	return p.securityMetrics, p.securityMetricsErr
+}
+
+// AuditMetrics returns the audit-pipeline counter (SOL-154569), registering
+// it once on first call — the same contract as ToolMetrics.
+func (p *Provider) AuditMetrics() (*AuditMetrics, error) {
+	p.auditMetricsOnce.Do(func() {
+		p.auditMetrics, p.auditMetricsErr = NewAuditMetrics(p.Meter(instrumentScope))
+	})
+	return p.auditMetrics, p.auditMetricsErr
 }
 
 // BrokerMetrics returns the broker reachability gauges, registering them once on first call.

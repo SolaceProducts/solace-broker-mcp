@@ -1234,6 +1234,16 @@ func main() {
 	// Security counters (SOL-152099); nil means off.
 	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
 
+	// mcp_audit_events_dropped_total (SOL-154569): audit.EmitDrop reaches it
+	// as process state, like the panic counter above and for the same reason
+	// (see audit.SetDropRecorder). Installed here, before any tool or auth
+	// wiring, so no audit record can drop before the counter exists. nil
+	// (metrics off, or registration failed) leaves the recorder unset and the
+	// audit_drop record as the only drop signal.
+	if am := buildAuditMetrics(metricsProvider); am != nil {
+		audit.SetDropRecorder(am)
+	}
+
 	// 4. Create broker pool
 	pool := semp.NewBrokerPool(cfg, exchanger,
 		semp.WithSEMPMetrics(sempMetrics),

@@ -70,9 +70,10 @@ fi
 
 # 6. Run Scenario 4: SEMP throttling (SOL-153444)
 #
-# Last on purpose. It restarts the MCP server three times with different
-# `semp:` limits, so it takes over port 9090 from the shared server the earlier
-# scenarios used. Anything added after it would find that server gone.
+# After the protocol scenarios on purpose. It restarts the MCP server three
+# times with different `semp:` limits, so it takes over port 9090 from the
+# shared server the earlier scenarios used. Anything after it must start its
+# own server, as Scenario 5 does.
 log_info ""
 log_info "=== Scenario 4: Throttling (rate limiter + in-flight cap) ==="
 log_info ""
@@ -82,7 +83,20 @@ else
     THROTTLING_EXIT=$?
 fi
 
-# 7. Summary table
+# 7. Run Scenario 5: audit drop counter (SOL-154569)
+#
+# Starts its own server (log_level=error, audit log and metrics on) and stops
+# it on exit, so it has to come after Scenario 4 took the shared one down.
+log_info ""
+log_info "=== Scenario 5: Audit drop counter (mcp_audit_events_dropped_total) ==="
+log_info ""
+if bash "$SCRIPT_DIR/test-audit-drop.sh"; then
+    AUDITDROP_EXIT=0
+else
+    AUDITDROP_EXIT=$?
+fi
+
+# 8. Summary table
 TOTAL_RUN=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
@@ -90,6 +104,7 @@ SAW_STANDALONE=0
 SAW_AGENT=0
 SAW_NEGATIVE=0
 SAW_THROTTLING=0
+SAW_AUDITDROP=0
 
 echo ""
 echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓"
@@ -107,6 +122,7 @@ if [ -f "$E2E_RESULTS_DIR/results.txt" ]; then
             "Agent tests")          SAW_AGENT=1      ;;
             "Negative-path tests")  SAW_NEGATIVE=1   ;;
             "Throttling tests")     SAW_THROTTLING=1 ;;
+            "Audit-drop tests")     SAW_AUDITDROP=1  ;;
         esac
     done < "$E2E_RESULTS_DIR/results.txt"
 fi
@@ -125,13 +141,16 @@ fi
 if [ "$SAW_THROTTLING" -eq 0 ] && [ "$THROTTLING_EXIT" -ne 0 ]; then
     printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Throttling tests" "CRASH" "--" "--"
 fi
+if [ "$SAW_AUDITDROP" -eq 0 ] && [ "$AUDITDROP_EXIT" -ne 0 ]; then
+    printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Audit-drop tests" "CRASH" "--" "--"
+fi
 
 echo "┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫"
 printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "TOTAL" "$TOTAL_RUN" "$TOTAL_PASSED" "$TOTAL_FAILED"
 echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┻━━━━━━━━━┻━━━━━━━━━┛"
 echo ""
 
-if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ] && [ "$NEGATIVE_EXIT" -eq 0 ] && [ "$THROTTLING_EXIT" -eq 0 ]; then
+if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ] && [ "$NEGATIVE_EXIT" -eq 0 ] && [ "$THROTTLING_EXIT" -eq 0 ] && [ "$AUDITDROP_EXIT" -eq 0 ]; then
     log_ok "All E2E scenarios passed"
     exit 0
 else
@@ -139,5 +158,6 @@ else
     [ "$AGENT_EXIT" -ne 0 ] && log_fail "Agent scenario failed"
     [ "$NEGATIVE_EXIT" -ne 0 ] && log_fail "Negative-path scenario failed"
     [ "$THROTTLING_EXIT" -ne 0 ] && log_fail "Throttling scenario failed"
+    [ "$AUDITDROP_EXIT" -ne 0 ] && log_fail "Audit-drop scenario failed"
     exit 1
 fi
