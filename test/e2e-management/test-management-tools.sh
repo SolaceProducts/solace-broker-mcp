@@ -31,6 +31,7 @@ broker_url_for() {
     case "$1" in
         broker-a) echo "$BROKER_A_URL" ;;
         broker-b) echo "$BROKER_B_URL" ;;
+        *) echo "broker_url_for: unknown broker alias: $1" >&2; return 1 ;;
     esac
 }
 
@@ -38,6 +39,7 @@ semp_config_for() {
     case "$1" in
         broker-a) echo "$BROKER_A_SEMP_CONFIG" ;;
         broker-b) echo "$BROKER_B_SEMP_CONFIG" ;;
+        *) echo "semp_config_for: unknown broker alias: $1" >&2; return 1 ;;
     esac
 }
 
