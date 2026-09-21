@@ -61,6 +61,15 @@ var ownerValidatedTools = map[string]ownerValidationSpec{
 // bigger, riskier change than a small wrapping handler needs to be.
 const getClientUsernameOperationID = "monitor/getMsgVpnClientUsername"
 
+// getMsgVpnOperationID is the same read-only operation get-vpn-status uses
+// to resolve a single VPN. Reused here strictly to disambiguate a NOT_FOUND
+// from getClientUsernameOperationID (see the comment in Handle): SEMP
+// returns the byte-identical NOT_FOUND/SEMPCode 6 for "clientUsername
+// doesn't exist" and for "msgVpnName itself doesn't exist" — confirmed live
+// against a broker — so a missing VPN cannot be told apart from a missing
+// owner using the first response alone.
+const getMsgVpnOperationID = "monitor/getMsgVpn"
+
 // ownerNotFoundError reports that a create/update tool's config object named
 // an "owner" client username SEMP has no record of in the target VPN.
 // Constructed only by ownerValidatingHandler's own pre-flight check, so, like
@@ -98,13 +107,15 @@ type ownerValidatingHandler struct {
 	inner       ToolHandler
 	spec        ownerValidationSpec
 	getUsername *sempv2.Operation
+	getVpn      *sempv2.Operation
 }
 
 // newOwnerValidatingHandler wraps inner with the owner-existence check
-// described by spec. getUsername is the parsed monitor/getMsgVpnClientUsername
-// operation from the same catalog the wrapped tool's own executor uses.
-func newOwnerValidatingHandler(inner ToolHandler, spec ownerValidationSpec, getUsername *sempv2.Operation) ToolHandler {
-	return &ownerValidatingHandler{inner: inner, spec: spec, getUsername: getUsername}
+// described by spec. getUsername and getVpn are the parsed
+// monitor/getMsgVpnClientUsername and monitor/getMsgVpn operations from the
+// same catalog the wrapped tool's own executor uses.
+func newOwnerValidatingHandler(inner ToolHandler, spec ownerValidationSpec, getUsername, getVpn *sempv2.Operation) ToolHandler {
+	return &ownerValidatingHandler{inner: inner, spec: spec, getUsername: getUsername, getVpn: getVpn}
 }
 
 func (h *ownerValidatingHandler) Metadata() Metadata {
@@ -121,11 +132,12 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 		"msgVpnName":     msgVpn,
 		"clientUsername": owner,
 	})
-	if err != nil {
-		var sempErr *sempv2.SEMPError
-		if errors.As(err, &sempErr) && isSEMPStatus(sempErr, "NOT_FOUND", 6) {
-			return nil, &ownerNotFoundError{owner: owner, msgVpn: msgVpn, objectKind: h.spec.objectKind}
-		}
+	if err == nil {
+		return h.inner.Handle(ctx, tc, params)
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) || !isSEMPStatus(sempErr, "NOT_FOUND", 6) {
 		// Any other failure (network, auth, 5xx, rate limiting) means the
 		// check was inconclusive, not that the username is confirmed absent.
 		// Deny on doubt rather than risk creating exactly the unscoped
@@ -134,7 +146,26 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 		// non-generic agent-facing message.
 		return nil, fmt.Errorf("checking owner client username %q in VPN %q: %w", owner, msgVpn, err)
 	}
-	return h.inner.Handle(ctx, tc, params)
+
+	// SEMP's NOT_FOUND here is ambiguous: a nonexistent msgVpnName produces
+	// the exact same code/description as a nonexistent clientUsername
+	// (verified live — see getMsgVpnOperationID's doc comment), so this
+	// NOT_FOUND alone cannot tell "no such owner" apart from "no such VPN".
+	// Resolve it with one more read, only on this already-slow path: if the
+	// VPN itself doesn't exist, this was never an owner problem, so fall
+	// through and let the wrapped tool's own call report the real, correct
+	// "Message VPN does not exist" error instead of a misleading
+	// owner-not-found one.
+	if _, vpnErr := tc.SEMPv2Client.Execute(ctx, h.getVpn, map[string]any{"msgVpnName": msgVpn}); vpnErr != nil {
+		var vpnSempErr *sempv2.SEMPError
+		if errors.As(vpnErr, &vpnSempErr) && isSEMPStatus(vpnSempErr, "NOT_FOUND", 6) {
+			return h.inner.Handle(ctx, tc, params)
+		}
+		// Inconclusive for the same reason as above: deny on doubt.
+		return nil, fmt.Errorf("checking owner client username %q in VPN %q: %w", owner, msgVpn, err)
+	}
+
+	return nil, &ownerNotFoundError{owner: owner, msgVpn: msgVpn, objectKind: h.spec.objectKind}
 }
 
 // extractOwner reads params[configParam]["owner"] and the sibling

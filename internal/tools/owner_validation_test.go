@@ -26,13 +26,15 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
-// realOwnerValidationFixture builds an ownerValidatingHandler wrapping the
-// real create-queue tool against the real embedded SEMP catalog (the same
-// pair TestCompositeToolHandler_OutputSchema_RealCatalogWiring uses), so
-// these tests exercise the actual monitor/getMsgVpnClientUsername and
-// config/createMsgVpnQueue operations SOL-153080's fix depends on, not a
-// hand-rolled stand-in that could drift from the real spec.
-func realOwnerValidationFixture(t *testing.T) (*ownerValidatingHandler, *mockClient) {
+// realOwnerValidationFixture builds an ownerValidatingHandler wrapping toolName's
+// real composite tool definition and ownerValidatedTools entry, against the
+// real embedded SEMP catalog (the same pair
+// TestCompositeToolHandler_OutputSchema_RealCatalogWiring uses), so these
+// tests exercise the actual monitor/getMsgVpnClientUsername,
+// monitor/getMsgVpn, and config/* operations SOL-153080's fix depends on,
+// not a hand-rolled stand-in that could drift from the real spec or from
+// ownerValidatedTools itself.
+func realOwnerValidationFixture(t *testing.T, toolName string) (*ownerValidatingHandler, *mockClient) {
 	t.Helper()
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -42,17 +44,21 @@ func realOwnerValidationFixture(t *testing.T) (*ownerValidatingHandler, *mockCli
 	if err != nil {
 		t.Fatalf("LoadTools: %v", err)
 	}
-	var createQueue composite.CompositeTool
+	var tool composite.CompositeTool
 	found := false
-	for _, tool := range realTools {
-		if tool.Name == "create-queue" {
-			createQueue = tool
+	for _, tl := range realTools {
+		if tl.Name == toolName {
+			tool = tl
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatal("create-queue not found in the real catalog")
+		t.Fatalf("%q not found in the real catalog", toolName)
+	}
+	spec, ok := ownerValidatedTools[toolName]
+	if !ok {
+		t.Fatalf("%q is not registered in ownerValidatedTools", toolName)
 	}
 
 	executor := composite.NewCompositeExecutor(operations)
@@ -60,13 +66,29 @@ func realOwnerValidationFixture(t *testing.T) (*ownerValidatingHandler, *mockCli
 	if getUsername == nil {
 		t.Fatalf("%q not found in the real catalog", getClientUsernameOperationID)
 	}
-	inner := NewCompositeToolHandler(createQueue, executor)
-	handler := newOwnerValidatingHandler(inner, ownerValidationSpec{configParam: "queueConfig", objectKind: "queue"}, getUsername).(*ownerValidatingHandler)
+	getVpn := operations[getMsgVpnOperationID]
+	if getVpn == nil {
+		t.Fatalf("%q not found in the real catalog", getMsgVpnOperationID)
+	}
+	inner := NewCompositeToolHandler(tool, executor)
+	handler := newOwnerValidatingHandler(inner, spec, getUsername, getVpn).(*ownerValidatingHandler)
 	return handler, newMockClient()
 }
 
+// vpnExistsResponse is the getMsgVpn response every test below installs
+// unless it's specifically exercising the missing-VPN disambiguation path —
+// it stands in for "the VPN is real", so a NOT_FOUND from the client-username
+// check can only mean the owner itself is missing.
+func vpnExistsResponse() *sempv2.Result {
+	return &sempv2.Result{Data: map[string]any{"msgVpnName": "default"}, StatusCode: 200}
+}
+
+func notFoundError(operation string) *sempv2.SEMPError {
+	return &sempv2.SEMPError{Operation: operation, StatusCode: 400, SEMPCode: 6, SEMPStatus: "NOT_FOUND"}
+}
+
 func TestOwnerValidatingHandler_OwnerOmitted_PassesThroughWithoutChecking(t *testing.T) {
-	handler, client := realOwnerValidationFixture(t)
+	handler, client := realOwnerValidationFixture(t, "create-queue")
 	client.responses["createMsgVpnQueue"] = &sempv2.Result{Data: map[string]any{"queueName": "q1", "msgVpnName": "default"}, StatusCode: 200}
 
 	tc := &ToolContext{SEMPv2Client: client}
@@ -88,7 +110,7 @@ func TestOwnerValidatingHandler_OwnerOmitted_PassesThroughWithoutChecking(t *tes
 }
 
 func TestOwnerValidatingHandler_OwnerExists_CreatesAfterChecking(t *testing.T) {
-	handler, client := realOwnerValidationFixture(t)
+	handler, client := realOwnerValidationFixture(t, "create-queue")
 	client.responses["getMsgVpnClientUsername"] = &sempv2.Result{
 		Data:       map[string]any{"clientUsername": "real-user", "msgVpnName": "default"},
 		StatusCode: 200,
@@ -104,19 +126,17 @@ func TestOwnerValidatingHandler_OwnerExists_CreatesAfterChecking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// The VPN-existence disambiguation call must only ever run after a
+	// NOT_FOUND from the username check, never on the happy path.
 	if len(client.calls) != 2 || client.calls[0] != "getMsgVpnClientUsername" || client.calls[1] != "createMsgVpnQueue" {
 		t.Errorf("expected [getMsgVpnClientUsername, createMsgVpnQueue] in order, got %v", client.calls)
 	}
 }
 
 func TestOwnerValidatingHandler_OwnerDoesNotExist_RejectsWithoutCreating(t *testing.T) {
-	handler, client := realOwnerValidationFixture(t)
-	client.errors["getMsgVpnClientUsername"] = &sempv2.SEMPError{
-		Operation:  "getMsgVpnClientUsername",
-		StatusCode: 400,
-		SEMPCode:   6,
-		SEMPStatus: "NOT_FOUND",
-	}
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.responses["getMsgVpn"] = vpnExistsResponse()
 
 	tc := &ToolContext{SEMPv2Client: client}
 	_, err := handler.Handle(context.Background(), tc, map[string]any{
@@ -142,7 +162,7 @@ func TestOwnerValidatingHandler_OwnerDoesNotExist_RejectsWithoutCreating(t *test
 }
 
 func TestOwnerValidatingHandler_CheckFailsTransiently_DeniesOnDoubtWithoutCreating(t *testing.T) {
-	handler, client := realOwnerValidationFixture(t)
+	handler, client := realOwnerValidationFixture(t, "create-queue")
 	client.errors["getMsgVpnClientUsername"] = &sempv2.SEMPError{
 		Operation:  "getMsgVpnClientUsername",
 		StatusCode: 503,
@@ -165,6 +185,91 @@ func TestOwnerValidatingHandler_CheckFailsTransiently_DeniesOnDoubtWithoutCreati
 		if call == "createMsgVpnQueue" {
 			t.Fatalf("queue must never be created when the owner check itself failed; calls = %v", client.calls)
 		}
+	}
+}
+
+// TestOwnerValidatingHandler_MissingVpn_FallsThroughInsteadOfBlamingOwner pins
+// the fix for a real bug found in review: SEMP returns the byte-identical
+// NOT_FOUND/SEMPCode 6 whether msgVpnName itself doesn't exist or whether
+// only clientUsername is missing (confirmed live against a broker), so a
+// naive check would blame a nonexistent VPN on "no such owner" — masking the
+// real problem. When the VPN itself doesn't exist, this must fall through to
+// the wrapped tool's own call, which reports the correct, existing "Message
+// VPN does not exist" error instead.
+func TestOwnerValidatingHandler_MissingVpn_FallsThroughInsteadOfBlamingOwner(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.errors["getMsgVpn"] = notFoundError("getMsgVpn")
+	client.errors["createMsgVpnQueue"] = notFoundError("createMsgVpnQueue")
+
+	tc := &ToolContext{SEMPv2Client: client}
+	_, err := handler.Handle(context.Background(), tc, map[string]any{
+		"msgVpnName":  "totally-missing-vpn",
+		"queueName":   "q1",
+		"queueConfig": map[string]any{"owner": "real-user"},
+	})
+	var ownerErr *ownerNotFoundError
+	if errors.As(err, &ownerErr) {
+		t.Fatalf("a missing VPN must not be reported as a missing owner: %v", err)
+	}
+	if len(client.calls) != 3 || client.calls[2] != "createMsgVpnQueue" {
+		t.Fatalf("expected the call to fall through to createMsgVpnQueue after confirming the VPN itself is missing, got calls %v", client.calls)
+	}
+}
+
+// TestOwnerValidatingHandler_GhostOwner_RejectsForEveryRegisteredTool iterates
+// the real ownerValidatedTools map — not a hand-picked copy of it — so a
+// copy-paste mistake in one entry (e.g. update-queue's configParam
+// accidentally set to "topicEndpointConfig") is caught here: this test's
+// expected param shape per tool is independent ground truth, taken directly
+// from tools.yaml's own parameter names, not derived from the map under
+// test.
+func TestOwnerValidatingHandler_GhostOwner_RejectsForEveryRegisteredTool(t *testing.T) {
+	cases := []struct {
+		tool        string
+		idParam     string
+		idValue     string
+		configParam string
+		writeOp     string
+	}{
+		{tool: "create-queue", idParam: "queueName", idValue: "q1", configParam: "queueConfig", writeOp: "createMsgVpnQueue"},
+		{tool: "update-queue", idParam: "queueName", idValue: "q1", configParam: "queueConfig", writeOp: "updateMsgVpnQueue"},
+		{tool: "create-topic-endpoint", idParam: "topicEndpointName", idValue: "te1", configParam: "topicEndpointConfig", writeOp: "createMsgVpnTopicEndpoint"},
+		{tool: "update-topic-endpoint", idParam: "topicEndpointName", idValue: "te1", configParam: "topicEndpointConfig", writeOp: "updateMsgVpnTopicEndpoint"},
+	}
+	// Every case above must correspond to a real ownerValidatedTools entry;
+	// this catches a case silently going stale (e.g. a renamed tool) just as
+	// much as it catches ownerValidatedTools itself drifting.
+	if len(cases) != len(ownerValidatedTools) {
+		t.Fatalf("this table has %d cases but ownerValidatedTools has %d entries — keep them in exact sync", len(cases), len(ownerValidatedTools))
+	}
+
+	for _, c := range cases {
+		t.Run(c.tool, func(t *testing.T) {
+			handler, client := realOwnerValidationFixture(t, c.tool)
+			client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+			client.responses["getMsgVpn"] = vpnExistsResponse()
+			// A generic success in case the ghost owner is wrongly accepted —
+			// makes the failure mode "write happened" rather than "mock had no
+			// canned response", which would fail for the wrong reason.
+			client.responses[c.writeOp] = &sempv2.Result{Data: map[string]any{}, StatusCode: 200}
+
+			params := map[string]any{
+				"msgVpnName":  "default",
+				c.idParam:     c.idValue,
+				c.configParam: map[string]any{"owner": "ghost-user", "permission": "consume"},
+			}
+			_, err := handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, params)
+			var ownerErr *ownerNotFoundError
+			if !errors.As(err, &ownerErr) {
+				t.Fatalf("%s: expected *ownerNotFoundError for a nonexistent owner, got %T: %v", c.tool, err, err)
+			}
+			for _, call := range client.calls {
+				if call == c.writeOp {
+					t.Fatalf("%s: %s must never be called when owner does not exist; calls = %v", c.tool, c.writeOp, client.calls)
+				}
+			}
+		})
 	}
 }
 

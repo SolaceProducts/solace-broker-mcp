@@ -134,37 +134,48 @@ func NewToolManager(pool *semp.BrokerPool, opts ...ManagerOption) *ToolManager {
 // present in tools is additionally wrapped with an owner-existence check
 // before registration — see ownerValidatingHandler's doc comment. This
 // panics at startup, not at first call, if the catalog backing such a tool
-// is missing getClientUsernameOperationID: that operation is a hard
-// dependency for every entry in ownerValidatedTools, so its absence is a
-// spec-catalog regression that must fail the same way ValidatePostProcess's
-// cross-checks do, before the server ever takes traffic. A catalog that
-// simply doesn't define any owner-validated tool at all (e.g. a test
-// fixture registering an unrelated synthetic tool) is not that regression
-// and must not panic — hence the check is scoped to tools actually being
-// wrapped, not to the catalog in general.
+// is missing either operation ownerValidatingHandler depends on: that is a
+// spec-catalog regression, and this package has no logging/os.Exit path of
+// its own to report it through the way cmd/server/main.go does for
+// composite.ValidatePostProcess's equivalent cross-check — a panic is the
+// only failure mode available here, so main's own startup sequence is what
+// turns it into the same "log and exit non-zero, never take traffic" outcome
+// from the caller's side. A catalog that simply doesn't define any
+// owner-validated tool at all (e.g. a test fixture registering an unrelated
+// synthetic tool) is not that regression and must not panic — hence the
+// check is scoped to tools actually being wrapped, not to the catalog or to
+// executor in general, and it never dereferences a nil executor either.
 func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor, opts ...ManagerOption) *ToolManager {
 	mgr := NewToolManager(pool, opts...)
-	// getUsername is resolved lazily, and only via this closure, so a caller
-	// registering zero owner-validated tools (e.g. a test fixture with its
-	// own minimal, possibly nil, executor) never dereferences executor at
-	// all — matching this function's pre-SOL-153080 behavior for that case.
-	var getUsername *sempv2.Operation
-	getUsernameResolved := false
-	resolveGetUsername := func() *sempv2.Operation {
-		if !getUsernameResolved {
-			getUsername = executor.Operations()[getClientUsernameOperationID]
-			getUsernameResolved = true
+	// getUsername/getVpn are resolved lazily, and only via this closure, so a
+	// caller registering zero owner-validated tools (e.g. a test fixture
+	// with its own minimal, possibly nil, executor) never dereferences
+	// executor at all — matching this function's pre-SOL-153080 behavior for
+	// that case.
+	var getUsername, getVpn *sempv2.Operation
+	resolved := false
+	resolveOwnerCheckOperations := func(toolName string) (*sempv2.Operation, *sempv2.Operation) {
+		if resolved {
+			return getUsername, getVpn
 		}
-		return getUsername
+		resolved = true
+		if executor == nil {
+			panic(fmt.Sprintf("tool %q requires owner-validation operations, but executor is nil", toolName))
+		}
+		operations := executor.Operations()
+		getUsername = operations[getClientUsernameOperationID]
+		getVpn = operations[getMsgVpnOperationID]
+		if getUsername == nil || getVpn == nil {
+			panic(fmt.Sprintf("tool %q requires operations %q and %q for owner validation, not both found in the embedded catalog",
+				toolName, getClientUsernameOperationID, getMsgVpnOperationID))
+		}
+		return getUsername, getVpn
 	}
 	for i := range tools {
 		var handler ToolHandler = NewCompositeToolHandler(tools[i], executor)
 		if spec, ok := ownerValidatedTools[tools[i].Name]; ok {
-			op := resolveGetUsername()
-			if op == nil {
-				panic(fmt.Sprintf("tool %q requires operation %q for owner validation, not found in the embedded catalog", tools[i].Name, getClientUsernameOperationID))
-			}
-			handler = newOwnerValidatingHandler(handler, spec, op)
+			usernameOp, vpnOp := resolveOwnerCheckOperations(tools[i].Name)
+			handler = newOwnerValidatingHandler(handler, spec, usernameOp, vpnOp)
 		}
 		mgr.Register(handler)
 	}

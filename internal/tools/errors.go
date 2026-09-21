@@ -189,6 +189,8 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	case errors.As(err, &ownerErr):
 		structured["error_source"] = "owner_validation"
 		structured["owner"] = ownerErr.owner
+		structured["msgVpnName"] = ownerErr.msgVpn
+		structured["objectKind"] = ownerErr.objectKind
 	case errors.As(err, &sempv2Err):
 		structured["status"] = sempv2Err.StatusCode
 		structured["operation"] = sempv2Err.Operation
