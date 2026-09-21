@@ -1080,6 +1080,9 @@ tools:
     result:
       strategy: collect
 
+  # SOL-153080: "owner" is validated against the broker (a real, existing
+  # client username required if set at all) — see the access-control
+  # paragraph below and ownerValidatingHandler (internal/tools/owner_validation.go).
   - name: create-queue
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
@@ -1097,8 +1100,8 @@ tools:
       messages — call create-queue-subscription next to give it one.
       Access control: if queueConfig sets "owner", that client username MUST
       already exist in msgVpnName — this call is rejected with a clear error
-      otherwise (SOL-153080; the broker itself does not check, so this tool
-      does). Leaving "owner" unset is not a workaround to avoid that check: it
+      otherwise (the broker itself does not check, so this tool does).
+      Leaving "owner" unset is not a workaround to avoid that check: it
       is the secure default, since the broker's own default for "permission"
       (the access level for every OTHER client, i.e. everyone but the owner)
       is "no-access". Setting "permission" to anything more open than
@@ -1124,7 +1127,7 @@ tools:
       - name: queueConfig
         type: object
         required: false
-        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — checked with list-client-usernames/get-client-username before this call is even attempted, and the create is rejected with a clear error if it does not."
+        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — validated against the broker before this call is even attempted, and the create is rejected with a clear error if it does not."
     steps:
       - id: createQueue
         operation: config/createMsgVpnQueue
@@ -1136,6 +1139,7 @@ tools:
     result:
       strategy: collect
 
+  # SOL-153080: same owner-existence validation as create-queue applies here.
   - name: update-queue
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
@@ -1145,11 +1149,13 @@ tools:
       a pre-confirmation, even if it implies intent.
       Update an existing queue. Requires msgVpnName and queueName to identify the
       queue; provide only the attributes you want to change in queueConfig.
-      Omitted attributes are left unchanged. Use this to update queue settings
-      such as enabled state, access type, spool quota, or redelivery limits.
+      Omitted attributes are left unchanged (this includes "owner": omitting it
+      leaves the queue's current owner as-is, it does NOT clear it). Use this
+      to update queue settings such as enabled state, access type, spool
+      quota, or redelivery limits.
       Access control: if queueConfig sets "owner", that client username MUST
       already exist in msgVpnName — this call is rejected with a clear error
-      otherwise (SOL-153080). See create-queue's description for why an owner
+      otherwise. See create-queue's description for why an owner
       that doesn't exist is a real access-control gap, not a cosmetic one:
       "permission" (the access level for every client but the owner) grants
       that level to everyone once the owner isn't a real, excludable identity.
@@ -1170,7 +1176,7 @@ tools:
       - name: queueConfig
         type: object
         required: true
-        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — checked before this call is even attempted, and the update is rejected with a clear error if it does not."
+        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — validated against the broker before this call is even attempted, and the update is rejected with a clear error if it does not."
     steps:
       - id: updateQueue
         operation: config/updateMsgVpnQueue
@@ -1409,6 +1415,7 @@ tools:
     result:
       strategy: collect
 
+  # SOL-153080: same owner-existence validation as create-queue applies here.
   - name: create-topic-endpoint
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
@@ -1425,7 +1432,7 @@ tools:
       against topicEndpointConfig) instead of failing.
       Access control: if topicEndpointConfig sets "owner", that client
       username MUST already exist in msgVpnName — this call is rejected with
-      a clear error otherwise (SOL-153080; the broker itself does not check,
+      a clear error otherwise (the broker itself does not check,
       so this tool does). Leaving "owner" unset is the secure default, since
       the broker's own default for "permission" (the access level for every
       OTHER client, i.e. everyone but the owner) is "no-access". Setting
@@ -1451,7 +1458,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: false
-        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — checked before this call is even attempted, and the create is rejected with a clear error if it does not."
+        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — validated against the broker before this call is even attempted, and the create is rejected with a clear error if it does not."
     steps:
       - id: createTopicEndpoint
         operation: config/createMsgVpnTopicEndpoint
@@ -1464,6 +1471,7 @@ tools:
     result:
       strategy: collect
 
+  # SOL-153080: same owner-existence validation as create-queue applies here.
   - name: update-topic-endpoint
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
@@ -1473,12 +1481,14 @@ tools:
       as a pre-confirmation, even if it implies intent.
       Update an existing topic endpoint. Requires msgVpnName and
       topicEndpointName to identify the topic endpoint; provide only the
-      attributes you want to change in topicEndpointConfig. Omitted attributes are
-      left unchanged. Use this to update topic endpoint settings such as enabled
-      state, access type, or spool quota.
+      attributes you want to change in topicEndpointConfig. Omitted attributes
+      are left unchanged (this includes "owner": omitting it leaves the topic
+      endpoint's current owner as-is, it does NOT clear it). Use this to
+      update topic endpoint settings such as enabled state, access type, or
+      spool quota.
       Access control: if topicEndpointConfig sets "owner", that client
       username MUST already exist in msgVpnName — this call is rejected with
-      a clear error otherwise (SOL-153080). See create-topic-endpoint's
+      a clear error otherwise. See create-topic-endpoint's
       description for why an owner that doesn't exist is a real
       access-control gap: "permission" (the access level for every client but
       the owner) grants that level to everyone once the owner isn't a real,
@@ -1500,7 +1510,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: true
-        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — checked before this call is even attempted, and the update is rejected with a clear error if it does not."
+        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here. If provided, \"owner\" must name a client username that already exists in msgVpnName — validated against the broker before this call is even attempted, and the update is rejected with a clear error if it does not."
     steps:
       - id: updateTopicEndpoint
         operation: config/updateMsgVpnTopicEndpoint
