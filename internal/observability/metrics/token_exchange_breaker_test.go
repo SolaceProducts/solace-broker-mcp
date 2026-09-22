@@ -48,7 +48,7 @@ func TestTokenExchangeBreakerMetrics_OneHot(t *testing.T) {
 		t.Run(active, func(t *testing.T) {
 			t.Parallel()
 
-			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestTokenExchangeBreakerMetrics_OneHot(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_TransitionUpdatesGauge(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestTokenExchangeBreakerMetrics_TransitionUpdatesGauge(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_AbsentWhenDisabled(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestTokenExchangeBreakerMetrics_AbsentWhenDisabled(t *testing.T) {
 func TestTokenExchangeBreakerMetrics_SnapshotOncePerCollection(t *testing.T) {
 	t.Parallel()
 
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,12 +27,13 @@ Unit tests mock the Solace broker entirely. E2E tests validate the full stack en
 HTTP transport → MCP protocol → SEMP API → live Solace broker
 ```
 
-Four scenarios are covered:
+Five scenarios are covered:
 
 1. **Standalone** — raw curl requests against the MCP server (no AI agent)
 2. **Agent** — a Go program using the MCP SDK client to connect and call tools
 3. **Negative paths** — tool-execution failures surface as clean MCP structured errors
 4. **Throttling** — the SEMP rate limiter and in-flight cap hold against a real broker
+5. **Audit drop counter** — `mcp_audit_events_dropped_total` rises alongside the `audit_drop` record
 
 Scenarios 1 and 2 run against **two independent brokers** (`broker-a`, `broker-b`) to verify multi-broker routing.
 
@@ -52,12 +53,14 @@ test/e2e-basic-mcp/
 ├── test-negative-paths.sh   # Scenario 3: structured-error envelope contract
 ├── test-throttling.sh       # Scenario 4: rate limiter + in-flight cap
 ├── test-throttling-analysis.sh  # Self-test of scenario 4's record arithmetic (no Docker)
+├── test-audit-drop.sh       # Scenario 5: audit drop counter tracks audit_drop records
 ├── bin/                     # Built binaries, generated configs, records (gitignored)
 │   ├── mcp-server
 │   ├── mcp-server.pid       # PID file when server is started with --bg
 │   ├── semp-tap             # recording reverse proxy (scenario 4)
 │   ├── mcp-config-throttle-*.yaml   # per-phase configs (scenario 4)
 │   ├── throttle-record-*.csv        # per-phase request records (scenario 4)
+│   ├── mcp-config-audit-drop.yaml   # log_level=error config (scenario 5)
 │   └── agent
 └── agent/
     ├── main.go              # Go MCP SDK client agent program
@@ -332,7 +335,17 @@ Each control differs from the phase it validates in exactly one variable. A sing
 - The scenario warms the broker client up and then skips the first arrivals. `RateLimiter` is a bare `time.Ticker`, not a token bucket: its channel buffers one tick, so idle time is credit and the first request after an idle period is admitted with no wait. The warm-up makes that behavior deterministic rather than accidental.
 - Phases with a concurrency assertion hold each response an identical extra 150ms at the tap, so overlap is arithmetic rather than a race against how fast the broker answers. Both limits are still enforced by the real server against a real broker; only the measurement window is widened, and identically in the phase and its control.
 
-The scenario runs last in `run-all.sh` because it takes over port `9090` from the shared server the earlier scenarios use.
+The scenario runs after the protocol scenarios in `run-all.sh` because it takes over port `9090` from the shared server they use; anything after it must start its own server.
+
+## Scenario 5: Audit drop counter (`mcp_audit_events_dropped_total`)
+
+SOL-154569. Proves the counter that makes a lost audit record visible off the log stream moves together with the `audit_drop` record, end to end through a real server and a real broker. It is discovery Story 22's "stderr / log-pipeline backpressure" scenario made deterministic: a full stderr pipe blocks the writer rather than failing the write, so nothing drops, and a closed stderr fails every write, so the `audit_drop` record could not be asserted on either. Instead the scenario starts its own server at `log_level: error` with `OBS_AUDIT_LOG_ENABLED` and `OBS_METRICS_SCRAPE_ENABLED` on — a configuration the server accepts, and one the runbook tells operators to fix, under which every INFO-level audit record is filtered out and reported through the same `EmitDrop` path a refusing handler takes — and asserts:
+
+- the counter is on `/metrics` at exactly `0` before any drop (seeded at process start);
+- a `disconnect-client` call on a client that does not exist (destructive, so it emits an `operation` record at completion whatever the outcome; nothing on the broker changes) leaves `audit_drop` records in the server log, at least one naming `dropped_audit_event_type=operation`, and **no** `operation` record — the positive control that the level filter is in force;
+- the counter rose by exactly the number of `audit_drop` records written since the mark. `auth_success` records (also INFO) drop here too, one per authenticated request the call made, so the assertion compares the two signals rather than a literal.
+
+A second phase, Linux only, is the ticket's headline case — the log stream itself failing. The server is restarted at `log_level: info` with stderr redirected to `/dev/full`, which fails every write with `ENOSPC` immediately (unlike a full pipe, which blocks). Nothing is level-filtered, so any increment can only come from the write failing; the scenario asserts the destructive call still completes (audit emission must never fail the operation it describes), that no `audit_drop` record is observable anywhere, and that the counter moved regardless. It is skipped where `/dev/full` does not exist (macOS). The panicking-handler drop path is pinned by unit tests in `internal/observability/audit`. The scenario runs last because it starts and stops its own servers; the metrics listener uses `:9091` (`MCP_METRICS_PORT` to override).
 
 ## Test Output
 

@@ -52,7 +52,7 @@
 // telemetry (slog.Default()) for the same reason.
 //
 // Register is called once, from cmd/server/main.go, when metrics are enabled.
-// Until then — and permanently when OBS_METRICS_ENABLED is false — the record
+// Until then — and permanently when no metrics egress flag is on — the record
 // functions are no-ops. Recovery itself is unconditional and never depends on
 // this package.
 package panics

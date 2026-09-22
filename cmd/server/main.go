@@ -575,6 +575,27 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 	return errCh
 }
 
+// wireMetricsEndpoint decides what the metrics egress leaves on /readyz. A
+// provider build failure is registered as the "metrics_provider" probe — named
+// for what failed, since in OTLP-only mode no endpoint was ever going to bind;
+// "metrics_endpoint" (serveMetricsEndpoint) stays the name for a listener that
+// could not bind — so it shows on the first check whichever egress was asked
+// for. A built provider gets its scrape listener only when
+// OBS_METRICS_SCRAPE_ENABLED is on. An
+// OTLP-only deployment (SOL-154607) binds nothing — the OTLP reader inside
+// the provider pushes on its own goroutine — so it leaves readiness untouched
+// here and metrics_bind_address is never opened. Split out of main() so a
+// wiring test can pin that without starting the rest of startup.
+func wireMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, provider *metrics.Provider, buildErr error) {
+	if buildErr != nil {
+		readiness.RegisterListener("metrics_provider", func() error { return buildErr })
+		return
+	}
+	if provider != nil && cfg.Observability.MetricsScrapeEnabled {
+		serveMetricsEndpoint(cfg, readiness, provider)
+	}
+}
+
 // startMetricsEndpoint serves Prometheus /metrics on its own listener and
 // registers a "metrics_endpoint" readiness probe. Returns the provider for
 // instrument registration, or nil if the provider failed to build or the
@@ -808,8 +829,8 @@ func warnIfOTLPEndpointUnset(cfg config.ObservabilityConfig) {
 // route wiring — the way resource_wiring_test.go's own doc comment names as
 // exactly the thing it could not do before this seam existed.
 //
-// A nil provider is silently skipped: metricsProvider is nil with
-// OBS_METRICS_ENABLED off (or on build failure), and tracerProvider is nil
+// A nil provider is silently skipped: metricsProvider is nil with both
+// metrics egress flags off (or on build failure), and tracerProvider is nil
 // with OBS_TRACING_ENABLED off. Registration order (metrics, then tracer)
 // matches the order the two providers are built in main(), which is what
 // TestRegisterShutdownHooks_BothProvidersRegistered pins.
@@ -1138,7 +1159,8 @@ func main() {
 	// audit and tracing remain flags with no emission behind them.
 	slog.Info("observability config loaded",
 		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
-		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
+		slog.Bool("metrics_scrape", cfg.Observability.MetricsScrapeEnabled),
+		slog.Bool("metrics_otlp", cfg.Observability.MetricsOTLPEnabled),
 		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
 		slog.Bool("tracing", cfg.Observability.TracingEnabled),
 		slog.Bool("saturation_events", cfg.Observability.SaturationEventsEnabled),
@@ -1233,6 +1255,16 @@ func main() {
 
 	// Security counters (SOL-152099); nil means off.
 	securityMetrics := buildSecurityMetrics(cfg, metricsProvider)
+
+	// mcp_audit_events_dropped_total (SOL-154569): audit.EmitDrop reaches it
+	// as process state, like the panic counter above and for the same reason
+	// (see audit.SetDropRecorder). Installed here, before any tool or auth
+	// wiring, so no audit record can drop before the counter exists. nil
+	// (metrics off, or registration failed) leaves the recorder unset and the
+	// audit_drop record as the only drop signal.
+	if am := buildAuditMetrics(metricsProvider); am != nil {
+		audit.SetDropRecorder(am)
+	}
 
 	// 4. Create broker pool
 	pool := semp.NewBrokerPool(cfg, exchanger,
@@ -1469,15 +1501,12 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Metrics endpoint: start the listener for the provider built above,
-	// registered before SetInitialized so a bind or build failure shows on the
-	// first /readyz check. The provider's flush is a shutdown hook, registered
-	// below alongside the tracer provider's (registerShutdownHooks).
-	if metricsProvider != nil {
-		serveMetricsEndpoint(cfg, readiness, metricsProvider)
-	} else if metricsBuildErr != nil {
-		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
-	}
+	// Metrics endpoint: start the scrape listener for the provider built above
+	// (when the scrape egress is on), registered before SetInitialized so a
+	// bind or build failure shows on the first /readyz check. The provider's
+	// flush is a shutdown hook, registered below alongside the tracer
+	// provider's (registerShutdownHooks).
+	wireMetricsEndpoint(cfg, readiness, metricsProvider, metricsBuildErr)
 
 	// Tracing (SOL-152420): does nothing when disabled, or installs the real
 	// OTLP-exporting provider when enabled — tracing.New handles both

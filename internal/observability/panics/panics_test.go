@@ -135,7 +135,8 @@ func TestRecovered_RecordsOnCancelledContext(t *testing.T) {
 	}
 }
 
-// TestRecovered_NoOpBeforeRegister covers the OBS_METRICS_ENABLED=false case:
+// TestRecovered_NoOpBeforeRegister covers the no-metrics-egress case (neither
+// OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED):
 // with no meter provider ever supplied, a recovery site still calls these on
 // every panic and must neither panic nor record. The recovery nets themselves
 // are unconditional, so this is the normal state with metrics off.

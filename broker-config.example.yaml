@@ -185,7 +185,7 @@ semp:
 # default, so the block can be omitted; docs/configuration.md § "Observability
 # Settings" lists them all.
 # observability:
-#   metrics_bind_address: ":9091"   # /metrics listener when OBS_METRICS_ENABLED is set.
+#   metrics_bind_address: ":9091"   # /metrics listener when OBS_METRICS_SCRAPE_ENABLED is set.
 #                                   # Must not share `port`. The Kubernetes NetworkPolicy,
 #                                   # Service, and Deployment spell this port too.
 #   shutdown_drain_delay_s: 10      # raise terminationGracePeriodSeconds with it

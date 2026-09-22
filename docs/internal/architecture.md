@@ -38,7 +38,7 @@ internal/
 │   ├── audit/                  Capability gate only — audit-record emission not yet implemented (skeleton)
 │   ├── correlation/            IMPLEMENTED: inbound correlation-ID middleware, context store, slog stamping (traceparent → X-Correlation-ID → UUIDv7)
 │   ├── health/                 IMPLEMENTED: /livez, /health, /readyz probes; readiness decoupled from broker (ADR-004)
-│   ├── metrics/                IMPLEMENTED: RED instruments + Prometheus /metrics endpoint (gated on OBS_METRICS_ENABLED)
+│   ├── metrics/                IMPLEMENTED: RED instruments; Prometheus /metrics endpoint (OBS_METRICS_SCRAPE_ENABLED) and/or OTLP push (OBS_METRICS_OTLP_ENABLED)
 │   ├── schema/                 Metrics/audit output schema-version constants
 │   └── tracing/                IMPLEMENTED: tracer provider + OTLP export, W3C propagator, request-path spans (gated on OBS_TRACING_ENABLED)
 ├── safego/                     Run errgroup goroutines with a panic-recovery net
@@ -366,7 +366,7 @@ sequenceDiagram
 | **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; the resolved ID is also written back onto the inbound `X-Correlation-ID` request header before `next` runs, so the SDK's per-message `Extra.Header` carries it even when the client generated none. Propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
 | **Health / readiness** | Implemented | `/livez`, `/health`, `/readyz` (readiness decoupled from broker per ADR-004; `internal/observability/health/readiness.go`). |
 | **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
-| **Metrics** | Implemented | RED instruments and a Prometheus `/metrics` endpoint on a dedicated listener (`internal/observability/metrics/`). Default OFF (`OBS_METRICS_ENABLED`). |
+| **Metrics** | Implemented | RED instruments and a Prometheus `/metrics` endpoint on a dedicated listener (`internal/observability/metrics/`). Default OFF for both egresses: `OBS_METRICS_SCRAPE_ENABLED` (the scrape listener) and `OBS_METRICS_OTLP_ENABLED` (OTLP push); either alone builds the meter provider. |
 | **Tracing** | Implemented | Tracer provider with OTLP export, the W3C Trace Context propagator, and spans at the HTTP boundary, tool dispatcher, composite executor and each SEMP call (`internal/observability/tracing/`, `internal/tools/spans.go`). Per-*attempt* SEMP spans are still pending (SOL-152422). Default OFF (`OBS_TRACING_ENABLED`). |
 | **Saturation events** | Implemented (logs) | Interim log-based signal, not the roadmap metric (SOL-153443). Per-request `broker admission slow` WARN from `internal/semp/resilience/sender.go` (`admit`/`warnSlowAdmission`) once a request's admission wait passes `observability.saturation_threshold_ms`; periodic per-broker `broker in-flight occupancy` from `internal/observability/health/saturation.go`, fed by `semp.BrokerPool.OccupancySnapshot`. Default OFF. |
 

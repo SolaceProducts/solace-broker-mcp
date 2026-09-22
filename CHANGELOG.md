@@ -16,6 +16,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mcp_audit_events_dropped_total` is now registered and emitted whenever a metrics egress flag
+  (`OBS_METRICS_SCRAPE_ENABLED` or `OBS_METRICS_OTLP_ENABLED`) is on — the one piece of the audit
+  trail PR #381 deferred, and the counter half of the
+  `OBS_AUDIT_LOG_ENABLED` GA condition in `docs/observability.md` (SOL-154569, from spike
+  SOL-154509). It increments once per audit record that could not be produced or written, for
+  every cause that produces an `audit_drop` record (a handler that refuses the write or panics
+  on it, a record filtered out by `log_level`, arguments that could not be canonicalized, a
+  record the schema constructor rejected), at the single point in `internal/observability/audit` that also
+  writes the `audit_drop` record, so the two signals agree by construction rather than by every
+  emission site remembering to do both; the drop notice's own delivery is deliberately not
+  counted, so a dead log stream reads as one increment per lost record, not two. Why a counter
+  when the record already exists: the record rides the stderr stream that just failed to carry
+  what it reports, while the counter rides the `/metrics` scrape surface, which fails
+  independently — the same reasoning as the `mcp_otel_*_dropped_total` pairs — so it is the
+  signal that survives the log pipeline itself failing. The series is seeded at `0` from process
+  start, so `increase()` fires on the first drop and an absent series means "metrics off", never
+  "no drops yet"; it is not also gated by `OBS_AUDIT_LOG_ENABLED`, because with the audit log off
+  nothing is emitted, so nothing drops, and a zero is the truthful reading. The audit package
+  reaches the instrument through a `DropRecorder` installed once at startup
+  (`audit.SetDropRecorder`, fed by a new `buildAuditMetrics` in `cmd/server`), the same
+  process-state shape as the panic counter, so `internal/observability/audit` still imports
+  nothing from `metrics`. `metrics_schema` bumps to `1.8`. `docs/observability.md` marks the Audit
+  Trail and Audit Pipeline Health sections implemented, rewrites the OTLP Export Health note so a
+  flag-gated absence is no longer described in the same words as a metric no build emits yet (the
+  framing SOL-154509 found had let a schema promise go unexamined for a release cycle), and
+  revises the "Audit records not arriving" runbook entry to alert on the counter and read the
+  record for attribution. A new E2E scenario in `test/e2e-basic-mcp` (`test-audit-drop.sh`)
+  restarts the server at `log_level: error` with the audit log and metrics on, drives a
+  destructive call, and asserts the counter was `0` before it and rose by exactly the number of
+  `audit_drop` records written; on Linux a second phase restarts it at `log_level: info` with
+  stderr on `/dev/full`, so no record can be written at all, and asserts the call still
+  completes and the counter still moves — the scrape surface as the only surviving signal.
 - Four read-only tools for inspecting provisioned client access: `list-client-usernames` and `get-client-username` return a VPN's client usernames (enabled state, client profile, ACL profile), and `list-client-profiles` and `get-client-profile` return its client profiles (guaranteed-messaging permission flags and per-username limits). These read the configured client-username/client-profile objects — distinct from the connected-session tools (`list-clients`, `get-client-details`) — and never surface passwords (SEMP monitor does not return them). They are read-only, so they register regardless of `enable_write_tools`. The create/update/delete counterparts are deferred pending a design spike (SOL-154499) covering secret handling and cross-referenced objects. Tracked under SOL-153076.
 - `deploy/grafana/solace-broker-mcp-overview.json` is a committed, importable Grafana 9+ dashboard: tool RED, an active-requests gauge beside it, SEMP RED-per-attempt, an auth-failure rate stacked by reason, an `error_type` breakdown (`sum by (error_type) (rate(mcp_tool_invocation_total{outcome="error"}[5m]))`), Go runtime, and build info. Trace exemplars are wired on the two latency panels and degrade to plain histograms with no trace data source configured. `docs/observability.md` documents import steps and two caveats found by testing both metric-ingestion paths live rather than assuming the schema doc's join expression covers them: (1) the `$service_name` dashboard variable is sourced from `target_info`'s `job` label, not `service_name` — Prometheus's OTLP-to-TSDB translator folds `service.name` into `job` on `target_info` specifically, so a `service_name`-keyed query returns an empty dropdown on the OTLP-ingestion path though it works fine on scrape; (2) this server's OTLP metrics exporter is gRPC-only, so a bare Prometheus's native OTLP receiver (HTTP-only) cannot receive it directly — an OTel Collector bridge in front of that Prometheus is required, not optional, alongside `promote_resource_attributes`. A new CI test, `cmd/server/grafana_dashboard_test.go`, parses Story 14's golden file and asserts every panel's metric name, label keys, and template-variable query exist in it, so the dashboard and the real schema cannot silently drift apart. Also corrects Story 40's (SOL-152423, #412) already-merged "Ingesting OTLP metrics directly into Prometheus (no collector)" doc section, which omitted the collector requirement above and would have sent an operator through the same four steps into the same dead end. Tracked under SOL-152092.
 - An **Operator Runbook** in `docs/observability.md` documents 25 operator-visible failure
@@ -27,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `monitoring` namespace, leaving `:9090` and every egress untouched; and a new
   `servicemonitor.yaml.example` (Prometheus Operator, 15s interval / 10s timeout) is `.example`
   because the CRD is not on every cluster and one missing kind fails the whole
-  `kubectl apply -f deploy/kubernetes/`. `OBS_METRICS_ENABLED` is **not** flipped: it stays off
+  `kubectl apply -f deploy/kubernetes/`. `OBS_METRICS_SCRAPE_ENABLED` is **not** flipped: it stays off
   per the door-closing policy and ships as a commented env entry. The policy is ingress-only on
   purpose — listing `Egress` would default-deny brokers, IdP, and DNS, and NetworkPolicies are
   additive, so an allow here could not override a customer's default-deny anyway — so the OTLP
@@ -71,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol-level tool errors now reach the wire with a valid JSON-RPC code instead of `0`: `describe-semp-schema` answers bad input with `-32602`, and any other error escaping a tool handler defaults to `-32603`. Tracked under SOL-153692.
 
 ### Changed
+- **BREAKING**: `OBS_METRICS_ENABLED` is renamed `OBS_METRICS_SCRAPE_ENABLED` and gates only the Prometheus scrape egress (the `/metrics` listener, its registry, and the `go_*`/`process_*` collectors). Either it or `OBS_METRICS_OTLP_ENABLED` alone now builds the meter provider: an OTLP-only deployment loads and binds no listener, the config-load error that required the old flag alongside `OBS_METRICS_OTLP_ENABLED` is gone, and `OBS_AUTH_FAILURE_COUNTER_ENABLED` defaults on when either flag is. The `observability config loaded` startup line reports `metrics_scrape` and `metrics_otlp` instead of `metrics`, and a provider build failure shows on `/readyz` as `metrics_provider` rather than `metrics_endpoint`, which now names only a scrape-listener bind failure. The old name is not read; setting it logs one startup `WARN`. Migration: rename the variable wherever it is set, keeping its value; for OTLP-only, drop it. Tracked under SOL-154607.
 - **Broker traffic now follows `HTTPS_PROXY` where it previously went direct.** This is the upgrade-facing half of the proxy support added above, called out separately because it can break broker connectivity with an unchanged configuration file. Any operator whose environment already carries `HTTPS_PROXY` — set for egress to a cloud IdP, or inherited from a base container image — will have SEMP traffic routed through that proxy after upgrading. Brokers are typically internal and such a proxy typically cannot reach them, so the failing call surfaces only as a `proxyconnect tcp:` dial error against a config that worked on the previous release. To make the reroute visible before it bites, the existing per-broker `broker connection created` line now carries a `proxy` field — either `direct` or the proxy URL with userinfo stripped — so `proxy=` at startup shows every broker's resolved state and `proxy!=direct` is alertable. Exempt the brokers with `NO_PROXY` (and the OTLP collector, if telemetry is enabled) before upgrading; the entry forms that actually match are tabulated in `docs/configuration.md` § "Outbound HTTP Proxy". Tracked under SOL-153295.
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.6 rolling release (`10.26.6.12130`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.6.json` and continue to be sourced from the private-extended variant.
 

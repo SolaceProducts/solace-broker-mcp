@@ -36,7 +36,7 @@ import (
 
 func newSecurityMetrics(t *testing.T) (*metrics.SecurityMetrics, *metrics.Provider) {
 	t.Helper()
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

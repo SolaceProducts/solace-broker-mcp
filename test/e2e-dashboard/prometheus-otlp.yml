@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+
+otlp:
+  promote_resource_attributes:
+    - service.name
+    - service.instance.id
+    - service.version
+    - deployment.environment.name
+    - cloud.region

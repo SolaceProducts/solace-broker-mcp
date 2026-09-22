@@ -15,6 +15,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
@@ -49,25 +50,30 @@ type ObservabilityConfig struct {
 	// Capability flags. Loaded from OBS_* env vars in applyObservabilityEnv,
 	// not from YAML. The yaml:"-" tags are intentional: they exclude these
 	// fields from YAML decoding so env vars stay the single source for flags.
-	CorrelationIDEnabled    bool `yaml:"-"`
-	MetricsEnabled          bool `yaml:"-"`
+	CorrelationIDEnabled bool `yaml:"-"`
+	// MetricsScrapeEnabled (OBS_METRICS_SCRAPE_ENABLED) turns on the Prometheus
+	// scrape egress: the client_golang registry, the Go/process collectors, the
+	// Prometheus exporter, and the /metrics listener on MetricsBindAddress. It
+	// is one of the two metrics egress flags (see MetricsProviderEnabled).
+	// Before SOL-154607 it was OBS_METRICS_ENABLED and also gated the meter
+	// provider the OTLP egress pushes from, so an OTLP-only deployment could
+	// not avoid binding an unauthenticated scrape listener nothing read.
+	MetricsScrapeEnabled    bool `yaml:"-"`
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
 	SaturationEventsEnabled bool `yaml:"-"`
-	// MetricsOTLPEnabled turns on the OTLP push egress alongside the Prometheus
-	// scrape (SOL-152418, Story 46): both read from the same meter provider, so
-	// enabling this adds a second consumer of the existing instruments rather
-	// than a second set of them. Meaningless with MetricsEnabled off — the
-	// meter provider is the shared root, so validateMetricsOTLPCoherence
-	// rejects that combination at config load rather than silently doing
-	// nothing.
+	// MetricsOTLPEnabled (OBS_METRICS_OTLP_ENABLED) turns on the OTLP push
+	// egress (SOL-152418, Story 46). Independent of MetricsScrapeEnabled:
+	// either flag alone builds the shared meter provider, and with both set
+	// the two readers observe one instrument set rather than a second set of
+	// them.
 	MetricsOTLPEnabled bool `yaml:"-"`
-	// AuthFailureCounterEnabled follows MetricsEnabled unless its own env var
-	// (OBS_AUTH_FAILURE_COUNTER_ENABLED) is explicitly set. It gates both
-	// security counters, mcp_auth_failure_total and mcp_authz_denied_total
-	// (SOL-152099). They are metrics, so it makes no sense to emit them while
-	// metrics are off — but an operator can still force the flag independently
-	// if they set the var directly.
+	// AuthFailureCounterEnabled follows MetricsProviderEnabled (either egress
+	// flag) unless its own env var (OBS_AUTH_FAILURE_COUNTER_ENABLED) is
+	// explicitly set. It gates both security counters, mcp_auth_failure_total
+	// and mcp_authz_denied_total (SOL-152099). They are metrics, so it makes
+	// no sense to emit them while no egress is on — but an operator can still
+	// force the flag independently if they set the var directly.
 	AuthFailureCounterEnabled bool `yaml:"-"`
 
 	// YAML tunables. Parsed from YAML (inheriting ${VAR} substitution);
@@ -103,18 +109,37 @@ type ObservabilityConfig struct {
 	CloudRegion           string `yaml:"cloud_region"`
 }
 
+// MetricsProviderEnabled reports whether a metrics meter provider is built at
+// all: true when either egress flag is on. It is the one definition of that
+// rule — the auth-failure counter's derived default (applyObservabilityEnv)
+// and cmd/server's provider gate (metrics.Enabled) both read it, so the two
+// cannot drift. Neither flag set means no provider, no instruments, and no
+// listener (SOL-154607).
+func (o ObservabilityConfig) MetricsProviderEnabled() bool {
+	return o.MetricsScrapeEnabled || o.MetricsOTLPEnabled
+}
+
 // Observability env var names. Capability on/off switches; the v1 defaults
 // follow the "door-closing" policy — correlation IDs on, everything else off
 // until an operator opts in.
 const (
 	envObsCorrelationIDEnabled      = "OBS_CORRELATION_ID_ENABLED"
-	envObsMetricsEnabled            = "OBS_METRICS_ENABLED"
+	envObsMetricsScrapeEnabled      = "OBS_METRICS_SCRAPE_ENABLED"
 	envObsAuditLogEnabled           = "OBS_AUDIT_LOG_ENABLED"
 	envObsTracingEnabled            = "OBS_TRACING_ENABLED"
 	envObsSaturationEventsEnabled   = "OBS_SATURATION_EVENTS_ENABLED"
 	envObsAuthFailureCounterEnabled = "OBS_AUTH_FAILURE_COUNTER_ENABLED"
 	envObsMetricsOTLPEnabled        = "OBS_METRICS_OTLP_ENABLED"
 )
+
+// envObsMetricsEnabledRetired is the pre-SOL-154607 name of
+// envObsMetricsScrapeEnabled. It is never read — the rename is deliberate and
+// has no alias, while the config surface is still uncommitted — but a
+// deployment that still sets it would otherwise get metrics silently off,
+// and a missing counter is indistinguishable from one reading zero.
+// applyObservabilityEnv warns when it is present so the operator has one log
+// line to act on.
+const envObsMetricsEnabledRetired = "OBS_METRICS_ENABLED"
 
 // applyObservabilityEnv populates the capability flags on cfg from the OBS_*
 // environment variables, using the v1 "door-closing" defaults. Called from
@@ -125,23 +150,35 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o := &cfg.Observability
 
 	o.CorrelationIDEnabled = envBool(envObsCorrelationIDEnabled, true, "observability")
-	o.MetricsEnabled = envBool(envObsMetricsEnabled, false, "observability")
+	o.MetricsScrapeEnabled = envBool(envObsMetricsScrapeEnabled, false, "observability")
 	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false, "observability")
 	o.TracingEnabled = envBool(envObsTracingEnabled, false, "observability")
 	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false, "observability")
 	o.MetricsOTLPEnabled = envBool(envObsMetricsOTLPEnabled, false, "observability")
 
-	// Auth-failure counter follows metrics unless its own var is explicitly
-	// set. LookupEnv distinguishes "unset" (follow metrics) from "set to
-	// false" (operator forced it off even though metrics are on).
+	// Names only, never the value: the retired var is not read, so its value
+	// has nothing to say, and the operator's fix is the same either way. The
+	// message states the consequence and the action because this line is the
+	// only thing that distinguishes "renamed and forgotten" from "metrics
+	// deliberately off" — docs/observability.md's runbook quotes it verbatim.
+	if _, ok := os.LookupEnv(envObsMetricsEnabledRetired); ok {
+		slog.Warn("retired observability flag is set and ignored: it enables nothing (no meter provider, no /metrics listener, no security counters); rename it to the replacement",
+			slog.String("var", envObsMetricsEnabledRetired),
+			slog.String("replacement", envObsMetricsScrapeEnabled))
+	}
+
+	// Auth-failure counter follows the metrics provider (either egress flag)
+	// unless its own var is explicitly set. LookupEnv distinguishes "unset"
+	// (follow) from "set to false" (operator forced it off even though a
+	// provider is built).
 	if _, ok := os.LookupEnv(envObsAuthFailureCounterEnabled); ok {
 		// Inside this branch the var IS set, so envBool parses the operator's
-		// explicit value; the o.MetricsEnabled default is unreachable here (it
-		// would only apply if the value were unparseable) — the follow-metrics
-		// behavior lives entirely in the else branch below.
-		o.AuthFailureCounterEnabled = envBool(envObsAuthFailureCounterEnabled, o.MetricsEnabled, "observability")
+		// explicit value; the MetricsProviderEnabled default is unreachable
+		// here (it would only apply if the value were unparseable) — the
+		// follow behavior lives entirely in the else branch below.
+		o.AuthFailureCounterEnabled = envBool(envObsAuthFailureCounterEnabled, o.MetricsProviderEnabled(), "observability")
 	} else {
-		o.AuthFailureCounterEnabled = o.MetricsEnabled
+		o.AuthFailureCounterEnabled = o.MetricsProviderEnabled()
 	}
 }
 

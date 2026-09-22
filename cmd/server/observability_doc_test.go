@@ -111,7 +111,7 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// the actually-representative default (docs/observability.md: "Push is
 	// off by default"), so there's no fidelity lost, only a real hazard
 	// avoided.
-	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}
@@ -152,6 +152,13 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// mcp_broker_authz_denied_total (SOL-153332, Story 49): seeded the same
 	// way as the hop-1 authz-denied counter above, via ToolMetrics.
 	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", metrics.DenialReasonPermissionDenied)
+
+	// mcp_audit_events_dropped_total (SOL-154569): seeded at zero on
+	// registration, so registering it is enough — main.go's buildAuditMetrics
+	// does exactly this and nothing more.
+	if _, err := mp.AuditMetrics(); err != nil {
+		t.Fatalf("AuditMetrics: %v", err)
+	}
 
 	// SOL-154365: this leaves the package-level counter pointed at a
 	// provider this test shuts down, with no way to reset it from here.
