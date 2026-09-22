@@ -96,6 +96,17 @@ func (e *ownerNotFoundError) Error() string {
 	return fmt.Sprintf("client username %q does not exist in Message VPN %q", e.owner, e.msgVpn)
 }
 
+// ownerCheckStage names which of ownerValidatingHandler's two pre-flight
+// reads produced an ownerCheckFailedError — the two have different causes
+// and different fixes, so collapsing them into one message loses exactly
+// the distinction an operator triaging a spike of failures needs.
+type ownerCheckStage string
+
+const (
+	ownerCheckStageClientUsername    ownerCheckStage = "client-username-read"
+	ownerCheckStageVpnDisambiguation ownerCheckStage = "vpn-disambiguation-read"
+)
+
 // ownerCheckFailedError reports that ownerValidatingHandler's pre-flight
 // existence check itself could not be completed — a transient network
 // error, timeout, rate limit, or 5xx from either the client-username or the
@@ -115,13 +126,26 @@ func (e *ownerNotFoundError) Error() string {
 // it, a caller facing e.g. a bare 503 on the pre-flight read sees only
 // "getMsgVpnClientUsername returned HTTP 503" with no indication the write
 // itself was never attempted.
+//
+// owner, msgVpn, and stage are carried separately from cause (rather than
+// leaving Error() to render cause's own text) because Error()'s output is
+// what logToolResult writes to the server-side "detail" field
+// (manager.go's own comment on that field) — without them, that field
+// collapses both call sites in Handle to byte-identical text, and an
+// operator triaging a spike of pre-flight failures cannot tell which owner
+// or VPN was involved, nor which of the two reads is the one failing. Both
+// values are caller-supplied input already present in the hashed audit
+// args, so carrying them here discloses nothing new.
 type ownerCheckFailedError struct {
 	cause      error
 	objectKind string
+	owner      string
+	msgVpn     string
+	stage      ownerCheckStage
 }
 
 func (e *ownerCheckFailedError) Error() string {
-	return fmt.Sprintf("checking whether the owner client username exists: %v", e.cause)
+	return fmt.Sprintf("checking owner client username %q in Message VPN %q (%s): %v", e.owner, e.msgVpn, e.stage, e.cause)
 }
 
 func (e *ownerCheckFailedError) Unwrap() error { return e.cause }
@@ -202,7 +226,13 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 		// binding this check exists to prevent; ownerCheckFailedError's own
 		// buildErrorMessage case makes sure the caller is told the write
 		// never ran, not just shown the bare read failure.
-		return nil, &ownerCheckFailedError{cause: err, objectKind: h.spec.objectKind}
+		return nil, &ownerCheckFailedError{
+			cause:      err,
+			objectKind: h.spec.objectKind,
+			owner:      owner,
+			msgVpn:     msgVpn,
+			stage:      ownerCheckStageClientUsername,
+		}
 	}
 
 	// SEMP's NOT_FOUND here is ambiguous: a nonexistent msgVpnName produces
@@ -225,36 +255,68 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 		// ambiguous NOT_FOUND this whole branch exists to not take at face
 		// value; surfacing it here would silently reintroduce the exact
 		// misleading owner-blame message this fix removes.
-		return nil, &ownerCheckFailedError{cause: vpnErr, objectKind: h.spec.objectKind}
+		return nil, &ownerCheckFailedError{
+			cause:      vpnErr,
+			objectKind: h.spec.objectKind,
+			owner:      owner,
+			msgVpn:     msgVpn,
+			stage:      ownerCheckStageVpnDisambiguation,
+		}
 	}
 
 	return nil, &ownerNotFoundError{owner: owner, msgVpn: msgVpn, objectKind: h.spec.objectKind, isUpdate: h.spec.isUpdate}
 }
 
 // extractOwner reads the "owner" attribute the caller supplied for this
-// write, and the sibling params["msgVpnName"]. "owner" can arrive two ways:
-// nested inside the tool's documented config object
-// (params[configParam]["owner"]), or as a bare top-level params["owner"] —
-// undeclared by any of these tools' input schemas, but the schema has no
-// additionalProperties:false (a deliberate choice, SOL-154164), and
-// constructRequestBody (internal/composite/executor.go) spreads ANY
-// top-level scalar param whose name is a known SEMP body field straight
-// into the request body, "owner" among them. A caller (or a confused LLM)
-// who puts "owner" there instead of inside the config object would
-// otherwise reach the broker with zero validation — reproduced live during
-// review. Checking the nested location first is not a security-relevant
-// ordering choice: if both are set, constructRequestBody's own
-// ambiguous-request-body check rejects the call before it reaches the
-// broker regardless of which value this function picked, so the ordering
-// only affects which safe error the caller sees, never whether the write
-// goes through unchecked.
+// write, and the sibling params["msgVpnName"]. constructRequestBody
+// (internal/composite/executor.go) assembles the SEMP request body from the
+// raw param map two ways, and "owner" can reach the broker through either:
+// a scalar param is set into the body under its OWN name (so a bare
+// top-level params["owner"] lands as body["owner"]), while an object-valued
+// param has its KEYS spread into the body regardless of that param's own
+// name (so params[configParam]["owner"] lands as body["owner"], but so does
+// params["literally-anything-else"]["owner"] — constructRequestBody does
+// not check the param's name before spreading an object's keys, only that
+// each resulting body field is declared on the operation, and "owner" is).
+// None of these three locations are declared in any of these tools' input
+// schemas beyond configParam itself, but the schema has no
+// additionalProperties:false (a deliberate choice, SOL-154164), so nothing
+// upstream strips an undeclared key before it reaches here.
 //
-// ok is false when neither location has a non-empty string "owner" — that
+// This function therefore checks all three, in this order: nested inside
+// the documented configParam object, then a bare top-level params["owner"],
+// then every other object-valued param's "owner" key. A caller (or a
+// confused LLM inventing a plausible-but-wrong config-object name — attempts
+// caught in review used "config", "attributes", "queueAttributes") that
+// puts "owner" in any of the three would otherwise reach the broker with
+// zero validation — reproduced live during review, twice, for two different
+// locations found across two review passes. The check order is not a
+// security-relevant choice: if more than one location is set,
+// constructRequestBody's own ambiguous-request-body check rejects the call
+// before it reaches the broker regardless of which value this function
+// picked, so the order only affects which safe error the caller sees, never
+// whether the write goes through unchecked.
+//
+// ok is false when no location has a non-empty string "owner" — that
 // includes a non-string value (e.g. {"owner": 123}), which is treated as "no
 // owner supplied" here rather than rejected: constructRequestBody spreads it
 // into the body regardless, and the broker's own type check on a
 // string-typed attribute already rejects it with an ordinary
 // INVALID_PARAMETER error, so duplicating that check here would add nothing.
+//
+// Deliberately scoped to "owner" specifically, not a general fix for the
+// underlying looseness in constructRequestBody (any object-valued param's
+// keys get spread regardless of that param's declared name — see its own
+// doc comment). Review raised fixing that at the executor level instead, so
+// the whole class closes at once rather than per sensitive field; this
+// function is the narrower, tool-specific mirror it also proposed as a
+// fallback if the executor change is judged too broad for this PR. The
+// tradeoff: a hypothetical future body field with the same referential
+// looseness as "owner" (SEMP has none today outside this one) would need
+// its own scan added here, and TestOwnerValidatedTools_MatchesBodyFields
+// would give no signal that one was needed, because it only checks for
+// "owner" specifically. Accepted for now; revisit at the executor level if
+// a second such field ever appears.
 func extractOwner(params map[string]any, configParam string) (owner, msgVpn string, ok bool) {
 	msgVpn, _ = params["msgVpnName"].(string)
 	if cfg, isMap := params[configParam].(map[string]any); isMap {
@@ -264,6 +326,18 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 	}
 	if o, isStr := params["owner"].(string); isStr && o != "" {
 		return o, msgVpn, true
+	}
+	for name, val := range params {
+		if name == configParam || name == "owner" {
+			continue // already checked above
+		}
+		obj, isMap := val.(map[string]any)
+		if !isMap {
+			continue
+		}
+		if o, isStr := obj["owner"].(string); isStr && o != "" {
+			return o, msgVpn, true
+		}
 	}
 	return "", "", false
 }

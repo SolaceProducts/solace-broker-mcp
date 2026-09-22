@@ -220,13 +220,23 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	// an *ownerCheckFailedError, errors.As on the switch's own vars already
 	// found and classified its wrapped cause (a *sempv2.SEMPError's status/
 	// operation/sempCode, a *resilience.BrokerBusyError's retryAfterMs, ...),
-	// exactly as if this wrapper weren't there. This only adds the two
-	// fields specific to the wrapper itself, so a client can tell the failed
-	// read was part of an owner-validation pre-flight without losing the
+	// exactly as if this wrapper weren't there. This only adds the fields
+	// specific to the wrapper itself, so a client can tell the failed read
+	// was part of an owner-validation pre-flight without losing the
 	// underlying failure's own machine-readable detail.
+	//
+	// Deliberately error_stage, not error_source: the switch above may have
+	// already set error_source to "load_shed" (busyErr) or "token_exchange"
+	// (exchErr) from the same wrapped cause errors.As just found through
+	// ownerCheckErr's Unwrap — both are real, reachable causes of a
+	// pre-flight read failing (shedding is per outbound call, token
+	// exchange runs per Execute), so overwriting error_source here would
+	// silently discard a classification the switch got right.
 	if errors.As(err, &ownerCheckErr) {
-		structured["error_source"] = "owner_validation_check_failed"
+		structured["error_stage"] = "owner_validation_check"
 		structured["objectKind"] = ownerCheckErr.objectKind
+		structured["owner"] = ownerCheckErr.owner
+		structured["msgVpnName"] = ownerCheckErr.msgVpn
 	}
 
 	// Content text mirrors the agent-facing message, with any suggestions
@@ -522,6 +532,28 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
 
 	switch {
+	// Checked before every other case, including busyErr/retriesErr/exchErr:
+	// ownerCheckFailedError wraps whichever of those actually caused the
+	// pre-flight read to fail (a real 503/429/transport failure on this
+	// read goes through the resilience layer the same as any other SEMP
+	// call, and comes back as *resilience.RetriesExhaustedError, not a bare
+	// *sempv2.SEMPError — confirmed against the real client, not assumed).
+	// If this case were below those three, their own cases would match err
+	// first via errors.As's Unwrap traversal, and this case — along with the
+	// "nothing was created or updated" framing it exists to add — would
+	// never run for the most common real failure shapes. The recursive
+	// buildErrorMessage(ownerCheckErr.cause, ...) call below still produces
+	// each of those three's own specific message (busyErr's "not sent",
+	// retriesErr's non-idempotent-vs-exhausted split, exchErr's
+	// AgentMessage) — this case only wraps that result, never replaces it.
+	case errors.As(err, &ownerCheckErr):
+		underlyingMsg, underlyingSuggestions := buildErrorMessage(ownerCheckErr.cause, brokerAlias)
+		return fmt.Sprintf(
+				"Could not confirm whether the requested owner client username exists, so this "+
+					"%s was not created or updated — nothing was changed. %s",
+				ownerCheckErr.objectKind, underlyingMsg),
+			underlyingSuggestions
+
 	// The server shed this request before sending it: the broker was too busy
 	// to admit it within semp.max_queue_wait (SOL-153442). Every word here is
 	// server-generated, so nothing needs sanitizing — no broker text exists,
@@ -587,14 +619,6 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 					"name with list-client-usernames, or %s.",
 				ownerErr.owner, ownerErr.msgVpn, ownerErr.objectKind, omitGuidance),
 			nil
-
-	case errors.As(err, &ownerCheckErr):
-		underlyingMsg, underlyingSuggestions := buildErrorMessage(ownerCheckErr.cause, brokerAlias)
-		return fmt.Sprintf(
-				"Could not confirm whether the requested owner client username exists, so this "+
-					"%s was not created or updated — nothing was changed. %s",
-				ownerCheckErr.objectKind, underlyingMsg),
-			underlyingSuggestions
 
 	case errors.As(err, &sempv2Err):
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode

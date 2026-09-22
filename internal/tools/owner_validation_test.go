@@ -19,9 +19,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
@@ -365,17 +367,72 @@ func TestOwnerValidatingHandler_TopLevelOwner_StillGetsChecked(t *testing.T) {
 // regardless of which value this package's own check used, so this test
 // only pins that the nested value is what gets validated — not that this
 // ordering has any security consequence, since either ordering is safe.
+//
+// This calls handler.Handle and asserts on which clientUsername the
+// pre-flight read was actually issued for, rather than calling extractOwner
+// directly: review found an earlier version of this test built the handler
+// fixture and seeded a mock response that nothing ever consumed, so it
+// silently tested extractOwner alone despite its name and fixture claiming
+// handler-level coverage — a later reordering of the lookup inside Handle
+// could have passed it either way.
 func TestOwnerValidatingHandler_NestedOwnerTakesPrecedenceOverTopLevel(t *testing.T) {
 	handler, client := realOwnerValidationFixture(t, "create-queue")
 	client.responses["getMsgVpnClientUsername"] = &sempv2.Result{Data: map[string]any{"clientUsername": "nested-real-user"}, StatusCode: 200}
 
-	owner, msgVpn, ok := extractOwner(map[string]any{
+	_, _ = handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
 		"msgVpnName":  "default",
+		"queueName":   "q1",
 		"owner":       "top-level-user",
 		"queueConfig": map[string]any{"owner": "nested-real-user"},
-	}, handler.spec.configParam)
-	if !ok || owner != "nested-real-user" || msgVpn != "default" {
-		t.Fatalf("expected nested owner %q to win, got owner=%q ok=%v", "nested-real-user", owner, ok)
+	})
+	// The write itself may or may not succeed depending on how
+	// constructRequestBody's ambiguous-request-body check interacts with the
+	// mock, which is not what this test is about — what matters is which
+	// username the pre-flight read was actually issued for.
+	var queried string
+	for i, call := range client.calls {
+		if call == "getMsgVpnClientUsername" {
+			queried, _ = client.callArgs[i]["clientUsername"].(string)
+			break
+		}
+	}
+	if queried != "nested-real-user" {
+		t.Fatalf("expected the pre-flight check to query the nested owner %q, got %q", "nested-real-user", queried)
+	}
+}
+
+// TestOwnerValidatingHandler_OwnerInArbitraryObjectParam_StillGetsChecked
+// pins a real bypass found in review: constructRequestBody spreads an
+// object-valued param's KEYS into the request body regardless of that
+// param's own name — it only checks that the resulting field names are
+// declared on the operation, never that the param itself is configParam.
+// So an "owner" nested inside ANY object-shaped param — not just
+// queueConfig, and not just a bare top-level "owner" — reached the broker
+// with zero validation. Reproduced end to end through the real registered
+// handler before this fix: mgr.Route("create-queue").Handle with
+// {"somethingElse": {"owner": "ghost", "permission": "consume"}} produced
+// createMsgVpnQueue with that owner and no getMsgVpnClientUsername call at
+// all. The realistic trigger isn't a param literally named "somethingElse":
+// it's an LLM inventing a plausible-but-wrong config-object name ("config",
+// "attributes", "queueAttributes") instead of the documented queueConfig.
+func TestOwnerValidatingHandler_OwnerInArbitraryObjectParam_StillGetsChecked(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.responses["getMsgVpn"] = vpnExistsResponse()
+
+	_, err := handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
+		"msgVpnName":    "default",
+		"queueName":     "q1",
+		"somethingElse": map[string]any{"owner": "ghost", "permission": "consume"},
+	})
+	var ownerErr *ownerNotFoundError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("an owner nested in a non-configParam object param must still be checked; got %T: %v", err, err)
+	}
+	for _, call := range client.calls {
+		if call == "createMsgVpnQueue" {
+			t.Fatalf("queue must never be created when an owner nested in any object param does not exist; calls = %v", client.calls)
+		}
 	}
 }
 
@@ -420,21 +477,83 @@ func TestBuildErrorMessage_OwnerNotFound_CreateVsUpdateGuidance(t *testing.T) {
 // as either the bare underlying-operation failure or the fully generic
 // internal-error message, with no indication that this was a pre-flight
 // read for a write tool and that the write itself never ran.
+//
+// Uses *resilience.RetriesExhaustedError as the cause, not a bare
+// *sempv2.SEMPError: review found that a real 503/429/transport failure on
+// this read goes through the resilience layer the same as any other SEMP
+// call and comes back wrapped in RetriesExhaustedError, a shape the
+// original version of this test never exercised — it pinned only a shape
+// the client provably never produces for a retried cause, so it passed
+// while the real one stayed uncovered. Asserting the status code survives
+// inside the message (rather than only that two exact strings are absent)
+// tests the contract the wrapper actually promises: it adds context, it
+// does not discard the underlying detail.
 func TestBuildErrorMessage_OwnerCheckFailed_SaysNothingWasWritten(t *testing.T) {
-	semp503 := &sempv2.SEMPError{Operation: "getMsgVpnClientUsername", StatusCode: 503}
-	wrapped := &ownerCheckFailedError{cause: semp503, objectKind: "queue"}
+	realistic := &resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3}
+	wrapped := &ownerCheckFailedError{
+		cause:      realistic,
+		objectKind: "queue",
+		owner:      "real-user",
+		msgVpn:     "default",
+		stage:      ownerCheckStageClientUsername,
+	}
 	msg, _ := buildErrorMessage(wrapped, "")
 	if !strings.Contains(msg, "was not created or updated") && !strings.Contains(msg, "nothing was changed") {
 		t.Errorf("expected reassurance that the write never ran, got: %s", msg)
 	}
-	if msg == "getMsgVpnClientUsername returned HTTP 503" {
-		t.Error("the bare underlying message must not reach the caller unframed")
+	if !strings.Contains(msg, "503") {
+		t.Errorf("expected the underlying status to survive the framing, got: %s", msg)
 	}
 
-	generic := &ownerCheckFailedError{cause: errors.New("dial tcp: connection refused"), objectKind: "topic endpoint"}
+	generic := &ownerCheckFailedError{
+		cause:      errors.New("dial tcp: connection refused"),
+		objectKind: "topic endpoint",
+		owner:      "real-user",
+		msgVpn:     "default",
+		stage:      ownerCheckStageVpnDisambiguation,
+	}
 	genericMsg, _ := buildErrorMessage(generic, "")
 	if genericMsg == genericInternalMessage {
 		t.Error("must not fall back to the bare generic message with no write-status context at all")
+	}
+	if !strings.Contains(genericMsg, "was not created or updated") && !strings.Contains(genericMsg, "nothing was changed") {
+		t.Errorf("expected reassurance that the write never ran even for an unclassified cause, got: %s", genericMsg)
+	}
+}
+
+// TestOwnerCheckFailedError_Error_CarriesOwnerVpnAndStage pins the fix for a
+// real gap found in review: the previous Error() rendered only "checking
+// whether the owner client username exists: %v", so both call sites in
+// Handle produced byte-identical text — an operator triaging a spike of
+// pre-flight failures in the server-side log (this is what logToolResult
+// writes to the "detail" field) could not tell which owner or VPN was
+// involved, nor which of the two reads — client-username or
+// VPN-disambiguation — was the one failing.
+func TestOwnerCheckFailedError_Error_CarriesOwnerVpnAndStage(t *testing.T) {
+	usernameStage := &ownerCheckFailedError{
+		cause:      errors.New("boom"),
+		objectKind: "queue",
+		owner:      "real-user",
+		msgVpn:     "default",
+		stage:      ownerCheckStageClientUsername,
+	}
+	vpnStage := &ownerCheckFailedError{
+		cause:      errors.New("boom"),
+		objectKind: "queue",
+		owner:      "real-user",
+		msgVpn:     "default",
+		stage:      ownerCheckStageVpnDisambiguation,
+	}
+	if usernameStage.Error() == vpnStage.Error() {
+		t.Fatalf("the two pre-flight reads must not produce byte-identical log text: %q", usernameStage.Error())
+	}
+	for _, e := range []*ownerCheckFailedError{usernameStage, vpnStage} {
+		msg := e.Error()
+		for _, want := range []string{"real-user", "default"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("Error() %q does not mention %q", msg, want)
+			}
+		}
 	}
 }
 
@@ -532,4 +651,88 @@ func TestOwnerValidatedTools_MatchesBodyFields(t *testing.T) {
 			t.Errorf("tool %q is in ownerValidatedTools but no step operation's body actually accepts \"owner\" — stale entry", tool.Name)
 		}
 	}
+}
+
+// TestBuildErrorResult_OwnerNotFound_StructuredFields pins the structured
+// (machine-readable) side of ownerNotFoundError's error result — only its
+// prose message (buildErrorMessage) had test coverage before this, so a
+// future edit could drop or rename structured["owner"]/["msgVpnName"]/
+// ["objectKind"]/["error_source"] — all documented in docs/user-guide.md's
+// error-field table — with the full suite staying green.
+func TestBuildErrorResult_OwnerNotFound_StructuredFields(t *testing.T) {
+	m := &ToolManager{}
+	err := &ownerNotFoundError{owner: "ghost-user", msgVpn: "default", objectKind: "queue"}
+
+	result := m.buildErrorResult(err, "my-broker")
+	if !result.IsError {
+		t.Fatal("expected IsError=true")
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	want := map[string]any{
+		"error_source": "owner_validation",
+		"owner":        "ghost-user",
+		"msgVpnName":   "default",
+		"objectKind":   "queue",
+		"retryable":    false,
+	}
+	for k, v := range want {
+		if structured[k] != v {
+			t.Errorf("structured[%q] = %v, want %v", k, structured[k], v)
+		}
+	}
+}
+
+// TestBuildErrorResult_OwnerCheckFailed_StructuredFields pins the same
+// contract for ownerCheckFailedError, and specifically the fix for a real
+// bug found in review: error_stage must never collide with (or clobber)
+// error_source when the wrapped cause is itself a *resilience.BrokerBusyError
+// or a *tokenexchange.ExchangeError — both real, reachable causes of a
+// pre-flight read failing, both of which set error_source to their own
+// value in the same switch this field is layered on top of.
+func TestBuildErrorResult_OwnerCheckFailed_StructuredFields(t *testing.T) {
+	m := &ToolManager{}
+
+	t.Run("plain cause", func(t *testing.T) {
+		err := &ownerCheckFailedError{
+			cause:      &sempv2.SEMPError{StatusCode: 503},
+			objectKind: "topic endpoint",
+			owner:      "real-user",
+			msgVpn:     "default",
+			stage:      ownerCheckStageVpnDisambiguation,
+		}
+		result := m.buildErrorResult(err, "my-broker")
+		structured := result.StructuredContent.(map[string]any)
+		want := map[string]any{
+			"error_stage": "owner_validation_check",
+			"owner":       "real-user",
+			"msgVpnName":  "default",
+			"objectKind":  "topic endpoint",
+		}
+		for k, v := range want {
+			if structured[k] != v {
+				t.Errorf("structured[%q] = %v, want %v", k, structured[k], v)
+			}
+		}
+	})
+
+	t.Run("busy cause: error_source must survive alongside error_stage", func(t *testing.T) {
+		err := &ownerCheckFailedError{
+			cause:      &resilience.BrokerBusyError{MaxWait: time.Second},
+			objectKind: "queue",
+			owner:      "real-user",
+			msgVpn:     "default",
+			stage:      ownerCheckStageClientUsername,
+		}
+		result := m.buildErrorResult(err, "my-broker")
+		structured := result.StructuredContent.(map[string]any)
+		if got := structured["error_source"]; got != "load_shed" {
+			t.Errorf("error_source = %v, want %q (must not be clobbered by error_stage)", got, "load_shed")
+		}
+		if got := structured["error_stage"]; got != "owner_validation_check" {
+			t.Errorf("error_stage = %v, want %q", got, "owner_validation_check")
+		}
+	})
 }
