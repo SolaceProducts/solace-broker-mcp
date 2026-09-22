@@ -2048,8 +2048,7 @@ recovered-panic ERROR — carry the correlation ID of the request that initiated
 under its own ID.
 
 At `log_level: debug`, a request that took a result it did not produce also says so directly:
-one `waited for concurrent broker token exchange` line, with `broker` and
-`singleflight_waited`, under
+one `waited for concurrent broker token exchange` line, with `broker` and `waited`, under
 **that request's own** correlation ID. One grep of that ID then answers the question
 positively — this request did not run the exchange, it waited for a concurrent one — with no
 tracing enabled. The line does not bring the identity-provider chapter with it:
@@ -2082,9 +2081,9 @@ installs:
 {"time":"2026-09-21T19:23:24.115803-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-c"}
 {"time":"2026-09-21T19:23:24.172233-07:00","level":"DEBUG","msg":"identity provider issued broker token","broker":"artifact-burst-broker","http_status":200,"attempts":0,"used_fallback":false,"correlation_id":"caller-a"}
 {"time":"2026-09-21T19:23:24.17225-07:00","level":"DEBUG","msg":"broker token cached","broker":"artifact-burst-broker","correlation_id":"caller-a"}
-{"time":"2026-09-21T19:23:24.172257-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","singleflight_waited":"56.440291ms","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172257-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"56.440291ms","correlation_id":"caller-c"}
 {"time":"2026-09-21T19:23:24.172259-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"56.440291ms","correlation_id":"caller-c"}
-{"time":"2026-09-21T19:23:24.172262-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","singleflight_waited":"62.066166ms","correlation_id":"caller-b"}
+{"time":"2026-09-21T19:23:24.172262-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"62.066166ms","correlation_id":"caller-b"}
 {"time":"2026-09-21T19:23:24.172261-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"63.276083ms","correlation_id":"caller-a"}
 {"time":"2026-09-21T19:23:24.172264-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"62.066166ms","correlation_id":"caller-b"}
 ```
@@ -2093,8 +2092,7 @@ installs:
 and the keys are the production ones; the correlation IDs are the test's (`caller-a` initiated
 the exchange, `caller-b` and `caller-c` waited on it) where a real request carries a UUIDv7 or
 an inbound trace-id, the broker alias is the test's, and `attempts` reads `0` against the
-in-process test IdP. Three things to read off it: the wait line carries `broker` and
-`singleflight_waited`
+in-process test IdP. Three things to read off it: the wait line carries `broker` and `waited`
 and nothing else; each of the three requests — the two waiters and the initiator alike — still
 logs its own `broker token exchange completed` with `exchange_total_elapsed`, so the wait line
 *accompanies* the outcome rather than replacing it; and the identity-provider lines appear only
@@ -2108,7 +2106,7 @@ the callers' to report:
 {"time":"2026-09-21T19:23:50.056266-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-a"}
 {"time":"2026-09-21T19:23:50.056709-07:00","level":"DEBUG","msg":"requesting broker token from identity provider","broker":"artifact-failed-broker","correlation_id":"failed-a"}
 {"time":"2026-09-21T19:23:50.05784-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-b"}
-{"time":"2026-09-21T19:23:50.114856-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-failed-broker","singleflight_waited":"56.999875ms","correlation_id":"failed-b"}
+{"time":"2026-09-21T19:23:50.114856-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-failed-broker","waited":"56.999875ms","correlation_id":"failed-b"}
 ```
 
 Neither request logs a completion line — a failed exchange is not a completion — and the error
@@ -2119,8 +2117,8 @@ having run an exchange of its own.
 Do not read the wait line as a fault or as a load signal. A waiting request is the
 deduplication working as designed: it is attribution, not degradation, there is no metric
 behind it, and it needs no response. Nor is it
-`token exchange abandoned by caller`, whose `waited` key measures how long a caller stayed
-before leaving with nothing.
+`token exchange abandoned by caller`, which carries the same `waited` key on a different
+message and means the opposite — that caller waited and left with nothing.
 
 Three lines never carry
 a correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict

@@ -43,9 +43,12 @@ var tracer = otel.Tracer("solace-broker-mcp/tokenexchange")
 // exchangeGroupResult is what the singleflight group's func returns and
 // every caller sharing that call — winner and followers alike — receives
 // back through DoChan's channel. winnerSpanCtx is always the WINNER's own
-// captured span context (see the DoChan call site), which is how a follower
-// learns which trace actually did the IdP work. The caller-local ranExchange
-// flag independently establishes whether this caller is that winner.
+// captured span context (see the DoChan call site), which is how a
+// follower's caller learns which trace actually did the IdP work: it
+// compares its own captured span context's TraceID and SpanID against this
+// one (both, not SpanID alone — a SpanID collision across two different
+// traces is astronomically unlikely but cheap to also rule out, since the
+// TraceID is already in hand).
 type exchangeGroupResult struct {
 	tok           *Token
 	winnerSpanCtx oteltrace.SpanContext
@@ -312,9 +315,6 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		// to the work that actually served it).
 		return exchangeGroupResult{tok: tok, winnerSpanCtx: callerSpanCtx}, err
 	})
-	if e.afterSingleflightDispatch != nil {
-		e.afterSingleflightDispatch()
-	}
 
 	// abandonedByCaller records a caller that left before taking a result, and
 	// returns its context error. BOTH select branches below reach it: the
@@ -373,17 +373,25 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		// time with no IdP call behind it at all.
 		elapsed := e.nowFunc().Sub(start)
 
-		// One checked assertion, also used for token extraction below. The
-		// same per-caller fact that controls the wait log controls the span
-		// role, so the two operator-visible signals cannot disagree.
-		// Computed before the res.Err branch so a follower's span is
-		// self-describing on the error path too, not only on success.
+		// One checked assertion, used for both the role classification here
+		// and the token extraction below (flagged by review — an unchecked
+		// second assertion of the same value was 30 lines apart). Sets the
+		// outer singleflightRole/winnerSpanCtx that Exchange's own deferred
+		// span-closing block reads — see exchangeGroupResult's doc for why
+		// the comparison is by TraceID+SpanID rather than by the whole
+		// SpanContext (which isn't comparable with ==; TraceState holds a
+		// slice internally). Computed before the res.Err branch below so a
+		// follower's span is self-describing on the error path too, not
+		// only on success.
 		groupResult, _ := res.Val.(exchangeGroupResult)
-		if ranExchange {
-			singleflightRole = "winner"
-		} else {
-			singleflightRole = "follower"
-			winnerSpanCtx = groupResult.winnerSpanCtx
+		if groupResult.winnerSpanCtx.IsValid() {
+			if groupResult.winnerSpanCtx.TraceID() == callerSpanCtx.TraceID() &&
+				groupResult.winnerSpanCtx.SpanID() == callerSpanCtx.SpanID() {
+				singleflightRole = "winner"
+			} else {
+				singleflightRole = "follower"
+				winnerSpanCtx = groupResult.winnerSpanCtx
+			}
 		}
 
 		// A live caller that did not run the fn took someone else's result.
@@ -400,7 +408,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		if !ranExchange {
 			slog.DebugContext(ctx, msgWaitedForConcurrentExchange,
 				slog.String("broker", input.BrokerAlias),
-				slog.String("singleflight_waited", elapsed.String()))
+				slog.String("waited", elapsed.String()))
 		}
 
 		if res.Err != nil {

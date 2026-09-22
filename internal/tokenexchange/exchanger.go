@@ -33,8 +33,7 @@ import (
 // breakerState, and expiryFallbackLogged atomics (safe by construction —
 // see raiseGate, BreakerStateSnapshot, and logExpiryFallbackOnce). Do not
 // assign to any OTHER field from any method; the race detector enforces
-// this at test time. Tests may replace nowFunc and afterSingleflightDispatch
-// before making calls.
+// this at test time.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -54,9 +53,6 @@ type Exchanger struct {
 	cache         cache.TokenCache
 	group         singleflight.Group
 	nowFunc       func() time.Time
-	// afterSingleflightDispatch is a test seam called after DoChan has
-	// registered this caller. Production leaves it nil.
-	afterSingleflightDispatch func()
 	// breaker is the process-wide circuit breaker guarding the IdP call.
 	// Nil means the breaker is disabled (the escape hatch, and the default
 	// for tests that don't opt in) — Exchange then calls the IdP directly

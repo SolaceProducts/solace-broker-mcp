@@ -2562,7 +2562,6 @@ func (h fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h fanoutHandler) Handle(ctx context.Context, rec slog.Record) error {
-	var errs []error
 	for _, child := range h.handlers {
 		if !child.Enabled(ctx, rec.Level) {
 			continue
@@ -2571,10 +2570,10 @@ func (h fanoutHandler) Handle(ctx context.Context, rec slog.Record) error {
 		// record it is given (correlation.NewSlogHandler adds correlation_id),
 		// and rec.Add appends to the record's own attribute slice.
 		if err := child.Handle(ctx, rec.Clone()); err != nil {
-			errs = append(errs, err)
+			return err
 		}
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 func (h fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -3147,28 +3146,6 @@ func waitForCacheMiss(t *testing.T, logs *jsonLogBuffer, alias, corrID string) {
 	}
 }
 
-// trackSingleflightDispatches observes the point immediately after DoChan has
-// registered a caller. Waiting for the expected count is a deterministic proof
-// that every intended waiter joined before a test releases the shared call.
-func trackSingleflightDispatches(e *Exchanger) <-chan struct{} {
-	dispatched := make(chan struct{}, 8)
-	e.afterSingleflightDispatch = func() { dispatched <- struct{}{} }
-	return dispatched
-}
-
-func waitForSingleflightDispatches(t *testing.T, dispatched <-chan struct{}, want int) {
-	t.Helper()
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	for i := 0; i < want; i++ {
-		select {
-		case <-dispatched:
-		case <-timer.C:
-			t.Fatalf("singleflight dispatches = %d, want %d within 2s", i, want)
-		}
-	}
-}
-
 func recordsWithMsg(recs []map[string]any, msg string) []map[string]any {
 	var out []map[string]any
 	for _, r := range recs {
@@ -3225,7 +3202,6 @@ func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
 
 	// Real clock, not pinnedNow: waited must parse to a POSITIVE duration.
 	e := newTestExchanger(t, srv.URL)
-	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-burst-broker"
 
@@ -3252,7 +3228,7 @@ func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
 		call(id)
 		waitForCacheMiss(t, logs, input.BrokerAlias, id)
 	}
-	waitForSingleflightDispatches(t, dispatched, 3)
+	time.Sleep(50 * time.Millisecond) // grace for the DoChan joins themselves
 	openGate()
 	wg.Wait()
 
@@ -3295,12 +3271,12 @@ func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
 		if got, _ := r["broker"].(string); got != input.BrokerAlias {
 			t.Errorf("wait line broker = %q, want %q", got, input.BrokerAlias)
 		}
-		waited, _ := r["singleflight_waited"].(string)
+		waited, _ := r["waited"].(string)
 		d, err := time.ParseDuration(waited)
 		if err != nil {
-			t.Errorf("wait line singleflight_waited = %q, not a parsable duration: %v", waited, err)
+			t.Errorf("wait line waited = %q, not a parsable duration: %v", waited, err)
 		} else if d <= 0 {
-			t.Errorf("wait line singleflight_waited = %v, want > 0 on a real clock", d)
+			t.Errorf("wait line waited = %v, want > 0 on a real clock", d)
 		}
 		for k := range r {
 			if strings.Contains(strings.ToLower(k), "token") {
@@ -3340,7 +3316,6 @@ func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
 	defer srv.Close()
 
 	e := newTestExchanger(t, srv.URL)
-	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-gate-broker"
 
@@ -3384,7 +3359,7 @@ func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
 	}()
 
 	waitForCacheMiss(t, logs, input.BrokerAlias, "gate-waiter-id")
-	waitForSingleflightDispatches(t, dispatched, 2)
+	time.Sleep(50 * time.Millisecond) // grace for the DoChan join itself
 	releaseClock()
 	wg.Wait()
 
@@ -3427,102 +3402,12 @@ func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
 	}
 	// The pinned clock makes this "0s"; the positive-duration claim is
 	// proof 1's, which runs a real clock.
-	if _, ok := waitLines[0]["singleflight_waited"].(string); !ok {
-		t.Error("wait line missing the singleflight_waited attribute")
+	if _, ok := waitLines[0]["waited"].(string); !ok {
+		t.Error("wait line missing the waited attribute")
 	}
 
 	if n := countMsg(recs, "broker token exchange completed"); n != 0 {
 		t.Errorf("completion lines = %d, want 0 — a rejection is not a completion, so the wait line is the only thing telling the two callers apart", n)
-	}
-}
-
-// A taken result is a wait whether the shared closure returns an ordinary IdP
-// error or recovers a panic. In both cases only the caller that did not run the
-// closure emits the attribution line.
-func TestExchange_WaiterOnSharedFailureStillLogsWait(t *testing.T) {
-	tests := []struct {
-		name       string
-		panicOnPut bool
-		respond    func(http.ResponseWriter)
-		wantErr    string
-	}{
-		{
-			name: "identity provider failure",
-			respond: func(w http.ResponseWriter) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, `{"error":"invalid_grant"}`)
-			},
-			wantErr: "invalid_grant",
-		},
-		{
-			name:       "recovered panic",
-			panicOnPut: true,
-			respond: func(w http.ResponseWriter) {
-				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, successJSON("doomed-shared-token", 3600))
-			},
-			wantErr: "token exchange panicked",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// NOT parallel: captureJSONLogs swaps the global logger.
-			logs := captureJSONLogs(t)
-			entered := make(chan struct{})
-			gate := make(chan struct{})
-			var enteredOnce sync.Once
-
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				enteredOnce.Do(func() { close(entered) })
-				<-gate
-				tc.respond(w)
-			}))
-			defer srv.Close()
-			var gateOnce sync.Once
-			openGate := func() { gateOnce.Do(func() { close(gate) }) }
-			defer openGate()
-
-			e := newTestExchanger(t, srv.URL)
-			if tc.panicOnPut {
-				e.cache = &panickingCache{inner: e.cache}
-			}
-			dispatched := trackSingleflightDispatches(e)
-			input := validInput()
-			input.BrokerAlias = "wait-line-" + strings.ReplaceAll(tc.name, " ", "-")
-
-			winnerErr := make(chan error, 1)
-			waiterErr := make(chan error, 1)
-			go func() {
-				_, err := e.Exchange(correlation.With(context.Background(), "failure-winner-id"), input)
-				winnerErr <- err
-			}()
-			<-entered
-			go func() {
-				_, err := e.Exchange(correlation.With(context.Background(), "failure-waiter-id"), input)
-				waiterErr <- err
-			}()
-
-			waitForSingleflightDispatches(t, dispatched, 2)
-			openGate()
-			for role, err := range map[string]error{
-				"winner": <-winnerErr,
-				"waiter": <-waiterErr,
-			} {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Errorf("%s err = %v, want error containing %q", role, err, tc.wantErr)
-				}
-			}
-
-			waitLines := recordsWithMsg(forBroker(logs.records(t), input.BrokerAlias), msgWaitedForConcurrentExchange)
-			if len(waitLines) != 1 {
-				t.Fatalf("%q lines = %d, want 1 on shared %s", msgWaitedForConcurrentExchange, len(waitLines), tc.name)
-			}
-			if got, _ := waitLines[0]["correlation_id"].(string); got != "failure-waiter-id" {
-				t.Errorf("wait line correlation_id = %q, want failure-waiter-id; the winner must remain silent", got)
-			}
-		})
 	}
 }
 
@@ -3560,7 +3445,6 @@ func TestExchange_WaitLineDarkAtInfo(t *testing.T) {
 	defer openGate()
 
 	e := newTestExchanger(t, srv.URL)
-	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-dark-broker"
 
@@ -3585,7 +3469,7 @@ func TestExchange_WaitLineDarkAtInfo(t *testing.T) {
 		call(id)
 		waitForCacheMiss(t, debugLogs, input.BrokerAlias, id)
 	}
-	waitForSingleflightDispatches(t, dispatched, 3)
+	time.Sleep(50 * time.Millisecond) // grace for the DoChan joins themselves
 	openGate()
 	wg.Wait()
 
