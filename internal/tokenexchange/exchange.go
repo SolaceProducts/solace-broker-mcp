@@ -54,6 +54,11 @@ type exchangeGroupResult struct {
 	winnerSpanCtx oteltrace.SpanContext
 }
 
+// msgWaitedForConcurrentExchange names a live caller that took a result it did
+// not produce. A constant, not a literal, because the tests assert on the same
+// string an operator greps for, and the two must not drift apart.
+const msgWaitedForConcurrentExchange = "waited for concurrent broker token exchange"
+
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
 // It checks the cache first; on a miss, concurrent calls with the same
 // (subjectToken, brokerAlias) pair are collapsed into a single IdP
@@ -261,7 +266,24 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	callerSpanCtx := oteltrace.SpanContextFromContext(ctx)
 
 	start := e.nowFunc()
+	// ranExchange answers, for THIS caller only, "did I run the shared func?"
+	// — singleflight runs exactly one caller's closure, so exactly one
+	// caller's local ever flips, whatever the burst size. It is deliberately
+	// not res.Shared: the library sets that on the WINNER's result too once
+	// another caller joins, which would label the caller that talked to the
+	// IdP a waiter. Nor singleflightRole below, which is computed only when a
+	// span context is valid and so is dead with tracing off (the default).
+	//
+	// Race-clean under -race without atomics: the closure's write happens on
+	// singleflight's goroutine before doCall sends the Result on every
+	// caller's channel, and each caller reads it after its own receive.
+	ranExchange := false
 	ch := e.group.DoChan(key, func() (val interface{}, err error) {
+		// First statement, above the recover below, so a winner whose closure
+		// panics is still classified a winner — it ran the fn — and the
+		// waiters that receive its shared panic error still get their wait
+		// line.
+		ranExchange = true
 		// singleflight runs this on its OWN goroutine, which none of the
 		// request-path recover() nets cover — and DoChan re-raises an escaping
 		// panic via `go panic(e)`, which is unrecoverable and takes down the
@@ -370,6 +392,23 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 				singleflightRole = "follower"
 				winnerSpanCtx = groupResult.winnerSpanCtx
 			}
+		}
+
+		// A live caller that did not run the fn took someone else's result.
+		// Says so positively, under its OWN context, so one grep of its
+		// correlation ID answers "did this request run the exchange?" without
+		// tracing and without reading the absence of the winner-attributed
+		// identity-provider lines as proof. Placed here — after the
+		// live-caller re-check, above the error branch — so it covers any
+		// taken result, a shared error as much as a success. The completion
+		// line below stays success-only (SOL-153363): it is something this
+		// line adds to on success, and on a shared error there is no second
+		// line at all. An abandoned caller emits the breadcrumb above
+		// instead, and a cache hit returns long before reaching this point.
+		if !ranExchange {
+			slog.DebugContext(ctx, msgWaitedForConcurrentExchange,
+				slog.String("broker", input.BrokerAlias),
+				slog.String("waited", elapsed.String()))
 		}
 
 		if res.Err != nil {
