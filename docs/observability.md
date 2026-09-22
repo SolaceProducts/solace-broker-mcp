@@ -1725,7 +1725,7 @@ distinction is the point, since they have different causes and different remedie
 | `http.response.status_code` | The status that attempt got, on `semp.attempt` and `tokenexchange.attempt`. Absent — never zero — when the attempt got no response at all (a connection error) | Solace |
 | `retry.decision` | Whether the retry policy chose to retry after this attempt, on `semp.attempt` and `tokenexchange.attempt`. **This is the decision the server acted on, not a re-reading of the status code**, so it can legitimately be `false` on a 503: a request the caller declared non-idempotent, or one on a non-idempotent method, is never replayed. A `true` alongside `retry.exhausted` means the policy wanted to retry and had nothing left | Solace |
 | `retry.exhausted` | `true` on the final attempt when a retry allowance ran out; absent otherwise. It means one thing: the policy stopped because something it was counting was already spent. On `semp.attempt` that covers all four allowances — the configured `semp.retries`, the internal 429/503 sub-cap (which fires well below `semp.retries`, and is how a real broker-overload episode usually ends), the once-only replay of a non-429/503 5xx, and the once-only 401 re-auth. **Absent when nothing ran out**, even though the call still failed: a replay the policy refused because the caller declared the request non-idempotent, a context that ended, a status never retried at all, or an auth mode that could not recover the first 401. Those need a different remedy from a bigger budget, which is why they are distinguishable. **On `tokenexchange.attempt` it means only that the IdP client's configured retry count (`MaxRetries`) was spent** — that path has no sub-cap, no non-idempotency guard, and no 401 re-auth allowance, so the four SEMP allowances and the four SEMP exclusions above do not apply. Raise the IdP retry setting, not `semp.retries` | Solace |
-| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
+| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it. With tracing off — the default — the same distinction is available in logs at `log_level: debug`, where a request that waited on another's exchange logs `waited for concurrent broker token exchange` under its own correlation ID (see [Correlation ID](#correlation-id--implemented)); that is an independent signal emitted by the waiting request, not a projection of this span | Solace |
 | `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
 | `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
 
@@ -1957,10 +1957,82 @@ concurrent requests need the same broker token, the server performs one exchange
 all of them, and the lines describing that work — the identity-provider request/response, the
 cache write, retry exhaustion, the Retry-After gate, the audience-mismatch WARN, and the
 recovered-panic ERROR — carry the correlation ID of the request that initiated it. Every request still logs its own `broker token exchange completed` line
-under its own ID. So if a request's ID turns up no identity-provider lines, that request rode
-an exchange another request started: pivot to the `broker` attribute plus the time window
-around the request's own completion line. A failed exchange surfaces through each caller's own
-error handling rather than a per-caller line from the exchange itself. Three lines never carry
+under its own ID.
+
+At `log_level: debug`, a request that took a result it did not produce also says so directly:
+one `waited for concurrent broker token exchange` line, with `broker` and `waited`, under
+**that request's own** correlation ID. One grep of that ID then answers the question
+positively — this request did not run the exchange, it waited for a concurrent one — with no
+tracing enabled. The line does not bring the identity-provider chapter with it:
+`requesting broker token from identity provider` and `identity provider issued broker token`
+stay on the initiating request's ID, so reading what the IdP actually said still means
+pivoting to that ID (read it off the `requesting broker token from identity provider` line for
+the same `broker` in the same window). And the *absence* of identity-provider lines on a
+request's own ID remains corroboration, not proof — a Retry-After gate rejection, a
+circuit-breaker rejection, a request that never got built, and a dropped log line all produce
+the same absence.
+
+**At the default INFO level that line is dark**, so an INFO deployment still needs the older
+pivot: the `broker` attribute plus the time window around the request's own completion line.
+A failed exchange still surfaces its outcome through each caller's own error handling rather
+than a per-caller line from the exchange itself — but a request that waited on a shared
+exchange that then failed does get its own wait line, so at DEBUG "which requests were riding
+this failing exchange" is readable instead of inferred.
+
+A burst of three requests served by one IdP round trip, at `log_level: debug`. The records
+below were dumped verbatim from a run of the same three-caller burst the committed test
+`TestExchange_WaiterLogsWaitLineWinnerDoesNot` drives (that test asserts on the records rather
+than printing them), emitted through the production handler chain —
+`correlation.NewSlogHandler` over `slog.NewJSONHandler`, the composition `cmd/server/main.go`
+installs:
+
+```json
+{"time":"2026-09-21T19:23:24.108794-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.109184-07:00","level":"DEBUG","msg":"requesting broker token from identity provider","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.110185-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-b"}
+{"time":"2026-09-21T19:23:24.115803-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172233-07:00","level":"DEBUG","msg":"identity provider issued broker token","broker":"artifact-burst-broker","http_status":200,"attempts":0,"used_fallback":false,"correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.17225-07:00","level":"DEBUG","msg":"broker token cached","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.172257-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"56.440291ms","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172259-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"56.440291ms","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172262-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"62.066166ms","correlation_id":"caller-b"}
+{"time":"2026-09-21T19:23:24.172261-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"63.276083ms","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.172264-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"62.066166ms","correlation_id":"caller-b"}
+```
+
+**This is test-captured output, not a production capture.** The handler chain, the messages
+and the keys are the production ones; the correlation IDs are the test's (`caller-a` initiated
+the exchange, `caller-b` and `caller-c` waited on it) where a real request carries a UUIDv7 or
+an inbound trace-id, the broker alias is the test's, and `attempts` reads `0` against the
+in-process test IdP. Three things to read off it: the wait line carries `broker` and `waited`
+and nothing else; each of the three requests — the two waiters and the initiator alike — still
+logs its own `broker token exchange completed` with `exchange_total_elapsed`, so the wait line
+*accompanies* the outcome rather than replacing it; and the identity-provider lines appear only
+under `caller-a`.
+
+The same shape when the shared exchange fails — here a `500` from the IdP, captured the same
+way — shows the wait line is not conditional on success, and that the failure itself is still
+the callers' to report:
+
+```json
+{"time":"2026-09-21T19:23:50.056266-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-a"}
+{"time":"2026-09-21T19:23:50.056709-07:00","level":"DEBUG","msg":"requesting broker token from identity provider","broker":"artifact-failed-broker","correlation_id":"failed-a"}
+{"time":"2026-09-21T19:23:50.05784-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-b"}
+{"time":"2026-09-21T19:23:50.114856-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-failed-broker","waited":"56.999875ms","correlation_id":"failed-b"}
+```
+
+Neither request logs a completion line — a failed exchange is not a completion — and the error
+itself reaches the operator through each caller's own error result, as before. What is new is
+the one line naming `failed-b` as a request that joined `failed-a`'s exchange rather than
+having run an exchange of its own.
+
+Do not read the wait line as a fault or as a load signal. A waiting request is the
+deduplication working as designed: it is attribution, not degradation, there is no metric
+behind it, and it needs no response. Nor is it
+`token exchange abandoned by caller`, which carries the same `waited` key on a different
+message and means the opposite — that caller waited and left with nothing.
+
+Three lines never carry
 a correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
 on a window of failures, not on any one request — filter on its `breaker` attribute instead),
 the startup configuration WARN, and the `registered OAuth protected resource metadata endpoint`
@@ -2779,6 +2851,13 @@ credentials, or the egress path to the IdP is blocked.
 **First response.** Check the IdP's own health. Confirm the pod can reach the token endpoint
 and that DNS resolves. Check the client credentials have not expired or been rotated. The
 breaker recovers on its own once exchanges succeed — do not restart to force it.
+
+If `log_level` is already `debug` for the window you are looking at, the
+`waited for concurrent broker token exchange` lines name the requests that were riding one
+failing exchange rather than each running their own, which is useful for telling an affected
+caller from an initiating one while reading logs. Treat it as attribution only: it is not a
+saturation or queue-depth signal, there is no metric behind it, and the number of such lines
+says nothing about IdP health.
 
 **Escalate.** To the IdP team if the IdP is unhealthy or the credentials were rotated without
 notice. To the platform team if the egress path is blocked.
