@@ -43,12 +43,10 @@ var tracer = otel.Tracer("solace-broker-mcp/tokenexchange")
 // exchangeGroupResult is what the singleflight group's func returns and
 // every caller sharing that call — winner and followers alike — receives
 // back through DoChan's channel. winnerSpanCtx is always the WINNER's own
-// captured span context (see the DoChan call site), which is how a
-// follower's caller learns which trace actually did the IdP work: it
-// compares its own captured span context's TraceID and SpanID against this
-// one (both, not SpanID alone — a SpanID collision across two different
-// traces is astronomically unlikely but cheap to also rule out, since the
-// TraceID is already in hand).
+// captured span context (see the DoChan call site). It is a pointer a
+// follower can link to, not the per-caller winner/waiter identity: that
+// identity is ranExchange at the call site, because this result is shared
+// and cannot say "this particular caller waited."
 type exchangeGroupResult struct {
 	tok           *Token
 	winnerSpanCtx oteltrace.SpanContext
@@ -70,10 +68,14 @@ const msgWaitedForConcurrentExchange = "waited for concurrent broker token excha
 // sibling preceding it. correlation_id joins the span to the same request's
 // logs and audit records (docs/observability.md's committed span-attribute
 // set). cache_hit distinguishes a served-from-cache call from one that
-// required (or waited on) a live IdP round trip; outcome follows the shared
-// success/error/cancelled vocabulary (ADR-009), and a failed span's status
-// is set accordingly so trace backends that key error views off span status
-// (not a vendor-specific attribute) surface it correctly.
+// required (or waited on) a live IdP round trip; on a cache miss,
+// singleflight_role is winner or follower from the same per-call bit the
+// wait log uses (ranExchange), omitted when the winner's span context is
+// invalid so tracing-off deployments still have no role attribute. outcome
+// follows the shared success/error/cancelled vocabulary (ADR-009), and a
+// failed span's status is set accordingly so trace backends that key error
+// views off span status (not a vendor-specific attribute) surface it
+// correctly.
 //
 // error_type is deliberately NOT set on outcome=error: that closed set is
 // scoped to tool invocation outcomes (internal/tools/manager.go), and none
@@ -127,7 +129,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 			}
 			if singleflightRole != "" {
 				attrs = append(attrs, attribute.String("singleflight_role", singleflightRole))
-				if singleflightRole == "follower" {
+				if singleflightRole == "follower" && winnerSpanCtx.IsValid() {
 					// A real span Link, not just the two ID attributes below:
 					// AddLink DOES work post-start on this SDK version
 					// (trace.Span.AddLink, sdk/trace's recordingSpan
@@ -139,7 +141,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 					// tracer.Start above. The two ID attributes stay
 					// alongside the link because most trace-backend UIs
 					// don't render a link's target inline the way an
-					// attribute value renders in a table.
+					// attribute value renders in a table. IsValid is the
+					// same gate as classification below: "I waited" is not
+					// itself a link target.
 					span.AddLink(oteltrace.Link{SpanContext: winnerSpanCtx})
 					attrs = append(attrs,
 						attribute.String("winner_trace_id", winnerSpanCtx.TraceID().String()),
@@ -268,11 +272,13 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	start := e.nowFunc()
 	// ranExchange answers, for THIS caller only, "did I run the shared func?"
 	// — singleflight runs exactly one caller's closure, so exactly one
-	// caller's local ever flips, whatever the burst size. It is deliberately
-	// not res.Shared: the library sets that on the WINNER's result too once
-	// another caller joins, which would label the caller that talked to the
-	// IdP a waiter. Nor singleflightRole below, which is computed only when a
-	// span context is valid and so is dead with tracing off (the default).
+	// caller's local ever flips, whatever the burst size. It is the one
+	// formula for winner vs waiter: the wait log reads it directly, and
+	// singleflightRole below is derived from the same bit (published only
+	// when the winner's span context is valid, so tracing-off still omits
+	// the attribute). It is deliberately not res.Shared: the library sets
+	// that on the WINNER's result too once another caller joins, which
+	// would label the caller that talked to the IdP a waiter.
 	//
 	// Race-clean under -race without atomics: the closure's write happens on
 	// singleflight's goroutine before doCall sends the Result on every
@@ -378,18 +384,16 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 
 		// One checked assertion, used for both the role classification here
 		// and the token extraction below (flagged by review — an unchecked
-		// second assertion of the same value was 30 lines apart). Sets the
-		// outer singleflightRole/winnerSpanCtx that Exchange's own deferred
-		// span-closing block reads — see exchangeGroupResult's doc for why
-		// the comparison is by TraceID+SpanID rather than by the whole
-		// SpanContext (which isn't comparable with ==; TraceState holds a
-		// slice internally). Computed before the res.Err branch below so a
-		// follower's span is self-describing on the error path too, not
-		// only on success.
+		// second assertion of the same value was 30 lines apart). Role is
+		// ranExchange, not a second span-ID compare: the shared result
+		// cannot name this caller. winnerSpanCtx is copied only for a
+		// follower's link. The IsValid gate keeps singleflight_role omitted
+		// when tracing is off (invalid contexts), matching Story 50.
+		// Computed before the res.Err branch below so a follower's span is
+		// self-describing on the error path too, not only on success.
 		groupResult, _ := res.Val.(exchangeGroupResult)
 		if groupResult.winnerSpanCtx.IsValid() {
-			if groupResult.winnerSpanCtx.TraceID() == callerSpanCtx.TraceID() &&
-				groupResult.winnerSpanCtx.SpanID() == callerSpanCtx.SpanID() {
+			if ranExchange {
 				singleflightRole = "winner"
 			} else {
 				singleflightRole = "follower"
