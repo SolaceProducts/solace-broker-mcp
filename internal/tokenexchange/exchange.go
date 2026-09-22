@@ -315,6 +315,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		// to the work that actually served it).
 		return exchangeGroupResult{tok: tok, winnerSpanCtx: callerSpanCtx}, err
 	})
+	if e.afterSingleflightDispatch != nil {
+		e.afterSingleflightDispatch()
+	}
 
 	// abandonedByCaller records a caller that left before taking a result, and
 	// returns its context error. BOTH select branches below reach it: the

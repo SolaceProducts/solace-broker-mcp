@@ -3146,6 +3146,28 @@ func waitForCacheMiss(t *testing.T, logs *jsonLogBuffer, alias, corrID string) {
 	}
 }
 
+// trackSingleflightDispatches observes the point immediately after DoChan has
+// registered a caller. Waiting for the expected count is a deterministic proof
+// that every intended waiter joined before a test releases the shared call.
+func trackSingleflightDispatches(e *Exchanger) <-chan struct{} {
+	dispatched := make(chan struct{}, 8)
+	e.afterSingleflightDispatch = func() { dispatched <- struct{}{} }
+	return dispatched
+}
+
+func waitForSingleflightDispatches(t *testing.T, dispatched <-chan struct{}, want int) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for i := 0; i < want; i++ {
+		select {
+		case <-dispatched:
+		case <-timer.C:
+			t.Fatalf("singleflight dispatches = %d, want %d within 2s", i, want)
+		}
+	}
+}
+
 func recordsWithMsg(recs []map[string]any, msg string) []map[string]any {
 	var out []map[string]any
 	for _, r := range recs {
@@ -3202,6 +3224,7 @@ func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
 
 	// Real clock, not pinnedNow: waited must parse to a POSITIVE duration.
 	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-burst-broker"
 
@@ -3228,7 +3251,7 @@ func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
 		call(id)
 		waitForCacheMiss(t, logs, input.BrokerAlias, id)
 	}
-	time.Sleep(50 * time.Millisecond) // grace for the DoChan joins themselves
+	waitForSingleflightDispatches(t, dispatched, 3)
 	openGate()
 	wg.Wait()
 
@@ -3316,6 +3339,7 @@ func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
 	defer srv.Close()
 
 	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-gate-broker"
 
@@ -3359,7 +3383,7 @@ func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
 	}()
 
 	waitForCacheMiss(t, logs, input.BrokerAlias, "gate-waiter-id")
-	time.Sleep(50 * time.Millisecond) // grace for the DoChan join itself
+	waitForSingleflightDispatches(t, dispatched, 2)
 	releaseClock()
 	wg.Wait()
 
@@ -3445,6 +3469,7 @@ func TestExchange_WaitLineDarkAtInfo(t *testing.T) {
 	defer openGate()
 
 	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
 	input := validInput()
 	input.BrokerAlias = "wait-line-dark-broker"
 
@@ -3469,7 +3494,7 @@ func TestExchange_WaitLineDarkAtInfo(t *testing.T) {
 		call(id)
 		waitForCacheMiss(t, debugLogs, input.BrokerAlias, id)
 	}
-	time.Sleep(50 * time.Millisecond) // grace for the DoChan joins themselves
+	waitForSingleflightDispatches(t, dispatched, 3)
 	openGate()
 	wg.Wait()
 
