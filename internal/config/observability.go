@@ -94,15 +94,16 @@ type ObservabilityConfig struct {
 	// Identity fields (SOL-152425, Story 34): wired into the single OTel
 	// resource.Resource shared by the meter provider (Story 14) and the
 	// tracer provider (Story 25), and into the default slog attributes. See
-	// internal/observability/resource. ServiceName defaults to
-	// "solace-broker-mcp" when empty. ServiceInstanceID falls back to the
-	// Kubernetes-downward-API pod name, then the process hostname, when
-	// empty — an explicit override for the (uncommon) case where neither
-	// identifies the instance usefully (e.g. bare-metal instances that share
-	// a hostname). DeploymentEnvironment and CloudRegion are omitted from the
-	// resource (and from logs) when empty — there is no meaningful default
-	// for either, and an empty value is not the same question as "not
-	// configured".
+	// internal/observability/resource, which resolves each through one chain:
+	// this field, then OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES, then a
+	// built-in default (SOL-154608). All four are left empty here when unset,
+	// so setting a field overrides the env var and leaving it unset honors it.
+	// The defaults, applied only when neither source is set: "solace-broker-mcp";
+	// the downward-API pod name then the hostname (ServiceInstanceID is an
+	// override for the uncommon case where neither identifies the instance,
+	// e.g. bare-metal instances sharing a hostname); and, for the last two,
+	// omitting the attribute entirely — empty is not the same question as
+	// "not configured".
 	ServiceName           string `yaml:"service_name"`
 	ServiceInstanceID     string `yaml:"service_instance_id"`
 	DeploymentEnvironment string `yaml:"deployment_environment"`
@@ -207,9 +208,10 @@ func applyObservabilityDefaults(cfg *ServerConfig) {
 	if o.MetricsBindAddress == "" {
 		o.MetricsBindAddress = defaults.DefaultMetricsBindAddress
 	}
-	if o.ServiceName == "" {
-		o.ServiceName = defaults.DefaultServiceName
-	}
-	// DeploymentEnvironment and CloudRegion are deliberately NOT defaulted:
-	// empty means "omit this attribute", not "use a placeholder value".
+	// None of the four identity fields is defaulted here. A value defaulted at
+	// this layer is indistinguishable from one the operator wrote, leaving the
+	// standard env vars no gap to fall into — exactly why OTEL_SERVICE_NAME
+	// never took effect before SOL-154608. internal/observability/resource
+	// owns the chain. DeploymentEnvironment and CloudRegion additionally have
+	// nothing to default TO: empty means "omit this attribute".
 }

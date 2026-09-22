@@ -83,6 +83,14 @@ data:
     #   metrics_bind_address: ":9091"  # networkpolicy.yaml, service.yaml, and
     #                                  # deployment.yaml spell this port too
     #   shutdown_drain_delay_s: 10     # raise terminationGracePeriodSeconds with it
+    #
+    #   # Identity. Each resolves: this field, else the standard OTel env var
+    #   # (OTEL_SERVICE_NAME, or an OTEL_RESOURCE_ATTRIBUTES entry), else the
+    #   # default. Unset lets a cluster-wide injection supply it; set pins it.
+    #   service_name: "solace-broker-mcp"    # the default when neither is set
+    #   service_instance_id: "${POD_NAME}"   # default: POD_NAME, else hostname
+    #   deployment_environment: "production" # omitted when unset
+    #   cloud_region: "us-east-1"            # omitted when unset
 
     brokers:
       my-broker:

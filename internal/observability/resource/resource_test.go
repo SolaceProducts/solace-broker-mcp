@@ -24,17 +24,17 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
-// TestMain clears the ambient OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME
-// env vars before any test in this package runs. sdkresource.Default()
-// memoizes its result behind a sync.Once, so whichever value it reads from
-// these vars on its first call in the process is permanent — t.Setenv on an
-// individual test cannot undo it. Without this, a developer's or CI runner's
-// ambient environment could make the omitted-vs-present assertions below
-// (TestNew_OptionalAttributes_OmittedWhenUnconfigured,
-// TestSlogAttrs_OmitsUnconfiguredOptionalAttrs) fail nondeterministically.
+// TestMain clears the ambient OTEL_* vars, then primes sdkresource.Default()
+// against that cleared environment. Both halves matter: Default() caches
+// behind a sync.Once, so clearing alone leaves the first New call — whichever
+// test that is, and under -shuffle that varies — baking its own env into the
+// cache and breaking the omitted-vs-present assertions below. The precedence
+// tests are unaffected either way: New reads sdkresource.Environment(), which
+// is not memoized.
 func TestMain(m *testing.M) {
 	os.Unsetenv("OTEL_RESOURCE_ATTRIBUTES")
 	os.Unsetenv("OTEL_SERVICE_NAME")
+	sdkresource.Default()
 	os.Exit(m.Run())
 }
 
@@ -61,11 +61,14 @@ func hasAttrKey(res *sdkresource.Resource, key attribute.Key) bool {
 	return false
 }
 
-// TestNew_DefaultServiceName pins the fallback when ServiceName is empty —
-// exercises New directly against a zero-value ObservabilityConfig, the
-// defense-in-depth path serviceName's doc comment describes; production
-// config loading has already defaulted this by the time New is called.
-func TestNew_DefaultServiceName(t *testing.T) {
+// TestNew_ServiceName_DefaultWhenNeitherSourceSet pins step 3 for
+// service.name. Since SOL-154608 this is the only place that default is
+// applied, so it is a production path, not the defense-in-depth case it was.
+// It also pins that Default()'s "unknown_service:<binary>" placeholder never
+// reaches the merged resource — an implementation that just omitted the
+// attribute when both sources were empty would export
+// "unknown_service:resource.test" here.
+func TestNew_ServiceName_DefaultWhenNeitherSourceSet(t *testing.T) {
 	res, err := New(config.ObservabilityConfig{}, "v1.2.3")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -78,8 +81,8 @@ func TestNew_DefaultServiceName(t *testing.T) {
 	}
 }
 
-// TestNew_ConfiguredServiceName pins that an explicit ServiceName overrides
-// the default.
+// TestNew_ConfiguredServiceName pins step 1 for service.name: an explicit
+// YAML field overrides the built-in default.
 func TestNew_ConfiguredServiceName(t *testing.T) {
 	res, err := New(config.ObservabilityConfig{ServiceName: "my-mcp"}, "v1")
 	if err != nil {
@@ -229,5 +232,186 @@ func TestSlogAttrs_OmitsUnconfiguredOptionalAttrs(t *testing.T) {
 	}
 	if attrs[0].Key != "service.name" {
 		t.Errorf("SlogAttrs()[0].Key = %q, want %q", attrs[0].Key, "service.name")
+	}
+}
+
+// --- Standard OTel environment variables (SOL-154608) ---
+//
+// The tests above cover step 1 (YAML set) and step 3 (neither set); these
+// cover step 2 and the step interactions the old implementation got wrong.
+
+// identityAttrs drives the precedence matrix. One table rather than
+// per-attribute tests: the asymmetry SOL-154608 fixes (two attributes honored
+// the standard vars, two silently did not) could otherwise come back one
+// attribute at a time.
+var identityAttrs = []struct {
+	key     attribute.Key
+	setYAML func(*config.ObservabilityConfig, string)
+}{
+	{key: "service.name", setYAML: func(o *config.ObservabilityConfig, v string) { o.ServiceName = v }},
+	{key: "service.instance.id", setYAML: func(o *config.ObservabilityConfig, v string) { o.ServiceInstanceID = v }},
+	{key: deploymentEnvironmentNameKey, setYAML: func(o *config.ObservabilityConfig, v string) { o.DeploymentEnvironment = v }},
+	{key: "cloud.region", setYAML: func(o *config.ObservabilityConfig, v string) { o.CloudRegion = v }},
+}
+
+// TestNew_EnvHonouredWhenYAMLUnset pins step 2 for all four attributes.
+//
+// Against the pre-SOL-154608 implementation this fails all FOUR rows, not the
+// two that were broken in production: the optional two were honored only via
+// Default(), which TestMain primes clean, so that route was never observable
+// from a test — which is why the asymmetry survived a release.
+//
+// POD_NAME is set throughout so the service.instance.id row also proves the
+// env var outranks the pod-name fallback, not merely that it is read.
+func TestNew_EnvHonouredWhenYAMLUnset(t *testing.T) {
+	for _, a := range identityAttrs {
+		t.Run(string(a.key), func(t *testing.T) {
+			t.Setenv("POD_NAME", "pod-name-should-lose")
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", string(a.key)+"=from-env")
+
+			res, err := New(config.ObservabilityConfig{}, "v1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if got := findAttr(t, res, a.key); got != "from-env" {
+				t.Errorf("%s = %q, want %q from OTEL_RESOURCE_ATTRIBUTES", a.key, got, "from-env")
+			}
+		})
+	}
+}
+
+// TestNew_YAMLWinsOverEnv pins step 1 over step 2 for all four attributes —
+// the half of the contract that must NOT change, so a deployment relying on
+// the YAML field keeps working across this story.
+func TestNew_YAMLWinsOverEnv(t *testing.T) {
+	for _, a := range identityAttrs {
+		t.Run(string(a.key), func(t *testing.T) {
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", string(a.key)+"=from-env")
+
+			var cfg config.ObservabilityConfig
+			a.setYAML(&cfg, "from-yaml")
+
+			res, err := New(cfg, "v1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if got := findAttr(t, res, a.key); got != "from-yaml" {
+				t.Errorf("%s = %q, want the YAML value to win", a.key, got)
+			}
+		})
+	}
+}
+
+// TestNew_ServiceName_OTelServiceNameVar pins the dedicated variable — the
+// one the OpenTelemetry Operator injects — not just the
+// OTEL_RESOURCE_ATTRIBUTES route the matrix uses.
+func TestNew_ServiceName_OTelServiceNameVar(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "from-otel-service-name")
+
+	res, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := findAttr(t, res, "service.name"); got != "from-otel-service-name" {
+		t.Errorf("service.name = %q, want the OTEL_SERVICE_NAME value", got)
+	}
+}
+
+// TestNew_ServiceName_OTelServiceNameBeatsResourceAttributes pins the spec's
+// ordering between the two env routes. New gets this free by reading
+// sdkresource.Environment(); the test catches a future rewrite that parses
+// the variables by hand and drops it.
+func TestNew_ServiceName_OTelServiceNameBeatsResourceAttributes(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "dedicated-var")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.name=resource-attributes-var")
+
+	res, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := findAttr(t, res, "service.name"); got != "dedicated-var" {
+		t.Errorf("service.name = %q, want OTEL_SERVICE_NAME to outrank the OTEL_RESOURCE_ATTRIBUTES entry", got)
+	}
+}
+
+// TestNew_ServiceName_YAMLWinsOverOTelServiceNameVar pins "ignored when the
+// YAML field is set" against the dedicated variable specifically.
+func TestNew_ServiceName_YAMLWinsOverOTelServiceNameVar(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "from-env")
+
+	res, err := New(config.ObservabilityConfig{ServiceName: "from-yaml"}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := findAttr(t, res, "service.name"); got != "from-yaml" {
+		t.Errorf("service.name = %q, want the YAML value to win", got)
+	}
+}
+
+// TestNew_OptionalAttributes_StillOmittedWithUnrelatedEnvVar pins that an
+// envAttr lookup returning "" is treated as absent, so New contributes no
+// attribute.
+//
+// Narrow on purpose: this covers what New contributes, NOT that the merged
+// resource omits empty-valued attributes. With OTEL_RESOURCE_ATTRIBUTES=
+// cloud.region= (an unset ${REGION} in a manifest), Default()'s own detector
+// emits cloud.region="", which survives unopposed precisely because New
+// omitted the key. That predates SOL-154608 and is unchanged by it, and no
+// test here can see it: TestMain primes Default() clean.
+func TestNew_OptionalAttributes_StillOmittedWithUnrelatedEnvVar(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "some.other.attribute=value")
+
+	res, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if hasAttrKey(res, deploymentEnvironmentNameKey) {
+		t.Error("deployment.environment.name is present with neither source set")
+	}
+	if hasAttrKey(res, "cloud.region") {
+		t.Error("cloud.region is present with neither source set")
+	}
+}
+
+// TestSlogAttrs_ReflectsEnvResolvedIdentity pins that logs follow the same
+// precedence as the resource: an operator setting OTEL_SERVICE_NAME must not
+// see one service.name on metrics and another in logs.
+func TestSlogAttrs_ReflectsEnvResolvedIdentity(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "env-named-service")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=env-staging,cloud.region=env-west")
+
+	res, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	got := map[string]string{}
+	for _, a := range SlogAttrs(res) {
+		got[a.Key] = a.Value.String()
+	}
+	want := map[string]string{
+		"service.name":                "env-named-service",
+		"deployment.environment.name": "env-staging",
+		"cloud.region":                "env-west",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("SlogAttrs()[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestNew_MalformedResourceAttributesDoNotFailStartup: entries that parse are
+// honored, the rest dropped with an SDK diagnostic, no error. A stray comma in
+// a platform-injected variable must not be why a pod fails to start.
+func TestNew_MalformedResourceAttributesDoNotFailStartup(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "no-equals-sign,service.name=still-parsed")
+
+	res, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v; malformed OTEL_RESOURCE_ATTRIBUTES must not fail construction", err)
+	}
+	if got := findAttr(t, res, "service.name"); got != "still-parsed" {
+		t.Errorf("service.name = %q, want the entry that parsed cleanly", got)
 	}
 }
