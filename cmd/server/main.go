@@ -1110,7 +1110,8 @@ func main() {
 	// sdkresource.Default() alone is a safe (merely less identifying)
 	// fallback, and refusing to serve MCP traffic over an identity-attribute
 	// problem would be a bad trade.
-	res, err := resource.New(cfg.Observability, version.Version())
+	res, identity, err := resource.New(cfg.Observability, version.Version())
+	identityResolved := err == nil
 	if err != nil {
 		slog.Error("observability identity resource unavailable; falling back to SDK defaults",
 			slog.String("error", err.Error()))
@@ -1131,6 +1132,30 @@ func main() {
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
 	logStartupBanners(cfg)
+
+	// The resolved identity, and which input won each attribute. Nothing
+	// else announces this, and each resolves through a chain up to five
+	// sources deep (SOL-154727). It matters most for service.instance.id:
+	// since SOL-154608 an OTEL_RESOURCE_ATTRIBUTES entry outranks the
+	// downward-API pod name, so a platform injecting one shared value across
+	// a Deployment collapses every replica onto a single instance id — and
+	// service.instance.id is excluded from the per-line identity attributes,
+	// so nothing in the log stream would otherwise show it.
+	//
+	// Placed here for the same reason logStartupBanners is, and it is load
+	// bearing for the same reason: emitted after the reconfigure below, this
+	// line would vanish at log_level: warn or error, which is precisely when
+	// an operator has least other signal. A diagnostic for a silent
+	// misconfiguration cannot itself be silenceable.
+	//
+	// Skipped when New failed: res is then a bare sdkresource.Default() and
+	// the zero Identity would report four empty values under no source at
+	// all, which is worse than the error already logged above. See
+	// resource.Identity.LogAttrs for the key naming.
+	if identityResolved {
+		slog.LogAttrs(context.Background(), slog.LevelInfo,
+			"observability identity resolved", identity.LogAttrs()...)
+	}
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error. Same

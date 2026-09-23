@@ -130,7 +130,8 @@ func TestRegisterShutdownHooks_OnlyMetricsRegistered(t *testing.T) {
 // resource.New exercises the same construction path main() uses.
 func resourceForTest(t *testing.T) (*sdkresource.Resource, error) {
 	t.Helper()
-	return resource.New(config.ObservabilityConfig{
+	res, _, err := resource.New(config.ObservabilityConfig{
 		ServiceName: "test-service",
 	}, "v1.2.3")
+	return res, err
 }
