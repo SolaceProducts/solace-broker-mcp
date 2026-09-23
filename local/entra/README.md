@@ -16,7 +16,7 @@ Run commands from the **repo root** (`make entra-up`). Do not `cd` here. Root al
 
 2. **Secret.** `cp local/entra/.env.example local/entra/.env` and set `MCP_SERVER_CLIENT_SECRET` to the mcp-broker client secret. Ask a teammate who already has the lab; it is not in git.
 
-3. Then `make entra-up` from the repo root.
+3. Then `make entra-up` from the repo root (root aliases come in a later commit). Until then, certs: `make -C local/entra certs`.
 
 ## After the server is up
 
