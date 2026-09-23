@@ -2,9 +2,9 @@
 
 Laptop stack for the shared **solacetest.com** Entra tenant. Not a product feature. Not CI.
 
-Run commands from the **repo root** (`make entra-up`). Do not `cd` here. Root aliases land in a later commit; until then this folder is the package only.
+Until root aliases land, run from the **repo root** with `make -C local/entra <target>`. Do not `cd` here.
 
-## Before `make entra-up`
+## Before `make -C local/entra run`
 
 1. **Hosts** (needs admin). Own line, not glued to FortiClient:
 
@@ -16,12 +16,16 @@ Run commands from the **repo root** (`make entra-up`). Do not `cd` here. Root al
 
 2. **Secret.** `cp local/entra/.env.example local/entra/.env` and set `MCP_SERVER_CLIENT_SECRET` to the mcp-broker client secret. Ask a teammate who already has the lab; it is not in git.
 
-3. Then `make entra-up` from the repo root (root aliases come in a later commit). Until then:
+3. Certs and brokers, then render + run:
 
    ```
    make -C local/entra certs
    make -C local/entra brokers-up
+   make -C local/entra config
+   make -C local/entra run MCP_REPO=/Users/amitmorade/Desktop/projects/mcp+rag/solace-broker-mcp
    ```
+
+   `run` is blocking. Do not start it from this checkout's default `MCP_REPO` (this tree is origin/main; jwt-bearer is not in `validGrantTypes`). Point `MCP_REPO=` at a tree that implements `GrantTypeJWTBearer` (typically `amorade/entra-prototype` in the sibling checkout above).
 
    `brokers-down` removes only these containers:
 
@@ -35,14 +39,17 @@ Run commands from the **repo root** (`make entra-up`). Do not `cd` here. Root al
 
 ## After the server is up
 
-Claude is a separate process. Export `NODE_EXTRA_CA_CERTS` and `NO_PROXY` as printed by `entra-up`, **restart Claude**, reconnect with mcp-agent Application (client) ID `REDACTED` (no client secret).
+Claude is a separate process. `make -C local/entra run` prints `NODE_EXTRA_CA_CERTS` and `NO_PROXY`. Export those, **restart Claude**, reconnect with mcp-agent Application (client) ID `REDACTED` (no client secret).
+
+`make -C local/entra claude-cmd` prints the full launch line.
 
 ## Coming back later
 
-`make entra-up` again (converge: start what is stopped, re-PATCH the broker Entra profile). Until root aliases land, `make -C local/entra brokers-up` / `make -C local/entra brokers-down`.
-`make entra-down` stops our containers; keeps `.local/` and `.env`.
-`make entra-reset` when the broker is wedged.
-`make entra-certs-clean` only if TLS is wrong; then restart Claude.
+`make -C local/entra brokers-up` again (converge: start what is stopped, re-PATCH the broker Entra profile).
+`make -C local/entra brokers-down` stops our containers; keeps `.local/` and `.env`.
+`make -C local/entra certs-clean` only if TLS is wrong; then restart Claude.
+
+Root aliases (`make entra-up` / `entra-down` / `entra-reset`) land in a later commit.
 
 ## Generated files
 
