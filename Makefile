@@ -306,13 +306,26 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 	docker build --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .
 
 # ── Local Entra lab ──────────────────────────────────────────────────────────
-# Thin wrappers. Broker/SEMP work stays in local/entra/. Default MCP_REPO is
-# this tree; entra-run still refuses until you override to a jwt-bearer checkout.
+# Thin wrappers. Broker/SEMP work stays in local/entra/.
+# MCP_REPO from the command line or environment wins. Otherwise use this tree
+# if it implements jwt-bearer, else a sibling solace-broker-mcp checkout.
 
-MCP_REPO   ?= $(CURDIR)
 ENTRA_DIR  := local/entra
 ENTRA_ENV  := $(ENTRA_DIR)/.env
 ENTRA_HOST := mcp-lab.solacetest.com
+ENTRA_SIB  := $(abspath $(CURDIR)/../solace-broker-mcp)
+
+ifeq ($(filter command line environment,$(origin MCP_REPO)),)
+  ifeq ($(shell grep -q 'GrantTypeJWTBearer, // NON-PROD' $(CURDIR)/internal/config/config.go 2>/dev/null && echo yes),yes)
+    MCP_REPO := $(CURDIR)
+  else
+    ifeq ($(shell grep -q 'GrantTypeJWTBearer, // NON-PROD' $(ENTRA_SIB)/internal/config/config.go 2>/dev/null && echo yes),yes)
+      MCP_REPO := $(ENTRA_SIB)
+    else
+      MCP_REPO := $(CURDIR)
+    endif
+  endif
+endif
 
 .PHONY: entra-preflight
 entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
@@ -351,17 +364,22 @@ entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
 	  fi; \
 	fi
 
+.PHONY: entra
+entra: entra-up entra-run ## One laptop command: converge brokers then run MCP (blocking)
+
 .PHONY: entra-up
 entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does not start MCP
 	@if [ ! -f "$(MCP_REPO)/internal/config/config.go" ] || ! grep -q 'GrantTypeJWTBearer, // NON-PROD' "$(MCP_REPO)/internal/config/config.go"; then \
-	  echo "NOTE: MCP_REPO=$(MCP_REPO) does not implement jwt-bearer; make entra-run will fail until you pass MCP_REPO= to a GrantTypeJWTBearer tree (e.g. amorade/entra-prototype)."; \
+	  echo "NOTE: MCP_REPO=$(MCP_REPO) does not implement jwt-bearer; make entra / entra-run will fail until a GrantTypeJWTBearer tree is on MCP_REPO (sibling solace-broker-mcp or MCP_REPO=)."; \
 	fi
 	$(MAKE) -C $(ENTRA_DIR) certs MCP_REPO=$(MCP_REPO)
 	$(MAKE) -C $(ENTRA_DIR) brokers-up MCP_REPO=$(MCP_REPO)
 	$(MAKE) -C $(ENTRA_DIR) config MCP_REPO=$(MCP_REPO)
-	@echo "Next (MCP is not started):"
-	@echo "  make entra-run MCP_REPO=<jwt-bearer-tree>"
-	@echo "  make entra-claude-cmd"
+	@if [ "$(filter entra,$(MAKECMDGOALS))" = "" ]; then \
+	  echo "Next (MCP is not started):"; \
+	  echo "  make entra          # converge + run (prints Claude launch line, then blocks)"; \
+	  echo "  make entra-run      # run only (same Claude line before go run)"; \
+	fi
 
 .PHONY: entra-run
 entra-run: entra-preflight ## Run MCP against the Entra lab (blocking)

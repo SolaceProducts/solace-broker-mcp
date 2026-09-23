@@ -62,8 +62,7 @@ run: config ## Run the MCP server (blocking) against this lab
 	  echo "MCP_SERVER_CLIENT_SECRET is empty — copy .env.example and set the mcp-broker client secret"; \
 	  exit 1; \
 	fi
-	@echo "NODE_EXTRA_CA_CERTS=$(CERT_ROOT)/combined-ca-bundle.crt"
-	@echo "NO_PROXY=mcp-lab.solacetest.com"
+	@$(MAKE) claude-cmd
 	CONFIG_FILE=$(CONFIG_FILE) \
 	ENV_FILE=$(ENV_FILE) \
 	MCPGODEBUG=disablelocalhostprotection=1 \
