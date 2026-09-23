@@ -22,24 +22,24 @@ allow_insecure_broker_tls: true
 # registration time, before RBAC even runs. Default is false.
 enable_write_tools: true
 
-# Rendered by `make config` — @@CERT_ROOT@@ is substituted with an absolute
-# path so the server can be launched from any working directory.
-# Do not edit the rendered file; edit this template.
+# Rendered by `make config` — @@CERT_ROOT@@ and @@ENTRA_*@@ / @@MCP_*@@ /
+# @@BROKER_*@@ placeholders come from entra-ids.sh. Edit that file for IDs;
+# edit this template for shape. Do not edit the rendered file.
 tls_cert_file: "@@CERT_ROOT@@/mcp-server/mcp-server.crt"
 tls_key_file: "@@CERT_ROOT@@/mcp-server/mcp-server.key"
 
 mcp_client_auth:
   mode: oauth
-  issuer: "https://login.microsoftonline.com/REDACTED/v2.0"
-  audience: "REDACTED"
-  resource_url: "https://mcp-lab.solacetest.com:19090/mcp"
+  issuer: "https://login.microsoftonline.com/@@ENTRA_TENANT_ID@@/v2.0"
+  audience: "@@MCP_BROKER_CLIENT_ID@@"
+  resource_url: "@@MCP_RESOURCE_URL@@"
   # Keep both. openid = OIDC sign-in (Learn: Sign you in / sub / ID token).
   # The access_as_user URI = token for this MCP API. Microsoft combined-
   # consent example is openid + {resource}/.default. Do not skip openid;
   # 9010010 was openid alone, not the pair.
   scopes_supported:
     - "openid"
-    - "https://mcp-lab.solacetest.com:19090/mcp/access_as_user"
+    - "@@MCP_ACCESS_AS_USER_SCOPE@@"
   tool_authorization:
     enabled: true
     # Narrow tools/list to what each caller may invoke (SOL-152888). Set false
@@ -107,8 +107,8 @@ mcp_client_auth:
         - list-vpns
 
 broker_oauth:
-  idp_token_endpoint: "https://login.microsoftonline.com/REDACTED/oauth2/v2.0/token"
-  mcp_server_client_id: "REDACTED"
+  idp_token_endpoint: "https://login.microsoftonline.com/@@ENTRA_TENANT_ID@@/oauth2/v2.0/token"
+  mcp_server_client_id: "@@MCP_BROKER_CLIENT_ID@@"
   mcp_server_client_auth:
     client_secret_post:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
@@ -130,15 +130,15 @@ brokers:
     auth:
       mode: oauth
       # test-broker-us Application ID URI + MSAL .default.
-      target: "api://REDACTED/.default"
+      target: "api://@@BROKER_RESOURCE_APP_ID@@/.default"
   test-us:
     url: "https://localhost:21945"
     insecure_skip_verify: true
     auth:
       mode: oauth
-      # Working: api://REDACTED/.default
+      # Working: api://@@BROKER_RESOURCE_APP_ID@@/.default
       # Probe: unregistered resource so OBO 400s (not a Hop 1 / jwt-bearer change).
-      target: "api://REDACTED/.default"
+      target: "api://@@OBO_PROBE_RESOURCE_APP_ID@@/.default"
   local-basic:
     url: "https://localhost:21944"
     insecure_skip_verify: true

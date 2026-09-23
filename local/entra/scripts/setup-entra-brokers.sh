@@ -19,13 +19,19 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../entra-ids.sh
+source "${SCRIPT_DIR}/../entra-ids.sh"
+: "${ENTRA_TENANT_ID:?missing ENTRA_TENANT_ID in entra-ids.sh}"
+: "${BROKER_RESOURCE_APP_ID:?missing BROKER_RESOURCE_APP_ID in entra-ids.sh}"
+: "${ENTRA_GROUP_OBJECT_ID:?missing ENTRA_GROUP_OBJECT_ID in entra-ids.sh}"
+: "${BROKER_OAUTH_REQUIRED_SCOPE:?missing BROKER_OAUTH_REQUIRED_SCOPE in entra-ids.sh}"
+
 BROKER_IMAGE="solace/solace-pubsub-standard:latest"
-TENANT="REDACTED"
-ISSUER="https://login.microsoftonline.com/${TENANT}/v2.0"
-JWKS_URL="https://login.microsoftonline.com/${TENANT}/discovery/v2.0/keys"
-REQUIRED_SCOPE="solace.admin"
-AUDIENCE="REDACTED"
-ENTRA_GROUP_OBJECT_ID="REDACTED"
+ISSUER="https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0"
+JWKS_URL="https://login.microsoftonline.com/${ENTRA_TENANT_ID}/discovery/v2.0/keys"
+REQUIRED_SCOPE="${BROKER_OAUTH_REQUIRED_SCOPE}"
+AUDIENCE="${BROKER_RESOURCE_APP_ID}"
 
 # broker-name  semp-host-port  smf-host-port  oauth|none
 BROKERS=(
@@ -174,7 +180,6 @@ upsert_group() {
     -H "Content-Type: application/json" -d "$body" >/dev/null
 }
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BROKER_TLS_DIR="${SCRIPT_DIR}/../.local/certs/broker"
 
 # Same job as test/e2e-oauth/helpers.sh install_broker_tls_cert.

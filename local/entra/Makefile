@@ -4,6 +4,7 @@ CERT_ROOT  := $(CURDIR)/.local/certs
 TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template
 CONFIG_FILE := $(CURDIR)/.local/broker-config.entra.yaml
 ENV_FILE   := $(CURDIR)/.env
+IDS_FILE   := $(CURDIR)/entra-ids.sh
 
 .DEFAULT_GOAL := help
 
@@ -28,11 +29,24 @@ brokers-down: ## Remove mcp-entra-solace* containers only (keeps .local/ and .en
 	@./scripts/teardown-entra-brokers.sh
 
 # Rendered YAML is gitignored under .local/. Edit the template, not the output.
+# Tenant/app GUIDs come from entra-ids.sh (sourced; not named .env).
 .PHONY: config
-config: ## Render broker-config.entra.yaml (absolute cert paths)
+config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 	@if [ ! -f "$(TEMPLATE)" ]; then echo "missing $(TEMPLATE)"; exit 1; fi
+	@if [ ! -f "$(IDS_FILE)" ]; then echo "missing $(IDS_FILE)"; exit 1; fi
 	@mkdir -p $(CURDIR)/.local
-	@sed -e 's|@@CERT_ROOT@@|$(CERT_ROOT)|g' "$(TEMPLATE)" > "$(CONFIG_FILE)"
+	@set -a && . "$(IDS_FILE)" && set +a && \
+	  : "$${ENTRA_TENANT_ID:?missing ENTRA_TENANT_ID}" && \
+	  : "$${MCP_BROKER_CLIENT_ID:?missing MCP_BROKER_CLIENT_ID}" && \
+	  sed \
+	    -e 's|@@CERT_ROOT@@|$(CERT_ROOT)|g' \
+	    -e "s|@@ENTRA_TENANT_ID@@|$${ENTRA_TENANT_ID}|g" \
+	    -e "s|@@MCP_BROKER_CLIENT_ID@@|$${MCP_BROKER_CLIENT_ID}|g" \
+	    -e "s|@@MCP_RESOURCE_URL@@|$${MCP_RESOURCE_URL}|g" \
+	    -e "s|@@MCP_ACCESS_AS_USER_SCOPE@@|$${MCP_ACCESS_AS_USER_SCOPE}|g" \
+	    -e "s|@@BROKER_RESOURCE_APP_ID@@|$${BROKER_RESOURCE_APP_ID}|g" \
+	    -e "s|@@OBO_PROBE_RESOURCE_APP_ID@@|$${OBO_PROBE_RESOURCE_APP_ID}|g" \
+	    "$(TEMPLATE)" > "$(CONFIG_FILE)"
 	@echo "rendered $(CONFIG_FILE)"
 
 .PHONY: config-clean
@@ -68,14 +82,27 @@ run: config ## Run the MCP server (blocking) against this lab
 # Do NOT carry this flag into production deployments or CI.
 
 .PHONY: claude-cmd
-claude-cmd: ## Print env + command to launch Claude trusting the lab certs
+claude-cmd: ## Print env + Claude mcp remove/add + launch line
 	@if [ ! -f $(CERT_ROOT)/combined-ca-bundle.crt ]; then \
 	  echo "CA bundle missing — run 'make certs' first."; exit 1; \
 	fi
-	@echo ""
-	@echo "Run this in a FRESH terminal (copy the whole line), then reconnect"
-	@echo "with mcp-agent Application (client) ID REDACTED"
-	@echo "(no client secret). Restart Claude if it was already running."
-	@echo ""
-	@echo "  NODE_EXTRA_CA_CERTS=\"$(CERT_ROOT)/combined-ca-bundle.crt\" NO_PROXY=mcp-lab.solacetest.com claude"
-	@echo ""
+	@set -a && . "$(IDS_FILE)" && set +a && \
+	echo "" && \
+	echo "Claude is a separate process. Quit Claude first. Copy the REAL cert path" && \
+	echo "(do not invent a '…' placeholder). mcp-agent client ID, no secret." && \
+	echo "Sign in as $${LAB_OPERATOR_UPN}." && \
+	echo "" && \
+	echo "  claude mcp list" && \
+	echo "  claude mcp remove solace-oauth-dev" && \
+	echo "  claude mcp remove solace-entra-lab" && \
+	echo "  # if it still appears: claude mcp remove <name> --scope user" && \
+	echo "  #                         --scope project  or  --scope local" && \
+	echo "" && \
+	echo "  NODE_EXTRA_CA_CERTS=\"$(CERT_ROOT)/combined-ca-bundle.crt\" NO_PROXY=$${MCP_RESOURCE_HOST} \\" && \
+	echo "    claude mcp add --transport http --client-id $${MCP_AGENT_CLIENT_ID} \\" && \
+	echo "    solace-entra-lab $${MCP_RESOURCE_URL}" && \
+	echo "" && \
+	echo "Then start Claude (same env, fresh terminal):" && \
+	echo "" && \
+	echo "  NODE_EXTRA_CA_CERTS=\"$(CERT_ROOT)/combined-ca-bundle.crt\" NO_PROXY=$${MCP_RESOURCE_HOST} claude" && \
+	echo ""
