@@ -1947,7 +1947,7 @@ series. All five follow the OpenTelemetry resource semantic conventions
 
 | Attribute | Source | Config key |
 |---|---|---|
-| `service.name` | config, else `OTEL_SERVICE_NAME`, else `solace-broker-mcp` | `observability.service_name` |
+| `service.name` | config, else `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`, else `solace-broker-mcp` | `observability.service_name` |
 | `service.version` | build-time injection | — |
 | `service.instance.id` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
 | `deployment.environment.name` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else omitted | `observability.deployment_environment` |
@@ -1972,6 +1972,13 @@ order:
 Set the YAML field to pin a value regardless of what the platform injects; leave it unset to
 let the platform's variable through. This matters because platform teams and the
 OpenTelemetry Operator inject these variables across every workload as a matter of course.
+
+**An empty field counts as unset, not as "pin empty".** `service_name: ""` behaves exactly
+like omitting the line — the chain moves on to step 2, and an injected `OTEL_SERVICE_NAME`
+takes effect. The same holds for all four fields. There is no way to pin an attribute to the
+empty string, and none of the four has a meaningful empty value: an empty `service.name`
+would not identify anything, and for the two optional attributes "empty" and "absent" are the
+same request. To pin a value, write the value.
 
 > **Changed in SOL-154608.** `service_name` and `service_instance_id` previously ignored the
 > standard environment variables outright: config always had a value for both by the time the

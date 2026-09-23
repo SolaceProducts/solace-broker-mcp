@@ -478,7 +478,7 @@ default, so the block may be omitted entirely, and every value supports `${VAR}`
 | `observability.saturation_threshold_ms` | — | `1000` | Queue wait above which a `broker admission slow` warning fires, when `OBS_SATURATION_EVENTS_ENABLED` is set. Sizing guidance under [When a broker is too busy](#when-a-broker-is-too-busy). |
 | `observability.otel_self_stats_interval_s` | — | `60` | Interval of the `otel self stats` log line, emitted when tracing is on but no meter provider exists — see [Observability § otel self stats](observability.md#otel-self-stats--periodic-when-metrics-are-off). |
 | `observability.progress_signal_threshold_ms` | — | `5000` | Reserved. Parsed and defaulted, but no signal consumes it yet. |
-| `observability.service_name` | `OTEL_SERVICE_NAME` | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. |
+| `observability.service_name` | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. `OTEL_SERVICE_NAME` wins between the two. |
 | `observability.service_instance_id` | `OTEL_RESOURCE_ATTRIBUTES` | pod name, else hostname | OTel `service.instance.id`. Set only when neither the downward-API pod name nor the hostname identifies the instance. |
 | `observability.deployment_environment` | `OTEL_RESOURCE_ATTRIBUTES` | none | OTel `deployment.environment.name`. Omitted from telemetry when empty. |
 | `observability.cloud_region` | `OTEL_RESOURCE_ATTRIBUTES` | none | OTel `cloud.region`. Omitted from telemetry when empty. |
@@ -486,7 +486,8 @@ default, so the block may be omitted entirely, and every value supports `${VAR}`
 **The four identity fields are the one place the env var does not simply override the YAML
 field — it is the other way round.** Each resolves as: the YAML field if set, else the
 standard OpenTelemetry variable, else the default in the table. Set the field to pin a value
-regardless of what the platform injects; leave it unset to honour the platform's variable.
+regardless of what the platform injects; leave it unset — or set it to `""`, which counts as
+unset — to honour the platform's variable.
 The other `OBS_*` variables in this document are unrelated capability switches. Full rules,
 including the ordering between `OTEL_SERVICE_NAME` and an `OTEL_RESOURCE_ATTRIBUTES`
 `service.name` entry, are under

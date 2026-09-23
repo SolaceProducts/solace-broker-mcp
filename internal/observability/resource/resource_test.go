@@ -415,3 +415,28 @@ func TestNew_MalformedResourceAttributesDoNotFailStartup(t *testing.T) {
 		t.Errorf("service.name = %q, want the entry that parsed cleanly", got)
 	}
 }
+
+// TestNew_EmptyYAMLFieldCountsAsUnset pins that an explicitly empty YAML field
+// behaves as unset for all four attributes, so step 2 still runs. The
+// zero-value config in TestNew_EnvHonouredWhenYAMLUnset reaches the same code
+// path but cannot express the intent: this is the contract docs/observability.md
+// states ("an empty field counts as unset, not as pin empty"), and writing ""
+// is what an operator does when a ${VAR} expands to nothing.
+func TestNew_EmptyYAMLFieldCountsAsUnset(t *testing.T) {
+	for _, a := range identityAttrs {
+		t.Run(string(a.key), func(t *testing.T) {
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", string(a.key)+"=from-env")
+
+			var cfg config.ObservabilityConfig
+			a.setYAML(&cfg, "")
+
+			res, err := New(cfg, "v1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if got := findAttr(t, res, a.key); got != "from-env" {
+				t.Errorf("%s = %q, want the env value; an empty YAML field must count as unset", a.key, got)
+			}
+		})
+	}
+}
