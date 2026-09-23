@@ -12,7 +12,7 @@ Laptop stack for the shared **solacetest.com** Entra tenant. Not a product featu
 | Brokers already up; only start/restart MCP | `make entra-run MCP_REPO=<checkout>` | **Required** |
 | Need certs + brokers + Entra SEMP PATCH, **not** the MCP process | `make entra-up` | No |
 | Brokers stopped or profile drifted; keep the same containers | `make entra-up` again (converge, re-PATCH) | No |
-| Brokers **exited**, POST/ulimit wrong, or create flags changed in the script | `make entra-reset` then `make entra MCP_REPO=<checkout>` | Reset: no. Then entra: **yes** |
+| Brokers **exited** or wedged | `make entra-reset` then `make entra MCP_REPO=<checkout>` | Reset: no. Then entra: **yes** |
 | Done for the day; keep `.env` and certs | `make entra-down` | No |
 | MCP TLS cert is wrong | `make entra-certs-clean` then `make entra-up` (or `entra`); restart Claude | As for entra |
 | Need the Claude launch line again | `make entra-claude-cmd` | No |
@@ -21,9 +21,7 @@ Laptop stack for the shared **solacetest.com** Entra tenant. Not a product featu
 
 `make entra-up` never starts MCP (`go run` blocks the terminal). `make entra` = `entra-up` then `entra-run`.
 
-**`entra-reset` vs `entra-up`:** `entra-up` starts existing containers and re-PATCHes. Docker/Podman freeze `--ulimit` and port maps at **create**. If the script changed those, or the container **exited** on Solace POST (e.g. `nofile`), `entra-up` will start the **same** broken container. `entra-reset` is `brokers-down` then `brokers-up`: **delete and recreate** the three `mcp-entra-solace*` names. It does not delete `.env` or certs.
-
-If SEMP “did not become ready in 90s”, check `podman ps -a` / `docker ps -a`. If status is **Exited**, do not raise the timeout — read logs, then `entra-reset` after the cause is fixed. 90s is for a **running** broker still booting.
+**`entra-reset` vs `entra-up`:** `entra-up` starts existing containers and re-PATCHes. `entra-reset` deletes and recreates the three `mcp-entra-solace*` names. It does not delete `.env` or certs.
 
 ## Prerequisites (once per laptop)
 
@@ -51,13 +49,13 @@ Claude is a **second process**. Copy the printed `NODE_EXTRA_CA_CERTS=… claude
 
 ## Brokers
 
-| Container            | Host ports  | MCP alias / auth              |
-| -------------------- | ----------- | ----------------------------- |
-| `mcp-entra-solace`   | 28081/21943 | prod-us, Entra OAuth          |
-| `mcp-entra-solace-c` | 28082/21944 | local-basic, `admin`/`admin`  |
-| `mcp-entra-solace-b` | 28083/21945 | test-us, Entra OAuth (OBO probe) |
+Bring-up copies infra’s `docker run` (image, shm, ulimits, 90s SEMP wait). Host ports are the Entra lab band so they do not steal infra `8081`/`1943`. Container names are `mcp-entra-solace*`. No Keycloak network. SEMP PATCH is Entra.
 
-Host ports are **not** infra `8081`/`1943`. Image is linux/amd64; on Apple Silicon you will see a platform warning (qemu). That is slow, not a substitute for reading **Exited** logs.
+| Container            | Host ports  | MCP alias / auth                 |
+| -------------------- | ----------- | -------------------------------- |
+| `mcp-entra-solace`   | 28081/21943 | prod-us, Entra OAuth             |
+| `mcp-entra-solace-c` | 28082/21944 | local-basic, `admin`/`admin`     |
+| `mcp-entra-solace-b` | 28083/21945 | test-us, Entra OAuth (OBO probe) |
 
 Do **not** run `solace-local-infra/brokers/setup-oauth-brokers.sh` on these names — it writes Keycloak issuer/JWKS.
 

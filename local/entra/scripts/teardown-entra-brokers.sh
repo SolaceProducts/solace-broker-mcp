@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-NAMES=(mcp-entra-solace mcp-entra-solace-c mcp-entra-solace-b)
+NAMES=(mcp-entra-solace mcp-entra-solace-b mcp-entra-solace-c)
 
 if command -v docker >/dev/null 2>&1; then
   CONTAINER_CLI=docker
