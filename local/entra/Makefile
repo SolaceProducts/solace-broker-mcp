@@ -44,8 +44,6 @@ config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 	    -e "s|@@MCP_BROKER_CLIENT_ID@@|$${MCP_BROKER_CLIENT_ID}|g" \
 	    -e "s|@@MCP_RESOURCE_URL@@|$${MCP_RESOURCE_URL}|g" \
 	    -e "s|@@MCP_ACCESS_AS_USER_SCOPE@@|$${MCP_ACCESS_AS_USER_SCOPE}|g" \
-	    -e "s|@@BROKER_RESOURCE_APP_ID@@|$${BROKER_RESOURCE_APP_ID}|g" \
-	    -e "s|@@OBO_PROBE_RESOURCE_APP_ID@@|$${OBO_PROBE_RESOURCE_APP_ID}|g" \
 	    "$(TEMPLATE)" > "$(CONFIG_FILE)"
 	@echo "rendered $(CONFIG_FILE)"
 
@@ -53,14 +51,12 @@ config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 config-clean: ## Delete the rendered config
 	rm -f $(CONFIG_FILE)
 
-# Builds from MCP_REPO via `go run -C`. This package never starts the server
-# as a background job; `run` is blocking on purpose.
+# MCP_REPO defaults to this repo root. Override to `go run` a different
+# worktree against this lab's rendered YAML. Blocking on purpose.
+MCP_REPO ?= $(abspath $(CURDIR)/..)
+
 .PHONY: run
 run: config ## Run the MCP server (blocking) against this lab
-	@if [ -z "$(MCP_REPO)" ]; then \
-	  echo "MCP_REPO is required — path to a solace-broker-mcp checkout. See README.md." >&2; \
-	  exit 1; \
-	fi
 	@if [ ! -d "$(MCP_REPO)" ]; then echo "MCP_REPO is not a directory: $(MCP_REPO)" >&2; exit 1; fi
 	@if [ ! -f "$(ENV_FILE)" ]; then \
 	  echo "missing $(ENV_FILE) — copy .env.example and set MCP_SERVER_CLIENT_SECRET"; \
@@ -75,11 +71,9 @@ run: config ## Run the MCP server (blocking) against this lab
 	ENV_FILE=$(ENV_FILE) \
 	MCPGODEBUG=disablelocalhostprotection=1 \
 	go run -C $(MCP_REPO) ./cmd/server
-# ^^^ MCPGODEBUG=disablelocalhostprotection=1 is a TEMPORARY LAB-ONLY workaround.
-# The MCP Go SDK rejects requests whose Host header is non-loopback when the
-# listener is on 127.0.0.1 (DNS-rebinding protection). The lab reaches the server
-# at mcp-lab.solacetest.com:19090, so we must bypass the check here only.
-# Do NOT carry this flag into production deployments or CI.
+# ^^^ Lab-only. The SDK rejects a non-loopback Host against a 127.0.0.1
+# listener. This Host is mcp-lab.solacetest.com. Do not copy this flag into
+# product, operator docs, or CI.
 
 .PHONY: claude-cmd
 claude-cmd: ## Print env + Claude mcp remove/add + launch line

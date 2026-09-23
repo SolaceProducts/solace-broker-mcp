@@ -307,11 +307,13 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 
 # ── Local Entra lab ──────────────────────────────────────────────────────────
 # Thin wrappers. Broker/SEMP work stays in local/entra/.
-# MCP_REPO has no default; required for entra / entra-run (see local/entra/README.md).
+# MCP_REPO defaults to this checkout. Override to run a different worktree
+# against this lab's brokers and rendered YAML.
 
 ENTRA_DIR  := local/entra
 ENTRA_ENV  := $(ENTRA_DIR)/.env
 ENTRA_HOST := mcp-lab.solacetest.com
+MCP_REPO   ?= $(CURDIR)
 
 .PHONY: entra-preflight
 entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
@@ -352,11 +354,6 @@ entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
 
 .PHONY: entra-need-repo
 entra-need-repo:
-	@if [ -z "$(MCP_REPO)" ]; then \
-	  echo "MCP_REPO is required — path to a solace-broker-mcp checkout that can load this lab YAML." >&2; \
-	  echo "See local/entra/README.md." >&2; \
-	  exit 1; \
-	fi
 	@if [ ! -d "$(MCP_REPO)" ]; then \
 	  echo "MCP_REPO is not a directory: $(MCP_REPO)" >&2; \
 	  exit 1; \
@@ -371,9 +368,7 @@ entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does n
 	$(MAKE) -C $(ENTRA_DIR) brokers-up
 	$(MAKE) -C $(ENTRA_DIR) config
 	@if [ "$(filter entra,$(MAKECMDGOALS))" = "" ]; then \
-	  echo "Next (MCP is not started):"; \
-	  echo "  make entra MCP_REPO=<checkout>   # converge + run"; \
-	  echo "  make entra-run MCP_REPO=<checkout>"; \
+	  echo "Next (MCP is not started): make entra   or   make entra-run [MCP_REPO=<checkout>]"; \
 	fi
 
 .PHONY: entra-run
