@@ -74,7 +74,7 @@ ensure_container() {
     echo "  [$name] creating (SEMP $semp, SMF $smf)"
     "$CONTAINER_CLI" run -d --name "$name" \
       -p "${semp}:8080" -p "${smf}:1943" \
-      --shm-size=1g --ulimit core=-1 --ulimit memlock=-1 --ulimit nofile=2448:42192 \
+      --shm-size=1g --ulimit core=-1 --ulimit memlock=-1 --ulimit nofile=1048576:1048576 \
       -e username_admin_globalaccesslevel=admin \
       -e username_admin_password=admin \
       "$BROKER_IMAGE" >/dev/null
@@ -84,8 +84,18 @@ ensure_container() {
 # wait_for_semp <semp-port>
 wait_for_semp() {
   local port="$1"
+  local name="$2"
   local i
   for i in $(seq 1 90); do
+    if [ -n "$name" ]; then
+      local status
+      status=$("$CONTAINER_CLI" inspect "$name" --format '{{.State.Status}}' 2>/dev/null || echo missing)
+      if [ "$status" != "running" ]; then
+        echo "  ERROR: $name is $status (not waiting 90s). Last logs:" >&2
+        "$CONTAINER_CLI" logs --tail 20 "$name" >&2 || true
+        return 1
+      fi
+    fi
     if curl -sf -o /dev/null --max-time 2 \
          -u admin:admin "http://localhost:${port}/SEMP/v2/config/about" 2>/dev/null; then
       echo "  SEMP on port $port ready (${i}s)"
@@ -222,7 +232,7 @@ echo "==> waiting for SEMP to come up"
 for row in "${BROKERS[@]}"; do
   read -r name semp _smf _mode <<<"$row"
   echo "  [$name]"
-  wait_for_semp "$semp"
+  wait_for_semp "$semp" "$name"
 done
 
 echo
