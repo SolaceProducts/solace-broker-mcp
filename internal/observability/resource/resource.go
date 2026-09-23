@@ -46,42 +46,41 @@ import (
 const deploymentEnvironmentNameKey = semconv.DeploymentEnvironmentNameKey
 
 // New builds the shared resource.Resource from cfg's identity fields plus
-// serviceVersion (the build-time version — passed in rather than imported
-// directly, so this package has no dependency on internal/version) and the
-// instance id (cfg.ServiceInstanceID, else the pod name, else the hostname —
-// see instanceID).
+// serviceVersion (passed in, so this package has no dependency on
+// internal/version).
 //
-// Merged with resource.Default() so the SDK's own automatic attributes
-// (telemetry.sdk.*, and its own service.name/service.instance.id guesses when
-// this package's values were somehow empty) are still present; Merge's
-// documented behavior is that the resource passed as the second argument wins
-// on any key collision, so the identity fields here always take precedence
-// over the SDK's defaults.
+// All four identity attributes resolve the same way (SOL-154608): the YAML
+// field, else the standard OTel env var (OTEL_SERVICE_NAME, or an
+// OTEL_RESOURCE_ATTRIBUTES entry under the attribute's own key), else the
+// built-in default. Before SOL-154608 config always had a value for
+// service.name and service.instance.id, so those two always won the merge and
+// OTEL_SERVICE_NAME could never take effect — silently, which is why it
+// survived a release.
 //
-// Known limitation, disclosed rather than fixed here: because this package's
-// values always win the merge, the two attributes cfg always has a real
-// value for — service.name (defaulted by config to "solace-broker-mcp") and
-// service.instance.id (defaulted here to the pod name or hostname) — can
-// never be overridden by the standard OTEL_SERVICE_NAME or an
-// OTEL_RESOURCE_ATTRIBUTES service.instance.id entry, unlike
-// deployment.environment.name and cloud.region, which cfg leaves empty when
-// unconfigured and so DO fall through to whatever resource.Default() detects
-// from those same env vars. An operator who wants either standard env var
-// honored must currently use this package's own config fields
-// (observability.service_name, observability.service_instance_id) instead.
-// Unifying the precedence across all five attributes is tracked as a
-// follow-up, not attempted in this story.
+// Step 2 reads sdkresource.Environment(), not the vars directly: that applies
+// the SDK's own parsing and its OTEL_SERVICE_NAME-over-OTEL_RESOURCE_ATTRIBUTES
+// ordering, and unlike Default() it is not memoized, which is what makes the
+// precedence testable with t.Setenv. Cost: a malformed OTEL_RESOURCE_ATTRIBUTES
+// is reported twice at startup, once here and once by Default()'s detector.
+//
+// Merged with Default() for its telemetry.sdk.* attributes; Merge's second
+// argument wins collisions. Resolving service.name and service.instance.id to
+// a non-empty value unconditionally is what keeps Default()'s own guesses out:
+// its "unknown_service:<binary>" placeholder, and the random UUID it generates
+// for service.instance.id under the experimental OTEL_GO_X_RESOURCE flag.
 func New(cfg config.ObservabilityConfig, serviceVersion string) (*sdkresource.Resource, error) {
+	env := sdkresource.Environment()
+
 	attrs := []attribute.KeyValue{
-		semconv.ServiceName(serviceName(cfg)),
+		semconv.ServiceName(serviceName(cfg, env)),
 		semconv.ServiceVersion(serviceVersion),
-		semconv.ServiceInstanceID(instanceID(cfg)),
+		semconv.ServiceInstanceID(instanceID(cfg, env)),
 	}
-	if cfg.DeploymentEnvironment != "" {
-		attrs = append(attrs, deploymentEnvironmentNameKey.String(cfg.DeploymentEnvironment))
+	if v := firstNonEmpty(cfg.DeploymentEnvironment, envAttr(env, deploymentEnvironmentNameKey)); v != "" {
+		attrs = append(attrs, deploymentEnvironmentNameKey.String(v))
 	}
-	if cfg.CloudRegion != "" {
-		attrs = append(attrs, semconv.CloudRegion(cfg.CloudRegion))
+	if v := firstNonEmpty(cfg.CloudRegion, envAttr(env, semconv.CloudRegionKey)); v != "" {
+		attrs = append(attrs, semconv.CloudRegion(v))
 	}
 
 	// sdkresource.Default().SchemaURL(), not the pinned semconv.SchemaURL:
@@ -100,42 +99,55 @@ func New(cfg config.ObservabilityConfig, serviceVersion string) (*sdkresource.Re
 	return res, nil
 }
 
-// serviceName returns cfg's configured service name. Config loading
-// (internal/config) already defaults this to defaults.DefaultServiceName
-// when empty; the empty-string fallback here is defense in depth for a
-// Resource built directly against a zero-value ObservabilityConfig (e.g. in
-// a test that skips config loading), not a path production traffic takes.
-func serviceName(cfg config.ObservabilityConfig) string {
-	if cfg.ServiceName != "" {
-		return cfg.ServiceName
+// envAttr returns the value env (sdkresource.Environment()) carries for key,
+// or "" when absent.
+func envAttr(env *sdkresource.Resource, key attribute.Key) string {
+	for _, kv := range env.Attributes() {
+		if kv.Key == key {
+			return kv.Value.AsString()
+		}
 	}
-	return defaults.DefaultServiceName
+	return ""
 }
 
-// instanceID returns, in order: cfg.ServiceInstanceID (an explicit operator
-// override — the FD's "config, or the pod name" commitment, for a deployment
-// topology where neither the pod name nor the hostname identifies the
-// instance usefully, e.g. bare-metal instances sharing a hostname); the pod
-// name (set via the Kubernetes downward API — see
-// deploy/kubernetes/deployment.yaml); or, when both are unset (bare-metal,
-// docker-compose, or a non-Kubernetes deployment with no override
-// configured), the process's hostname. An empty instance ID would collapse
-// every instance into one series in an aggregator, which is exactly the
-// failure this story exists to prevent, so this always returns SOMETHING
-// rather than propagating an os.Hostname error into resource construction: a
-// resource attribute is best-effort identity, not a value worth failing
-// server startup over.
-func instanceID(cfg config.ObservabilityConfig) string {
-	if cfg.ServiceInstanceID != "" {
-		return cfg.ServiceInstanceID
+// firstNonEmpty returns the first non-empty value, or "". Callers pass sources
+// in priority order, so each precedence chain reads off its own call site.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
 	}
-	if pod := os.Getenv("POD_NAME"); pod != "" {
-		return pod
+	return ""
+}
+
+// serviceName resolves service.name. Config no longer defaults this field —
+// applyObservabilityDefaults leaves it empty so the env var has a gap to fall
+// into (SOL-154608) — so the default here is the only one.
+func serviceName(cfg config.ObservabilityConfig, env *sdkresource.Resource) string {
+	return firstNonEmpty(cfg.ServiceName, envAttr(env, semconv.ServiceNameKey), defaults.DefaultServiceName)
+}
+
+// instanceID resolves service.instance.id: the config override (the FD's
+// "config, or the pod name" commitment, for topologies where neither pod name
+// nor hostname identifies the instance — e.g. bare-metal instances sharing a
+// hostname), else an OTEL_RESOURCE_ATTRIBUTES entry, else the downward-API pod
+// name (deploy/kubernetes/deployment.yaml), else the hostname. Always returns
+// something rather than propagating an os.Hostname error: an empty id
+// collapses every instance into one series, and identity is best-effort, not
+// worth failing startup over.
+func instanceID(cfg config.ObservabilityConfig, env *sdkresource.Resource) string {
+	var hostname string
+	if host, err := os.Hostname(); err == nil {
+		hostname = host
 	}
-	if host, err := os.Hostname(); err == nil && host != "" {
-		return host
-	}
-	return "unknown"
+	return firstNonEmpty(
+		cfg.ServiceInstanceID,
+		envAttr(env, semconv.ServiceInstanceIDKey),
+		os.Getenv("POD_NAME"),
+		hostname,
+		"unknown",
+	)
 }
 
 // SlogAttrs returns the subset of res's attributes that belong on every log

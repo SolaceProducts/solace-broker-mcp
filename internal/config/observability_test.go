@@ -311,8 +311,15 @@ func TestObservability_NumericDefaults(t *testing.T) {
 	if o.MetricsBindAddress != defaults.DefaultMetricsBindAddress {
 		t.Errorf("MetricsBindAddress = %q, want %q", o.MetricsBindAddress, defaults.DefaultMetricsBindAddress)
 	}
-	if o.ServiceName != defaults.DefaultServiceName {
-		t.Errorf("ServiceName = %q, want %q", o.ServiceName, defaults.DefaultServiceName)
+	// All four identity fields stay empty at this layer (SOL-154608): a value
+	// defaulted here is indistinguishable from one the operator wrote, leaving
+	// OTEL_SERVICE_NAME no gap to fall into. The "solace-broker-mcp" default
+	// still exists, at the end of internal/observability/resource's chain.
+	if o.ServiceName != "" {
+		t.Errorf("ServiceName = %q, want empty (resolved in internal/observability/resource, not defaulted here)", o.ServiceName)
+	}
+	if o.ServiceInstanceID != "" {
+		t.Errorf("ServiceInstanceID = %q, want empty (omitted, not defaulted)", o.ServiceInstanceID)
 	}
 	if o.DeploymentEnvironment != "" {
 		t.Errorf("DeploymentEnvironment = %q, want empty (omitted, not defaulted)", o.DeploymentEnvironment)
@@ -411,5 +418,27 @@ observability:
 	}
 	if o.ShutdownDrainDelayS != defaults.DefaultShutdownDrainDelayS {
 		t.Errorf("ShutdownDrainDelayS = %d, want default %d (negative re-defaulted)", o.ShutdownDrainDelayS, defaults.DefaultShutdownDrainDelayS)
+	}
+}
+
+// TestObservability_ServiceInstanceIDFromPodNameSubstitution pins the exact
+// migration docs/observability.md and the SOL-154608 CHANGELOG hand to
+// operators. TestObservability_NumericFromYAML already covers ${VAR}
+// generally; this pins the documented incantation, so it fails a build rather
+// than someone's cluster.
+func TestObservability_ServiceInstanceIDFromPodNameSubstitution(t *testing.T) {
+	clearObsEnv(t)
+	t.Setenv("POD_NAME", "solace-broker-mcp-7d8f9-abcde")
+
+	cfg, err := LoadConfig(writeTemp(t, obsYAML+`
+observability:
+  service_instance_id: "${POD_NAME}"
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Observability.ServiceInstanceID; got != "solace-broker-mcp-7d8f9-abcde" {
+		t.Errorf("ServiceInstanceID = %q, want the substituted POD_NAME; the documented "+
+			"`service_instance_id: \"${POD_NAME}\"` migration no longer works", got)
 	}
 }

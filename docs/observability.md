@@ -1939,18 +1939,55 @@ your own data-flow review before pointing this at a collector you don't operate.
 > are live today, sharing this same resource by construction (both readers attach to the one
 > meter provider Story 14 built)._
 
-Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
-tell instances apart without a label duplicated onto every series. All five follow the
-OpenTelemetry resource semantic conventions
+Set from server configuration, or from the standard OpenTelemetry environment variables when
+the configuration leaves a field unset (see Precedence below), on **both** metrics and spans,
+so an aggregated dashboard can tell instances apart without a label duplicated onto every
+series. All five follow the OpenTelemetry resource semantic conventions
 (https://opentelemetry.io/docs/specs/semconv/resource/).
 
 | Attribute | Source | Config key |
 |---|---|---|
-| `service.name` | config, default `solace-broker-mcp` | `observability.service_name` |
+| `service.name` | config, else `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`, else `solace-broker-mcp` | `observability.service_name` |
 | `service.version` | build-time injection | — |
-| `service.instance.id` | config, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
-| `deployment.environment.name` | config, when set | `observability.deployment_environment` |
-| `cloud.region` | config, when set | `observability.cloud_region` |
+| `service.instance.id` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
+| `deployment.environment.name` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else omitted | `observability.deployment_environment` |
+| `cloud.region` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else omitted | `observability.cloud_region` |
+
+#### Precedence
+
+All four configurable identity attributes resolve through the same three-step chain, in
+order:
+
+1. **The YAML field** (`observability.service_name`, `service_instance_id`,
+   `deployment_environment`, `cloud_region`). An explicit operator choice, so it wins.
+2. **The standard OpenTelemetry environment variable** — `OTEL_SERVICE_NAME` for
+   `service.name`, and an `OTEL_RESOURCE_ATTRIBUTES` entry under the attribute's own key for
+   any of the four. Honoured only when the YAML field is unset. Where both environment routes
+   name a service, `OTEL_SERVICE_NAME` outranks an `OTEL_RESOURCE_ATTRIBUTES service.name`
+   entry, per the OTel specification.
+3. **The built-in default** — `solace-broker-mcp` for `service.name`; the downward-API pod
+   name, then the process hostname, for `service.instance.id`; and, for
+   `deployment.environment.name` and `cloud.region`, omitting the attribute entirely.
+
+Set the YAML field to pin a value regardless of what the platform injects; leave it unset to
+let the platform's variable through. This matters because platform teams and the
+OpenTelemetry Operator inject these variables across every workload as a matter of course.
+
+**An empty field counts as unset, not as "pin empty".** `service_name: ""` behaves exactly
+like omitting the line — the chain moves on to step 2, and an injected `OTEL_SERVICE_NAME`
+takes effect. The same holds for all four fields. There is no way to pin an attribute to the
+empty string, and none of the four has a meaningful empty value: an empty `service.name`
+would not identify anything, and for the two optional attributes "empty" and "absent" are the
+same request. To pin a value, write the value.
+
+> **Changed in SOL-154608.** `service_name` and `service_instance_id` previously ignored the
+> standard environment variables outright: config always had a value for both by the time the
+> resource was built, so they always won the merge and `OTEL_SERVICE_NAME` could never take
+> effect, with no error anywhere. `deployment_environment` and `cloud_region` already behaved
+> as described above. **If you set `OTEL_SERVICE_NAME`, saw it ignored, and built dashboards
+> against `solace-broker-mcp`, that variable now takes effect** — `service.name` is the join
+> key across metrics, traces, and logs, so the series will change name. Set
+> `observability.service_name: "solace-broker-mcp"` explicitly to keep the old value.
 
 An earlier draft called this attribute `region` and flagged the OTel name as a possible
 change. **It is now `cloud.region`**: where OTel publishes a convention we adopt it, and
@@ -1962,21 +1999,34 @@ sharing a hostname. Most Kubernetes deployments need neither this nor `POD_NAME`
 configuration: `deploy/kubernetes/deployment.yaml` already wires `POD_NAME` via the downward
 API.
 
-**The process hostname is what gets exported when neither override is set.** Outside
-Kubernetes (or with `POD_NAME` unset), `service.instance.id` falls all the way through to
-`os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
+**The process hostname is what gets exported when no other source supplies one.** Outside
+Kubernetes (or with `POD_NAME` unset), and with neither `observability.service_instance_id`
+nor an `OTEL_RESOURCE_ATTRIBUTES` entry set, `service.instance.id` falls all the way through
+to `os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
 recognizes) that now travels off-box on every span and appears on `target_info`. Set
 `observability.service_instance_id` explicitly if that's not a value you want to export.
 
-**Known limitation:** `service_name` and `service_instance_id` always win over the standard
-`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` environment variables, because config always
-has a value for both (a real one, or the stated default) by the time the shared resource is
-built, and this package's own attributes take precedence in the merge. `deployment_environment`
-and `cloud_region` do **not** have this problem — config leaves them genuinely empty when
-unset, so the standard `OTEL_RESOURCE_ATTRIBUTES` entries for those two reach the resource
-unopposed. An operator who wants `OTEL_SERVICE_NAME` or an `OTEL_RESOURCE_ATTRIBUTES`
-`service.instance.id` honored should use `observability.service_name` /
-`observability.service_instance_id` instead, for now.
+**The pod-name fallback sits below the environment variable, not above it.** An
+`OTEL_RESOURCE_ATTRIBUTES service.instance.id` entry outranks the downward-API pod name, so a
+platform that injects instance identity centrally overrides the Kubernetes default without
+any config change here. Set `observability.service_instance_id` to override both.
+
+> **Check this before upgrading past SOL-154608** — it is the change most likely to bite
+> silently, and it hides behind the `OTEL_SERVICE_NAME` headline. If your platform injects
+> `service.instance.id` through a **shared** `OTEL_RESOURCE_ATTRIBUTES` (one `envFrom`
+> ConfigMap across a Deployment, a Helm or Kyverno default), every replica previously got its
+> own pod name and will now report the same id — collapsing them into one series, with no
+> error. To keep per-pod identity without removing the shared variable, pin the field to the
+> downward-API value (`${VAR}` substitution works here, and the shipped `deployment.yaml`
+> always sets `POD_NAME`):
+>
+> ```yaml
+> observability:
+>   service_instance_id: "${POD_NAME}"
+> ```
+>
+> A platform injecting a genuinely per-pod value needs no action — that is the case this
+> change exists to honour.
 
 **`deployment.environment.name`, not the FD's original `deployment.environment`.** OTel
 renamed the semantic-convention key ahead of this story landing; the SDK's own
