@@ -5,10 +5,8 @@ TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template
 CONFIG_FILE := $(CURDIR)/.local/broker-config.entra.yaml
 ENV_FILE   := $(CURDIR)/.env
 
-# Default is this checkout. origin/main does not put jwt-bearer in
-# validGrantTypes, so `make run` will refuse until you point at a tree that
-# implements GrantTypeJWTBearer (typically amorade/entra-prototype):
-#   make run MCP_REPO=/Users/amitmorade/Desktop/projects/mcp+rag/solace-broker-mcp
+# Source tree for `go run ./cmd/server`. Default is this repo. Override:
+#   make entra MCP_REPO=/path/to/solace-broker-mcp
 MCP_REPO   ?= $(abspath $(CURDIR)/../..)
 
 .DEFAULT_GOAL := help
@@ -50,10 +48,6 @@ config-clean: ## Delete the rendered config
 .PHONY: run
 run: config ## Run the MCP server (blocking) against this lab
 	@if [ ! -d "$(MCP_REPO)" ]; then echo "MCP_REPO not found: $(MCP_REPO)"; exit 1; fi
-	@if ! grep -q 'GrantTypeJWTBearer, // NON-PROD' "$(MCP_REPO)/internal/config/config.go"; then \
-	  echo "MCP_REPO $(MCP_REPO) does not implement jwt-bearer (validGrantTypes). Pass MCP_REPO= to a checkout with GrantTypeJWTBearer (e.g. amorade/entra-prototype)."; \
-	  exit 1; \
-	fi
 	@if [ ! -f "$(ENV_FILE)" ]; then \
 	  echo "missing $(ENV_FILE) — copy .env.example and set MCP_SERVER_CLIENT_SECRET"; \
 	  exit 1; \

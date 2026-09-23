@@ -10,7 +10,11 @@ One-time on the laptop: hosts line + `cp local/entra/.env.example local/entra/.e
 make entra
 ```
 
-That converges certs, brokers (re-PATCH), config, then **blocks** on the MCP server. It picks `MCP_REPO` from this tree if jwt-bearer is implemented, otherwise `../solace-broker-mcp`. Override with `MCP_REPO=/path make entra`.
+That converges certs, brokers (re-PATCH), config, then **blocks** on the MCP server from this checkout (`go run ./cmd/server`). If startup rejects `jwt-bearer`, point `MCP_REPO` at a tree that implements it:
+
+```
+make entra MCP_REPO=/path/to/solace-broker-mcp
+```
 
 Claude is still a **second process** (`make` cannot restart it). `make entra` prints the Claude launch line **before** it blocks on MCP. Copy that line into a **fresh** terminal (quit Claude first). `make entra-claude-cmd` reprints it if you scrolled past.
 
