@@ -1,5 +1,4 @@
-# Laptop Entra lab. Invoked from repo root later (`make entra-up`).
-# Until then: make -C local/entra <target>
+# Laptop Entra lab. From repo root: make entra-up / entra-run / entra-down / …
 
 CERT_ROOT  := $(CURDIR)/.local/certs
 TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template

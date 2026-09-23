@@ -26,7 +26,7 @@ COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
 
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # ── Git hooks ────────────────────────────────────────────────────────────────
 
@@ -304,3 +304,82 @@ e2e-oauth-all: ## Full e2e-oauth cycle: certs, Keycloak+brokers up, configure OA
 .PHONY: docker
 docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 	docker build --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .
+
+# ── Local Entra lab ──────────────────────────────────────────────────────────
+# Thin wrappers. Broker/SEMP work stays in local/entra/. Default MCP_REPO is
+# this tree; entra-run still refuses until you override to a jwt-bearer checkout.
+
+MCP_REPO   ?= $(CURDIR)
+ENTRA_DIR  := local/entra
+ENTRA_ENV  := $(ENTRA_DIR)/.env
+ENTRA_HOST := mcp-lab.solacetest.com
+
+.PHONY: entra-preflight
+entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
+	@set -e; \
+	host="$(ENTRA_HOST)"; \
+	addrs=""; \
+	if command -v python3 >/dev/null 2>&1; then \
+	  addrs=$$(python3 -c 'import socket,sys; print("\n".join(sorted({i[4][0] for i in socket.getaddrinfo(sys.argv[1], None)})))' "$$host") || addrs=""; \
+	elif command -v dscacheutil >/dev/null 2>&1; then \
+	  addrs=$$(dscacheutil -q host -a name "$$host" | awk '/^ip_address:/{print $$2}'); \
+	else \
+	  echo "cannot resolve $$host: need python3 or dscacheutil" >&2; exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$addrs" | grep -qx '127.0.0.1' || printf '%s\n' "$$addrs" | grep -qx '198.19.1.1'; then \
+	  echo "Add an own /etc/hosts line: 127.0.0.1 $$host" >&2; \
+	  echo "Do not glue it onto FortiClient; do not disable FortiClient." >&2; \
+	  exit 1; \
+	fi; \
+	if [ ! -f "$(ENTRA_ENV)" ]; then \
+	  echo "missing $(ENTRA_ENV) — copy $(ENTRA_DIR)/.env.example and set MCP_SERVER_CLIENT_SECRET" >&2; \
+	  exit 1; \
+	fi; \
+	if ! grep -q '^MCP_SERVER_CLIENT_SECRET=.\+' "$(ENTRA_ENV)"; then \
+	  echo "MCP_SERVER_CLIENT_SECRET is empty — copy $(ENTRA_DIR)/.env.example and set the mcp-broker client secret" >&2; \
+	  exit 1; \
+	fi; \
+	if command -v docker >/dev/null 2>&1; then \
+	  names=$$(docker ps --format '{{.Names}}' 2>/dev/null) || names=""; \
+	  if printf '%s\n' "$$names" | grep -qx solace; then \
+	    echo "WARN: docker container 'solace' is running (infra Keycloak lab); ports 8081/1943 may collide with mcp-entra-solace." >&2; \
+	  fi; \
+	  clash=$$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | awk -F '\t' '$$1 != "mcp-entra-solace" && ($$2 ~ /:8081->/ || $$2 ~ /:1943->/) {print $$1}'); \
+	  if [ -n "$$clash" ]; then \
+	    echo "Entra lab ports 8081/1943 are already published by: $$clash (not mcp-entra-solace)" >&2; \
+	    exit 1; \
+	  fi; \
+	fi
+
+.PHONY: entra-up
+entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does not start MCP
+	@if [ ! -f "$(MCP_REPO)/internal/config/config.go" ] || ! grep -q 'GrantTypeJWTBearer, // NON-PROD' "$(MCP_REPO)/internal/config/config.go"; then \
+	  echo "NOTE: MCP_REPO=$(MCP_REPO) does not implement jwt-bearer; make entra-run will fail until you pass MCP_REPO= to a GrantTypeJWTBearer tree (e.g. amorade/entra-prototype)."; \
+	fi
+	$(MAKE) -C $(ENTRA_DIR) certs MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) brokers-up MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) config MCP_REPO=$(MCP_REPO)
+	@echo "Next (MCP is not started):"
+	@echo "  make entra-run MCP_REPO=<jwt-bearer-tree>"
+	@echo "  make entra-claude-cmd"
+
+.PHONY: entra-run
+entra-run: entra-preflight ## Run MCP against the Entra lab (blocking)
+	$(MAKE) -C $(ENTRA_DIR) run MCP_REPO=$(MCP_REPO)
+
+.PHONY: entra-down
+entra-down: ## Stop Entra lab brokers; keep .local/ and .env
+	$(MAKE) -C $(ENTRA_DIR) brokers-down MCP_REPO=$(MCP_REPO)
+
+.PHONY: entra-reset
+entra-reset: ## Recreate Entra lab brokers (teardown then brokers-up)
+	$(MAKE) -C $(ENTRA_DIR) brokers-down MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) brokers-up MCP_REPO=$(MCP_REPO)
+
+.PHONY: entra-certs-clean
+entra-certs-clean: ## Delete Entra lab certs (restart Claude after next certs)
+	$(MAKE) -C $(ENTRA_DIR) certs-clean MCP_REPO=$(MCP_REPO)
+
+.PHONY: entra-claude-cmd
+entra-claude-cmd: ## Print env + command to launch Claude with lab certs
+	$(MAKE) -C $(ENTRA_DIR) claude-cmd MCP_REPO=$(MCP_REPO)
