@@ -7,7 +7,9 @@
 #   - host ports 28081/21943, 28082/21944, 28083/21945 so they do not steal infra 8081/1943
 #   - third container for local-basic (no OAuth PATCH)
 #   - no Keycloak docker network (JWKS is Microsoft HTTPS)
-#   - PATCH issuer/JWKS/audience/group to the solacetest.com Entra tenant
+#   - --ulimit nofile=1048576:1048576 (e2e compose + the working infra
+#     `solace` container on this laptop). Infra's script still says 42192;
+#     Solace 10.25 POST requires 1048576.
 #
 # Brokers:
 #   mcp-entra-solace    → 28081 (SEMP HTTP), 21943 (SEMP TLS)  prod-us
@@ -61,7 +63,7 @@ ensure_container() {
     echo "  [$name] creating (SEMP $semp, SMF $smf)"
     "$CONTAINER_CLI" run -d --name "$name" \
       -p "${semp}:8080" -p "${smf}:1943" \
-      --shm-size=1g --ulimit core=-1 --ulimit memlock=-1 --ulimit nofile=2448:42192 \
+      --shm-size=1g --ulimit core=-1 --ulimit memlock=-1 --ulimit nofile=1048576:1048576 \
       -e username_admin_globalaccesslevel=admin \
       -e username_admin_password=admin \
       "$BROKER_IMAGE" >/dev/null
