@@ -38,7 +38,7 @@ import (
 // confirming both report back that exact same value (by identity, and by
 // attribute content as a second check).
 func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.T) {
-	res, err := resource.New(config.ObservabilityConfig{
+	res, _, err := resource.New(config.ObservabilityConfig{
 		ServiceName:           "test-service",
 		DeploymentEnvironment: "test-env",
 		CloudRegion:           "test-region",

@@ -1973,12 +1973,28 @@ Set the YAML field to pin a value regardless of what the platform injects; leave
 let the platform's variable through. This matters because platform teams and the
 OpenTelemetry Operator inject these variables across every workload as a matter of course.
 
-**An empty field counts as unset, not as "pin empty".** `service_name: ""` behaves exactly
-like omitting the line — the chain moves on to step 2, and an injected `OTEL_SERVICE_NAME`
-takes effect. The same holds for all four fields. There is no way to pin an attribute to the
-empty string, and none of the four has a meaningful empty value: an empty `service.name`
-would not identify anything, and for the two optional attributes "empty" and "absent" are the
-same request. To pin a value, write the value.
+**An empty or whitespace-only value counts as unset, not as "pin empty".** `service_name: ""`
+behaves exactly like omitting the line — the chain moves on to step 2, and an injected
+`OTEL_SERVICE_NAME` takes effect. So does `service_name: "   "`, which is what a `${VAR}` that
+expanded to nothing leaves behind. The same holds for all four fields, and for the environment
+side: `OTEL_RESOURCE_ATTRIBUTES=cloud.region=` (an unset `${REGION}` in a manifest) reads as
+"no region", not as an empty region, and leaves the attribute omitted. Surrounding whitespace
+is trimmed rather than exported, so `service_name: "  my-mcp  "` resolves to `my-mcp`. There is
+no way to pin an attribute to the empty string, and none of the four has a meaningful empty
+value: an empty `service.name` would not identify anything, and for the two optional attributes
+"empty" and "absent" are the same request. To pin a value, write the value.
+
+> **Fixed in SOL-154727.** Two narrower cases used to slip through this rule. A whitespace-only
+> YAML field won the chain and exported `service.name: "   "` — worse than the default, because
+> it looks configured — while `OTEL_SERVICE_NAME="   "` correctly fell through to the default,
+> so one input got two answers depending on which side it arrived on. And an empty-valued
+> `OTEL_RESOURCE_ATTRIBUTES` entry for `cloud.region` or `deployment.environment.name` reached
+> `target_info` and every log line: the chain read it as absent and contributed no attribute,
+> which left the SDK's own copy of the empty value with nothing to override it. (`service.name`
+> and `service.instance.id` were never affected — both are always written with a resolved
+> value, which overrode the empty copy.) Both cases are now treated as unset. If you were
+> relying on an empty-valued entry to produce a blank `cloud.region` label, it is now absent
+> instead.
 
 > **Changed in SOL-154608.** `service_name` and `service_instance_id` previously ignored the
 > standard environment variables outright: config always had a value for both by the time the
@@ -2028,6 +2044,37 @@ any config change here. Set `observability.service_instance_id` to override both
 > A platform injecting a genuinely per-pod value needs no action — that is the case this
 > change exists to honour.
 
+**Confirming what resolved, at startup.** The server logs one INFO line naming every resolved
+identity value and the chain step that supplied it, so the outcome of the precedence rules
+above is visible at deploy time rather than inferred from a dashboard later. It is emitted
+before `log_level` is applied, so it appears even at `warn` or `error` — a diagnostic for a
+silent misconfiguration is no use if turning down logging hides it. The one case where it does
+not appear is when the identity resource could not be built at all; an
+`observability identity resource unavailable; falling back to SDK defaults` ERROR line names
+that instead, and the server continues on the SDK's own defaults:
+
+```json
+{"time":"2026-09-23T10:14:02.481293-04:00","level":"INFO","msg":"observability identity resolved","deployment.environment.name":"production","service.name":"my-mcp","service_name":"my-mcp","service_name_source":"env","service_instance_id":"solace-broker-mcp-7d8f9-abcde","service_instance_id_source":"pod_name","deployment_environment":"production","deployment_environment_source":"config","cloud_region":"","cloud_region_source":"unset"}
+```
+
+The keys are the YAML field names, so the field to edit is the one named — and so they do not
+collide with the dotted attribute keys the handler already binds to every line (`service.name`
+and `deployment.environment.name` appear above for that reason, not as duplicates). Each
+`*_source` is one of `config`, `env`, `pod_name`, `hostname`, `default`, or `unset` — `unset`
+appearing only for the two optional attributes, paired with an empty value, meaning the
+attribute is omitted from the resource entirely.
+
+This is the line to check for the shared-`OTEL_RESOURCE_ATTRIBUTES` trap above, but read it
+wider than that trap: only `pod_name` and `hostname` are per-pod by construction. On a
+multi-replica Deployment, a `service_instance_id_source` of **either** `env` or `config` means
+the replicas may all be reporting the same id — a ConfigMap carrying a literal
+`service_instance_id` collapses them exactly as an injected `OTEL_RESOURCE_ATTRIBUTES` does.
+Compare the `service_instance_id` value across two replicas to confirm. It is also the only
+place `service.instance.id` appears in the log stream —
+`SlogAttrs` deliberately mirrors only `service.name`, `deployment.environment.name`, and
+`cloud.region` onto individual log lines (see this section's status note), so nothing else
+ties a log line back to the pod that produced it. Added in SOL-154727.
+
 **`deployment.environment.name`, not the FD's original `deployment.environment`.** OTel
 renamed the semantic-convention key ahead of this story landing; the SDK's own
 `resource.Default()` (which this attribute set is merged with) is already built against the
@@ -2042,7 +2089,12 @@ key — nothing rejects it. Set that variable under the old spelling and the mer
 carries both keys with independent values; `target_info` shows both, and `SlogAttrs` mirrors
 only the new one, so logs and metrics can disagree about which environment a pod is in. Use
 `observability.deployment_environment` instead of the environment variable to avoid the
-ambiguity entirely.
+ambiguity entirely. The empty-value rule above does not reach the old spelling either:
+`OTEL_RESOURCE_ATTRIBUTES=deployment.environment=` still puts an empty `deployment.environment`
+on `target_info`, because only the four current keys are filtered. It cannot reach log lines —
+`SlogAttrs` never mirrors the old spelling — and the same caveat applies to any other key an
+`OTEL_RESOURCE_ATTRIBUTES` entry names with an empty value, which this server deliberately
+leaves to the SDK.
 
 **How to query them, per egress.** These are resource attributes, not per-series labels, so
 they arrive differently on each of the two metric egresses:
