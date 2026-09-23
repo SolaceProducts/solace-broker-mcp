@@ -1,5 +1,5 @@
 # Laptop Entra lab. Invoked from repo root later (`make entra-up`).
-# Until then: make -C local/entra certs
+# Until then: make -C local/entra <target>
 
 CERT_ROOT := $(CURDIR)/.local/certs
 
@@ -16,3 +16,11 @@ certs: ## Generate self-signed MCP certs under .local/certs/ (idempotent)
 .PHONY: certs-clean
 certs-clean: ## Delete generated certs (restart Claude after the next certs)
 	rm -rf $(CERT_ROOT)
+
+.PHONY: brokers-up
+brokers-up: ## Start mcp-entra-solace* brokers and PATCH Entra OAuth (converge)
+	@./scripts/setup-entra-brokers.sh
+
+.PHONY: brokers-down
+brokers-down: ## Remove mcp-entra-solace* containers only (keeps .local/ and .env)
+	@./scripts/teardown-entra-brokers.sh
