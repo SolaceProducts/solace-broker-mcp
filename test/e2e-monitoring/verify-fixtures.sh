@@ -59,10 +59,17 @@ test_ac2_multi_vpn_state_b() { verify_multi_vpn_state "broker-b" "$BROKER_B_URL"
 # fire. The handler derives that count directly via a per-VPN getMsgVpnClients
 # probe filtered by `clientUsername != #*`, so we only assert enabled+up here —
 # no msgVpnConnections tripwire is needed.
+#
+# The zero-real-clients GET below grounds the other side of the zero/nonzero
+# split independently of the tool under test, mirroring
+# verify_real_client_default_vpn_state's ground truth for the "has a real
+# client" side. Without this, a fixture regression that gave test-vpn-empty
+# an unexpected real client would go undetected: nothing else in this suite
+# checks its client population against the broker directly.
 verify_empty_enabled_vpn_state() {
     local label="$1"
     local broker_url="$2"
-    local body
+    local body real_clients_body real_count
     body=$(semp_monitor_get "$broker_url" "msgVpns/test-vpn-empty") || {
         log_fail "empty-enabled-VPN [$label]: GET msgVpns/test-vpn-empty failed"
         return 1
@@ -71,6 +78,20 @@ verify_empty_enabled_vpn_state() {
         "empty-enabled-VPN [$label]: test-vpn-empty enabled must be true" || return 1
     assert_json_field "$body" ".data.state" "up" \
         "empty-enabled-VPN [$label]: test-vpn-empty state must be up" || return 1
+
+    real_clients_body=$(semp_monitor_get "$broker_url" "msgVpns/test-vpn-empty/clients?count=100") || {
+        log_fail "empty-enabled-VPN [$label]: GET msgVpns/test-vpn-empty/clients failed"
+        return 1
+    }
+    if ! jq -e '(.data | type) == "array"' <<<"$real_clients_body" >/dev/null; then
+        log_fail "empty-enabled-VPN [$label]: unexpected shape from msgVpns/test-vpn-empty/clients — .data missing or not an array"
+        return 1
+    fi
+    real_count=$(jq '[.data[] | select((.clientUsername | startswith("#")) | not)] | length' <<<"$real_clients_body")
+    if [ "$real_count" -ne 0 ]; then
+        log_fail "empty-enabled-VPN [$label]: test-vpn-empty must have zero real (non-reserved) clients, ground truth found $real_count"
+        return 1
+    fi
 }
 
 test_empty_enabled_vpn_state_a() { verify_empty_enabled_vpn_state "broker-a" "$BROKER_A_URL"; }
@@ -79,9 +100,12 @@ test_empty_enabled_vpn_state_b() { verify_empty_enabled_vpn_state "broker-b" "$B
 # The default VPN (`BROKER_VPN`) already carries both the automatic reserved
 # `#client` (present on any enabled+up VPN) and F3's real (non-reserved)
 # connected client — no dedicated VPN fixture is needed for this. Regression
-# fixture for SOL-153071: the real-clients probe's old count=1 scan only ever
-# reached the reserved client (which sorts first alphabetically) and never
-# scanned far enough to see a real one behind it. An earlier design
+# fixture for SOL-153071: SEMP applies `where` after the `count` cut, so the
+# probe's old one-object scan window could be consumed by a reserved client and
+# return nothing even though a real one was present. (The scan order is not
+# reserved-first, and is not lexicographic on clientName — see the measured
+# order recorded in test-monitoring-tools.sh. The bug does not need reserved
+# clients to sort first, only for one to land in the window.) An earlier design
 # provisioned a separate `test-vpn-real-client` VPN for this, but this
 # broker image caps message-VPN count at 3 total (including `default`),
 # already exhausted by test-vpn/test-vpn-empty — reusing the default VPN's

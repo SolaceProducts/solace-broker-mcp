@@ -50,6 +50,12 @@ type vpnFixture struct {
 	state       string
 	connections any
 	realClients int
+	// indeterminate models a broker that does not honour forceFullPage: the
+	// real-clients probe for this VPN comes back with zero rows but still
+	// reports a further page pending, instead of exhausting the collection.
+	// Mutually exclusive with realClients > 0 — a broker that found a match
+	// would not also claim it stopped scanning early.
+	indeterminate bool
 }
 
 func (f vpnFixture) row() map[string]any {
@@ -66,8 +72,11 @@ func (f vpnFixture) row() map[string]any {
 
 // brokerStub answers the two operations list-vpns issues, modelling the one
 // broker invariant the change rides on: a VPN reporting msgVpnConnections == 0
-// has no connections at all, so a client probe against it returns nothing.
-// Probed VPN names are recorded so a test can assert which probes were issued.
+// has no connections at all, so a client probe against it returns nothing. It
+// also models a broker that does not honour forceFullPage (vpnFixture.indeterminate),
+// so the real-clients probe's pagination envelope reaches the postprocess
+// handler exactly as the real executor's fan-out would store it. Probed VPN
+// names are recorded so a test can assert which probes were issued.
 type brokerStub struct {
 	mu     sync.Mutex
 	vpns   []vpnFixture
@@ -93,15 +102,23 @@ func (b *brokerStub) Execute(_ context.Context, op *sempv2.Operation, args map[s
 		b.mu.Unlock()
 
 		rows := []any{}
+		indeterminate := false
 		for _, f := range b.vpns {
 			if f.name != name {
 				continue
 			}
+			indeterminate = f.indeterminate
 			for i := 0; i < f.realClients; i++ {
 				rows = append(rows, map[string]any{"clientName": fmt.Sprintf("%s-app-%d", name, i)})
 			}
 		}
-		return &sempv2.Result{Data: map[string]any{"data": rows}, StatusCode: 200}, nil
+		data := map[string]any{"data": rows}
+		if indeterminate {
+			// Mirrors the real SEMP envelope shape hasNextPage() reads
+			// (meta.paging.nextPageUri) — see executor.go's extractNextPageURI.
+			data["meta"] = map[string]any{"paging": map[string]any{"nextPageUri": "https://broker/next-page"}}
+		}
+		return &sempv2.Result{Data: data, StatusCode: 200}, nil
 
 	default:
 		return nil, fmt.Errorf("unexpected operation %q", op.ID)
@@ -147,6 +164,50 @@ func runListVPNs(t *testing.T, tool CompositeTool, fixtures []vpnFixture) (map[s
 		t.Fatalf("summary missing or wrong type: %T", out["summary"])
 	}
 	return summary, broker.probedVPNs()
+}
+
+// TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption pins the three args
+// the postprocess handler's correctness silently depends on.
+//
+// ListVpns (internal/composite/postprocess/handlers/list_vpns.go) reads "zero
+// rows but a nextPageUri is present" as indeterminate rather than as "no real
+// client". That reading is only correct while this step asks the broker for an
+// exhaustive search for a single match: count=1 with forceFullPage=true makes
+// the broker scan internally until it matches or exhausts the collection, so an
+// empty result without a next page genuinely means "there are none".
+//
+// Change any of these args and the handler keeps its interpretation while the
+// premise moves under it, with no error anywhere:
+//   - drop forceFullPage → every probe returns a scan-window page with a next
+//     page, so every VPN becomes indeterminate and zeroConnectionCount silently
+//     goes to 0 forever;
+//   - raise count → the step samples again instead of searching exhaustively,
+//     which is the SOL-153071 false positive the fix removed;
+//   - set followPages → per-step paging couples this probe's depth to the
+//     tool-wide maxResults (resolveMaxResults reads it once), which is the
+//     coupling forceFullPage exists to avoid.
+//
+// The repo enforces the handler's *field* dependency at boot (ValidateTool
+// cross-checks RequiredFieldsPerStep against each step's select:), but there is
+// no equivalent for arg dependencies, so this test is the enforcement.
+func TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption(t *testing.T) {
+	tool := loadListVPNs(t)
+	step := findStep(&tool, "real-clients")
+	if step == nil {
+		t.Fatal("step 'real-clients' not found in list-vpns")
+	}
+	for _, want := range []struct{ arg, value string }{
+		{"count", "1"},
+		{"forceFullPage", "true"},
+	} {
+		if got := step.Args[want.arg]; got != want.value {
+			t.Errorf("real-clients args[%q] = %v, want %q — the ListVpns indeterminate guard depends on this; see this test's doc comment before changing it",
+				want.arg, got, want.value)
+		}
+	}
+	if step.FollowPages {
+		t.Error("real-clients must not set followPages: forceFullPage moves paging broker-side precisely so this probe's depth is not coupled to the tool-wide maxResults")
+	}
 }
 
 // TestExecute_ListVPNs_SkipsRealClientProbeOnZeroConnectionVPNs covers
@@ -233,5 +294,51 @@ func TestExecute_ListVPNs_SkipsRealClientProbeOnZeroConnectionVPNs(t *testing.T)
 	if !reflect.DeepEqual(legacyProbes, wantLegacyProbes) {
 		t.Errorf("legacy probed VPNs = %v, want %v — the fixture no longer reproduces the "+
 			"pre-fix behavior this test claims to compare against", legacyProbes, wantLegacyProbes)
+	}
+}
+
+// TestExecute_ListVPNs_IndeterminateWhenBrokerDoesNotHonourForceFullPage covers
+// the safety mechanism the SOL-153071 rework added: when the real-clients probe
+// comes back empty but the broker reports a further page pending, the VPN must
+// be reported as indeterminate rather than folded into zeroConnectionCount.
+//
+// Before this test, brokerStub had no way to produce that response shape at
+// all — its getMsgVpnClients case never set meta.paging, so every probe result
+// was either "has a real client" or "exhausted, no real client". The
+// probeIndeterminate branch in probeRealClientOutcome
+// (postprocess/handlers/list_vpns.go) was therefore only ever exercised by
+// hand-built maps in list_vpns_test.go, never through the real
+// executor/fan-out path this tool actually runs in production. This test
+// closes that gap.
+func TestExecute_ListVPNs_IndeterminateWhenBrokerDoesNotHonourForceFullPage(t *testing.T) {
+	fixtures := []vpnFixture{
+		{name: "idle", enabled: true, state: "up", connections: float64(1)},
+		{name: "busy", enabled: true, state: "up", connections: float64(2), realClients: 1},
+		{name: "degraded", enabled: true, state: "up", connections: float64(1), indeterminate: true},
+	}
+	for _, f := range fixtures {
+		if f.indeterminate && f.realClients > 0 {
+			t.Fatalf("fixture %q sets both indeterminate and realClients; a broker cannot claim it "+
+				"stopped scanning early while also returning a match", f.name)
+		}
+	}
+
+	summary, probes := runListVPNs(t, loadListVPNs(t), fixtures)
+
+	wantSummary := map[string]any{
+		"disabledCount":                0,
+		"downCount":                    0,
+		"standbyCount":                 0,
+		"zeroConnectionCount":          1, // idle
+		"indeterminateConnectionCount": 1, // degraded
+		"scanned":                      len(fixtures),
+	}
+	if !reflect.DeepEqual(summary, wantSummary) {
+		t.Errorf("summary = %v, want %v", summary, wantSummary)
+	}
+
+	wantProbes := []string{"busy", "degraded", "idle"}
+	if !reflect.DeepEqual(probes, wantProbes) {
+		t.Errorf("probed VPNs = %v, want %v", probes, wantProbes)
 	}
 }

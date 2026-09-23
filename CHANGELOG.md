@@ -140,9 +140,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `list-vpns`'s `zeroConnectionCount` no longer miscounts an enabled+up VPN as zero-connection
-  when its only real client sorts behind the automatic reserved `#client`. The underlying probe
-  now scans up to 100 clients per VPN instead of 1. Tracked under SOL-153071.
+- `list-vpns`'s `zeroConnectionCount` no longer reports enabled+up VPNs as having no client
+  connections when they do. The blast radius was broad, not an edge case: SEMP applies a `where`
+  filter *after* the `count` cut, so the probe's one-object scan window was routinely consumed by
+  a reserved (`#*`) client and returned nothing, making practically every enabled+up VPN with any
+  reserved client read as idle — on every broker, every call. Historical readings of this field
+  should be distrusted. The probe is now exhaustive rather than sampled (`forceFullPage`, so the
+  broker scans internally until it finds a match or exhausts the collection), which closes the
+  miscount at any client population; a bounded `count` cannot, because reserved clients are not
+  ordered predictably relative to real ones. If the broker cannot complete the check for a VPN,
+  that VPN is now reported under the new `indeterminateConnectionCount` rather than being counted
+  as zero-connection, so an unverifiable VPN is never presented as idle. The probe's raw
+  client-name rows also no longer appear in the response: `real-clients.byKey[vpn]` carries only
+  the verdict (`hasRealClient`, or `indeterminate`), not the probed client list. Tracked under
+  SOL-153071.
 
 ## [0.9.0] - 2026-09-11
 

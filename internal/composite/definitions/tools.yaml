@@ -226,7 +226,20 @@ tools:
       probing each enabled+up VPN for a client whose clientUsername does not
       match Solace's reserved `#*` prefix, unless the VPN reports exactly zero
       connections; a VPN with no connection count at all is probed rather than
-      assumed empty. Standby VPNs are excluded from both.
+      assumed empty. The probe is exhaustive rather than sampled, so it does
+      not miss a real client behind any number of reserved ones. If the broker
+      cannot complete the check for a VPN, that VPN is reported under
+      indeterminateConnectionCount (present only when non-zero) instead of
+      being counted as zero-connection, so an unverifiable VPN is never
+      reported as idle. Per-VPN verdicts appear under
+      real-clients.byKey[vpnName] in exactly one of three shapes:
+      {"hasRealClient": true} (has a non-reserved client),
+      {"hasRealClient": false} (verified to have none), or
+      {"indeterminate": true} (not established — treat as unknown, NOT as
+      idle). Only trust hasRealClient == true as a positive; an absent
+      hasRealClient key means the question was not settled, never that the VPN
+      is empty. The probed client names themselves are deliberately not
+      returned. Standby VPNs are excluded from both counts.
       Admin-disabled VPNs land in disabledCount only and are excluded from
       downCount and zeroConnectionCount. For per-service TLS status and AMQP
       support, use get-vpn-status.
@@ -236,7 +249,7 @@ tools:
       - name: maxResults
         type: integer
         required: false
-        description: "Maximum number of VPNs to return (default 100, max 500)"
+        description: "Maximum number of VPNs to return (default 100, max 500). Each returned enabled+up VPN triggers its own additional real-clients probe call, so raising this also raises the number of SEMP calls made per list-vpns invocation."
     steps:
       - id: vpns
         operation: monitor/getMsgVpns
@@ -270,24 +283,64 @@ tools:
       # clientUsername is Solace's documented reserved-name contract, so this
       # is version-independent — no reliance on the empirical `#client
       # counts as exactly one connection` invariant the old <=1 predicate
-      # rode on. count=100 is still a boolean check, not an enumeration: any
-      # row returned means the VPN has a real client. `#`-prefixed names sort
-      # first, so count=1 (SOL-153071) only ever saw a reserved client and
-      # never scanned far enough to reach a real one on a VPN with more than
-      # one reserved client. 100 covers that. followPages is deliberately not
-      # set here: maxResults is shared across every step in the tool call
-      # (resolveMaxResults reads it once from the top-level params), so
-      # pagination on this step would silently couple "how many VPNs
-      # list-vpns returns" to "how many clients get scanned per VPN" via an
-      # unrelated parameter. A VPN with over 100 reserved clients ahead of
-      # its first real one would still false-negative; accepted as an
-      # extreme case far rarer than the bug this fixes. select=[clientName]
-      # keeps the payload minimal. forEachIf restricts the probe to
-      # enabled+up VPNs, which are exactly the
-      # rows the postProcess handler consults for zeroConnectionCount. Disabled
-      # VPNs report state==down, and standby VPNs are excluded from the count;
-      # calling getMsgVpnClients on either would be wasted work (and hits an
-      # admin-disabled service on some brokers).
+      # rode on.
+      #
+      # SEMP applies `where` AFTER the `count` cut, so `count` bounds objects
+      # *scanned*, not matches *returned*: a scan window filled by reserved
+      # clients returns zero rows even when the VPN has real clients. That is
+      # SOL-153071. `forceFullPage` is what actually fixes it — the broker
+      # keeps scanning internally until the page holds `count` matches or the
+      # collection is exhausted, so the answer is correct at any client
+      # population without this step paginating.
+      #
+      # count stays at 100 rather than dropping to 1, even though the handler
+      # only needs "is there at least one?". forceFullPage pages internally at
+      # `count`, so count=1 costs one internal round trip per object scanned.
+      # Measured on 10.26.6, a 19-client VPN with no real client: 55.5ms at
+      # count=1 versus 28.5ms at count=100, which is the plateau and matches a
+      # single-page count=1000 scan (29.0ms) — roughly 2ms per object of
+      # avoidable overhead, i.e. ~2s on a 1,000-client VPN. count=1 is no
+      # better in the positive case either: it returns as soon as one match
+      # fills the page, but still needs one internal request per object until
+      # that match, and scan order is not predictable (see below), so its cost
+      # is unbounded in practice rather than merely large.
+      #
+      # The rows this returns are bounded by the number of real clients, not by
+      # count (a VPN with one real client returns one row), and the handler
+      # scrubs them before the response either way — so the larger count buys
+      # scan efficiency without widening the payload that reaches a caller.
+      #
+      # Do NOT assume reserved clients sort first and "a big enough count
+      # covers them". Measured on 10.26.6, they do not: on a VPN holding a
+      # bridge client, three real clients and an RDP client, the observed
+      # order was
+      #   #bridge/local/... , aaa , probe-real , zzz , #client , #rdp/...
+      # i.e. reserved names appear both before and after real ones, and the
+      # order is not lexicographic on clientName. The false positive
+      # therefore reproduces at six clients, not a hundred, and no fixed
+      # `count` is a sound bound — which is why the earlier count=100
+      # mitigation was replaced rather than raised.
+      #
+      # The handler must treat "zero rows WITH a nextPageUri still present"
+      # as indeterminate, not as "no real client": that combination is the
+      # signature of forceFullPage being ignored, and it is the guard that
+      # keeps an unsupported parameter from silently regressing this to
+      # SOL-153071 fleet-wide. With forceFullPage honoured, a genuinely
+      # empty result carries no nextPageUri (measured).
+      #
+      # followPages stays off: maxResults is shared across every step in the
+      # tool call (resolveMaxResults reads it once from the top-level params),
+      # so pagination here would couple "how many VPNs list-vpns returns" to
+      # "how many clients get scanned per VPN" via an unrelated parameter.
+      # forceFullPage moves that paging broker-side, so the coupling never
+      # arises. select=[clientName] keeps the payload minimal; at count=1 the
+      # probe returns at most one row per VPN.
+      #
+      # forEachIf restricts the probe to enabled+up VPNs, which are exactly
+      # the rows the postProcess handler consults for zeroConnectionCount.
+      # Disabled VPNs report state==down, and standby VPNs are excluded from
+      # the count; calling getMsgVpnClients on either would be wasted work
+      # (and hits an admin-disabled service on some brokers).
       #
       # The msgVpnConnections term (SOL-154166) drops the probe for a VPN the
       # vpns step already proved empty: zero connections means no clients of
@@ -326,7 +379,8 @@ tools:
         forEachKey: msgVpnName
         args:
           msgVpnName: "{{.Item.msgVpnName}}"
-          count: "100"
+          count: "1"
+          forceFullPage: "true"
           where: "clientUsername!=#*"
         select:
           - clientName
