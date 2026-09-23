@@ -67,7 +67,12 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 	}
 
 	// Reads AdvertisedPRM; do not format resource_metadata here.
-	prm := NewAdvertisedPRM(AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer})
+	prm := NewAdvertisedPRM(AdvertisedPRMInput{
+		Mode:            cfg.MCPClientAuth.Mode,
+		ResourceURL:     cfg.MCPClientAuth.ResourceURL,
+		Issuer:          cfg.MCPClientAuth.Issuer,
+		ScopesSupported: cfg.MCPClientAuth.ScopesSupported,
+	})
 
 	// RequireBearerToken's own verify() rejects on four conditions after our
 	// TokenVerifier has returned — nil TokenInfo, a missing required scope,
@@ -321,6 +326,6 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 }
 
 // NewProtectedResourceMetadataHandler returns the configured RFC 9728 handler.
-func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
-	return NewAdvertisedPRM(AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer}).Handler()
+func NewProtectedResourceMetadataHandler(in AdvertisedPRMInput) http.Handler {
+	return NewAdvertisedPRM(in).Handler()
 }

@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -124,9 +126,10 @@ func TestAdvertisedPRM_Log(t *testing.T) {
 			defer slog.SetDefault(previous)
 
 			NewAdvertisedPRM(AdvertisedPRMInput{
-				Mode:        tt.mode,
-				ResourceURL: "https://resource-user:resource-pass@mcp.example.com/mcp",
-				Issuer:      "https://issuer-user:issuer-pass@auth.example.com/realm",
+				Mode:            tt.mode,
+				ResourceURL:     "https://resource-user:resource-pass@mcp.example.com/mcp",
+				Issuer:          "https://issuer-user:issuer-pass@auth.example.com/realm",
+				ScopesSupported: []string{"openid"},
 			}).Log()
 
 			if !tt.wantLine {
@@ -159,5 +162,47 @@ func TestAdvertisedPRM_Log(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAdvertisedPRM_ScopesSnapshotServedAndLogged(t *testing.T) {
+	const delegatedScope = "https://mcp.example.com/mcp/access_as_user"
+	scopes := []string{"openid", delegatedScope}
+	prm := NewAdvertisedPRM(AdvertisedPRMInput{
+		Mode:            config.AuthModeOAuth,
+		ResourceURL:     "https://mcp.example.com/mcp",
+		Issuer:          "https://auth.example.com",
+		ScopesSupported: scopes,
+	})
+
+	scopes[0] = "mutated-after-construction"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, prmBarePath, nil)
+	prm.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PRM status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &metadata); err != nil {
+		t.Fatalf("decode PRM: %v", err)
+	}
+	wantScopes := []any{"openid", delegatedScope}
+	if got := metadata["scopes_supported"]; !reflect.DeepEqual(got, wantScopes) {
+		t.Errorf("served scopes_supported = %#v, want %#v", got, wantScopes)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	prm.Log()
+
+	var record map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+		t.Fatalf("decode log: %v", err)
+	}
+	if got := record["scopes_supported"]; !reflect.DeepEqual(got, wantScopes) {
+		t.Errorf("logged scopes_supported = %#v, want %#v", got, wantScopes)
 	}
 }
