@@ -7,9 +7,8 @@
 #   - host ports 28081/21943, 28082/21944, 28083/21945 so they do not steal infra 8081/1943
 #   - third container for local-basic (no OAuth PATCH)
 #   - no Keycloak docker network (JWKS is Microsoft HTTPS)
-#   - --ulimit nofile=1048576:1048576 (e2e compose + the working infra
-#     `solace` container on this laptop). Infra's script still says 42192;
-#     Solace 10.25 POST requires 1048576.
+#   - PATCH tlsServerCertContent on HTTP SEMP (e2e-oauth install_broker_tls_cert)
+#     so HTTPS on 1943 has a cert. TLS is enabled but empty cert RSTs.
 #
 # Brokers:
 #   mcp-entra-solace    → 28081 (SEMP HTTP), 21943 (SEMP TLS)  prod-us
@@ -175,6 +174,34 @@ upsert_group() {
     -H "Content-Type: application/json" -d "$body" >/dev/null
 }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BROKER_TLS_DIR="${SCRIPT_DIR}/../.local/certs/broker"
+
+# Same job as test/e2e-oauth/helpers.sh install_broker_tls_cert.
+ensure_broker_tls_files() {
+  mkdir -p "$BROKER_TLS_DIR"
+  local crt="$BROKER_TLS_DIR/broker.crt" key="$BROKER_TLS_DIR/broker.key"
+  if [[ -f "$crt" && -f "$key" ]] \
+     && openssl x509 -in "$crt" -noout -checkend $((15 * 24 * 3600)) >/dev/null 2>&1; then
+    return 0
+  fi
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 90 -nodes \
+    -keyout "$key" -out "$crt" -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+  chmod 0644 "$key"
+}
+
+# install_broker_tls_cert <semp-http-port>
+install_broker_tls_cert() {
+  local port="$1"
+  local pem body
+  pem=$(cat "$BROKER_TLS_DIR/broker.crt" "$BROKER_TLS_DIR/broker.key")
+  body=$(python3 -c "import json,sys; print(json.dumps({'tlsServerCertContent': sys.stdin.read()}))" <<<"$pem")
+  curl -sf -u admin:admin -X PATCH \
+    "http://localhost:${port}/SEMP/v2/config" \
+    -H "Content-Type: application/json" -d "$body" >/dev/null
+}
+
 echo "==> ensuring broker containers exist and are running"
 for row in "${BROKERS[@]}"; do
   read -r name semp smf _mode <<<"$row"
@@ -187,6 +214,15 @@ for row in "${BROKERS[@]}"; do
   read -r name semp _smf _mode <<<"$row"
   echo "  [$name]"
   wait_for_semp "$semp"
+done
+
+echo
+echo "==> installing SEMP TLS cert (empty tlsServerCertContent RSTs HTTPS)"
+ensure_broker_tls_files
+for row in "${BROKERS[@]}"; do
+  read -r name semp _smf _mode <<<"$row"
+  echo "  [$name] PATCH tlsServerCertContent via HTTP $semp"
+  install_broker_tls_cert "$semp"
 done
 
 echo
