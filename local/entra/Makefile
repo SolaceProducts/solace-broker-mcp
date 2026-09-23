@@ -5,10 +5,6 @@ TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template
 CONFIG_FILE := $(CURDIR)/.local/broker-config.entra.yaml
 ENV_FILE   := $(CURDIR)/.env
 
-# Source tree for `go run ./cmd/server`. Default is this repo. Override:
-#   make entra MCP_REPO=/path/to/solace-broker-mcp
-MCP_REPO   ?= $(abspath $(CURDIR)/../..)
-
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -47,7 +43,11 @@ config-clean: ## Delete the rendered config
 # as a background job; `run` is blocking on purpose.
 .PHONY: run
 run: config ## Run the MCP server (blocking) against this lab
-	@if [ ! -d "$(MCP_REPO)" ]; then echo "MCP_REPO not found: $(MCP_REPO)"; exit 1; fi
+	@if [ -z "$(MCP_REPO)" ]; then \
+	  echo "MCP_REPO is required — path to a solace-broker-mcp checkout. See README.md." >&2; \
+	  exit 1; \
+	fi
+	@if [ ! -d "$(MCP_REPO)" ]; then echo "MCP_REPO is not a directory: $(MCP_REPO)" >&2; exit 1; fi
 	@if [ ! -f "$(ENV_FILE)" ]; then \
 	  echo "missing $(ENV_FILE) — copy .env.example and set MCP_SERVER_CLIENT_SECRET"; \
 	  exit 1; \

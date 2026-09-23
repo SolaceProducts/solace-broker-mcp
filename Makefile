@@ -307,13 +307,11 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 
 # ── Local Entra lab ──────────────────────────────────────────────────────────
 # Thin wrappers. Broker/SEMP work stays in local/entra/.
-# go run uses this tree unless MCP_REPO is set (command line or environment).
-# If this checkout cannot load the Entra YAML, the server fails at startup.
+# MCP_REPO has no default; required for entra / entra-run (see local/entra/README.md).
 
 ENTRA_DIR  := local/entra
 ENTRA_ENV  := $(ENTRA_DIR)/.env
 ENTRA_HOST := mcp-lab.solacetest.com
-MCP_REPO   ?= $(CURDIR)
 
 .PHONY: entra-preflight
 entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
@@ -352,37 +350,49 @@ entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
 	  fi; \
 	fi
 
+.PHONY: entra-need-repo
+entra-need-repo:
+	@if [ -z "$(MCP_REPO)" ]; then \
+	  echo "MCP_REPO is required — path to a solace-broker-mcp checkout that can load this lab YAML." >&2; \
+	  echo "See local/entra/README.md." >&2; \
+	  exit 1; \
+	fi
+	@if [ ! -d "$(MCP_REPO)" ]; then \
+	  echo "MCP_REPO is not a directory: $(MCP_REPO)" >&2; \
+	  exit 1; \
+	fi
+
 .PHONY: entra
-entra: entra-up entra-run ## One laptop command: converge brokers then run MCP (blocking)
+entra: entra-need-repo entra-up entra-run ## One laptop command: converge brokers then run MCP (blocking)
 
 .PHONY: entra-up
 entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does not start MCP
-	$(MAKE) -C $(ENTRA_DIR) certs MCP_REPO=$(MCP_REPO)
-	$(MAKE) -C $(ENTRA_DIR) brokers-up MCP_REPO=$(MCP_REPO)
-	$(MAKE) -C $(ENTRA_DIR) config MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) certs
+	$(MAKE) -C $(ENTRA_DIR) brokers-up
+	$(MAKE) -C $(ENTRA_DIR) config
 	@if [ "$(filter entra,$(MAKECMDGOALS))" = "" ]; then \
 	  echo "Next (MCP is not started):"; \
-	  echo "  make entra          # converge + run (prints Claude launch line, then blocks)"; \
-	  echo "  make entra-run      # run only (same Claude line before go run)"; \
+	  echo "  make entra MCP_REPO=<checkout>   # converge + run"; \
+	  echo "  make entra-run MCP_REPO=<checkout>"; \
 	fi
 
 .PHONY: entra-run
-entra-run: entra-preflight ## Run MCP against the Entra lab (blocking)
+entra-run: entra-preflight entra-need-repo ## Run MCP against the Entra lab (blocking)
 	$(MAKE) -C $(ENTRA_DIR) run MCP_REPO=$(MCP_REPO)
 
 .PHONY: entra-down
 entra-down: ## Stop Entra lab brokers; keep .local/ and .env
-	$(MAKE) -C $(ENTRA_DIR) brokers-down MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) brokers-down
 
 .PHONY: entra-reset
 entra-reset: ## Recreate Entra lab brokers (teardown then brokers-up)
-	$(MAKE) -C $(ENTRA_DIR) brokers-down MCP_REPO=$(MCP_REPO)
-	$(MAKE) -C $(ENTRA_DIR) brokers-up MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) brokers-down
+	$(MAKE) -C $(ENTRA_DIR) brokers-up
 
 .PHONY: entra-certs-clean
 entra-certs-clean: ## Delete Entra lab certs (restart Claude after next certs)
-	$(MAKE) -C $(ENTRA_DIR) certs-clean MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) certs-clean
 
 .PHONY: entra-claude-cmd
 entra-claude-cmd: ## Print env + command to launch Claude with lab certs
-	$(MAKE) -C $(ENTRA_DIR) claude-cmd MCP_REPO=$(MCP_REPO)
+	$(MAKE) -C $(ENTRA_DIR) claude-cmd

@@ -4,13 +4,7 @@ Laptop stack for the shared **solacetest.com** Entra tenant. Not a product featu
 
 Run from the **repo root**. Do not `cd` here.
 
-One-time on the laptop: hosts line + `cp local/entra/.env.example local/entra/.env` with the mcp-broker secret. After that:
-
-```
-make entra
-```
-
-That converges certs, brokers (re-PATCH), config, then **blocks** on the MCP server from this checkout (`go run ./cmd/server`). If startup rejects `jwt-bearer`, point `MCP_REPO` at a tree that implements it:
+One-time on the laptop: hosts, `.env` secret, and **`MCP_REPO`** (required, no default). Then:
 
 ```
 make entra MCP_REPO=/path/to/solace-broker-mcp
@@ -32,7 +26,9 @@ Pieces if you need them: `make entra-up` (no `go run`), `make entra-run`, `make 
 
 2. **Secret.** `cp local/entra/.env.example local/entra/.env` and set `MCP_SERVER_CLIENT_SECRET` to the mcp-broker client secret. Ask a teammate who already has the lab; it is not in git. Preflight fails on a missing or empty `.env` before brokers start.
 
-3. `make entra` as above. `entra-up` alone converges: certs (idempotent), brokers-up (re-PATCH), config, and does not start `go run`.
+3. **`MCP_REPO`.** Absolute path to a **solace-broker-mcp** checkout that can load this lab YAML (`grant_type` jwt-bearer). There is no default. `make entra` / `make entra-run` fail immediately if it is unset. `make entra-up` (brokers only) does not need it.
+
+4. Then `make entra MCP_REPO=/path/to/solace-broker-mcp`. `entra-up` alone converges: certs (idempotent), brokers-up (re-PATCH), config, and does not start `go run`.
 
    `make entra-down` removes only these containers:
 
