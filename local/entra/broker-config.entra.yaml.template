@@ -125,14 +125,14 @@ semp:
 
 brokers:
   prod-us:
-    url: "https://localhost:1943"
+    url: "https://localhost:21943"
     insecure_skip_verify: true
     auth:
       mode: oauth
       # test-broker-us Application ID URI + MSAL .default.
       target: "api://REDACTED/.default"
   test-us:
-    url: "https://localhost:1945"
+    url: "https://localhost:21945"
     insecure_skip_verify: true
     auth:
       mode: oauth
@@ -140,7 +140,7 @@ brokers:
       # Probe: unregistered resource so OBO 400s (not a Hop 1 / jwt-bearer change).
       target: "api://REDACTED/.default"
   local-basic:
-    url: "https://localhost:1944"
+    url: "https://localhost:21944"
     insecure_skip_verify: true
     auth:
       mode: basic

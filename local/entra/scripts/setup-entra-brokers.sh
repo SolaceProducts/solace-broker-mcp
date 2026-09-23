@@ -2,10 +2,11 @@
 #
 # Bring up three Solace brokers for the laptop Entra lab. Idempotent.
 #
-# Distinct names so they do not collide with solace-local-infra solace / solace-b:
-#   mcp-entra-solace    8081/1943  Entra OAuth  (prod-us)
-#   mcp-entra-solace-c  8082/1944  basic auth only (local-basic)
-#   mcp-entra-solace-b  8083/1945  Entra OAuth  (test-us)
+# Distinct names AND host ports so they can sit beside solace-local-infra
+# (that stack already owns 8081/1943 and 8083/1945):
+#   mcp-entra-solace    28081/21943  Entra OAuth  (prod-us)
+#   mcp-entra-solace-c  28082/21944  basic auth only (local-basic)
+#   mcp-entra-solace-b  28083/21945  Entra OAuth  (test-us)
 #
 # Do NOT run solace-local-infra/brokers/setup-oauth-brokers.sh on these
 # containers — that script PATCHes Keycloak issuer/JWKS and joins the
@@ -31,9 +32,9 @@ ENTRA_GROUP_OBJECT_ID="REDACTED"
 
 # name  semp-host-port  smf-host-port  oauth|none
 BROKERS=(
-  "mcp-entra-solace    8081  1943  oauth"
-  "mcp-entra-solace-c  8082  1944  none"
-  "mcp-entra-solace-b  8083  1945  oauth"
+  "mcp-entra-solace    28081  21943  oauth"
+  "mcp-entra-solace-c  28082  21944  none"
+  "mcp-entra-solace-b  28083  21945  oauth"
 )
 
 if command -v docker >/dev/null 2>&1; then
@@ -250,8 +251,8 @@ done
 
 echo
 echo "Done. Brokers:"
-echo "  mcp-entra-solace    http://localhost:8081  (Entra OAuth, prod-us)"
-echo "  mcp-entra-solace-c  http://localhost:8082  (basic admin/admin, local-basic)"
-echo "  mcp-entra-solace-b  http://localhost:8083  (Entra OAuth, test-us)"
+echo "  mcp-entra-solace    http://localhost:28081 / https://localhost:21943  (Entra OAuth, prod-us)"
+echo "  mcp-entra-solace-c  http://localhost:28082 / https://localhost:21944  (basic admin/admin, local-basic)"
+echo "  mcp-entra-solace-b  http://localhost:28083 / https://localhost:21945  (Entra OAuth, test-us)"
 echo "Teardown: make -C local/entra brokers-down"
 echo "Do not run solace-local-infra setup-oauth-brokers.sh on these names."

@@ -355,11 +355,11 @@ entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
 	if command -v docker >/dev/null 2>&1; then \
 	  names=$$(docker ps --format '{{.Names}}' 2>/dev/null) || names=""; \
 	  if printf '%s\n' "$$names" | grep -qx solace; then \
-	    echo "WARN: docker container 'solace' is running (infra Keycloak lab); ports 8081/1943 may collide with mcp-entra-solace." >&2; \
+	    echo "WARN: docker container 'solace' is running (infra Keycloak lab). Entra uses 28081/21943, not 8081/1943." >&2; \
 	  fi; \
-	  clash=$$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | awk -F '\t' '$$1 != "mcp-entra-solace" && ($$2 ~ /:8081->/ || $$2 ~ /:1943->/) {print $$1}'); \
+	  clash=$$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | awk -F '\t' '$$1 != "mcp-entra-solace" && ($$2 ~ /:28081->/ || $$2 ~ /:21943->/) {print $$1}'); \
 	  if [ -n "$$clash" ]; then \
-	    echo "Entra lab ports 8081/1943 are already published by: $$clash (not mcp-entra-solace)" >&2; \
+	    echo "Entra lab ports 28081/21943 are already published by: $$clash (not mcp-entra-solace)" >&2; \
 	    exit 1; \
 	  fi; \
 	fi

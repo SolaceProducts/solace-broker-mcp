@@ -34,13 +34,13 @@ Pieces if you need them: `make entra-up` (no `go run`), `make entra-run`, `make 
 
    | Container            | Host ports | Auth                         |
    | -------------------- | ---------- | ---------------------------- |
-   | `mcp-entra-solace`   | 8081/1943  | Entra OAuth (prod-us)        |
-   | `mcp-entra-solace-c` | 8082/1944  | basic `admin`/`admin`        |
-   | `mcp-entra-solace-b` | 8083/1945  | Entra OAuth (test-us)        |
+   | `mcp-entra-solace`   | 28081/21943 | Entra OAuth (prod-us)        |
+   | `mcp-entra-solace-c` | 28082/21944 | basic `admin`/`admin`        |
+   | `mcp-entra-solace-b` | 28083/21945 | Entra OAuth (test-us)        |
 
    Names are distinct from solace-local-infra `solace` / `solace-b`. **Do not** run `solace-local-infra/brokers/setup-oauth-brokers.sh` on these brokers — that script writes Keycloak issuer/JWKS and joins the Keycloak docker network. Entra brokers need outbound HTTPS to Microsoft for JWKS.
 
-   If a docker container named `solace` (infra Keycloak lab) is running, preflight warns that ports 8081/1943 may collide.
+   Host ports are **not** 8081/1943 so this stack can sit beside solace-local-infra. If a docker container named `solace` is running, preflight still warns in case something else rebound the Entra ports.
 
 ## After the server is up
 
