@@ -436,6 +436,39 @@ func TestOwnerValidatingHandler_OwnerInArbitraryObjectParam_StillGetsChecked(t *
 	}
 }
 
+// TestOwnerValidatingHandler_OwnerNestedUnderOwnerNamedParam_StillGetsChecked
+// pins a fourth bypass route found in review — narrower than the third, but
+// left open by the very fix that closed it. The scan added for the third
+// route explicitly skipped any param named "owner" ("already checked
+// above"), which is true only for the STRING case the scalar check two
+// lines above handles; a params["owner"] that is itself a map (e.g.
+// {"owner": {"owner": "ghost", "permission": "consume"}}) fell through that
+// scalar check unhandled and was then skipped by the loop as if it had
+// already been validated. Reproduced end to end through the real registered
+// handler before this fix: Handle with exactly that shape produced
+// createMsgVpnQueue with the ghost owner and no getMsgVpnClientUsername call
+// at all — extractOwner returned ok=false without ever inspecting the map.
+func TestOwnerValidatingHandler_OwnerNestedUnderOwnerNamedParam_StillGetsChecked(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "create-queue")
+	client.errors["getMsgVpnClientUsername"] = notFoundError("getMsgVpnClientUsername")
+	client.responses["getMsgVpn"] = vpnExistsResponse()
+
+	_, err := handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "q1",
+		"owner":      map[string]any{"owner": "ghost", "permission": "consume"},
+	})
+	var ownerErr *ownerNotFoundError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("an owner nested under a param literally named \"owner\" must still be checked; got %T: %v", err, err)
+	}
+	for _, call := range client.calls {
+		if call == "createMsgVpnQueue" {
+			t.Fatalf("queue must never be created when an owner nested under an owner-named param does not exist; calls = %v", client.calls)
+		}
+	}
+}
+
 // TestOwnerValidatingHandler_NonStringOwner_SkipsLocalCheck documents the
 // accepted tradeoff for a malformed, non-string "owner": this package treats
 // it as "no owner supplied" rather than rejecting it itself, because

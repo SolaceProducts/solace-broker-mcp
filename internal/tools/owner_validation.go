@@ -283,14 +283,26 @@ func (h *ownerValidatingHandler) Handle(ctx context.Context, tc *ToolContext, pa
 // additionalProperties:false (a deliberate choice, SOL-154164), so nothing
 // upstream strips an undeclared key before it reaches here.
 //
-// This function therefore checks all three, in this order: nested inside
-// the documented configParam object, then a bare top-level params["owner"],
-// then every other object-valued param's "owner" key. A caller (or a
-// confused LLM inventing a plausible-but-wrong config-object name — attempts
-// caught in review used "config", "attributes", "queueAttributes") that
-// puts "owner" in any of the three would otherwise reach the broker with
-// zero validation — reproduced live during review, twice, for two different
-// locations found across two review passes. The check order is not a
+// This function checks, in this order: nested inside the documented
+// configParam object; a bare top-level params["owner"] that is itself a
+// string; and finally every other object-valued param's "owner" key — this
+// last scan is NOT restricted to params whose name differs from "owner", so
+// a param literally named "owner" whose VALUE is itself a map (e.g.
+// {"owner": {"owner": "ghost", "permission": "consume"}}) is still caught
+// here, by the same scan that catches any other wrong config-object name.
+// Only configParam is excluded from this final scan, because its "owner"
+// key was already checked above; excluding "owner" too was an earlier,
+// incorrect version of this function — the scalar check two lines up only
+// matches params["owner"] when it is a string, so a map-valued
+// params["owner"] fell through that check unhandled and was then skipped by
+// the loop as if it had been "already checked", reopening the exact class
+// of bypass this function exists to close. Found and fixed in review: a
+// caller (or a confused LLM inventing a plausible-but-wrong config-object
+// name — attempts caught in review used "config", "attributes",
+// "queueAttributes", and finally "owner" itself) that puts "owner" in any
+// of these shapes would otherwise reach the broker with zero validation —
+// reproduced live during review, three times now, for three different
+// shapes found across three review passes. Check order is not a
 // security-relevant choice: if more than one location is set,
 // constructRequestBody's own ambiguous-request-body check rejects the call
 // before it reaches the broker regardless of which value this function
@@ -328,8 +340,8 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 		return o, msgVpn, true
 	}
 	for name, val := range params {
-		if name == configParam || name == "owner" {
-			continue // already checked above
+		if name == configParam {
+			continue // its "owner" key is checked above
 		}
 		obj, isMap := val.(map[string]any)
 		if !isMap {
