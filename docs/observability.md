@@ -2048,7 +2048,10 @@ any config change here. Set `observability.service_instance_id` to override both
 identity value and the chain step that supplied it, so the outcome of the precedence rules
 above is visible at deploy time rather than inferred from a dashboard later. It is emitted
 before `log_level` is applied, so it appears even at `warn` or `error` — a diagnostic for a
-silent misconfiguration is no use if turning down logging hides it:
+silent misconfiguration is no use if turning down logging hides it. The one case where it does
+not appear is when the identity resource could not be built at all; an
+`observability identity resource unavailable; falling back to SDK defaults` ERROR line names
+that instead, and the server continues on the SDK's own defaults:
 
 ```json
 {"time":"2026-09-23T10:14:02.481293-04:00","level":"INFO","msg":"observability identity resolved","deployment.environment.name":"production","service.name":"my-mcp","service_name":"my-mcp","service_name_source":"env","service_instance_id":"solace-broker-mcp-7d8f9-abcde","service_instance_id_source":"pod_name","deployment_environment":"production","deployment_environment_source":"config","cloud_region":"","cloud_region_source":"unset"}

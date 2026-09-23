@@ -16,6 +16,7 @@ package resource
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -582,14 +583,24 @@ func TestNew_WhitespaceOnlyYAMLFieldOmitsOptionalAttributes(t *testing.T) {
 }
 
 // TestNew_SurroundingWhitespaceIsTrimmed pins that the trim is a trim, not
-// just an is-blank test: a value with padding is used, without it.
+// just an is-blank test: a padded value is used, without its padding.
 func TestNew_SurroundingWhitespaceIsTrimmed(t *testing.T) {
-	res, _, err := New(config.ObservabilityConfig{ServiceName: "  my-mcp  "}, "v1")
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	if got := findAttr(t, res, "service.name"); got != "my-mcp" {
-		t.Errorf("service.name = %q, want %q", got, "my-mcp")
+	for _, a := range identityAttrs {
+		t.Run(string(a.key), func(t *testing.T) {
+			var cfg config.ObservabilityConfig
+			a.setYAML(&cfg, "  from-yaml  ")
+
+			res, identity, err := New(cfg, "v1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			if got := findAttr(t, res, a.key); got != "from-yaml" {
+				t.Errorf("%s = %q, want %q", a.key, got, "from-yaml")
+			}
+			if src := sourceFor(t, identity, a.key); src != SourceConfig {
+				t.Errorf("%s source = %q, want %q", a.key, src, SourceConfig)
+			}
+		})
 	}
 }
 
@@ -618,17 +629,26 @@ func TestNew_WhitespaceOnlyOTelServiceNameVarCountsAsUnset(t *testing.T) {
 // OTEL_RESOURCE_ATTRIBUTES value before percent-decoding it, so %20 decodes
 // to a space afterwards and arrives untrimmed. envAttr trims again for this.
 func TestNew_PercentEncodedWhitespaceEnvValueCountsAsUnset(t *testing.T) {
-	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "cloud.region=%20%20")
+	for _, a := range identityAttrs {
+		t.Run(string(a.key), func(t *testing.T) {
+			t.Setenv("OTEL_RESOURCE_ATTRIBUTES", string(a.key)+"=%20%20")
 
-	res, identity, err := New(config.ObservabilityConfig{}, "v1")
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	if hasAttrKey(res, "cloud.region") {
-		t.Errorf("cloud.region = %q, want the attribute omitted", findAttr(t, res, "cloud.region"))
-	}
-	if identity.CloudRegion.Source != SourceUnset {
-		t.Errorf("cloud.region source = %q, want %q", identity.CloudRegion.Source, SourceUnset)
+			res, identity, err := New(config.ObservabilityConfig{}, "v1")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			// The required two fall through to their default, the optional
+			// two are omitted; neither may carry the decoded whitespace, and
+			// env must not be reported as the winning source.
+			for _, kv := range res.Attributes() {
+				if kv.Key == a.key && strings.TrimSpace(kv.Value.AsString()) == "" {
+					t.Errorf("%s = %q, want the decoded whitespace treated as unset", a.key, kv.Value.AsString())
+				}
+			}
+			if src := sourceFor(t, identity, a.key); src == SourceEnv {
+				t.Errorf("%s source = %q; a whitespace-only env value must not win", a.key, src)
+			}
+		})
 	}
 }
 
@@ -760,6 +780,70 @@ func TestNew_IdentityValuesMatchTheResource(t *testing.T) {
 	}
 }
 
+// TestNew_IdentityUnsetMeansTheAttributeIsAbsent pins the other half of that
+// contract, which the row above cannot reach because it configures all four:
+// a reported SourceUnset must mean the key is absent from the resource, not
+// present and blank. Without this, an implementation that reported "unset"
+// while still exporting cloud.region="" would satisfy every other assertion
+// in this file.
+func TestNew_IdentityUnsetMeansTheAttributeIsAbsent(t *testing.T) {
+	res, identity, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	for key, got := range map[attribute.Key]Resolution{
+		deploymentEnvironmentNameKey: identity.DeploymentEnvironment,
+		"cloud.region":               identity.CloudRegion,
+	} {
+		if got.Source != SourceUnset {
+			t.Errorf("%s source = %q, want %q with no source configured", key, got.Source, SourceUnset)
+		}
+		if got.Value != "" {
+			t.Errorf("%s value = %q, want empty when unset", key, got.Value)
+		}
+		if hasAttrKey(res, key) {
+			t.Errorf("%s reported %q but is present on the resource as %q; unset must mean absent",
+				key, SourceUnset, findAttr(t, res, key))
+		}
+	}
+
+	// The required two can never be unset — both chains end in a non-empty
+	// default — so the same contract reads as "always present, never blank".
+	for key, got := range map[attribute.Key]Resolution{
+		"service.name":        identity.ServiceName,
+		"service.instance.id": identity.ServiceInstanceID,
+	} {
+		if got.Source == SourceUnset || got.Value == "" {
+			t.Errorf("%s = %q (source %q), want a resolved non-empty value", key, got.Value, got.Source)
+		}
+		if findAttr(t, res, key) != got.Value {
+			t.Errorf("%s on the resource does not match the reported %q", key, got.Value)
+		}
+	}
+}
+
+// TestSlogAttrs_DropsWhitespaceOnlyValues is the fallback path again, for the
+// case a bare != "" guard lets through: cmd/server hands SlogAttrs an
+// unstripped sdkresource.Default(), and OTEL_RESOURCE_ATTRIBUTES=cloud.region=%20
+// puts a lone decoded space on it. A blank-looking label is the same defect
+// as an empty one (raised by review on PR #443).
+func TestSlogAttrs_DropsWhitespaceOnlyValues(t *testing.T) {
+	res := sdkresource.NewSchemaless(
+		attribute.String("service.name", "  real-service  "),
+		attribute.String("deployment.environment.name", " "),
+		attribute.String("cloud.region", "\t\n"),
+	)
+
+	attrs := SlogAttrs(res)
+	if len(attrs) != 1 {
+		t.Fatalf("SlogAttrs() = %v, want only the one non-blank attribute", attrs)
+	}
+	if attrs[0].Key != "service.name" || attrs[0].Value.String() != "real-service" {
+		t.Errorf("SlogAttrs()[0] = %v, want service.name=real-service (trimmed)", attrs[0])
+	}
+}
+
 // TestIdentity_LogAttrs pins the startup line's key naming and, more
 // usefully, that every field maps to its own key pair. Each of the eight
 // strings below is distinct, so a copy-paste swap between two attributes —
@@ -874,5 +958,26 @@ func TestBaseResource_StripsOnlyTheIdentityKeys(t *testing.T) {
 	}
 	if hasAttrKey(res, "cloud.region") {
 		t.Errorf("cloud.region = %q, want it stripped from the base", findAttr(t, res, "cloud.region"))
+	}
+}
+
+// TestNew_InstanceID_WhitespaceOnlyPodNameFallsThrough pins the trim on the
+// two sources that are not config or env. The shipped deployment.yaml feeds
+// POD_NAME from the downward API, where a Kubernetes object name cannot hold
+// whitespace — but POD_NAME is an ordinary environment variable and nothing
+// forces it to come from there, and instanceID's contract covers non-Kubernetes
+// topologies (raised by review on PR #443).
+func TestNew_InstanceID_WhitespaceOnlyPodNameFallsThrough(t *testing.T) {
+	t.Setenv("POD_NAME", "   ")
+
+	res, identity, err := New(config.ObservabilityConfig{}, "v1")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if identity.ServiceInstanceID.Source == SourcePodName {
+		t.Errorf("service.instance.id source = %q; a whitespace-only POD_NAME must count as unset", SourcePodName)
+	}
+	if got := findAttr(t, res, "service.instance.id"); strings.TrimSpace(got) == "" {
+		t.Errorf("service.instance.id = %q, want a non-blank fallback", got)
 	}
 }

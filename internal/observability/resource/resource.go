@@ -80,6 +80,11 @@ var identityKeys = map[attribute.Key]bool{
 // this seam existed, was that no test in this package could observe the
 // Default()-carries-env path that production always takes — which is why the
 // empty-attribute leak above went unnoticed through a release (SOL-154727).
+//
+// Being package-level mutable state, a test that swaps it must not call
+// t.Parallel, and must restore it with t.Cleanup. No test in this package
+// runs in parallel today — t.Setenv, which most of them use, already forbids
+// it — so the constraint costs nothing; see withBaseResource.
 var defaultResource = sdkresource.Default
 
 // baseResource returns the resource New merges its own attributes over: the
@@ -304,19 +309,22 @@ func serviceName(cfg config.ObservabilityConfig, env *sdkresource.Resource) Reso
 // collapses every instance into one series, and identity is best-effort, not
 // worth failing startup over.
 //
-// POD_NAME and the hostname are not trimmed, unlike the config and env
-// values above: POD_NAME carries a Kubernetes object name and the hostname a
-// DNS label, neither of which can contain whitespace. Trimming them would be
-// code for an input that cannot occur.
+// Every source is trimmed, POD_NAME and the hostname included. Under the
+// shipped deployment.yaml both carry a Kubernetes object name or a DNS label
+// and so cannot hold whitespace, but POD_NAME is an ordinary environment
+// variable that nothing forces to come from the downward API, and this
+// function's own contract covers topologies outside Kubernetes. Trusting the
+// shape of an input is the failure this story exists to fix, so the rule is
+// uniform rather than argued per source (SOL-154727).
 func instanceID(cfg config.ObservabilityConfig, env *sdkresource.Resource) Resolution {
 	var hostname string
 	if host, err := os.Hostname(); err == nil {
-		hostname = host
+		hostname = strings.TrimSpace(host)
 	}
 	return resolve(
 		candidate{cfg.ServiceInstanceID, SourceConfig},
 		candidate{envAttr(env, semconv.ServiceInstanceIDKey), SourceEnv},
-		candidate{os.Getenv("POD_NAME"), SourcePodName},
+		candidate{strings.TrimSpace(os.Getenv("POD_NAME")), SourcePodName},
 		candidate{hostname, SourceHostname},
 		candidate{"unknown", SourceDefault},
 	)
@@ -338,13 +346,18 @@ func SlogAttrs(res *sdkresource.Resource) []slog.Attr {
 	for _, kv := range res.Attributes() {
 		switch kv.Key {
 		case semconv.ServiceNameKey, deploymentEnvironmentNameKey, semconv.CloudRegionKey:
-			// Empty values are dropped, not logged as "". A resource from
-			// New cannot carry one — baseResource strips these keys and New
-			// re-adds them only when non-empty — but cmd/server falls back
-			// to a bare sdkresource.Default() when New fails, and that is
-			// exactly the resource whose env detector emits cloud.region=""
-			// for OTEL_RESOURCE_ATTRIBUTES=cloud.region= (SOL-154727).
-			if v := kv.Value.AsString(); v != "" {
+			// Blank values are dropped, and the survivors trimmed, by the
+			// same rule the resolution chain uses — res is not necessarily
+			// one New built. A resource from New cannot carry a blank
+			// identity value (baseResource strips these keys and New re-adds
+			// them already trimmed), but cmd/server falls back to a bare
+			// sdkresource.Default() when New fails, and that is exactly the
+			// resource whose env detector emits cloud.region="" for
+			// OTEL_RESOURCE_ATTRIBUTES=cloud.region= — or a lone space for
+			// the percent-encoded cloud.region=%20. Testing != "" alone
+			// would catch the first and log the second as a blank-looking
+			// label (SOL-154727).
+			if v := strings.TrimSpace(kv.Value.AsString()); v != "" {
 				out = append(out, slog.String(string(kv.Key), v))
 			}
 		}

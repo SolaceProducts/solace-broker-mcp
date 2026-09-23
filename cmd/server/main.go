@@ -1110,6 +1110,16 @@ func main() {
 	// sdkresource.Default() alone is a safe (merely less identifying)
 	// fallback, and refusing to serve MCP traffic over an identity-attribute
 	// problem would be a bad trade.
+	//
+	// The fallback is unreachable as written: New's only error is Merge's
+	// ErrSchemaURLConflict, and it builds both sides from the same
+	// base.SchemaURL(), so they cannot differ. It is kept because that is a
+	// property of New's internals rather than of its contract. Note what it
+	// would cost if a future change made it reachable: sdkresource.Default()
+	// is the UNSTRIPPED base, so an empty OTEL_RESOURCE_ATTRIBUTES entry
+	// would put cloud.region="" back on target_info (SlogAttrs guards the
+	// log-line half independently, for any resource). Give it the stripped
+	// base instead of widening it (SOL-154727).
 	res, identity, err := resource.New(cfg.Observability, version.Version())
 	identityResolved := err == nil
 	if err != nil {
