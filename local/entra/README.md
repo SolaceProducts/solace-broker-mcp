@@ -53,6 +53,13 @@ The lab Host is `mcp-lab.solacetest.com` while the listener is loopback. `make e
 make entra
 ```
 
+> **Read this before you type anything else.**
+>
+> - `make entra` ends on `go run ./cmd/server` and **blocks that terminal**. That process **is** the MCP server; keeping it running in this terminal is the point. `Ctrl-C` stops it.
+> - **Before it blocks**, the same terminal prints the Claude setup block (the `run` target calls `claude-cmd` first). Quit Claude, then paste the printed `claude mcp remove` / `claude mcp add` lines and the launch line — with the cert path, `--client-id`, `NO_PROXY`, and the `solace-entra-lab` URL **already filled in** for this laptop. `make entra-claude-cmd` reprints the same block if you scrolled past it.
+> - **Copy the printed lines verbatim.** Do not invent a `…` cert path and do not paste a client ID from another doc — the printed block is the source of truth for this laptop.
+> - **Sign in to Claude as `test-operator@solacetest.com`** — the `operator` app role on `mcp-broker`, i.e. the account for driving tools. `test-reader@solacetest.com` is the read-only user for RBAC spot-checks; use it only when you want to prove a lower role gets a smaller tool surface. Passwords for both accounts, and the `.env` values, live with the team — not in this repo.
+
 `MCP_REPO` defaults to this checkout. That: certs (idempotent), three brokers, Entra PATCH, render YAML, print the Claude line, then **block** on MCP.
 
 `make entra` prints this block with an **absolute** cert path before it blocks on MCP. `make entra-claude-cmd` reprints it (certs must already exist). Copy those printed lines; do not invent a `…` path.
