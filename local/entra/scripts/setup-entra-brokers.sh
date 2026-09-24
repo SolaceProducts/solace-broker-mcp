@@ -70,9 +70,13 @@ ensure_container() {
       "$CONTAINER_CLI" start "$name" >/dev/null
     fi
   else
-    echo "  [$name] creating (SEMP $semp, SMF $smf)"
+    echo "  [$name] creating (SEMP $semp, SMF $smf) — bound to 127.0.0.1"
+    # Bind lab SEMP (admin/admin, plain HTTP) and SMF to loopback so that on
+    # shared Wi-Fi another host cannot reach admin/admin or repoint the Entra
+    # OAuth profile. Lab is single-laptop; there is no need to publish these
+    # on 0.0.0.0.
     "$CONTAINER_CLI" run -d --name "$name" \
-      -p "${semp}:8080" -p "${smf}:1943" \
+      -p "127.0.0.1:${semp}:8080" -p "127.0.0.1:${smf}:1943" \
       --shm-size=1g --ulimit core=-1 --ulimit memlock=-1 --ulimit nofile=1048576:1048576 \
       -e username_admin_globalaccesslevel=admin \
       -e username_admin_password=admin \

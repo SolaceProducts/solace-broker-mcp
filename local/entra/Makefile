@@ -62,7 +62,8 @@ config-clean: ## Delete the rendered config
 
 # MCP_REPO defaults to this repo root, which loads the live lab YAML.
 # Override to `go run` a different checkout. Blocking on purpose.
-MCP_REPO ?= $(abspath $(CURDIR)/..)
+# $(CURDIR) here is local/entra/, so the repo root is two levels up.
+MCP_REPO ?= $(abspath $(CURDIR)/../..)
 
 .PHONY: run
 run: certs config ## Run the MCP server (blocking) against this lab
