@@ -663,6 +663,9 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 		}
 	}
 
+	const delegatedScope = "https://mcp.example.com/mcp/access_as_user"
+	wantScopes := []string{"openid", delegatedScope}
+
 	tests := []struct {
 		name          string
 		port          int
@@ -684,22 +687,14 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			if tt.tlsEnabled {
 				scheme = "https"
 			}
-			cfg := &config.ServerConfig{
-				Port: tt.port,
-				MCPClientAuth: config.MCPClientAuthConfig{
-					Mode:        tt.mode,
-					DevToken:    tt.devToken,
-					Issuer:      tt.issuer,
-					Audience:    "solace-mcp-server",
-					ResourceURL: fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
-				},
-			}
-			if tt.tlsEnabled {
-				cfg.TLSCertFile = "/path/to/cert.pem"
-				cfg.TLSKeyFile = "/path/to/key.pem"
+			in := AdvertisedPRMInput{
+				Mode:            tt.mode,
+				Issuer:          tt.issuer,
+				ResourceURL:     fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
+				ScopesSupported: wantScopes,
 			}
 
-			handler := NewProtectedResourceMetadataHandler(cfg)
+			handler := NewProtectedResourceMetadataHandler(in)
 			if !tt.expectHandler {
 				if handler != nil {
 					t.Error("expected nil handler")
@@ -737,7 +732,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			expectedResource := fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port)
 			checkStringField(t, metadata, "resource", expectedResource)
 			checkStringArray(t, metadata, "authorization_servers", []string{tt.issuer})
-			checkStringArray(t, metadata, "scopes_supported", []string{"openid"})
+			checkStringArray(t, metadata, "scopes_supported", wantScopes)
 			checkStringArray(t, metadata, "bearer_methods_supported", []string{"header"})
 		})
 	}

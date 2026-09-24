@@ -171,7 +171,12 @@ func buildMux(readiness *health.ReadinessState) *http.ServeMux {
 
 // registerMetadataRoutes installs the configured RFC 9728 PRM paths.
 func registerMetadataRoutes(mux *http.ServeMux, cfg *config.ServerConfig) {
-	prm := auth.NewAdvertisedPRM(auth.AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer})
+	prm := auth.NewAdvertisedPRM(auth.AdvertisedPRMInput{
+		Mode:            cfg.MCPClientAuth.Mode,
+		ResourceURL:     cfg.MCPClientAuth.ResourceURL,
+		Issuer:          cfg.MCPClientAuth.Issuer,
+		ScopesSupported: cfg.MCPClientAuth.ScopesSupported,
+	})
 	paths := prm.Paths()
 	for _, path := range paths {
 		mux.Handle(path, prm.Handler())

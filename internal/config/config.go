@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/banner"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
@@ -327,6 +328,9 @@ type MCPClientAuthConfig struct {
 	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
 	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
 	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") — required when mode == "oauth"
+	// ScopesSupported is the ordered RFC 9728 scope list advertised to MCP
+	// clients. It defaults to ["openid"] when omitted or empty.
+	ScopesSupported []string `yaml:"scopes_supported,omitempty"`
 	// Mode selects the client authentication backend. One of AuthModeDisabled,
 	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
 	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
@@ -454,12 +458,13 @@ func (b BrokerConfig) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer for MCPClientAuthConfig. It exposes the auth
-// mode and OAuth configuration (issuer, audience, resource URL) but excludes
-// DevToken to prevent credential leaks in log output. Mode is listed first
-// because it is the most important operator-facing piece of information —
-// operators need to confirm which auth mode the server loaded at startup.
-// Issuer and ResourceURL are routed through SanitizeURLString for the same
-// defense-in-depth reason as BrokerConfig.LogValue.
+// mode and OAuth configuration (issuer, audience, resource URL, advertised
+// scopes) but excludes DevToken to prevent credential leaks in log output.
+// Mode is listed first because it is the most important operator-facing piece
+// of information — operators need to confirm which auth mode the server loaded
+// at startup. Issuer and ResourceURL are routed through SanitizeURLString for
+// the same defense-in-depth reason as BrokerConfig.LogValue. Scopes are public
+// RFC 9728 identifiers, logged with slog.Any as a JSON array.
 // See docs/secure-logging-rules.md Rule 2.
 func (c MCPClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
@@ -467,6 +472,7 @@ func (c MCPClientAuthConfig) LogValue() slog.Value {
 		slog.String("issuer", SanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", SanitizeURLString(c.ResourceURL)),
+		slog.Any("scopes_supported", c.ScopesSupported),
 	)
 }
 
@@ -740,6 +746,9 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	if cfg.SEMP.RetryMaxInterval == 0 {
 		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
+	}
+	if len(cfg.MCPClientAuth.ScopesSupported) == 0 {
+		cfg.MCPClientAuth.ScopesSupported = []string{"openid"}
 	}
 
 	applyToolAuthorizationDefaults(cfg)
@@ -1179,6 +1188,7 @@ func validate(cfg *ServerConfig) error {
 	//   - oauth: production, https:// required everywhere
 	// mode was normalized to lowercase at the top of validate() so every check
 	// above (broker TLS, IsProductionMode) and the switch below agree on it.
+	errs = append(errs, validateScopesSupported(cfg.MCPClientAuth.ScopesSupported)...)
 	switch cfg.MCPClientAuth.Mode {
 	case "":
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode is required (must be one of %v)", validAuthClientModes))
@@ -1273,6 +1283,17 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func validateScopesSupported(scopes []string) []error {
+	var errs []error
+	for i, scope := range scopes {
+		if scope == "" || strings.IndexFunc(scope, unicode.IsSpace) >= 0 {
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.scopes_supported[%d] must be a non-empty string without whitespace", i))
+		}
+	}
+	return errs
 }
 
 // countHop2Brokers returns the number of brokers configured with

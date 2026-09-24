@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -4446,5 +4447,185 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "semp.max_queue_wait must be >= 0") {
 		t.Errorf("error = %v, want it to name semp.max_queue_wait", err)
+	}
+}
+
+func TestLoadConfig_ScopesSupported_DefaultsAndPreservesOrder(t *testing.T) {
+	tests := []struct {
+		name       string
+		scopesYAML string
+		want       []string
+	}{
+		{name: "omitted", want: []string{"openid"}},
+		{name: "null", scopesYAML: "  scopes_supported: null\n", want: []string{"openid"}},
+		{name: "empty", scopesYAML: "  scopes_supported: []\n", want: []string{"openid"}},
+		{
+			name: "custom order and duplicates",
+			scopesYAML: `  scopes_supported:
+    - "openid"
+    - "https://mcp.example.com/mcp/access_as_user"
+    - "openid"
+`,
+			want: []string{"openid", "https://mcp.example.com/mcp/access_as_user", "openid"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := `mcp_client_auth:
+  mode: static
+  dev_token: test
+` + tt.scopesYAML + `brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got := cfg.MCPClientAuth.ScopesSupported; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ScopesSupported = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ScopesSupported_RejectsWhitespace(t *testing.T) {
+	tests := []struct {
+		name  string
+		scope string
+	}{
+		{name: "empty", scope: ""},
+		{name: "spaces only", scope: "   "},
+		{name: "embedded space", scope: "openid profile"},
+		{name: "tab", scope: "openid\tprofile"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := fmt.Sprintf(`mcp_client_auth:
+  mode: static
+  dev_token: test
+  scopes_supported:
+    - %q
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`, tt.scope)
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if err == nil {
+				t.Fatal("LoadConfig() error = nil, want invalid scopes_supported error")
+			}
+			if !strings.Contains(err.Error(), "without whitespace") {
+				t.Errorf("error = %q, want without whitespace", err)
+			}
+			if !strings.Contains(err.Error(), "mcp_client_auth.scopes_supported") {
+				t.Errorf("error = %q, want mcp_client_auth.scopes_supported", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ScopesSupported_OAuthCustomList(t *testing.T) {
+	want := []string{"openid", "https://mcp.example.com/mcp/access_as_user"}
+	yaml := `tls_terminated_upstream: true
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-app"
+  resource_url: "https://mcp.example.com/mcp"
+  scopes_supported:
+    - "openid"
+    - "https://mcp.example.com/mcp/access_as_user"
+  tool_authorization:
+    enabled: false
+brokers:
+  first:
+    url: "https://first.example.com"
+    auth: {mode: basic, username: admin, password: secret}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got := cfg.MCPClientAuth.ScopesSupported; !reflect.DeepEqual(got, want) {
+		t.Errorf("ScopesSupported = %v, want %v", got, want)
+	}
+}
+
+func TestLoadConfig_ScopesSupported_CompatibilityMatrix(t *testing.T) {
+	const hop1 = `tls_terminated_upstream: true
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-app"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
+`
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "basic brokers without broker oauth",
+			yaml: hop1 + `brokers:
+  first:
+    url: "https://first.example.com"
+    auth: {mode: basic, username: admin, password: secret}
+  second:
+    url: "https://second.example.com"
+    auth: {mode: basic, username: admin, password: secret}
+`,
+		},
+		{
+			name: "bearer brokers without broker oauth",
+			yaml: hop1 + `brokers:
+  first:
+    url: "https://first.example.com"
+    auth: {mode: bearer, token: first-token}
+  second:
+    url: "https://second.example.com"
+    auth: {mode: bearer, token: second-token}
+`,
+		},
+		{
+			name: "existing token exchange config",
+			yaml: hop1 + `broker_oauth:
+  idp_token_endpoint: "https://idp.example.com/token"
+  mcp_server_client_id: "mcp-app"
+  mcp_server_client_auth:
+    client_secret_post:
+      secret: "secret"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "https://broker.example.com"
+    auth:
+      mode: oauth
+      audience: "broker-app"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadConfig(writeTemp(t, tt.yaml))
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got, want := cfg.MCPClientAuth.ScopesSupported, []string{"openid"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("ScopesSupported = %v, want %v", got, want)
+			}
+		})
 	}
 }

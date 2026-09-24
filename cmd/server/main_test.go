@@ -1009,14 +1009,17 @@ func TestHealthProbeTimeout_IsUnderDockerHealthcheckTimeout(t *testing.T) {
 // both the bare path and the §3.1 canonical path (derived from resource_url)
 // must return the same document. Non-oauth modes register nothing.
 func TestRegisterMetadataRoutes(t *testing.T) {
+	const delegatedScope = "https://mcp.example.com/mcp/access_as_user"
+	wantScopes := []any{"openid", delegatedScope}
 	oauthCfg := func(resourceURL string) *config.ServerConfig {
 		return &config.ServerConfig{
 			Port: 9090,
 			MCPClientAuth: config.MCPClientAuthConfig{
-				Mode:        config.AuthModeOAuth,
-				Issuer:      "https://auth.example.com",
-				Audience:    "solace-mcp-server",
-				ResourceURL: resourceURL,
+				Mode:            config.AuthModeOAuth,
+				Issuer:          "https://auth.example.com",
+				Audience:        "solace-mcp-server",
+				ResourceURL:     resourceURL,
+				ScopesSupported: []string{"openid", delegatedScope},
 			},
 		}
 	}
@@ -1089,6 +1092,9 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 				if got := records[0]["prm_paths"]; !reflect.DeepEqual(got, tt.wantPaths) {
 					t.Errorf("prm_paths = %#v, want %#v", got, tt.wantPaths)
 				}
+				if got := records[0]["scopes_supported"]; !reflect.DeepEqual(got, wantScopes) {
+					t.Errorf("logged scopes_supported = %#v, want %#v", got, wantScopes)
+				}
 			}
 
 			bareRec := httptest.NewRecorder()
@@ -1096,6 +1102,15 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 			mux.ServeHTTP(bareRec, bareReq)
 			if bareRec.Code != tt.bareStatus {
 				t.Errorf("bare path status = %d, want %d", bareRec.Code, tt.bareStatus)
+			}
+			if tt.wantLog {
+				var metadata map[string]any
+				if err := json.Unmarshal(bareRec.Body.Bytes(), &metadata); err != nil {
+					t.Fatalf("decode PRM: %v", err)
+				}
+				if got := metadata["scopes_supported"]; !reflect.DeepEqual(got, wantScopes) {
+					t.Errorf("served scopes_supported = %#v, want %#v", got, wantScopes)
+				}
 			}
 
 			if tt.canonPath == "" {
