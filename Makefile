@@ -307,9 +307,9 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 
 # ── Local Entra lab ──────────────────────────────────────────────────────────
 # Thin wrappers. Broker/SEMP work stays in local/entra/.
-# The lab YAML has broker_oauth + jwt-bearer. MCP_REPO defaults to this
-# checkout, which cannot load it; override to a checkout that supports
-# the jwt-bearer grant.
+# The live lab YAML is Hop 1 mcp_client_auth + broker_oauth token-exchange
+# with per-broker auth.audience, so this checkout loads it. MCP_REPO
+# defaults here; override only to run against a different checkout.
 
 ENTRA_DIR  := local/entra
 ENTRA_ENV  := $(ENTRA_DIR)/.env

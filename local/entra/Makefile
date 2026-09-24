@@ -1,7 +1,8 @@
 # Laptop Entra lab. From repo root: make entra / entra-up / entra-down / …
-# Lab YAML includes broker_oauth + jwt-bearer (not Hop 1 only). This
-# delivery tree cannot load it; MCP_REPO must be a checkout that supports
-# the jwt-bearer grant.
+# Live YAML is Hop 1 mcp_client_auth + broker_oauth token-exchange with
+# per-broker auth.audience, so this checkout loads it. MCP_REPO defaults
+# here; override only to run against a different checkout. The template
+# carries jwt-bearer and auth.target as comments for later.
 
 CERT_ROOT  := $(CURDIR)/.local/certs
 TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template
@@ -59,8 +60,8 @@ config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 config-clean: ## Delete the rendered config
 	rm -f $(CONFIG_FILE)
 
-# MCP_REPO defaults to this repo root (fails config load here). Override
-# to `go run` a checkout that supports jwt-bearer. Blocking on purpose.
+# MCP_REPO defaults to this repo root, which loads the live lab YAML.
+# Override to `go run` a different checkout. Blocking on purpose.
 MCP_REPO ?= $(abspath $(CURDIR)/..)
 
 .PHONY: run
@@ -78,7 +79,7 @@ run: certs config ## Run the MCP server (blocking) against this lab
 	CONFIG_FILE=$(CONFIG_FILE) \
 	ENV_FILE=$(ENV_FILE) \
 	MCPGODEBUG=disablelocalhostprotection=1 \
-	go run -C $(MCP_REPO) ./cmd/server
+	go -C $(MCP_REPO) run ./cmd/server
 # ^^^ Lab-only. The SDK rejects a non-loopback Host against a 127.0.0.1
 # listener. This Host is mcp-lab.solacetest.com. Do not copy this flag into
 # product, operator docs, or CI.
