@@ -1160,7 +1160,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the queue in. |
 | `queueName` | string | yes | Name of the queue to create. |
-| `queueConfig` | object | no | Queue attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take event broker defaults. |
+| `queueConfig` | object | no | Queue attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take event broker defaults. If `owner` is set, it must name a client username that already exists in `msgVpnName` — the call is rejected otherwise, and nothing is created. |
 
 **Returns:** step-keyed envelope, step `createQueue`.
 
@@ -1183,7 +1183,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to modify. |
-| `queueConfig` | object | yes | Queue attributes to change. Do not include `msgVpnName` or `queueName`. |
+| `queueConfig` | object | yes | Queue attributes to change. Do not include `msgVpnName` or `queueName`. If `owner` is set, it must name a client username that already exists in `msgVpnName` — the call is rejected otherwise, and nothing is changed. Omitting `owner` leaves the queue's current owner as-is; it does not clear it. |
 
 **Returns:** step-keyed envelope, step `updateQueue`.
 
@@ -1275,7 +1275,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the topic endpoint in. |
 | `topicEndpointName` | string | yes | Name of the topic endpoint to create. |
-| `topicEndpointConfig` | object | no | TopicEndpoint attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take event broker defaults. |
+| `topicEndpointConfig` | object | no | TopicEndpoint attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxSpoolUsage`, `permission`). Omitted attributes take event broker defaults. If `owner` is set, it must name a client username that already exists in `msgVpnName` — the call is rejected otherwise, and nothing is created. |
 
 **Returns:** step-keyed envelope, step `createTopicEndpoint`.
 
@@ -1298,7 +1298,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the topic endpoint. |
 | `topicEndpointName` | string | yes | The topic endpoint to modify. |
-| `topicEndpointConfig` | object | yes | TopicEndpoint attributes to change. Do not include `msgVpnName` or `topicEndpointName`. |
+| `topicEndpointConfig` | object | yes | TopicEndpoint attributes to change. Do not include `msgVpnName` or `topicEndpointName`. If `owner` is set, it must name a client username that already exists in `msgVpnName` — the call is rejected otherwise, and nothing is changed. Omitting `owner` leaves the topic endpoint's current owner as-is; it does not clear it. |
 
 **Returns:** step-keyed envelope, step `updateTopicEndpoint`.
 
