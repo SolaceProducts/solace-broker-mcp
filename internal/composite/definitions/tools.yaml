@@ -1314,7 +1314,7 @@ tools:
       - name: subscriptionTopic
         type: string
         required: true
-        description: "The topic to subscribe the queue to. Accepts Solace wildcards (> for multi-level, * for single-level). Pass the literal characters '>' and '*' — do not HTML-escape them (e.g. '&gt;'); an escaped character changes the topic and silently creates the wrong subscription."
+        description: "The topic to subscribe the queue to. Accepts Solace wildcards (> for multi-level, * for single-level). Pass the literal characters '>' and '*' — do not HTML-escape them (e.g. '&gt;'); an HTML-escaped character is rejected with an error rather than silently creating the wrong subscription."
     steps:
       - id: createQueueSubscription
         operation: config/createMsgVpnQueueSubscription
@@ -1359,7 +1359,7 @@ tools:
       - name: subscriptionTopic
         type: string
         required: true
-        description: "The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Pass the literal characters '>' and '*' — do not HTML-escape them (e.g. '&gt;')."
+        description: "The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Normally pass the literal characters '>' and '*', not an HTML-escaped form (e.g. '&gt;') — but if a subscription was mistakenly created with a literally HTML-escaped topic, pass that same escaped string here to remove it; unlike create-queue-subscription, this tool does not reject it."
     steps:
       - id: deleteQueueSubscription
         operation: config/deleteMsgVpnQueueSubscription
