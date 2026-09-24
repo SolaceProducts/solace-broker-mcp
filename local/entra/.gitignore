@@ -1,5 +1,5 @@
 # Generated certs, rendered config. Reused across entra-up; not a wipe-on-every-run temp dir.
 .local/
 
-# Client secret. Copy from .env.example.
+# Client secret and tenant/app/group IDs. Copy from .env.example.
 .env

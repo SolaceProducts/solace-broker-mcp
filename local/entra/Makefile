@@ -1,10 +1,12 @@
-# Laptop Entra lab. From repo root: make entra-up / entra-run / entra-down / …
+# Laptop Entra lab. From repo root: make entra / entra-up / entra-down / …
+# Lab YAML includes broker_oauth + jwt-bearer (not Hop 1 only). This
+# delivery tree cannot load it; MCP_REPO must be a checkout that supports
+# the jwt-bearer grant.
 
 CERT_ROOT  := $(CURDIR)/.local/certs
 TEMPLATE   := $(CURDIR)/broker-config.entra.yaml.template
 CONFIG_FILE := $(CURDIR)/.local/broker-config.entra.yaml
 ENV_FILE   := $(CURDIR)/.env
-IDS_FILE   := $(CURDIR)/entra-ids.sh
 
 .DEFAULT_GOAL := help
 
@@ -29,21 +31,27 @@ brokers-down: ## Remove mcp-entra-solace* containers only (keeps .local/ and .en
 	@./scripts/teardown-entra-brokers.sh
 
 # Rendered YAML is gitignored under .local/. Edit the template, not the output.
-# Tenant/app GUIDs come from entra-ids.sh (sourced; not named .env).
+# Tenant/app GUIDs come from .env (gitignored). Copy .env.example.
 .PHONY: config
 config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 	@if [ ! -f "$(TEMPLATE)" ]; then echo "missing $(TEMPLATE)"; exit 1; fi
-	@if [ ! -f "$(IDS_FILE)" ]; then echo "missing $(IDS_FILE)"; exit 1; fi
+	@if [ ! -f "$(ENV_FILE)" ]; then echo "missing $(ENV_FILE) — copy .env.example"; exit 1; fi
 	@mkdir -p $(CURDIR)/.local
-	@set -a && . "$(IDS_FILE)" && set +a && \
-	  : "$${ENTRA_TENANT_ID:?missing ENTRA_TENANT_ID}" && \
-	  : "$${MCP_BROKER_CLIENT_ID:?missing MCP_BROKER_CLIENT_ID}" && \
+	@set -a && . "$(ENV_FILE)" && set +a && \
+	  : "$${ENTRA_TENANT_ID:?empty ENTRA_TENANT_ID}" && \
+	  : "$${MCP_BROKER_CLIENT_ID:?empty MCP_BROKER_CLIENT_ID}" && \
+	  : "$${MCP_RESOURCE_URL:?empty MCP_RESOURCE_URL}" && \
+	  : "$${MCP_ACCESS_AS_USER_SCOPE:?empty MCP_ACCESS_AS_USER_SCOPE}" && \
+	  : "$${BROKER_RESOURCE_APP_ID:?empty BROKER_RESOURCE_APP_ID}" && \
+	  : "$${OBO_PROBE_RESOURCE_APP_ID:?empty OBO_PROBE_RESOURCE_APP_ID}" && \
 	  sed \
 	    -e 's|@@CERT_ROOT@@|$(CERT_ROOT)|g' \
 	    -e "s|@@ENTRA_TENANT_ID@@|$${ENTRA_TENANT_ID}|g" \
 	    -e "s|@@MCP_BROKER_CLIENT_ID@@|$${MCP_BROKER_CLIENT_ID}|g" \
 	    -e "s|@@MCP_RESOURCE_URL@@|$${MCP_RESOURCE_URL}|g" \
 	    -e "s|@@MCP_ACCESS_AS_USER_SCOPE@@|$${MCP_ACCESS_AS_USER_SCOPE}|g" \
+	    -e "s|@@BROKER_RESOURCE_APP_ID@@|$${BROKER_RESOURCE_APP_ID}|g" \
+	    -e "s|@@OBO_PROBE_RESOURCE_APP_ID@@|$${OBO_PROBE_RESOURCE_APP_ID}|g" \
 	    "$(TEMPLATE)" > "$(CONFIG_FILE)"
 	@echo "rendered $(CONFIG_FILE)"
 
@@ -51,15 +59,15 @@ config: ## Render broker-config.entra.yaml (absolute cert paths + Entra IDs)
 config-clean: ## Delete the rendered config
 	rm -f $(CONFIG_FILE)
 
-# MCP_REPO defaults to this repo root. Override to `go run` a different
-# worktree against this lab's rendered YAML. Blocking on purpose.
+# MCP_REPO defaults to this repo root (fails config load here). Override
+# to `go run` a checkout that supports jwt-bearer. Blocking on purpose.
 MCP_REPO ?= $(abspath $(CURDIR)/..)
 
 .PHONY: run
-run: config ## Run the MCP server (blocking) against this lab
+run: certs config ## Run the MCP server (blocking) against this lab
 	@if [ ! -d "$(MCP_REPO)" ]; then echo "MCP_REPO is not a directory: $(MCP_REPO)" >&2; exit 1; fi
 	@if [ ! -f "$(ENV_FILE)" ]; then \
-	  echo "missing $(ENV_FILE) — copy .env.example and set MCP_SERVER_CLIENT_SECRET"; \
+	  echo "missing $(ENV_FILE) — copy .env.example and set the required keys"; \
 	  exit 1; \
 	fi
 	@if ! grep -q '^MCP_SERVER_CLIENT_SECRET=.\+' "$(ENV_FILE)"; then \
@@ -80,7 +88,12 @@ claude-cmd: ## Print env + Claude mcp remove/add + launch line
 	@if [ ! -f $(CERT_ROOT)/combined-ca-bundle.crt ]; then \
 	  echo "CA bundle missing — run 'make certs' first."; exit 1; \
 	fi
-	@set -a && . "$(IDS_FILE)" && set +a && \
+	@if [ ! -f "$(ENV_FILE)" ]; then echo "missing $(ENV_FILE) — copy .env.example"; exit 1; fi
+	@set -a && . "$(ENV_FILE)" && set +a && \
+	: "$${LAB_OPERATOR_UPN:?empty LAB_OPERATOR_UPN}" && \
+	: "$${MCP_RESOURCE_HOST:?empty MCP_RESOURCE_HOST}" && \
+	: "$${MCP_AGENT_CLIENT_ID:?empty MCP_AGENT_CLIENT_ID}" && \
+	: "$${MCP_RESOURCE_URL:?empty MCP_RESOURCE_URL}" && \
 	echo "" && \
 	echo "Claude is a separate process. Quit Claude first. Copy the REAL cert path" && \
 	echo "(do not invent a '…' placeholder). mcp-agent client ID, no secret." && \

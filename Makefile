@@ -307,8 +307,9 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 
 # ── Local Entra lab ──────────────────────────────────────────────────────────
 # Thin wrappers. Broker/SEMP work stays in local/entra/.
-# MCP_REPO defaults to this checkout. Override to run a different worktree
-# against this lab's brokers and rendered YAML.
+# The lab YAML has broker_oauth + jwt-bearer. MCP_REPO defaults to this
+# checkout, which cannot load it; override to a checkout that supports
+# the jwt-bearer grant.
 
 ENTRA_DIR  := local/entra
 ENTRA_ENV  := $(ENTRA_DIR)/.env
@@ -316,7 +317,7 @@ ENTRA_HOST := mcp-lab.solacetest.com
 MCP_REPO   ?= $(CURDIR)
 
 .PHONY: entra-preflight
-entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
+entra-preflight: ## Check lab hosts, .env keys, optional docker port clash
 	@set -e; \
 	host="$(ENTRA_HOST)"; \
 	addrs=""; \
@@ -333,13 +334,15 @@ entra-preflight: ## Check lab hosts, .env secret, optional docker port clash
 	  exit 1; \
 	fi; \
 	if [ ! -f "$(ENTRA_ENV)" ]; then \
-	  echo "missing $(ENTRA_ENV) — copy $(ENTRA_DIR)/.env.example and set MCP_SERVER_CLIENT_SECRET" >&2; \
+	  echo "missing $(ENTRA_ENV) — copy $(ENTRA_DIR)/.env.example and fill the required keys" >&2; \
 	  exit 1; \
 	fi; \
-	if ! grep -q '^MCP_SERVER_CLIENT_SECRET=.\+' "$(ENTRA_ENV)"; then \
-	  echo "MCP_SERVER_CLIENT_SECRET is empty — copy $(ENTRA_DIR)/.env.example and set the mcp-broker client secret" >&2; \
-	  exit 1; \
-	fi; \
+	for _k in MCP_SERVER_CLIENT_SECRET ENTRA_TENANT_ID MCP_BROKER_CLIENT_ID MCP_AGENT_CLIENT_ID BROKER_RESOURCE_APP_ID ENTRA_GROUP_OBJECT_ID BROKER_OAUTH_REQUIRED_SCOPE MCP_RESOURCE_HOST MCP_RESOURCE_URL MCP_ACCESS_AS_USER_SCOPE LAB_OPERATOR_UPN OBO_PROBE_RESOURCE_APP_ID; do \
+	  if ! grep -q "^$${_k}=.\+" "$(ENTRA_ENV)"; then \
+	    echo "$${_k} is empty — copy $(ENTRA_DIR)/.env.example and set it in $(ENTRA_ENV)" >&2; \
+	    exit 1; \
+	  fi; \
+	done; \
 	if command -v docker >/dev/null 2>&1; then \
 	  names=$$(docker ps --format '{{.Names}}' 2>/dev/null) || names=""; \
 	  if printf '%s\n' "$$names" | grep -qx solace; then \
@@ -360,7 +363,8 @@ entra-need-repo:
 	fi
 
 .PHONY: entra
-entra: entra-need-repo entra-up entra-run ## One laptop command: converge brokers then run MCP (blocking)
+entra: entra-preflight entra-need-repo entra-up ## One laptop command: preflight, certs, brokers, config, then MCP (blocking)
+	$(MAKE) -C $(ENTRA_DIR) run MCP_REPO=$(MCP_REPO)
 
 .PHONY: entra-up
 entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does not start MCP
@@ -368,12 +372,8 @@ entra-up: entra-preflight ## Converge Entra lab (certs, brokers, config); does n
 	$(MAKE) -C $(ENTRA_DIR) brokers-up
 	$(MAKE) -C $(ENTRA_DIR) config
 	@if [ "$(filter entra,$(MAKECMDGOALS))" = "" ]; then \
-	  echo "Next (MCP is not started): make entra   or   make entra-run [MCP_REPO=<checkout>]"; \
+	  echo "Next (MCP is not started): make entra [MCP_REPO=<checkout>]"; \
 	fi
-
-.PHONY: entra-run
-entra-run: entra-preflight entra-need-repo ## Run MCP against the Entra lab (blocking)
-	$(MAKE) -C $(ENTRA_DIR) run MCP_REPO=$(MCP_REPO)
 
 .PHONY: entra-down
 entra-down: ## Stop Entra lab brokers; keep .local/ and .env

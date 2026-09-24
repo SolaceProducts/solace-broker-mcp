@@ -1,11 +1,16 @@
-# Entra lab Hop 1 (SOL-154397): mcp_client_auth.oauth + a basic broker.
-# Brokers stay admin/admin. No broker_oauth, no jwt-bearer, no oauth aliases.
-# entra-up still PATCHes Entra onto the other two containers for later Hop 2;
-# this process does not use them.
+# Entra lab: Hop 1 (mcp_client_auth) + broker_oauth token-exchange.
+# local-basic stays basic (no OBO). prod-us and test-us share the one lab
+# broker resource app (test-broker-us); Entra has no per-alias audience.
 #
-# Rendered by `make config` — @@CERT_ROOT@@ and @@ENTRA_*@@ / @@MCP_*@@
-# placeholders come from entra-ids.sh. Edit that file for IDs; edit this
-# template for shape. Do not edit the rendered file.
+# Hop 2 invalid_grant probe (live today via auth.audience): test-us audience
+# is a resource this MCP app is not allowed to OBO. prod-us stays the
+# working audience. Call list-vpns with broker test-us. Expect tool isError,
+# log ErrExchangeRejected, Entra 400 (invalid_grant / invalid_resource +
+# error_codes). Restore by copying prod-us's audience line onto test-us.
+#
+# KnownFields(true): use auth.audience, not auth.scopes. Later, jwt-bearer
+# uses auth.target (same URI values) and omits audience_parameter_name
+# (RFC 8693 only).
 port: 19090
 log_level: debug
 
@@ -18,6 +23,9 @@ allow_insecure_broker_tls: true
 # registration time, before RBAC even runs. Default is false.
 enable_write_tools: true
 
+# Rendered by `make config` — @@CERT_ROOT@@ and @@ENTRA_*@@ / @@MCP_*@@ /
+# @@BROKER_*@@ placeholders come from gitignored .env (copy .env.example).
+# Edit this template for shape. Do not edit the rendered file.
 tls_cert_file: "@@CERT_ROOT@@/mcp-server/mcp-server.crt"
 tls_key_file: "@@CERT_ROOT@@/mcp-server/mcp-server.key"
 
@@ -99,6 +107,16 @@ mcp_client_auth:
         - list-slow-subscribers
         - list-vpns
 
+broker_oauth:
+  idp_token_endpoint: "https://login.microsoftonline.com/@@ENTRA_TENANT_ID@@/oauth2/v2.0/token"
+  mcp_server_client_id: "@@MCP_BROKER_CLIENT_ID@@"
+  mcp_server_client_auth:
+    client_secret_post:
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
+  # Later: urn:ietf:params:oauth:grant-type:jwt-bearer (and omit audience_parameter_name; RFC 8693 only).
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
+
 semp:
   max_concurrent_per_broker: 10
   request_timeout_duration: 30s
@@ -108,6 +126,25 @@ semp:
   retry_max_interval: 2s
 
 brokers:
+  prod-us:
+    url: "https://localhost:21943"
+    insecure_skip_verify: true
+    auth:
+      mode: oauth
+      # test-broker-us Application ID URI + MSAL .default.
+      # Later: auth.target (same URI). KnownFields(true) rejects auth.scopes;
+      # jwt-bearer uses target, not RFC 8693 audience.
+      audience: "api://@@BROKER_RESOURCE_APP_ID@@/.default"
+  test-us:
+    url: "https://localhost:21945"
+    insecure_skip_verify: true
+    auth:
+      mode: oauth
+      # Working: api://@@BROKER_RESOURCE_APP_ID@@/.default
+      # Probe: unregistered resource so OBO 400s (not a Hop 1 / jwt-bearer change).
+      # Later: auth.target (same URI). KnownFields(true) rejects auth.scopes;
+      # jwt-bearer uses target, not RFC 8693 audience.
+      audience: "api://@@OBO_PROBE_RESOURCE_APP_ID@@/.default"
   local-basic:
     url: "https://localhost:21944"
     insecure_skip_verify: true
