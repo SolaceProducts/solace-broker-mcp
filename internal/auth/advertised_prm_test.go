@@ -16,6 +16,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -178,7 +179,7 @@ func TestAdvertisedPRM_ScopesSnapshotServedAndLogged(t *testing.T) {
 	scopes[0] = "mutated-after-construction"
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, prmBarePath, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, prmBarePath, nil)
 	prm.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PRM status = %d, want %d", rec.Code, http.StatusOK)
