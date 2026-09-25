@@ -17,6 +17,17 @@ across two modes:
   says yes/no, and an out-of-band SEMPv2 `ground_truth.shell` check verifies
   broker state matches the answer's claim. All broker-a only.
 
+## When it runs
+
+A `v*` tag runs this suite on that tag's commit. `release.yml` calls
+`llm-eval.yml` and does not push the image or create the GitHub Release
+until it passes. The binary build does not wait, so a finished archive job
+is not a sign the release is clear. Manual dispatch still checks out
+`target_branch` (default `main`). There is no pull-request run and no daily
+run. One attempt. A red release job is `gh run rerun`. The run record's
+`head` line is `git rev-parse HEAD`. It matches `commit` when the checkout
+is the tag. A full run costs API credits (~$4.78 measured 2026-08-05).
+
 ## Quickstart
 
 ```sh

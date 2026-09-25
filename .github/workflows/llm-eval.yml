@@ -1,40 +1,32 @@
 name: LLM E2E Eval
 
-# Non-gating run of the LLM e2e eval suite under test/e2e-llm/, on a daily
-# schedule and on demand. Costs API credits per invocation (~$4.78 for the full
-# 35-row matrix, measured 2026-08-05). Do not add a per-PR or merge-gating
-# trigger, and do not make this a required check.
+# LLM e2e suite under test/e2e-llm/. release.yml calls this on a v* tag and
+# does not push the image or create the GitHub Release until it passes.
+# workflow_dispatch still evaluates inputs.target_branch (default main).
+# No per-PR trigger and no schedule. One attempt per run. A full matrix
+# costs API credits (~$4.78 measured 2026-08-05). A red run is re-run with
+# `gh run rerun`; there is no admin skip.
 #
-# THE SCHEDULE IS A TIME-BOXED EXPERIMENT — REMOVE IT BY 2026-09-05
-#
-# SOL-153184 runs the suite unattended for a bounded window to collect the data
-# the operating-model decision needs and does not have: how often a scenario
-# flakes across many runs, what a full matrix actually costs per day, and
-# whether the fixtures hold up on a hosted runner over weeks. A hand-run cannot
-# answer any of those.
-#
-# The window is 10–20 daily runs starting 2026-08-15, so the last scheduled run
-# is 2026-09-03. By 2026-09-05, either the `schedule:` trigger below is deleted
-# or SOL-153184 records the follow-up decision (permanent daily run, on-demand
-# only, or gating). An unowned schedule burning credits past its window is the
-# failure mode this comment exists to prevent.
-#
-# Nothing here retries. A single attempt per run is what makes the flake-rate
-# data meaningful.
+# Checkout is inputs.target_branch when that input is set (manual dispatch,
+# default main). On workflow_call that input does not exist, so the ref is
+# github.sha, the caller's commit. github.event_name stays the caller's
+# event (push on a tag), so it cannot be used to tell the two paths apart.
+# summary.txt records head (git rev-parse HEAD) beside commit (GITHUB_SHA).
 
 on:
-  schedule:
-    # 02:00 Eastern daily — off-hours, so the run neither competes with a manual
-    # dispatch nor with peak hosted-runner demand. Nobody is watching at 02:00,
-    # which is fine: results are read from the artifacts at the end of the
-    # window, not reacted to daily.
-    #
-    # Cron here is UTC and does not follow daylight saving. The collection window
-    # (2026-08-15 to 2026-09-03) falls entirely in EDT, where 06:00 UTC is 02:00
-    # local. If the schedule ever outlives the window into EST it drifts to 01:00
-    # local and needs 07:00 UTC — one more reason not to let it outlive the
-    # window.
-    - cron: '0 6 * * *' # schedule owner: lkiri (reassigned from helen-zhu-solace)
+  workflow_call:
+    inputs:
+      broker_target:
+        required: false
+        type: string
+        default: local-docker
+      scenario_filter:
+        required: false
+        type: string
+        default: ''
+    secrets:
+      LLM_SERVICE_API_KEY:
+        required: true
   workflow_dispatch:
     inputs:
       target_branch:
@@ -53,19 +45,18 @@ on:
         default: ''
         type: string
 
-# Serialize runs rather than cancelling them. The 02:00 schedule makes an overlap
-# with a manual dispatch unlikely rather than impossible, and the cost of the
-# unlikely case is losing that day's data point — `cancel-in-progress: true`
-# would let a dispatch silently destroy it. Cancelling is the worse outcome
-# either way: it leaves broker containers up on a runner that is about to be
-# reclaimed, having already spent the API credits it will now produce no data
-# from.
-#
-# On a hosted runner each job gets its own VM, so this is not about Docker port
-# or container-name collisions — it is about the day's data point and, for a
-# lab-broker target, two runs mutating one shared broker's fixtures.
+# Do not cancel an in-progress run. Cancelling spends the API credits and
+# leaves broker containers on a runner that is about to be reclaimed.
+# On a called workflow github.workflow is the caller name (Release on a tag)
+# and github.sha is that tag's commit. GitHub keeps one running and one
+# pending run per group, so a group of only github.workflow would queue every
+# release together and a third tag would cancel the waiting one. Adding the
+# SHA puts each tag in its own group; two runs of the same commit still
+# share one. Hosted runners do not share a Docker daemon, and the release
+# call is local-docker, so it does not share a lab broker with a manual lab
+# run.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -73,22 +64,17 @@ permissions:
 
 jobs:
   llm-eval:
-    # A `schedule` event fires on every fork that has Actions enabled, which
-    # would hand each fork an inherited daily credit burn nobody there asked
-    # for. Manual dispatch stays available everywhere.
-    if: github.event_name != 'schedule' || github.repository == 'SolaceProducts/solace-broker-mcp'
     runs-on: ubuntu-latest
     # Headroom, not a guess: the full 35-row matrix took 7m50s of suite time in
     # a 10m26s job on a hosted runner (run 31039920539, 2026-08-05), measured
     # after the Mode-2 rows landed.
     timeout-minutes: 30
     env:
-      # A `schedule` event supplies no `inputs`, so every input needs a
-      # fallback. Resolving all three once here — instead of repeating
-      # `${{ inputs.x || 'default' }}` at each use — is what keeps the
-      # scheduled run from checking out an empty ref and skipping log capture
-      # and teardown. Steps read env.*, never inputs.*.
-      TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+      # Steps read env.*, never inputs.*. Dispatch sets target_branch (default
+      # main). workflow_call does not define that input, so it is empty and
+      # the ref is github.sha, the caller's commit. Do not branch on
+      # github.event_name: in a called workflow that is the caller's event.
+      TARGET_BRANCH: ${{ inputs.target_branch || github.sha }}
       BROKER_TARGET: ${{ inputs.broker_target || 'local-docker' }}
       SCENARIO_FILTER: ${{ inputs.scenario_filter }}
     steps:
@@ -276,6 +262,7 @@ jobs:
             echo "event:           ${GITHUB_EVENT_NAME}"
             echo "ref:             ${TARGET_BRANCH}"
             echo "commit:          ${GITHUB_SHA}"
+            echo "head:            $(git rev-parse HEAD)"
             echo "finished_utc:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "broker_target:   ${BROKER_TARGET}"
             echo "scenario_filter: ${SCENARIO_FILTER:-(none)}"
