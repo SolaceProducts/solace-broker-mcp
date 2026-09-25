@@ -93,9 +93,15 @@ test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 # as zero-connection when the probe returned no rows for it (missing key or
 # empty data[]). This directly mirrors the handler; both rely on the durable
 # `#*` reserved-name contract, not the older `#client counts as one connection`
-# invariant.
+# invariant. That recompute alone cannot catch a wrong probe (SOL-153071: a
+# bug in the probe itself and a recompute over that same wrong probe still
+# agree), so this test also grounds the probe's byKey output for the default
+# VPN (which carries F3's real connected client) against a direct SEMP call
+# the tool never sees — see the SOL-153071 block near the end of the
+# function.
 test_list_vpns_summary() {
     local broker="$1"
+    local broker_url="$2"
     local label="list-vpns [$broker]"
     local response content
     response=$(mcp_call_tool "list-vpns" "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
@@ -112,11 +118,23 @@ test_list_vpns_summary() {
         '.enabled == true and .state == "down"' || return 1
     assert_recompute_count "$content" "$label" "$well_typed" "standbyCount" \
         '.enabled == true and .state == "standby"' || return 1
-    # zeroConnectionCount: enabled+up rows whose real-clients probe returned
-    # no rows (missing byKey entry OR data:[]). Bespoke assertion — not
-    # assert_recompute_count — because the byKey lookup lives on the top-level
-    # response next to .vpns.data, and assert_recompute_count pipes well_typed
-    # first, which strips that context and leaves `.` as a single row.
+    # zeroConnectionCount: enabled+up rows whose real-clients probe reports
+    # hasRealClient==false (missing byKey entry counts the same way — both
+    # mean "no real client"). Bespoke assertion — not assert_recompute_count —
+    # because the byKey lookup lives on the top-level response next to
+    # .vpns.data, and assert_recompute_count pipes well_typed first, which
+    # strips that context and leaves `.` as a single row.
+    #
+    # byKey[vpn] is the scrubbed probe verdict, not the raw {data: [...]} client
+    # rows: ListVpns replaces each entry in place before returning
+    # (internal/composite/postprocess/handlers/list_vpns.go) so probed client
+    # names never reach the response. Three disjoint shapes:
+    #   {hasRealClient: true}  — definitively has one
+    #   {hasRealClient: false} — definitively has none  → zeroConnectionCount
+    #   {indeterminate: true}  — probe settled nothing  → indeterminateConnectionCount
+    # The recompute must exclude the indeterminate shape, which is why it tests
+    # `hasRealClient == false` explicitly rather than `!= true`: an unverified
+    # VPN belongs in neither the numerator nor zeroConnectionCount.
     assert_json_field "$content" \
         '(.summary.zeroConnectionCount) == (
             . as $root
@@ -124,12 +142,19 @@ test_list_vpns_summary() {
             | '"$well_typed"'
             | map(select(
                 .enabled == true and .state == "up" and
-                ($byKey[.msgVpnName] as $p |
-                    ($p == null or (($p.data // []) | length) == 0))
+                (($byKey[.msgVpnName] // {}) | (has("indeterminate") | not)) and
+                (($byKey[.msgVpnName].hasRealClient) // false) == false
               ))
             | length
         )' "true" \
         "$label: summary.zeroConnectionCount must equal recomputed count from rows" || return 1
+    # An indeterminate probe means the broker did not settle the question, so it
+    # must never be reported as an idle VPN. On a healthy run this is 0/absent;
+    # a non-zero value means forceFullPage stopped being honoured and is a real
+    # signal, not noise — fail loudly rather than let it read as zero-connection.
+    assert_json_field "$content" \
+        '(.summary.indeterminateConnectionCount // 0) == 0' "true" \
+        "$label: no VPN probe may be indeterminate (forceFullPage must be honoured)" || return 1
     # scanned is a direct equality against .vpns.data length — an uncapped
     # call is not truncated so scanned reflects the full population.
     assert_json_field "$content" \
@@ -145,10 +170,124 @@ test_list_vpns_summary() {
     assert_json_field "$content" \
         '(.summary.zeroConnectionCount) >= 1' "true" \
         "$label: at least one bare enabled+up VPN expected (fixture: test-vpn-empty)" || return 1
+
+    # SOL-153071 regression check. The two assertions above only prove the
+    # summary's arithmetic is internally consistent with .real-clients.byKey —
+    # they cannot catch a bug where the probe itself is wrong, because a wrong
+    # probe and a "recompute" over that same wrong probe still agree (this is
+    # exactly how the count=1 bug shipped undetected: the reserved #client
+    # sorted first, so byKey came back empty for the default VPN too, and
+    # zeroConnectionCount agreed with its own empty byKey). Ground truth here
+    # comes from a direct SEMP call the tool under test never sees, independent
+    # of anything list-vpns computed. The default VPN (BROKER_VPN) is used
+    # rather than a dedicated fixture VPN because this broker image caps
+    # message-VPN count at 3 total (including default), already exhausted by
+    # test-vpn/test-vpn-empty.
+    #
+    # AC4 coverage: F3's real client does not sit alone here. F8's bridges
+    # (the two never-connected ones still register a local-endpoint client
+    # regardless of state) and F9/F10's Kafka Receivers/Senders all register
+    # as `#`-prefixed reserved clients on this same default VPN.
+    #
+    # Do NOT assert that reserved clients sort first. Measured on 10.26.6 they
+    # do not: an observed order was
+    #   #bridge/local/... , aaa , probe-real , zzz , #client , #rdp/...
+    # i.e. reserved names appear on both sides of the real ones, and the order
+    # is not lexicographic on clientName. An earlier revision of this test
+    # asserted `data[0:2]` were all `#`-prefixed and was simply wrong.
+    #
+    # So the bug-shape check below is driven by the position actually observed
+    # in this run rather than by an assumed ordering: find where the first real
+    # client sits in the unfiltered scan order, and only then predict what a
+    # one-object scan window must return. That keeps the check deterministic
+    # without depending on an ordering the broker does not promise.
+    local ground_truth real_count reserved_count first_real_idx narrow_probe narrow_rows
+    ground_truth=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients failed"
+        return 1
+    }
+    # Guard the shape before trusting the counts below: jq computes `null |
+    # length` as 0 with no error, so a malformed/unexpected response (missing
+    # .data) would otherwise silently read as "zero clients" instead of
+    # failing loudly.
+    if ! jq -e '(.data | type) == "array"' <<<"$ground_truth" >/dev/null; then
+        log_fail "$label: unexpected shape from msgVpns/$BROKER_VPN/clients — .data missing or not an array"
+        return 1
+    fi
+    real_count=$(jq '[.data[] | select((.clientUsername | startswith("#")) | not)] | length' <<<"$ground_truth")
+    reserved_count=$(jq '[.data[] | select(.clientUsername | startswith("#"))] | length' <<<"$ground_truth")
+    if [ "$real_count" -lt 1 ]; then
+        log_fail "$label: ground truth expected >=1 real client on $BROKER_VPN, got $real_count"
+        return 1
+    fi
+    if [ "$reserved_count" -lt 2 ]; then
+        log_fail "$label: ground truth expected >=2 reserved (#*) clients on $BROKER_VPN (AC4: bridges/Kafka/RDPs), got $reserved_count"
+        return 1
+    fi
+
+    # Index of the first real client in the unfiltered scan order, as returned
+    # by this broker on this run. A value > 0 means a one-object scan window
+    # cannot reach a real client, because `where` is applied AFTER the count
+    # cut — the exact SOL-153071 mechanism. Deriving the prediction from the
+    # observed order (instead of assuming reserved-first) is what makes the
+    # assertion below deterministic on any ordering.
+    first_real_idx=$(jq '[.data[] | (.clientUsername | startswith("#")) | not] | index(true)' <<<"$ground_truth")
+
+    narrow_probe=$(semp_monitor_get "$broker_url" \
+        "msgVpns/$BROKER_VPN/clients?count=1&where=clientUsername!=%23*") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients?count=1&where=... failed"
+        return 1
+    }
+    if ! jq -e '(.data | type) == "array"' <<<"$narrow_probe" >/dev/null; then
+        log_fail "$label: unexpected shape from msgVpns/$BROKER_VPN/clients?count=1&where=... — .data missing or not an array"
+        return 1
+    fi
+    narrow_rows=$(jq '.data | length' <<<"$narrow_probe")
+    # Informational only, never a failure. It documents the bug shape live
+    # (a reserved client in the single scan slot makes an unaided count=1
+    # probe come back empty) but cannot be asserted: the two GETs are
+    # separate calls against a VPN whose client population churns mid-run
+    # (F6 reaps and respawns its subscriber; F4/F9/F10 also hold clients
+    # here), so scan order can shift between them; and a broker release that
+    # applied `where` before the count cut would make the "bug" disappear
+    # without anything in this repo being wrong — no product code issues a
+    # count=1 probe any more. The forceFullPage assertion below is what
+    # gates the fix.
+    if [ "$first_real_idx" -gt 0 ] && [ "$narrow_rows" -eq 0 ]; then
+        log_info "$label: bug shape reproduced on $BROKER_VPN — first real client at scan index $first_real_idx, count=1 without forceFullPage returned 0 rows"
+    else
+        log_info "$label: narrow-window observation on $BROKER_VPN not conclusive this run (first real client at scan index $first_real_idx, count=1 returned $narrow_rows rows)"
+    fi
+
+    # The fix itself, at SEMP level, in the shipped probe's exact query shape
+    # (tools.yaml real-clients: count=100, where, forceFullPage): forceFullPage
+    # must find a real client regardless of scan position, because the broker
+    # keeps scanning internally until the page holds `count` matches or the
+    # collection is exhausted. count is a performance choice there, not what
+    # makes this correct — see the step's comment.
+    # The GET is captured first so a rejected parameter (HTTP 400 → curl -f
+    # exits non-zero with no body) fails as "broker rejected forceFullPage",
+    # not as an empty-actual "the fix doesn't work" from assert_json_field.
+    local full_page_probe
+    full_page_probe=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100&where=clientUsername!=%23*&forceFullPage=true") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients?count=100&where=...&forceFullPage=true failed — the broker rejected forceFullPage (or the call failed outright); list-vpns falls back to a probe without it via optionalArgs, but this suite expects a broker that honours it"
+        return 1
+    }
+    assert_json_field "$full_page_probe" \
+        '(.data | length) >= 1' "true" \
+        "$label: count=100 + forceFullPage must find a real client on $BROKER_VPN (SOL-153071 fix)" || return 1
+
+    # Public-contract check, not internal probe shape: hasRealClient is the
+    # sanitized signal ListVpns returns after scrubbing the probe's raw
+    # client rows (see the recompute assertion above), so this asserts
+    # against exactly what a caller of list-vpns actually receives.
+    assert_json_field "$content" \
+        '(.["real-clients"].byKey["'"$BROKER_VPN"'"].hasRealClient) == true' "true" \
+        "$label: list-vpns must report hasRealClient=true for $BROKER_VPN (SOL-153071)" || return 1
 }
 
-test_list_vpns_summary_a() { test_list_vpns_summary "broker-a"; }
-test_list_vpns_summary_b() { test_list_vpns_summary "broker-b"; }
+test_list_vpns_summary_a() { test_list_vpns_summary "broker-a" "$BROKER_A_URL"; }
+test_list_vpns_summary_b() { test_list_vpns_summary "broker-b" "$BROKER_B_URL"; }
 
 # ── Tool 2: get-vpn-status (F1 multi-VPN; VPN-scoped) ────────────────────────
 # Value check (AC 5): the base `default` VPN reports enabled=true with services

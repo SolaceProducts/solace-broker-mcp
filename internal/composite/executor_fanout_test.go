@@ -17,6 +17,7 @@ package composite
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -404,4 +405,79 @@ func (b *barrierClient) Execute(ctx context.Context, op *sempv2.Operation, _ map
 	}
 	atomic.AddInt32(&b.inflight, -1)
 	return &sempv2.Result{Data: map[string]any{"data": []any{}}}, nil
+}
+
+// optionalArgsClient rejects any getMsgVpnClients call that still carries the
+// named arg with the configured error, and records the args of every call so
+// a test can see exactly what was retried and with what.
+type optionalArgsClient struct {
+	mu        sync.Mutex
+	rejectArg string
+	rejectErr error
+	calls     []map[string]any
+}
+
+func (c *optionalArgsClient) Execute(_ context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
+	if op.ID == "getMsgVpns" {
+		return &sempv2.Result{Data: vpnRows(map[string]any{"msgVpnName": "v1"}), StatusCode: 200}, nil
+	}
+	c.mu.Lock()
+	c.calls = append(c.calls, maps.Clone(args))
+	c.mu.Unlock()
+	if _, sent := args[c.rejectArg]; sent && c.rejectErr != nil {
+		return nil, c.rejectErr
+	}
+	return &sempv2.Result{Data: map[string]any{"data": []any{}}, StatusCode: 200}, nil
+}
+
+// TestRunSingle_OptionalArgsRetry pins the retry rule for Step.OptionalArgs:
+// exactly one retry, only on HTTP 400, only when an optional arg was actually
+// sent, and the retried request carries none of the optional args. Every
+// other failure must propagate untouched — the retry exists for "the broker
+// does not know this parameter", not as a general second attempt.
+func TestRunSingle_OptionalArgsRetry(t *testing.T) {
+	badRequest := &sempv2.SEMPError{Operation: "getMsgVpnClients", StatusCode: 400, SEMPStatus: "INVALID_PARAMETER"}
+	cases := []struct {
+		name         string
+		optionalArgs []string
+		rejectErr    error
+		wantCalls    int
+		wantErr      bool
+	}{
+		{name: "400 with optional arg sent is retried once without it", optionalArgs: []string{"forceFullPage"}, rejectErr: badRequest, wantCalls: 2},
+		{name: "no optionalArgs declared: 400 propagates", rejectErr: badRequest, wantCalls: 1, wantErr: true},
+		{name: "non-400 SEMP error is not retried", optionalArgs: []string{"forceFullPage"}, rejectErr: &sempv2.SEMPError{Operation: "getMsgVpnClients", StatusCode: 403}, wantCalls: 1, wantErr: true},
+		{name: "non-SEMP error is not retried", optionalArgs: []string{"forceFullPage"}, rejectErr: fmt.Errorf("dial tcp: connection refused"), wantCalls: 1, wantErr: true},
+		{name: "400 when the optional arg is not in args propagates", optionalArgs: []string{"where"}, rejectErr: badRequest, wantCalls: 1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := fanOutTool()
+			tool.Steps[1].Args["forceFullPage"] = "true"
+			tool.Steps[1].OptionalArgs = tc.optionalArgs
+			client := &optionalArgsClient{rejectArg: "forceFullPage", rejectErr: tc.rejectErr}
+
+			_, err := NewCompositeExecutor(testOperations()).Execute(context.Background(), tool, client, nil)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := len(client.calls); got != tc.wantCalls {
+				t.Fatalf("getMsgVpnClients calls = %d, want %d", got, tc.wantCalls)
+			}
+			if tc.wantCalls == 2 {
+				if _, sent := client.calls[0]["forceFullPage"]; !sent {
+					t.Error("first call must carry forceFullPage")
+				}
+				if _, sent := client.calls[1]["forceFullPage"]; sent {
+					t.Error("retried call must not carry forceFullPage")
+				}
+				if client.calls[1]["msgVpnName"] != "v1" {
+					t.Errorf("retried call lost the non-optional args: %v", client.calls[1])
+				}
+			}
+		})
+	}
 }

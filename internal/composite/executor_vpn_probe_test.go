@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -50,6 +51,12 @@ type vpnFixture struct {
 	state       string
 	connections any
 	realClients int
+	// indeterminate models a broker that does not honour forceFullPage: the
+	// real-clients probe for this VPN comes back with zero rows but still
+	// reports a further page pending, instead of exhausting the collection.
+	// Mutually exclusive with realClients > 0 — a broker that found a match
+	// would not also claim it stopped scanning early.
+	indeterminate bool
 }
 
 func (f vpnFixture) row() map[string]any {
@@ -66,12 +73,20 @@ func (f vpnFixture) row() map[string]any {
 
 // brokerStub answers the two operations list-vpns issues, modelling the one
 // broker invariant the change rides on: a VPN reporting msgVpnConnections == 0
-// has no connections at all, so a client probe against it returns nothing.
-// Probed VPN names are recorded so a test can assert which probes were issued.
+// has no connections at all, so a client probe against it returns nothing. It
+// also models a broker that does not honour forceFullPage (vpnFixture.indeterminate),
+// so the real-clients probe's pagination envelope reaches the postprocess
+// handler exactly as the real executor's fan-out would store it. Probed VPN
+// names are recorded so a test can assert which probes were issued.
 type brokerStub struct {
 	mu     sync.Mutex
 	vpns   []vpnFixture
 	probes []string
+	// rejectForceFullPage models a broker that answers any request carrying
+	// forceFullPage with HTTP 400, as an older or hardened broker that does
+	// not know the Solace-internal parameter would. The retried request
+	// (without it) is served as a plain page.
+	rejectForceFullPage bool
 }
 
 func (b *brokerStub) Execute(_ context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
@@ -92,16 +107,30 @@ func (b *brokerStub) Execute(_ context.Context, op *sempv2.Operation, args map[s
 		b.probes = append(b.probes, name)
 		b.mu.Unlock()
 
+		if b.rejectForceFullPage {
+			if _, sent := args["forceFullPage"]; sent {
+				return nil, &sempv2.SEMPError{Operation: op.ID, StatusCode: 400, SEMPCode: 11, SEMPStatus: "INVALID_PARAMETER", Description: "Unknown query parameter forceFullPage"}
+			}
+		}
+
 		rows := []any{}
+		indeterminate := false
 		for _, f := range b.vpns {
 			if f.name != name {
 				continue
 			}
+			indeterminate = f.indeterminate
 			for i := 0; i < f.realClients; i++ {
 				rows = append(rows, map[string]any{"clientName": fmt.Sprintf("%s-app-%d", name, i)})
 			}
 		}
-		return &sempv2.Result{Data: map[string]any{"data": rows}, StatusCode: 200}, nil
+		data := map[string]any{"data": rows}
+		if indeterminate {
+			// Mirrors the real SEMP envelope shape hasNextPage() reads
+			// (meta.paging.nextPageUri) — see executor.go's extractNextPageURI.
+			data["meta"] = map[string]any{"paging": map[string]any{"nextPageUri": "https://broker/next-page"}}
+		}
+		return &sempv2.Result{Data: data, StatusCode: 200}, nil
 
 	default:
 		return nil, fmt.Errorf("unexpected operation %q", op.ID)
@@ -134,10 +163,18 @@ func loadListVPNs(t *testing.T) CompositeTool {
 
 // runListVPNs executes the given list-vpns definition against a stub broker
 // built from fixtures, returning the postprocessed summary and the VPN names
-// that were probed for real clients.
+// that were probed for real clients. It also asserts the verdict shape of every
+// real-clients.byKey entry in the assembled response, so each caller checks the
+// scrub the MCP caller depends on without repeating the assertion.
 func runListVPNs(t *testing.T, tool CompositeTool, fixtures []vpnFixture) (map[string]any, []string) {
 	t.Helper()
-	broker := &brokerStub{vpns: fixtures}
+	return runListVPNsAgainst(t, tool, &brokerStub{vpns: fixtures})
+}
+
+// runListVPNsAgainst is runListVPNs with a caller-built stub, for tests that
+// need to configure broker behaviour beyond the fixture rows.
+func runListVPNsAgainst(t *testing.T, tool CompositeTool, broker *brokerStub) (map[string]any, []string) {
+	t.Helper()
 	out, err := NewCompositeExecutor(testOperations()).Execute(context.Background(), tool, broker, map[string]any{})
 	if err != nil {
 		t.Fatalf("Execute(list-vpns): %v", err)
@@ -146,7 +183,104 @@ func runListVPNs(t *testing.T, tool CompositeTool, fixtures []vpnFixture) (map[s
 	if !ok {
 		t.Fatalf("summary missing or wrong type: %T", out["summary"])
 	}
+	assertVerdictShapes(t, out)
 	return summary, broker.probedVPNs()
+}
+
+// assertVerdictShapes fails unless every real-clients.byKey entry in the
+// executor's assembled output is exactly one of the three verdict shapes
+// ListVpns documents — {hasRealClient: true}, {hasRealClient: false},
+// {indeterminate: true} — with no other keys. This is what the MCP caller
+// receives: collectSteps copies the step map references verbatim after the
+// handler returns, so a raw "data" or "meta" key left beside a verdict, or an
+// indeterminate entry the scrub missed, would ship — and the summary
+// assertions alone would never notice.
+func assertVerdictShapes(t *testing.T, out map[string]any) {
+	t.Helper()
+	step, ok := out["real-clients"].(map[string]any)
+	if !ok {
+		t.Fatalf("real-clients step missing or wrong type in output: %T", out["real-clients"])
+	}
+	byKey, ok := step["byKey"].(map[string]any)
+	if !ok {
+		t.Fatalf("real-clients.byKey missing or wrong type: %T", step["byKey"])
+	}
+	verdicts := []map[string]any{
+		{"hasRealClient": true},
+		{"hasRealClient": false},
+		{"indeterminate": true},
+	}
+	for vpn, raw := range byKey {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			t.Errorf("byKey[%q]: want map[string]any, got %#v", vpn, raw)
+			continue
+		}
+		matched := false
+		for _, v := range verdicts {
+			if reflect.DeepEqual(entry, v) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("byKey[%q] = %#v; want exactly one of %v", vpn, entry, verdicts)
+		}
+	}
+}
+
+// TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption pins the args the
+// postprocess handler's correctness silently depends on, plus the one tuning
+// choice that is easy to "fix" back to the wrong value.
+//
+// ListVpns (internal/composite/postprocess/handlers/list_vpns.go) reads "zero
+// rows but a nextPageUri is present" as indeterminate rather than as "no real
+// client". That reading is only correct while this step asks the broker for an
+// exhaustive search: forceFullPage=true makes the broker scan internally until
+// the page holds `count` matches or the collection is exhausted, so an empty
+// result without a next page genuinely means "there are none".
+//
+// Change either of these and the handler keeps its interpretation while the
+// premise moves under it, with no error anywhere:
+//   - drop forceFullPage → every probe returns a scan-window page with a next
+//     page, so every VPN becomes indeterminate and zeroConnectionCount silently
+//     goes to 0 forever;
+//   - set followPages → per-step paging couples this probe's depth to the
+//     tool-wide maxResults (resolveMaxResults reads it once), which is the
+//     coupling forceFullPage exists to avoid.
+//
+// count is pinned for a different reason. With forceFullPage set, correctness
+// does not depend on count at all — any value scans exhaustively — so count is
+// a performance choice, not a correctness one. forceFullPage pages internally
+// at `count`, so a small count costs one internal round trip per object
+// scanned: measured on 10.26.6, a 19-client VPN with no real client took
+// 55.5ms at count=1 versus 28.5ms at count=100, roughly 2ms per object, i.e.
+// ~2s of avoidable latency on a 1,000-client VPN (see the step's comment in
+// tools.yaml). The handler only needs "is there at least one?", which makes
+// count=1 look like the obvious value; this pin exists so that change is made
+// on purpose, with the measurement in hand.
+//
+// The repo enforces the handler's *field* dependency at boot (ValidateTool
+// cross-checks RequiredFieldsPerStep against each step's select:), but there is
+// no equivalent for arg dependencies, so this test is the enforcement.
+func TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption(t *testing.T) {
+	tool := loadListVPNs(t)
+	step := findStep(&tool, "real-clients")
+	if step == nil {
+		t.Fatal("step 'real-clients' not found in list-vpns")
+	}
+	if got := step.Args["forceFullPage"]; got != "true" {
+		t.Errorf("real-clients args[forceFullPage] = %v, want \"true\" — the ListVpns indeterminate guard depends on this; see this test's doc comment before changing it", got)
+	}
+	if got := step.Args["count"]; got != "100" {
+		t.Errorf("real-clients args[count] = %v, want \"100\" — count is a measured performance choice, not a correctness one; see this test's doc comment and the step's tools.yaml comment before changing it", got)
+	}
+	if step.FollowPages {
+		t.Error("real-clients must not set followPages: forceFullPage moves paging broker-side precisely so this probe's depth is not coupled to the tool-wide maxResults")
+	}
+	if !slices.Contains(step.OptionalArgs, "forceFullPage") {
+		t.Errorf("real-clients optionalArgs = %v, want to contain \"forceFullPage\" — the parameter is Solace-internal-use-only, and without the retry a broker that rejects it fails the whole list-vpns call (fan-out is fail-fast)", step.OptionalArgs)
+	}
 }
 
 // TestExecute_ListVPNs_SkipsRealClientProbeOnZeroConnectionVPNs covers
@@ -233,5 +367,93 @@ func TestExecute_ListVPNs_SkipsRealClientProbeOnZeroConnectionVPNs(t *testing.T)
 	if !reflect.DeepEqual(legacyProbes, wantLegacyProbes) {
 		t.Errorf("legacy probed VPNs = %v, want %v — the fixture no longer reproduces the "+
 			"pre-fix behavior this test claims to compare against", legacyProbes, wantLegacyProbes)
+	}
+}
+
+// TestExecute_ListVPNs_IndeterminateWhenBrokerDoesNotHonourForceFullPage covers
+// the safety mechanism the SOL-153071 rework added: when the real-clients probe
+// comes back empty but the broker reports a further page pending, the VPN must
+// be reported as indeterminate rather than folded into zeroConnectionCount.
+//
+// Before this test, brokerStub had no way to produce that response shape at
+// all — its getMsgVpnClients case never set meta.paging, so every probe result
+// was either "has a real client" or "exhausted, no real client". The
+// probeIndeterminate branch in probeRealClientOutcome
+// (postprocess/handlers/list_vpns.go) was therefore only ever exercised by
+// hand-built maps in list_vpns_test.go, never through the real
+// executor/fan-out path this tool actually runs in production. This test
+// closes that gap.
+func TestExecute_ListVPNs_IndeterminateWhenBrokerDoesNotHonourForceFullPage(t *testing.T) {
+	fixtures := []vpnFixture{
+		{name: "idle", enabled: true, state: "up", connections: float64(1)},
+		{name: "busy", enabled: true, state: "up", connections: float64(2), realClients: 1},
+		{name: "degraded", enabled: true, state: "up", connections: float64(1), indeterminate: true},
+	}
+	for _, f := range fixtures {
+		if f.indeterminate && f.realClients > 0 {
+			t.Fatalf("fixture %q sets both indeterminate and realClients; a broker cannot claim it "+
+				"stopped scanning early while also returning a match", f.name)
+		}
+	}
+
+	summary, probes := runListVPNs(t, loadListVPNs(t), fixtures)
+
+	wantSummary := map[string]any{
+		"disabledCount":                0,
+		"downCount":                    0,
+		"standbyCount":                 0,
+		"zeroConnectionCount":          1, // idle
+		"indeterminateConnectionCount": 1, // degraded
+		"scanned":                      len(fixtures),
+	}
+	if !reflect.DeepEqual(summary, wantSummary) {
+		t.Errorf("summary = %v, want %v", summary, wantSummary)
+	}
+
+	wantProbes := []string{"busy", "degraded", "idle"}
+	if !reflect.DeepEqual(probes, wantProbes) {
+		t.Errorf("probed VPNs = %v, want %v", probes, wantProbes)
+	}
+}
+
+// TestExecute_ListVPNs_RetriesProbeWhenBrokerRejectsForceFullPage covers the
+// other half of the forceFullPage guard. The step's comment in tools.yaml
+// distinguishes a broker that *ignores* the parameter (handled by the
+// nextPageUri check above) from one that *rejects* it with HTTP 400: the
+// parameter is Solace-internal-use-only and no broker version gate exists, so
+// an older or hardened broker may do exactly that. The fan-out is fail-fast,
+// so without the optionalArgs retry a single rejected probe would fail the
+// entire list-vpns call — a step down from the wrong count SOL-153071 fixed.
+//
+// With the retry, each probe is reissued without forceFullPage and the plain
+// page it returns is classified by the same three-way rule: a row found is a
+// real client, an empty page with a nextPageUri is indeterminate, an empty
+// page with no further page is genuinely idle.
+func TestExecute_ListVPNs_RetriesProbeWhenBrokerRejectsForceFullPage(t *testing.T) {
+	fixtures := []vpnFixture{
+		{name: "idle", enabled: true, state: "up", connections: float64(1)},
+		{name: "busy", enabled: true, state: "up", connections: float64(2), realClients: 1},
+		{name: "degraded", enabled: true, state: "up", connections: float64(1), indeterminate: true},
+	}
+	broker := &brokerStub{vpns: fixtures, rejectForceFullPage: true}
+
+	summary, probes := runListVPNsAgainst(t, loadListVPNs(t), broker)
+
+	wantSummary := map[string]any{
+		"disabledCount":                0,
+		"downCount":                    0,
+		"standbyCount":                 0,
+		"zeroConnectionCount":          1, // idle
+		"indeterminateConnectionCount": 1, // degraded
+		"scanned":                      len(fixtures),
+	}
+	if !reflect.DeepEqual(summary, wantSummary) {
+		t.Errorf("summary = %v, want %v", summary, wantSummary)
+	}
+
+	// Every VPN is probed exactly twice: the rejected call and its retry.
+	wantProbes := []string{"busy", "busy", "degraded", "degraded", "idle", "idle"}
+	if !reflect.DeepEqual(probes, wantProbes) {
+		t.Errorf("probed VPNs = %v, want %v (each probe once with forceFullPage, once without)", probes, wantProbes)
 	}
 }

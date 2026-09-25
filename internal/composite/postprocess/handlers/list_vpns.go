@@ -16,9 +16,18 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
+
+// indeterminateLogSample bounds how many VPN names the indeterminate warning
+// names. list-vpns can return up to 500 VPNs, and a degraded broker would make
+// every one of them indeterminate at once; the count carries the scale, so the
+// names only need to be enough to start an investigation.
+const indeterminateLogSample = 5
 
 // Step IDs this handler keys into. Declared as consts so the init-time
 // RequiredSteps registration and the runtime lookups cannot drift out of sync,
@@ -46,16 +55,22 @@ func init() {
 //     operational alarm — "should be serving but isn't")
 //   - standbyCount:         enabled VPNs whose state == "standby" (informational;
 //     HA mode, not a problem)
-//   - zeroConnectionCount:  enabled+up VPNs with no real (non-reserved) client
-//     connected. Derived directly from a per-VPN getMsgVpnClients probe filtered
-//     server-side by `clientUsername != #*` — the `#*` prefix is Solace's
-//     documented reserved-name contract for internal clients, so this is
+//   - zeroConnectionCount:  enabled+up VPNs established to have no real
+//     (non-reserved) client connected. Derived from a per-VPN getMsgVpnClients
+//     probe filtered server-side by `clientUsername != #*` — the `#*` prefix is
+//     Solace's documented reserved-name contract for internal clients, so this is
 //     version-independent. Previous implementations (before the real-clients
 //     fan-out step) inferred this from `msgVpnConnections <= 1` on the empirical
 //     invariant that the reserved `#client` shows up as exactly one connection
 //     per enabled+up VPN. That invariant is no longer load-bearing: the count
 //     is consulted only to skip the probe at exactly 0 (SOL-154166), where "no
 //     connections" implies "no clients" on any broker version, never at 1.
+//   - indeterminateConnectionCount: enabled+up VPNs whose probe did not settle
+//     the question either way (see probeRealClientOutcome). Omitted when zero. These
+//     are deliberately excluded from zeroConnectionCount rather than folded
+//     into it: reporting an unverified VPN as idle is the exact failure this
+//     probe exists to prevent, and an operator acting on it could decommission
+//     a VPN carrying live traffic.
 //
 // down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
 // (which typically reports state=="down") lands in disabledCount only, and the
@@ -93,7 +108,8 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("real-clients.byKey: want map[string]any, got %T", clientsStep["byKey"])
 	}
 
-	var disabled, down, standby, zeroConn, skipped int
+	var disabled, down, standby, zeroConn, indeterminate, skipped int
+	var indeterminateVpns []string
 	for i, raw := range items {
 		v, ok := raw.(map[string]any)
 		if !ok {
@@ -116,17 +132,66 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		case "standby":
 			standby++
 		case "up":
-			if !hasRealClient(byKey, vpnName) {
+			switch probeRealClientOutcome(byKey, vpnName) {
+			case probeNone:
 				zeroConn++
+			case probeIndeterminate:
+				indeterminate++
+				indeterminateVpns = append(indeterminateVpns, vpnName)
+			case probeRealClient:
 			}
 		}
 	}
+	// The probe's raw client rows and paging metadata must not reach the caller:
+	// they are internal to how zeroConnectionCount is computed, and stepResults
+	// is shared, unbuffered state — the executor's response assembly
+	// (collectSteps) copies these same map references after this handler
+	// returns, with no filtering of its own. Each entry is replaced by the
+	// single fact a consumer needs.
+	//
+	// Note the shapes are disjoint rather than a bool plus a flag: an
+	// indeterminate entry carries no hasRealClient key at all, so a caller
+	// reading hasRealClient == false can never silently inherit an unverified
+	// VPN as an idle one.
+	for vpnName := range byKey {
+		switch probeRealClientOutcome(byKey, vpnName) {
+		case probeRealClient:
+			byKey[vpnName] = map[string]any{"hasRealClient": true}
+		case probeNone:
+			byKey[vpnName] = map[string]any{"hasRealClient": false}
+		case probeIndeterminate:
+			byKey[vpnName] = map[string]any{"indeterminate": true}
+		}
+	}
+
 	out := map[string]any{
 		"disabledCount":       disabled,
 		"downCount":           down,
 		"standbyCount":        standby,
 		"zeroConnectionCount": zeroConn,
 		"scanned":             len(items),
+	}
+	if indeterminate > 0 {
+		out["indeterminateConnectionCount"] = indeterminate
+		// Without this the degradation is effectively invisible: the only other
+		// evidence is a summary field in a tool response that an MCP client may
+		// never surface to a human. An indeterminate probe means the broker
+		// stopped scanning early, which in practice means forceFullPage is no
+		// longer being honoured — a silent regression to SOL-153071 territory
+		// that an operator needs to hear about from logs, not from a user
+		// noticing zeroConnectionCount has quietly pinned to zero. Mirrors the
+		// executor's existing "pagination page cap reached" warning for the
+		// analogous incomplete-result case.
+		sort.Strings(indeterminateVpns)
+		sample := indeterminateVpns
+		if len(sample) > indeterminateLogSample {
+			sample = sample[:indeterminateLogSample]
+		}
+		slog.Warn("list-vpns real-client probe did not complete for some VPNs; they are excluded from zeroConnectionCount rather than reported as idle",
+			slog.Int("indeterminate_vpns", indeterminate),
+			slog.Int("scanned_vpns", len(items)),
+			slog.String("example_vpns", strings.Join(sample, ",")),
+			slog.String("likely_cause", "broker did not honour the forceFullPage query parameter on the real-clients probe"))
 	}
 	if skipped > 0 {
 		out["skipped"] = skipped
@@ -137,26 +202,61 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 	return out, nil
 }
 
-// hasRealClient returns true when the per-VPN probe returned at least one row.
-// A row present in byKey with a non-empty data[] means the broker had a client
-// whose clientUsername did not match the reserved `#*` prefix. Missing key or
-// empty data[] means "no real client" — the VPN is enabled+up but no user
-// clients are connected.
+// probeOutcome is what the per-VPN real-clients probe actually established.
+type probeOutcome int
+
+const (
+	probeNone          probeOutcome = iota // definitively no real client
+	probeRealClient                        // definitively at least one real client
+	probeIndeterminate                     // the probe did not settle the question
+)
+
+// probeRealClientOutcome classifies the per-VPN probe result.
 //
-// A missing key is equally a "no real client" signal, and is expected for two
-// reasons: forEachIf filters out disabled/down/standby rows (whose branches
-// never reach this function), and since SOL-154166 it also filters out an
-// enabled+up VPN whose msgVpnConnections is 0. The latter does reach here, and
-// false is the right answer: zero connections means no clients of any kind, so
-// the probe that was skipped would have come back empty.
-func hasRealClient(byKey map[string]any, vpnName string) bool {
+// A non-empty data[] means the broker returned a client whose clientUsername
+// did not match the reserved `#*` prefix, so the VPN has a real client.
+//
+// An empty data[] is only "no real client" when the broker also reports no
+// further page. The step runs with forceFullPage=true, which makes the broker
+// scan internally until the page holds `count` matches or the collection is
+// exhausted; on exhaustion it drops nextPageUri. So empty-and-no-next means
+// "there are none", while empty-with-a-next-page means the scan stopped early
+// and nothing was established — the signature of forceFullPage not being
+// honoured. That case must not be read as an idle VPN: SEMP applies `where`
+// after the count cut, so a single unscanned page is exactly how SOL-153071
+// produced false positives across every VPN at once.
+//
+// A missing key is "no real client", not indeterminate, and is expected:
+// forEachIf filters out disabled/down/standby rows (whose branches never reach
+// here), and since SOL-154166 it also filters out an enabled+up VPN whose
+// msgVpnConnections is 0. That last case does reach here, and probeNone is
+// correct — zero connections means no clients of any kind, so the probe that
+// was skipped would have come back empty anyway.
+func probeRealClientOutcome(byKey map[string]any, vpnName string) probeOutcome {
 	entry, ok := byKey[vpnName].(map[string]any)
 	if !ok {
-		return false
+		return probeNone
 	}
-	data, ok := entry["data"].([]any)
+	if data, ok := entry["data"].([]any); ok && len(data) > 0 {
+		return probeRealClient
+	}
+	if hasNextPage(entry) {
+		return probeIndeterminate
+	}
+	return probeNone
+}
+
+// hasNextPage reports whether a SEMP response envelope carries pagination
+// metadata pointing at a further page.
+func hasNextPage(entry map[string]any) bool {
+	meta, ok := entry["meta"].(map[string]any)
 	if !ok {
 		return false
 	}
-	return len(data) > 0
+	paging, ok := meta["paging"].(map[string]any)
+	if !ok {
+		return false
+	}
+	uri, _ := paging["nextPageUri"].(string)
+	return uri != ""
 }
