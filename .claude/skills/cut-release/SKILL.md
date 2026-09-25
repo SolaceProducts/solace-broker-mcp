@@ -10,9 +10,13 @@ Run the whole release from one command. Invoked with `/cut-release <version>` (o
 v0.6.0 release").
 
 The release pipeline (`.github/workflows/release.yml`) triggers on a pushed `v*` tag and does the
-heavy lifting itself — builds binaries for 4 OS/arch, pushes the multi-arch image, extracts the
-tagged commit's `## [X.Y.Z]` CHANGELOG block, and **creates the GitHub Release** from it with
-artifacts + checksums attached. No GitHub-UI "draft release / auto-generate notes" step is needed.
+heavy lifting itself — builds binaries for 4 OS/arch, runs the LLM eval suite against the tagged
+commit, and does not push the multi-arch image or create the GitHub Release until that suite
+passes. It extracts the tagged commit's `## [X.Y.Z]` CHANGELOG block and attaches artifacts +
+checksums. No GitHub-UI "draft release / auto-generate notes" step is needed. The suite starts
+beside the build, not after it. A full run costs API credits (about $4.78 when measured on
+2026-08-05) and does not retry. A red suite is `gh run rerun` on that job. There is no admin
+skip. `RELEASING.md` has the job graph. A finished binary build is not "clear to publish."
 So cutting a release reduces to: get the dated CHANGELOG block onto `main`, then push the tag.
 
 **The one human checkpoint is merging the changelog PR** — that is where "make sure the changelog
@@ -270,7 +274,9 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 - Report the run URL and its conclusion. **On failure**, point the operator at `RELEASING.md`
   Rollback and warn that the container image and its moving pointers (`:latest`, `{major}.{minor}`)
   may already be published on `ghcr.io` even though a later job failed — recovery is roll-forward to
-  the next PATCH, never a retag.
+  the next PATCH, never a retag. A red **LLM eval** job is the earlier case: the image was not
+  pushed and no GitHub Release exists. Re-run that job with `gh run rerun`. A suite that is wrong,
+  rather than a flake, is a fix on `main` and the next patch tag.
 - **On success**, print the `RELEASING.md` "After pushing the tag" checklist: verify
   `gh release view vX.Y.Z` shows four archives + `checksums-sha256.txt` + the curated notes,
   spot-check a binary's `--version`, and announce once verified.

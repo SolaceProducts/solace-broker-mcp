@@ -42,7 +42,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Security scans clean — FOSSA SCA (dependencies, licenses); runs on same-repo pull requests, default-branch pushes, and release tags. A fork pull request gets no scan, because GitHub withholds the credential — see `.github/ADMIN_SETUP.md` **[Implemented]**
 - `THIRD_PARTY_LICENSES.md` and `NOTICE` match the binary — `.github/scripts/licenses-check.sh` fails when the inventory drifts from `go list -deps ./cmd/server`, or when a dependency's NOTICE is not propagated. It runs on every pull request as `Third-party licenses current`, which is a required context on the `main-protection` ruleset with an empty bypass-actor list (verify with the ruleset-lookup query in `.github/ADMIN_SETUP.md`) — a pull request cannot merge with it red, by any path. It runs again at the tag as a `needs` of `build-binaries` and `build-docker` — a second, independent check at a different point, not a redundant one: being a required pull-request check is what stops a drifted *merge*; the tag-time run is what stops a drifted *release* regardless of how the merge happened **[Implemented]**
 - No open P0/P1 bugs **[Planned]**
-- Eval harness passes **[Planned]**
+- Eval harness passes — `llm-eval.yml` runs on the tagged commit and holds the GHCR push and the GitHub Release. The binary build does not wait. A red run is `gh run rerun`. There is no admin skip **[Implemented]**
 - Coverage threshold met **[Planned]**
 - No performance regression **[Planned]**
 - Release notes drafted — the GitHub Release body is minted from that version's `CHANGELOG.md` block, with the auto-generated PR list appended beneath; a missing block fails the release **[Implemented]**
@@ -73,10 +73,11 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 
 1. Re-runs the full build-and-test suite.
 2. Runs the release readiness check (the Guardian gate) against the tag.
-3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it.
-4. Smoke-tests each of the four archived binaries — extracts the artifact and runs `--version`, asserting a clean exit and that the reported version matches the tag. `linux/arm64` is verified under QEMU emulation since no native ARM Linux runner is available; the darwin legs run on their native macOS runners.
-5. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
-6. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives, the SBOM (when generation succeeded), and SHA-256 checksums covering everything actually attached. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
+3. Runs the LLM eval suite (`llm-eval.yml`) against the tagged commit, on local Docker brokers. It starts in parallel with the jobs above. A full run costs API credits (about $4.78 when measured on 2026-08-05). It does not retry. The run record's `head` line is `git rev-parse HEAD` and matches `commit` when the checkout is the tag.
+4. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it. This build does not wait for the LLM suite.
+5. Smoke-tests each of the four archived binaries — extracts the artifact and runs `--version`, asserting a clean exit and that the reported version matches the tag. `linux/arm64` is verified under QEMU emulation since no native ARM Linux runner is available; the darwin legs run on their native macOS runners.
+6. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it. This waits for the LLM suite.
+7. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives, the SBOM (when generation succeeded), and SHA-256 checksums covering everything actually attached. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes. This also waits for the LLM suite.
 
 Anyone with permission to push tags can cut a release.
 
@@ -87,16 +88,17 @@ push v* tag
   ├─> test               (reuses build-and-test.yml)
   ├─> release-notes      (CHANGELOG block must exist)
   ├─> licenses           (inventory must match the binary; also generates and verifies the SBOM)
-  └─> release-readiness  (Guardian gate)
+  ├─> release-readiness  (Guardian gate)
+  └─> llm-eval           (LLM suite on this tag; local-docker)
 
 waits on
   build-binaries   test, release-notes, licenses
   smoke-test       build-binaries                                    ← executes each archive
-  build-docker     test, release-notes, licenses, release-readiness   ← pushes the image
-  release          build-binaries, build-docker, release-readiness, smoke-test
+  build-docker     test, release-notes, licenses, release-readiness, llm-eval   ← pushes the image
+  release          build-binaries, build-docker, release-readiness, smoke-test, llm-eval
 ```
 
-A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the readiness check as well as the build, so a failing Guardian gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
+A failing Guardian gate or a failing LLM suite publishes no image and no GitHub Release. `build-binaries` does not wait on the suite, so a finished archive job is not a sign the release is clear. The archives stay artifacts until `release` runs. The image is live the moment it is pushed. A red LLM job is `gh run rerun <run-id>` (below). There is no admin skip for it. `skip_security_checks` skips only a Guardian block.
 
 One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, because attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
