@@ -3,14 +3,14 @@ module github.com/SolaceProducts/solace-broker-mcp
 go 1.25.0
 
 require (
-	github.com/getkin/kin-openapi v0.148.0
+	github.com/getkin/kin-openapi v0.149.0
 	github.com/go-logr/logr v1.4.4
 	github.com/gowebpki/jcs v1.0.1
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/maypok86/otter/v2 v2.3.0
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/common v0.70.1
+	github.com/prometheus/common v0.71.0
 	github.com/prometheus/otlptranslator v1.0.0
 	github.com/sony/gobreaker/v2 v2.4.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
@@ -55,8 +55,8 @@ require (
 )
 
 require (
-	github.com/coreos/go-oidc/v3 v3.20.0
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/oasdiff/yaml v0.1.1 // indirect
