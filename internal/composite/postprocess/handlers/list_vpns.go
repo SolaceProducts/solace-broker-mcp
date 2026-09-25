@@ -66,7 +66,7 @@ func init() {
 //     is consulted only to skip the probe at exactly 0 (SOL-154166), where "no
 //     connections" implies "no clients" on any broker version, never at 1.
 //   - indeterminateConnectionCount: enabled+up VPNs whose probe did not settle
-//     the question either way (see probeRealClient). Omitted when zero. These
+//     the question either way (see probeRealClientOutcome). Omitted when zero. These
 //     are deliberately excluded from zeroConnectionCount rather than folded
 //     into it: reporting an unverified VPN as idle is the exact failure this
 //     probe exists to prevent, and an operator acting on it could decommission
@@ -211,14 +211,14 @@ const (
 	probeIndeterminate                     // the probe did not settle the question
 )
 
-// probeRealClient classifies the per-VPN probe result.
+// probeRealClientOutcome classifies the per-VPN probe result.
 //
 // A non-empty data[] means the broker returned a client whose clientUsername
 // did not match the reserved `#*` prefix, so the VPN has a real client.
 //
 // An empty data[] is only "no real client" when the broker also reports no
-// further page. The step runs with count=1 and forceFullPage=true, which makes
-// the broker scan internally until the page holds a match or the collection is
+// further page. The step runs with forceFullPage=true, which makes the broker
+// scan internally until the page holds `count` matches or the collection is
 // exhausted; on exhaustion it drops nextPageUri. So empty-and-no-next means
 // "there are none", while empty-with-a-next-page means the scan stopped early
 // and nothing was established — the signature of forceFullPage not being

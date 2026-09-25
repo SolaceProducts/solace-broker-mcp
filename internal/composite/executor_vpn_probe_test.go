@@ -151,7 +151,9 @@ func loadListVPNs(t *testing.T) CompositeTool {
 
 // runListVPNs executes the given list-vpns definition against a stub broker
 // built from fixtures, returning the postprocessed summary and the VPN names
-// that were probed for real clients.
+// that were probed for real clients. It also asserts the verdict shape of every
+// real-clients.byKey entry in the assembled response, so each caller checks the
+// scrub the MCP caller depends on without repeating the assertion.
 func runListVPNs(t *testing.T, tool CompositeTool, fixtures []vpnFixture) (map[string]any, []string) {
 	t.Helper()
 	broker := &brokerStub{vpns: fixtures}
@@ -163,29 +165,82 @@ func runListVPNs(t *testing.T, tool CompositeTool, fixtures []vpnFixture) (map[s
 	if !ok {
 		t.Fatalf("summary missing or wrong type: %T", out["summary"])
 	}
+	assertVerdictShapes(t, out)
 	return summary, broker.probedVPNs()
 }
 
-// TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption pins the three args
-// the postprocess handler's correctness silently depends on.
+// assertVerdictShapes fails unless every real-clients.byKey entry in the
+// executor's assembled output is exactly one of the three verdict shapes
+// ListVpns documents — {hasRealClient: true}, {hasRealClient: false},
+// {indeterminate: true} — with no other keys. This is what the MCP caller
+// receives: collectSteps copies the step map references verbatim after the
+// handler returns, so a raw "data" or "meta" key left beside a verdict, or an
+// indeterminate entry the scrub missed, would ship — and the summary
+// assertions alone would never notice.
+func assertVerdictShapes(t *testing.T, out map[string]any) {
+	t.Helper()
+	step, ok := out["real-clients"].(map[string]any)
+	if !ok {
+		t.Fatalf("real-clients step missing or wrong type in output: %T", out["real-clients"])
+	}
+	byKey, ok := step["byKey"].(map[string]any)
+	if !ok {
+		t.Fatalf("real-clients.byKey missing or wrong type: %T", step["byKey"])
+	}
+	verdicts := []map[string]any{
+		{"hasRealClient": true},
+		{"hasRealClient": false},
+		{"indeterminate": true},
+	}
+	for vpn, raw := range byKey {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			t.Errorf("byKey[%q]: want map[string]any, got %#v", vpn, raw)
+			continue
+		}
+		matched := false
+		for _, v := range verdicts {
+			if reflect.DeepEqual(entry, v) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("byKey[%q] = %#v; want exactly one of %v", vpn, entry, verdicts)
+		}
+	}
+}
+
+// TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption pins the args the
+// postprocess handler's correctness silently depends on, plus the one tuning
+// choice that is easy to "fix" back to the wrong value.
 //
 // ListVpns (internal/composite/postprocess/handlers/list_vpns.go) reads "zero
 // rows but a nextPageUri is present" as indeterminate rather than as "no real
 // client". That reading is only correct while this step asks the broker for an
-// exhaustive search for a single match: count=1 with forceFullPage=true makes
-// the broker scan internally until it matches or exhausts the collection, so an
-// empty result without a next page genuinely means "there are none".
+// exhaustive search: forceFullPage=true makes the broker scan internally until
+// the page holds `count` matches or the collection is exhausted, so an empty
+// result without a next page genuinely means "there are none".
 //
-// Change any of these args and the handler keeps its interpretation while the
+// Change either of these and the handler keeps its interpretation while the
 // premise moves under it, with no error anywhere:
 //   - drop forceFullPage → every probe returns a scan-window page with a next
 //     page, so every VPN becomes indeterminate and zeroConnectionCount silently
 //     goes to 0 forever;
-//   - raise count → the step samples again instead of searching exhaustively,
-//     which is the SOL-153071 false positive the fix removed;
 //   - set followPages → per-step paging couples this probe's depth to the
 //     tool-wide maxResults (resolveMaxResults reads it once), which is the
 //     coupling forceFullPage exists to avoid.
+//
+// count is pinned for a different reason. With forceFullPage set, correctness
+// does not depend on count at all — any value scans exhaustively — so count is
+// a performance choice, not a correctness one. forceFullPage pages internally
+// at `count`, so a small count costs one internal round trip per object
+// scanned: measured on 10.26.6, a 19-client VPN with no real client took
+// 55.5ms at count=1 versus 28.5ms at count=100, roughly 2ms per object, i.e.
+// ~2s of avoidable latency on a 1,000-client VPN (see the step's comment in
+// tools.yaml). The handler only needs "is there at least one?", which makes
+// count=1 look like the obvious value; this pin exists so that change is made
+// on purpose, with the measurement in hand.
 //
 // The repo enforces the handler's *field* dependency at boot (ValidateTool
 // cross-checks RequiredFieldsPerStep against each step's select:), but there is
@@ -196,14 +251,11 @@ func TestListVPNs_RealClientsProbeArgsMatchHandlerAssumption(t *testing.T) {
 	if step == nil {
 		t.Fatal("step 'real-clients' not found in list-vpns")
 	}
-	for _, want := range []struct{ arg, value string }{
-		{"count", "1"},
-		{"forceFullPage", "true"},
-	} {
-		if got := step.Args[want.arg]; got != want.value {
-			t.Errorf("real-clients args[%q] = %v, want %q — the ListVpns indeterminate guard depends on this; see this test's doc comment before changing it",
-				want.arg, got, want.value)
-		}
+	if got := step.Args["forceFullPage"]; got != "true" {
+		t.Errorf("real-clients args[forceFullPage] = %v, want \"true\" — the ListVpns indeterminate guard depends on this; see this test's doc comment before changing it", got)
+	}
+	if got := step.Args["count"]; got != "100" {
+		t.Errorf("real-clients args[count] = %v, want \"100\" — count is a measured performance choice, not a correctness one; see this test's doc comment and the step's tools.yaml comment before changing it", got)
 	}
 	if step.FollowPages {
 		t.Error("real-clients must not set followPages: forceFullPage moves paging broker-side precisely so this probe's depth is not coupled to the tool-wide maxResults")

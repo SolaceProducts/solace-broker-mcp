@@ -257,14 +257,16 @@ test_list_vpns_summary() {
         log_info "$label: first real client sits at scan index 0 on $BROKER_VPN; narrow-window check is vacuous this run"
     fi
 
-    # The fix itself, at SEMP level: the same one-object window plus
-    # forceFullPage must find a real client regardless of scan position,
-    # because the broker keeps scanning internally until the page is full or
-    # the collection is exhausted.
+    # The fix itself, at SEMP level, in the shipped probe's exact query shape
+    # (tools.yaml real-clients: count=100, where, forceFullPage): forceFullPage
+    # must find a real client regardless of scan position, because the broker
+    # keeps scanning internally until the page holds `count` matches or the
+    # collection is exhausted. count is a performance choice there, not what
+    # makes this correct — see the step's comment.
     assert_json_field \
-        "$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=1&where=clientUsername!=%23*&forceFullPage=true")" \
+        "$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100&where=clientUsername!=%23*&forceFullPage=true")" \
         '(.data | length) >= 1' "true" \
-        "$label: count=1 + forceFullPage must find a real client on $BROKER_VPN (SOL-153071 fix)" || return 1
+        "$label: count=100 + forceFullPage must find a real client on $BROKER_VPN (SOL-153071 fix)" || return 1
 
     # Public-contract check, not internal probe shape: hasRealClient is the
     # sanitized signal ListVpns returns after scrubbing the probe's raw

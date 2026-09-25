@@ -236,10 +236,13 @@ tools:
       {"hasRealClient": true} (has a non-reserved client),
       {"hasRealClient": false} (verified to have none), or
       {"indeterminate": true} (not established — treat as unknown, NOT as
-      idle). Only trust hasRealClient == true as a positive; an absent
+      idle). Only trust hasRealClient == true as a positive; an entry without a
       hasRealClient key means the question was not settled, never that the VPN
-      is empty. The probed client names themselves are deliberately not
-      returned. Standby VPNs are excluded from both counts.
+      is empty. A VPN with no entry at all was not probed: it is disabled, down,
+      or standby, or it is enabled+up with msgVpnConnections == 0 — that last
+      case is counted under zeroConnectionCount. The probed client names
+      themselves are deliberately not returned. Standby VPNs are excluded from
+      both counts.
       Admin-disabled VPNs land in disabledCount only and are excluded from
       downCount and zeroConnectionCount. For per-service TLS status and AMQP
       support, use get-vpn-status.
@@ -305,10 +308,10 @@ tools:
       # that match, and scan order is not predictable (see below), so its cost
       # is unbounded in practice rather than merely large.
       #
-      # The rows this returns are bounded by the number of real clients, not by
-      # count (a VPN with one real client returns one row), and the handler
-      # scrubs them before the response either way — so the larger count buys
-      # scan efficiency without widening the payload that reaches a caller.
+      # The rows this returns are bounded by min(count, real clients) — a VPN
+      # with one real client returns one row — and the handler scrubs them to a
+      # verdict before the response is assembled, so the larger count buys scan
+      # efficiency without widening the payload that reaches a caller.
       #
       # Do NOT assume reserved clients sort first and "a big enough count
       # covers them". Measured on 10.26.6, they do not: on a VPN holding a
@@ -328,13 +331,18 @@ tools:
       # SOL-153071 fleet-wide. With forceFullPage honoured, a genuinely
       # empty result carries no nextPageUri (measured).
       #
+      # forceFullPage is not a public SEMP contract: the bundled spec (the
+      # private-extended variant) describes it as "only for Solace internal
+      # use". The guard above covers a broker that *ignores* the parameter and
+      # pages normally; a broker that *rejects* it errors the probe call
+      # itself, which is not the silent case the guard exists for.
+      #
       # followPages stays off: maxResults is shared across every step in the
       # tool call (resolveMaxResults reads it once from the top-level params),
       # so pagination here would couple "how many VPNs list-vpns returns" to
       # "how many clients get scanned per VPN" via an unrelated parameter.
       # forceFullPage moves that paging broker-side, so the coupling never
-      # arises. select=[clientName] keeps the payload minimal; at count=1 the
-      # probe returns at most one row per VPN.
+      # arises. select=[clientName] keeps each returned row minimal.
       #
       # forEachIf restricts the probe to enabled+up VPNs, which are exactly
       # the rows the postProcess handler consults for zeroConnectionCount.
@@ -379,7 +387,7 @@ tools:
         forEachKey: msgVpnName
         args:
           msgVpnName: "{{.Item.msgVpnName}}"
-          count: "1"
+          count: "100"
           forceFullPage: "true"
           where: "clientUsername!=#*"
         select:

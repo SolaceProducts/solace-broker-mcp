@@ -475,9 +475,9 @@ func TestListVpns_ExhaustedEmptyProbeIsZeroConn(t *testing.T) {
 }
 
 // TestListVpns_IndeterminateIgnoredWhenRowsPresent: a probe that returned a
-// match is definitive even if a next page remains — at count=1 the broker stops
-// as soon as the page is full, so a trailing cursor is normal and must not
-// downgrade a positive result.
+// match is definitive even if a next page remains — the broker stops as soon
+// as the page holds `count` matches, so a trailing cursor is normal and must
+// not downgrade a positive result.
 func TestListVpns_IndeterminateIgnoredWhenRowsPresent(t *testing.T) {
 	entry := indeterminateEntry()
 	entry["data"] = []any{clientRow()}
@@ -499,21 +499,24 @@ func TestListVpns_IndeterminateIgnoredWhenRowsPresent(t *testing.T) {
 }
 
 // TestListVpns_ScrubsRawClientRows locks in the payload-leak fix: after
-// ListVpns returns, real-clients.byKey must hold only {hasRealClient: bool}
-// for every VPN it probed — never the raw client rows the probe fetched.
-// stepResults is shared with the executor's response assembly (no copy is
-// made after this handler returns), so anything left in byKey here is
-// returned to the MCP caller verbatim.
+// ListVpns returns, real-clients.byKey must hold exactly one verdict shape for
+// every VPN it probed — {hasRealClient: true}, {hasRealClient: false}, or
+// {indeterminate: true} — never the raw client rows or paging metadata the
+// probe fetched. stepResults is shared with the executor's response assembly
+// (no copy is made after this handler returns), so anything left in byKey
+// here is returned to the MCP caller verbatim.
 func TestListVpns_ScrubsRawClientRows(t *testing.T) {
 	items := []any{
 		vpn(true, "up", "healthy"),
 		vpn(true, "up", "empty"),
+		vpn(true, "up", "degraded"),
 	}
 	byVpn := map[string][]any{
-		"healthy": {clientRow(), clientRow()},
-		"empty":   {},
+		"healthy":  {clientRow(), clientRow()},
+		"empty":    {},
+		"degraded": {},
 	}
-	in := input(items, byVpn)
+	in := withEntry(input(items, byVpn), "degraded", indeterminateEntry())
 	if _, err := ListVpns(in); err != nil {
 		t.Fatal(err)
 	}
@@ -521,23 +524,28 @@ func TestListVpns_ScrubsRawClientRows(t *testing.T) {
 	if !ok {
 		t.Fatalf("real-clients.byKey missing or wrong type after ListVpns: %#v", in["real-clients"])
 	}
-	cases := map[string]bool{
-		"healthy": true,
-		"empty":   false,
+	cases := map[string]map[string]any{
+		"healthy":  {"hasRealClient": true},
+		"empty":    {"hasRealClient": false},
+		"degraded": {"indeterminate": true},
 	}
 	for vpnName, want := range cases {
 		entry, ok := byKey[vpnName].(map[string]any)
 		if !ok {
 			t.Fatalf("byKey[%q]: want map[string]any, got %#v", vpnName, byKey[vpnName])
 		}
-		if _, leaked := entry["data"]; leaked {
-			t.Errorf("byKey[%q] still has raw \"data\" rows after ListVpns: %#v", vpnName, entry)
+		for _, raw := range []string{"data", "meta"} {
+			if _, leaked := entry[raw]; leaked {
+				t.Errorf("byKey[%q] still has raw %q after ListVpns: %#v", vpnName, raw, entry)
+			}
 		}
-		if got := entry["hasRealClient"]; got != want {
-			t.Errorf("byKey[%q][%q]: got %v, want %v", vpnName, "hasRealClient", got, want)
+		if len(entry) != len(want) {
+			t.Errorf("byKey[%q]: want exactly %#v, got %#v", vpnName, want, entry)
 		}
-		if len(entry) != 1 {
-			t.Errorf("byKey[%q]: want exactly {hasRealClient}, got %#v", vpnName, entry)
+		for k, v := range want {
+			if entry[k] != v {
+				t.Errorf("byKey[%q][%q]: got %v, want %v", vpnName, k, entry[k], v)
+			}
 		}
 	}
 }
