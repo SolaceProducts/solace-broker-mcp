@@ -70,7 +70,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
@@ -160,11 +160,11 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 		t.Fatalf("AuditMetrics: %v", err)
 	}
 
-	// SOL-154365: this leaves the package-level counter pointed at a
-	// provider this test shuts down, with no way to reset it from here.
-	if err := panics.Register(mp.MeterProvider()); err != nil {
-		t.Fatalf("panics.Register: %v", err)
-	}
+	// mcp_panic_recovered_total (SOL-154037): seeded at zero on registration,
+	// so registering it is enough. Routed through panicstest.Register so the
+	// registration ends with this test instead of outliving it pointed at the
+	// provider the Shutdown cleanup above kills (SOL-154365).
+	panicstest.Register(t, mp.MeterProvider())
 
 	// mcp_token_exchange_circuit_breaker_state (SOL-152284): an observable
 	// gauge, so registering it is enough — the SDK invokes the callback on
