@@ -121,6 +121,41 @@ func Register(meterProvider metric.MeterProvider) error {
 	return nil
 }
 
+// Unregister clears the installed instrument, returning the record functions to
+// the no-op state they have before Register runs. Exported only to support the
+// panicstest helper package's t.Cleanup hook; production code must not call it —
+// Register runs once at startup and the counter stays for the process lifetime.
+//
+// A test in another package has no other way to undo its own Register call:
+// counter is unexported, so the t.Cleanup(func() { counter.Store(nil) }) pattern
+// the tests in this package use is unreachable from outside (SOL-154365).
+// Without it, such a test leaves the process-wide counter pointing at a provider
+// it has already shut down or abandoned, for the rest of that test binary's run.
+//
+// What that leak actually costs is narrower than it looks, and is worth stating
+// precisely so nobody later goes hunting for a failure it cannot produce: a test
+// that registers through panicstest overwrites the stale pointer before it
+// asserts, so it is unaffected. The exposure is a test that records or asserts
+// WITHOUT registering — one that builds a reader by hand, say — which reads its
+// own empty provider while the writes land on the stale instrument. Recovery
+// sites firing in the gap record into a dead provider and are dropped. The blast
+// radius is one test binary: cmd/server and internal/observability/metrics run
+// as separate processes, each with a single registering test.
+//
+// Clearing to nil rather than restoring some previous instrument is deliberate.
+// nil is the documented no-op state, so a stray increment after cleanup is
+// harmless whatever order the tests run in (-shuffle included), and there is no
+// "previous" to restore — Register is called once per process outside tests, and
+// panicstest.Register refuses a nested registration rather than stacking one, so
+// no caller can have an outer registration for this to discard.
+func Unregister() { counter.Store(nil) }
+
+// IsRegistered reports whether an instrument is currently installed. Exported
+// only so the panicstest helper package can refuse a nested registration, the
+// same way postprocess.IsRegistered exists for postprocesstest; production code
+// has no use for it.
+func IsRegistered() bool { return counter.Load() != nil }
+
 // RecoveredHTTP records one panic trapped by recovery.HTTPMiddleware. It is a
 // no-op when Register has not run (metrics disabled), so the recovery site can
 // call it unconditionally without knowing whether metrics are on.

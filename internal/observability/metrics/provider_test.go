@@ -30,7 +30,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
@@ -140,9 +140,10 @@ func TestGoldenSchema(t *testing.T) {
 		t.Fatalf("AuditMetrics() error = %v", err)
 	}
 
-	if err := panics.Register(p.MeterProvider()); err != nil {
-		t.Fatalf("panics.Register() error = %v", err)
-	}
+	// Routed through panicstest.Register so the registration ends with this
+	// test rather than leaving the process-wide counter pointing at this
+	// provider for the rest of the run (SOL-154365).
+	panicstest.Register(t, p.MeterProvider())
 
 	// Broker reachability gauges (SOL-152088): seed one reachable and one failed
 	// broker with fixed timestamps so the one-hot 0 series is captured in the golden.
