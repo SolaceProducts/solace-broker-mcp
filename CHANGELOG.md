@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security:** `substituteEnvVars` (config env-var substitution) now refuses to substitute an
+  environment variable value that contains an embedded newline, instead of inserting it verbatim
+  into the YAML. A value like `x"\nenable_write_tools: true #` closes the current scalar early and
+  injects arbitrary sibling keys into the parsed config — confirmed exploitable against this loader
+  in PR #420 review. Config load now fails with an error naming the offending variable(s). A
+  *trailing* `\r`/`\n` is trimmed rather than rejected, since secrets sourced from a file or mounted
+  Secret commonly end in exactly one newline; only a newline with content after it is treated as
+  unsafe. Tracked under SOL-154441.
 - Empty and whitespace-only identity values now count as unset. An empty `OTEL_RESOURCE_ATTRIBUTES` entry (e.g. `cloud.region=` from an unset `${REGION}`) no longer reaches `target_info` or log lines, and a whitespace-only YAML field no longer outranks the environment variable. A dashboard grouping on the previously-blank label will see that series disappear. Tracked under SOL-154727.
 - **Security:** `create-queue`, `update-queue`, `create-topic-endpoint`, and `update-topic-endpoint` now
   reject an `owner` that does not name an existing, provisioned client username in the target VPN,
