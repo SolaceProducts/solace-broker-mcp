@@ -30,9 +30,9 @@ import (
 // and the saturation signal on the broker admission path (internal/semp/pool.go).
 // (Panic recovery is unconditional and is no longer a flag on this struct.)
 //
-// The v1 defaults and the written flip-condition behind each one are recorded
-// in docs/observability.md, "Flag Defaults at GA". Change a default there and
-// here together, and update the default-assertion table in observability_test.go.
+// The defaults and operator-visible effect of each flag are recorded in
+// docs/observability.md, "Feature switches". Change a default there and here
+// together, and update the default-assertion table in observability_test.go.
 //
 // Two distinct loading channels, deliberately split:
 //
