@@ -333,9 +333,16 @@ tools:
       #
       # forceFullPage is not a public SEMP contract: the bundled spec (the
       # private-extended variant) describes it as "only for Solace internal
-      # use". The guard above covers a broker that *ignores* the parameter and
-      # pages normally; a broker that *rejects* it errors the probe call
-      # itself, which is not the silent case the guard exists for.
+      # use", and nothing gates this definition on broker version. The guard
+      # above covers a broker that *ignores* the parameter and pages normally.
+      # A broker that *rejects* it (HTTP 400 — older firmware, a hardened
+      # appliance, a SEMP proxy) is covered by optionalArgs: the executor
+      # retries that one probe without forceFullPage, and the plain page it
+      # gets back feeds the same three-way verdict — rows found is a real
+      # client, empty with a nextPageUri is indeterminate, empty with none is
+      # genuinely idle. Without the retry the fan-out is fail-fast, so a
+      # single rejected probe would fail the whole list-vpns call, which is
+      # strictly worse than the wrong count this step exists to fix.
       #
       # followPages stays off: maxResults is shared across every step in the
       # tool call (resolveMaxResults reads it once from the top-level params),
@@ -390,6 +397,7 @@ tools:
           count: "100"
           forceFullPage: "true"
           where: "clientUsername!=#*"
+        optionalArgs: [forceFullPage]
         select:
           - clientName
     result:

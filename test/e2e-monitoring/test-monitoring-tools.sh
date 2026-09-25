@@ -243,18 +243,20 @@ test_list_vpns_summary() {
         return 1
     fi
     narrow_rows=$(jq '.data | length' <<<"$narrow_probe")
-    if [ "$first_real_idx" -gt 0 ]; then
-        # A reserved client occupies the single scan slot, so an unaided
-        # count=1 probe MUST come back empty. This is the bug reproduced live.
-        if [ "$narrow_rows" -ne 0 ]; then
-            log_fail "$label: first real client is at scan index $first_real_idx on $BROKER_VPN, so count=1 without forceFullPage must return 0 rows, got $narrow_rows"
-            return 1
-        fi
+    # Informational only, never a failure. It documents the bug shape live
+    # (a reserved client in the single scan slot makes an unaided count=1
+    # probe come back empty) but cannot be asserted: the two GETs are
+    # separate calls against a VPN whose client population churns mid-run
+    # (F6 reaps and respawns its subscriber; F4/F9/F10 also hold clients
+    # here), so scan order can shift between them; and a broker release that
+    # applied `where` before the count cut would make the "bug" disappear
+    # without anything in this repo being wrong — no product code issues a
+    # count=1 probe any more. The forceFullPage assertion below is what
+    # gates the fix.
+    if [ "$first_real_idx" -gt 0 ] && [ "$narrow_rows" -eq 0 ]; then
+        log_info "$label: bug shape reproduced on $BROKER_VPN — first real client at scan index $first_real_idx, count=1 without forceFullPage returned 0 rows"
     else
-        # The first scanned client happens to be real this run, so a narrow
-        # window succeeds by luck and proves nothing. Not a failure — the
-        # forceFullPage assertion below is what actually gates the fix.
-        log_info "$label: first real client sits at scan index 0 on $BROKER_VPN; narrow-window check is vacuous this run"
+        log_info "$label: narrow-window observation on $BROKER_VPN not conclusive this run (first real client at scan index $first_real_idx, count=1 returned $narrow_rows rows)"
     fi
 
     # The fix itself, at SEMP level, in the shipped probe's exact query shape
@@ -263,8 +265,15 @@ test_list_vpns_summary() {
     # keeps scanning internally until the page holds `count` matches or the
     # collection is exhausted. count is a performance choice there, not what
     # makes this correct — see the step's comment.
-    assert_json_field \
-        "$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100&where=clientUsername!=%23*&forceFullPage=true")" \
+    # The GET is captured first so a rejected parameter (HTTP 400 → curl -f
+    # exits non-zero with no body) fails as "broker rejected forceFullPage",
+    # not as an empty-actual "the fix doesn't work" from assert_json_field.
+    local full_page_probe
+    full_page_probe=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/clients?count=100&where=clientUsername!=%23*&forceFullPage=true") || {
+        log_fail "$label: direct SEMP GET msgVpns/$BROKER_VPN/clients?count=100&where=...&forceFullPage=true failed — the broker rejected forceFullPage (or the call failed outright); list-vpns falls back to a probe without it via optionalArgs, but this suite expects a broker that honours it"
+        return 1
+    }
+    assert_json_field "$full_page_probe" \
         '(.data | length) >= 1' "true" \
         "$label: count=100 + forceFullPage must find a real client on $BROKER_VPN (SOL-153071 fix)" || return 1
 

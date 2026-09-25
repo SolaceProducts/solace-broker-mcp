@@ -71,6 +71,11 @@ type Step struct {
 	ForEachIf   string            `yaml:"forEachIf"`   // optional predicate template; iteration skipped when it resolves to a false bool
 	ForEachKey  string            `yaml:"forEachKey"`  // parent-row field whose value keys this step's result map (required with ForEach)
 	Concurrency int               `yaml:"concurrency"` // max in-flight per-row calls in fan-out; 0 means use the framework default
+	// OptionalArgs names Args keys the broker may not support. When a SEMP call
+	// carrying any of them is rejected with HTTP 400, the call is retried once
+	// with those keys removed; every other error propagates unchanged. Each
+	// entry must be a key of Args (validated at load time). See runSingle.
+	OptionalArgs []string `yaml:"optionalArgs"`
 
 	// compiledArgs and compiledForEachIf cache the parsed *template.Template
 	// form of Args and ForEachIf. They are populated once by
