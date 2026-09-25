@@ -148,7 +148,7 @@ brokers:
 
 `mcp_client_auth.mode: disabled` skips client authentication entirely; use this only for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with a realistic authentication flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
-Production concerns beyond this Quickstart — audit-log identity fields, claim-based tool authorization, and narrowing `tools/list` per caller — are covered in the [Audit Trail](docs/observability.md) reference and [Tool authorization](docs/configuration.md#tool-authorization); none of them are required to get a first query working.
+`disabled` and `static` logs carry no real caller attribution (`static` logs every call as `dev-user`); use `oauth` when audit logs must identify who ran a tool — see [Client Authentication Settings](docs/configuration.md#client-authentication-settings). Other production concerns beyond this Quickstart — claim-based tool authorization and narrowing `tools/list` per caller — are covered in [Tool authorization](docs/configuration.md#tool-authorization) and the [Audit Trail](docs/observability.md#audit-trail--implemented) reference; none of them are required to get a first query working.
 
 Each event broker needs:
 - `url` — the SEMP management API base URL
@@ -230,43 +230,47 @@ After the MCP server is running (via binary, Docker, or `go run`), add it as an 
 claude mcp add solace-broker --transport http http://localhost:9090/mcp
 ```
 
-> **If `claude mcp add` can't reach the server,** try `http://127.0.0.1:9090/mcp` instead of `localhost`. The server's default bind (`127.0.0.1`) and `claude mcp add`'s hostname resolution are not guaranteed to agree on every system.
+> **If `claude mcp add` can't reach the server,** try `http://127.0.0.1:9090/mcp` instead of `localhost`. On some systems `localhost` resolves to the IPv6 loopback (`::1`) while the server listens on IPv4 only, so the connection fails even though the server is up.
 
 Example query:
 
 ```
-List queues in <your-vpn-name> on the dev event broker
+List queues in <your-vpn-name> on my-broker
 ```
 
 The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ### Connect from Solace Agent Mesh
 
-After the MCP server is running, configure it to accept a static development token (local development only). For production, use `mcp_client_auth.mode: oauth`; see [Authentication](docs/authentication.md).
+The Quickstart configuration above (`mcp_client_auth.mode: disabled`) already matches the guide's local no-auth example — no configuration change is needed to try this. For a shared or production deployment, switch to `mcp_client_auth.mode: static` or `oauth` and set the connector's Authentication Type to match; see [Authentication](docs/authentication.md).
 
-```yaml
-# broker-config.yaml
-mcp_client_auth:
-  mode: static
-  dev_token: "sam-mcp-dev-token-local-only"
-```
-
-Then in your Agent Mesh project, add an MCP-tooled agent that points at this server with the matching bearer token. For complete setup instructions, see [Agent Mesh Integration](docs/sam-integration.md).
+In your Agent Mesh project, add an MCP-tooled agent that points at this server. For complete setup instructions, including the connector wizard fields, see [Agent Mesh Integration](docs/sam-integration.md).
 
 Example queries through the Agent Mesh web UI:
 
 ```
 What event brokers are configured?
-List the queues on event-broker-one's <your-vpn-name> VPN.
+List the queues on my-broker's <your-vpn-name> VPN.
 ```
 
 The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
 
 ## Alternative Deployment Methods
 
-Docker and `go install` share the [Configuration](#configuration) step from the Quickstart above; Kubernetes uses its own manifests instead (below).
+Docker and `go install` share the [Configuration](#configuration) step from the Quickstart above, with one addition required for Docker (below) before running the container.
 
 ### Docker Deployment
+
+**Required:** the Quickstart configuration above (like `broker-config.example.yaml`) uses `mcp_client_auth.mode: disabled`, which binds `127.0.0.1` only — inside a container that is the *container's* loopback, so the published port refuses connections. Bind all interfaces and pair that with a token so the port is not left unauthenticated:
+
+```yaml
+listen_address: "0.0.0.0"
+mcp_client_auth:
+  mode: static
+  dev_token: "${DEV_TOKEN}"
+```
+
+Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
 
 ```bash
 docker run -d \
@@ -281,15 +285,6 @@ docker run -d \
 > ```bash
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
-
-> **Important:** `broker-config.example.yaml` ships with `mcp_client_auth.mode: disabled`, which binds `127.0.0.1` only — inside a container that is the *container's* loopback, so the published port refuses connections. For a container, bind all interfaces and pair that with a token so the port is not left unauthenticated:
-> ```yaml
-> listen_address: "0.0.0.0"
-> mcp_client_auth:
->   mode: static
->   dev_token: "${DEV_TOKEN}"
-> ```
-> Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
 
 > **If you cap the container's memory** — `--memory`, or `mem_limit` in Compose — pass `-e GOMEMLIMIT` at 75% of that cap alongside it. The Go runtime reads the cgroup CPU limit but never the memory one, so an uninformed process runs right up against a cap it cannot see. The command above sets no memory limit and so needs no `GOMEMLIMIT`; the two belong together. Note the suffix is Go's `MiB`, not Docker's `m`, and an unparseable value kills the process at startup. See [Resource requests and limits](docs/observability.md#resource-requests-and-limits) for the rule and what it is measured against.
 
@@ -346,7 +341,7 @@ Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your con
 CONFIG_FILE=./broker-config.yaml server
 ```
 
-> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — copy `broker-config.example.yaml` from the repository.
+> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — the `broker-config.yaml` from [Configuration](#configuration) above is enough to run; for the full field-by-field reference, copy `broker-config.example.yaml` from the repository.
 
 Verify:
 
@@ -368,6 +363,8 @@ Read [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) first: it
 lists the values that must be set before applying (`DEV_TOKEN` ships empty and
 the pod will not start without it), the image-tag naming, and how to switch to
 production OAuth.
+
+Once the server is running via any of the above, continue with [Connect from Claude Code](#connect-from-claude-code) or [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh).
 
 ## Development Setup
 

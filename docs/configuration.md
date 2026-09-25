@@ -184,6 +184,8 @@ Configured under the `mcp_client_auth` key. The `mode` field is required and sel
 | `mcp_client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.tool_authorization` | Claim-based tool authorization block. Required under `mcp_client_auth.mode: oauth` — the `enabled` field must be set explicitly to `true` or `false`; omitting the block, or omitting `enabled` from it, is a startup error. Not legal under `static` or `disabled`. See [Tool authorization](#tool-authorization). |
 
+**Audit-log identity.** Under `mode: oauth`, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti`. Under `mode: disabled`, those fields are absent — the line carries no identity at all. Under `mode: static`, every invocation is attributed to the same hardcoded subject, `dev-user`, regardless of which caller sent it. **`disabled` and `static` modes are not real audit trails:** use `mode: oauth` for any deployment whose logs need to answer "who ran what tool against which event broker?"
+
 ## Tool Authorization
 
 Under `mcp_client_auth.mode: oauth`, the server can gate individual MCP tools by the caller's group or role memberships. The caller's identity provider must include a claim in the issued access token that lists these memberships — the name of the claim is configurable via `groups_claim_name` (defaulting to `"groups"`). The server compares the values in that claim against a policy the operator defines under `mcp_client_auth.tool_authorization`. Under `mode: static` or `mode: disabled` the feature is off and a `tool_authorization` block is a startup error.
