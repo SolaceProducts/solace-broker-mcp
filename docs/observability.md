@@ -111,8 +111,10 @@ For `service.name`, `OTEL_SERVICE_NAME` takes precedence over a `service.name` e
 `OTEL_RESOURCE_ATTRIBUTES`. Empty and whitespace-only values count as unset.
 
 At startup, the `observability identity resolved` INFO record reports each resolved value and
-its source. Compare `service_instance_id` across replicas: a shared config or environment
-value can accidentally collapse several pods into one monitoring identity.
+its source. If resource construction fails, the server logs
+`observability identity resource unavailable; falling back to SDK defaults` and continues
+with the SDK's own defaults. Compare `service_instance_id` across replicas: a shared config
+or environment value can accidentally collapse several pods into one monitoring identity.
 
 On the Prometheus scrape path, resource attributes appear on `target_info`; join them rather
 than expecting them on every series. On the OTLP path, configure your backend to promote the
@@ -858,8 +860,8 @@ reaches those sites; alerting on the metric does not.
 `go_memstats_heap_inuse_bytes` approaches the container limit. `/readyz` does not report
 memory pressure.
 
-**Likely cause.** Limit too low, a leak, or an invalid `GOMEMLIMIT` (that case fails
-startup rather than OOM).
+**Likely cause.** Limit too low, or a leak. An invalid `GOMEMLIMIT` fails startup; it does
+not produce `OOMKilled`.
 
 **First response.** Compare heap trend to the limit. Raise a stable-but-high limit together
 with `GOMEMLIMIT` (~75% of the cap). A climbing heap under flat traffic is a leak.
@@ -923,7 +925,8 @@ together.
 **Symptom.** The process is ready, but some `mcp_*` families are absent from `/metrics`.
 Startup logs include one of: `tool metrics unavailable`, `SEMP metrics unavailable`,
 `broker reachability metrics unavailable`, `token exchange circuit breaker metrics unavailable`,
-`panic counter unavailable: registration failed`, or `audit drop counter unavailable: registration failed`.
+`panic counter unavailable: registration failed`, `audit drop counter unavailable: registration failed`,
+or `security counters unavailable: registration failed`.
 
 **Likely cause.** That instrument group failed to register. The server continues with a
 partial surface.

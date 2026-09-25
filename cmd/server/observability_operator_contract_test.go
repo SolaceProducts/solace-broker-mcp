@@ -268,7 +268,7 @@ func TestObservabilityDoc_DocumentsMuxProbeRoutes(t *testing.T) {
 		}
 		return true
 	})
-	required := []string{"/livez", "/health", "/readyz", "/metrics", "/mcp"}
+	required := []string{"/livez", "/health", "/readyz", "/ready", "/metrics", "/mcp"}
 	doc := publicObservabilityDoc(t)
 	for _, path := range required {
 		if !routes[path] {
@@ -386,6 +386,30 @@ func TestObservabilityDoc_DocumentsObservabilityWarnAndErrorLogs(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatal("no slog.Warn/Error string literals under internal/observability")
+	}
+}
+
+func TestObservabilityDoc_DocumentsCmdServerUnavailableMetricsLogs(t *testing.T) {
+	doc := publicObservabilityDoc(t)
+	found := 0
+	for _, path := range productionGoFiles(t, ".") {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, m := range slogCallRE.FindAllSubmatch(src, -1) {
+			msg := string(m[2])
+			if !strings.Contains(strings.ToLower(msg), "unavailable") {
+				continue
+			}
+			found++
+			if !strings.Contains(doc, msg) {
+				t.Errorf("docs/observability.md does not quote cmd/server %s %q (from %s)", m[1], msg, path)
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no slog.Warn/Error \"unavailable\" messages in cmd/server production files")
 	}
 }
 
