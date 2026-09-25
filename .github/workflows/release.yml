@@ -270,6 +270,26 @@ jobs:
     with:
       version: ${{ github.ref_name }}
 
+  # Release gate: the LLM suite against this tag's commit. A red suite holds
+  # the GHCR push and the GitHub Release. build-binaries does not wait.
+  # This job starts with the other roots. A red test, release-notes,
+  # licenses, or release-readiness job does not stop it starting. It only
+  # stops what this job protects. Re-run a flake with `gh run rerun`.
+  # There is no admin skip.
+  # Name LLM_SERVICE_API_KEY. Do not use secrets: inherit here — that is
+  # load-bearing on release-readiness above, and it would hand this key to
+  # every called workflow that inherits.
+  llm-eval:
+    name: LLM eval
+    permissions:
+      contents: read
+    uses: ./.github/workflows/llm-eval.yml
+    with:
+      broker_target: local-docker
+      scenario_filter: ''
+    secrets:
+      LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
+
   build-binaries:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
@@ -433,11 +453,12 @@ jobs:
   # scopes (packages/id-token/attestations) belong to the release path only —
   # putting the build in a shared reusable workflow would force the scan path
   # and the release-readiness gate chain to grant them too. Gated on
-  # release-readiness: a registry push is irreversible and moves `latest`, so it
-  # must wait for the Guardian gate. Admin skip_security_checks can publish over
-  # a block via release-readiness-check.
+  # release-readiness and llm-eval: a registry push is irreversible and moves
+  # `latest`, so it waits for the Guardian gate and for the LLM suite.
+  # Admin skip_security_checks can publish over a Guardian block. It does
+  # not skip llm-eval. A red suite is `gh run rerun`.
   build-docker:
-    needs: [test, release-notes, licenses, release-readiness]
+    needs: [test, release-notes, licenses, release-readiness, llm-eval]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -499,7 +520,7 @@ jobs:
           push-to-registry: true
 
   release:
-    needs: [build-binaries, build-docker, release-readiness, smoke-test]
+    needs: [build-binaries, build-docker, release-readiness, smoke-test, llm-eval]
     runs-on: ubuntu-latest
     # Creates the GitHub Release and uploads the archives and checksums to it.
     permissions:
