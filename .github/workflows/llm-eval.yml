@@ -47,12 +47,16 @@ on:
 
 # Do not cancel an in-progress run. Cancelling spends the API credits and
 # leaves broker containers on a runner that is about to be reclaimed.
-# github.workflow is the caller's name, so a tag run (Release) and a manual
-# dispatch (LLM E2E Eval) do not share a group and do not cancel each other.
-# Hosted runners do not share a Docker daemon. The release call is
-# local-docker, so it does not share a lab broker with a manual lab run.
+# On a called workflow github.workflow is the caller name (Release on a tag)
+# and github.sha is that tag's commit. GitHub keeps one running and one
+# pending run per group, so a group of only github.workflow would queue every
+# release together and a third tag would cancel the waiting one. Adding the
+# SHA puts each tag in its own group; two runs of the same commit still
+# share one. Hosted runners do not share a Docker daemon, and the release
+# call is local-docker, so it does not share a lab broker with a manual lab
+# run.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
