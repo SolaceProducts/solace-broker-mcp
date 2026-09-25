@@ -1285,7 +1285,7 @@ same digest:
    hash differently despite being the same operation. Removing it before hashing means the
    digest cannot be salted by the caller's casing; the record's own `broker` field (always the
    *configured* casing) is the place to look for which broker a call targeted.
-2. **A value on the [Never-Log list](internal/secure-logging-rules.md) is replaced with the
+2. **A value on the [Never-Log list](secure-logging-rules.md) is replaced with the
    fixed placeholder `[REDACTED]`, recursively.** A key matches by the same case-insensitive
    substring test as the `ReplaceAttr` net on log output — `password`, `token`, `secret`,
    `authorization`, `credential`, `api_key`, `private_key` — because at least one composite
@@ -2229,7 +2229,7 @@ a correlation ID by design: the circuit-breaker state-change WARN (a transition 
 on a window of failures, not on any one request — filter on its `breaker` attribute instead),
 the startup configuration WARN, and the `registered OAuth protected resource metadata endpoint`
 INFO; both startup lines run before any request exists. Operators troubleshooting OAuth discovery
-should read that INFO in [authentication.md](authentication.md#browser-login-window-does-not-appear).
+should read that INFO in [authentication.md](../authentication.md#browser-login-window-does-not-appear).
 
 ---
 
@@ -2420,11 +2420,11 @@ holding its session. **Do not scale beyond one replica without it.** Two constra
 - **Service-level affinity does not survive an ingress, gateway, or mesh.** kube-proxy applies
   it on the ClusterIP path only. An Ingress or Gateway controller load-balances straight to pod
   IPs, never transiting the ClusterIP, so the field is ignored and the 404 returns in full —
-  and that is the topology [Authentication](authentication.md) recommends for OAuth ("keep the
+  and that is the topology [Authentication](../authentication.md) recommends for OAuth ("keep the
   Service `ClusterIP` and put the TLS-terminating ingress in front of it"). A service mesh
   sidecar bypasses it as well. Behind any of these, configuring stickiness at *that* layer is
   a required deployment step, and the hash key is not the obvious one — the session ID is
-  wrong. [Authentication](authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+  wrong. [Authentication](../authentication.md#session-routing-at-the-ingress-required-above-one-replica)
   § "Session Routing at the Ingress" is authoritative; `deploy/kubernetes/ingress.yaml.example`
   is the manifest.
 - Where affinity *is* in effect it is keyed on source IP, so every client behind one NAT or
@@ -2504,7 +2504,7 @@ with `docker run --memory=512m`, or a Compose service with `mem_limit`, gets the
 cgroup limit this manifest sets, and the runtime does not read that one either — so cap the
 memory and you owe the process a `GOMEMLIMIT` at 75% of it, exactly as here. Nothing in the
 image supplies one: the Dockerfile deliberately sets no default, since it cannot know what
-you will cap it at. The `docker run` example in the [README](../README.md) sets no memory
+you will cap it at. The `docker run` example in the [README](../../README.md) sets no memory
 limit at all, and so needs no `GOMEMLIMIT` — but the two go together the moment you add one.
 
 **On bare metal or a VM, leave it unset.** There is no cgroup and no per-process cap to
@@ -2853,7 +2853,7 @@ established in its own layer. The `broker connection created` line logged at fir
 carries both, which is what maps one to the other. That same line also reports the broker's
 effective `proxy`, which is the only place the server says whether an `HTTP_PROXY`/`HTTPS_PROXY`
 in the environment routes a given broker — see
-[Configuration § Outbound HTTP Proxy](configuration.md#outbound-http-proxy). The metric form will carry `broker`
+[Configuration § Outbound HTTP Proxy](../configuration.md#outbound-http-proxy). The metric form will carry `broker`
 (alias) and `server_address` on the same series and remove the need — see
 [Decided Since the First Draft](#decided-since-the-first-draft).
 

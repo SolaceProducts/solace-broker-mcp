@@ -323,7 +323,7 @@ func TestObservabilityDoc_DocumentsExtraCodeBackedScenarios(t *testing.T) {
 	}
 }
 
-var slogCallRE = regexp.MustCompile(`slog\.(Warn|Error)\(\s*"([^"]+)"`)
+var slogCallRE = regexp.MustCompile(`slog\.(Warn|Error)(?:Context)?\(\s*(?:[^,\s"]+,\s*)?"([^"]+)"`)
 
 // internalObservabilityLogMessages are Warn/Error strings in
 // internal/observability that are not operator runbook material (debug
@@ -427,8 +427,8 @@ func TestObservabilityDoc_QuotesMetricsProviderBuildFailed(t *testing.T) {
 func TestObservabilityDoc_DocumentsPanicMetricScope(t *testing.T) {
 	runbook := operatorRunbookSection(t, publicObservabilityDoc(t))
 	for _, needle := range []string{"safego", "tokenexchange", "event=\"panic_recovered\""} {
-		if !strings.Contains(runbook, needle) && !strings.Contains(publicObservabilityDoc(t), needle) {
-			t.Errorf("docs/observability.md does not explain panic-metric scope using %q (panics.go: logs without mcp_panic_recovered_total)", needle)
+		if !strings.Contains(runbook, needle) {
+			t.Errorf("Operator Runbook does not explain panic-metric scope using %q (panics.go: logs without mcp_panic_recovered_total)", needle)
 		}
 	}
 }

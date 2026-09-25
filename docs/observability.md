@@ -1056,7 +1056,10 @@ failure; shipper not collecting this container; gap between stderr and the index
 **First response.** Confirm the flag and `log_level: info` or lower. With metrics on, a
 rising drop counter means the server produced records and lost them; flat zero means
 look downstream. `kubectl logs` splits the problem: present in stderr is the shipper;
-absent is the server. Search `audit_event_type=audit_drop`.
+absent is the server. Search `audit_event_type=audit_drop`. A constructor that refuses
+an auth record logs
+`audit: auth record rejected by the schema constructor; recording a drop` and writes
+`audit_drop`.
 
 A counter that rises with no `audit_drop` in stderr means stderr itself refused the
 ERROR notice — platform, not SIEM. A blocked pipe is backpressure, not a drop: see
