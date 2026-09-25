@@ -108,7 +108,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 - [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, rate-limit/retry settings, and outbound HTTP proxy support
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
-- [Observability Schema](docs/observability.md) — the versioned metric, audit, and trace schema: names, labels, audit fields, and the compatibility commitment your dashboards and SIEM rules pin to
+- [Observability](docs/observability.md) — enable metrics, audit records, traces, correlation IDs, and saturation logs; includes the live metric and audit schema
 - [Agent Mesh Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
 
 ## Prerequisites
