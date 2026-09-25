@@ -94,6 +94,16 @@ mcp_client_auth:
   # audience: "mcp-server"
   # resource_url: "https://mcp.example.com/mcp"
   #
+  # scopes_supported — RFC 9728 PRM list MCP clients request at the IdP.
+  # Omit, null, or [] → advertised ["openid"] (Keycloak). The process
+  # still starts. Entra: keep both openid and this API's Application ID
+  # URI scope. openid alone + Claude resource=MCP URL is AADSTS9010010.
+  # Blank or whitespace-in-entry is a load error. Not brokers.*.auth.target.
+  #
+  # scopes_supported:
+  #   - "openid"
+  #   - "https://mcp.example.com/mcp/access_as_user"
+  #
   # Switching to oauth also requires, above: tls_terminated_upstream: true (or
   # tls_cert_file/tls_key_file), since oauth refuses a plaintext listener.
 
@@ -185,7 +195,7 @@ semp:
 # default, so the block can be omitted; docs/configuration.md § "Observability
 # Settings" lists them all.
 # observability:
-#   metrics_bind_address: ":9091"   # /metrics listener when OBS_METRICS_ENABLED is set.
+#   metrics_bind_address: ":9091"   # /metrics listener when OBS_METRICS_SCRAPE_ENABLED is set.
 #                                   # Must not share `port`. The Kubernetes NetworkPolicy,
 #                                   # Service, and Deployment spell this port too.
 #   shutdown_drain_delay_s: 10      # raise terminationGracePeriodSeconds with it

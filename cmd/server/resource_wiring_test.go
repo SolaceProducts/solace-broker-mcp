@@ -38,7 +38,7 @@ import (
 // confirming both report back that exact same value (by identity, and by
 // attribute content as a second check).
 func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.T) {
-	res, err := resource.New(config.ObservabilityConfig{
+	res, _, err := resource.New(config.ObservabilityConfig{
 		ServiceName:           "test-service",
 		DeploymentEnvironment: "test-env",
 		CloudRegion:           "test-region",
@@ -47,7 +47,7 @@ func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.
 		t.Fatalf("resource.New() error = %v", err)
 	}
 
-	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.
 	// TracingEnabled: true means the OTLP gRPC exporter can attempt a flush
 	// against the default endpoint on shutdown — bounded so that has a
 	// ceiling rather than an unbounded wait (flagged by review).
-	tp, err := tracing.New(config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true}, mp.MeterProvider(), res)
+	tp, err := tracing.New(config.ObservabilityConfig{TracingEnabled: true}, mp.MeterProvider(), res)
 	if err != nil {
 		t.Fatalf("tracing.New() error = %v", err)
 	}

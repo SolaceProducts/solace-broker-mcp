@@ -171,7 +171,12 @@ func buildMux(readiness *health.ReadinessState) *http.ServeMux {
 
 // registerMetadataRoutes installs the configured RFC 9728 PRM paths.
 func registerMetadataRoutes(mux *http.ServeMux, cfg *config.ServerConfig) {
-	prm := auth.NewAdvertisedPRM(auth.AdvertisedPRMInput{Mode: cfg.MCPClientAuth.Mode, ResourceURL: cfg.MCPClientAuth.ResourceURL, Issuer: cfg.MCPClientAuth.Issuer})
+	prm := auth.NewAdvertisedPRM(auth.AdvertisedPRMInput{
+		Mode:            cfg.MCPClientAuth.Mode,
+		ResourceURL:     cfg.MCPClientAuth.ResourceURL,
+		Issuer:          cfg.MCPClientAuth.Issuer,
+		ScopesSupported: cfg.MCPClientAuth.ScopesSupported,
+	})
 	paths := prm.Paths()
 	for _, path := range paths {
 		mux.Handle(path, prm.Handler())
@@ -575,6 +580,27 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 	return errCh
 }
 
+// wireMetricsEndpoint decides what the metrics egress leaves on /readyz. A
+// provider build failure is registered as the "metrics_provider" probe — named
+// for what failed, since in OTLP-only mode no endpoint was ever going to bind;
+// "metrics_endpoint" (serveMetricsEndpoint) stays the name for a listener that
+// could not bind — so it shows on the first check whichever egress was asked
+// for. A built provider gets its scrape listener only when
+// OBS_METRICS_SCRAPE_ENABLED is on. An
+// OTLP-only deployment (SOL-154607) binds nothing — the OTLP reader inside
+// the provider pushes on its own goroutine — so it leaves readiness untouched
+// here and metrics_bind_address is never opened. Split out of main() so a
+// wiring test can pin that without starting the rest of startup.
+func wireMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, provider *metrics.Provider, buildErr error) {
+	if buildErr != nil {
+		readiness.RegisterListener("metrics_provider", func() error { return buildErr })
+		return
+	}
+	if provider != nil && cfg.Observability.MetricsScrapeEnabled {
+		serveMetricsEndpoint(cfg, readiness, provider)
+	}
+}
+
 // startMetricsEndpoint serves Prometheus /metrics on its own listener and
 // registers a "metrics_endpoint" readiness probe. Returns the provider for
 // instrument registration, or nil if the provider failed to build or the
@@ -808,8 +834,8 @@ func warnIfOTLPEndpointUnset(cfg config.ObservabilityConfig) {
 // route wiring — the way resource_wiring_test.go's own doc comment names as
 // exactly the thing it could not do before this seam existed.
 //
-// A nil provider is silently skipped: metricsProvider is nil with
-// OBS_METRICS_ENABLED off (or on build failure), and tracerProvider is nil
+// A nil provider is silently skipped: metricsProvider is nil with both
+// metrics egress flags off (or on build failure), and tracerProvider is nil
 // with OBS_TRACING_ENABLED off. Registration order (metrics, then tracer)
 // matches the order the two providers are built in main(), which is what
 // TestRegisterShutdownHooks_BothProvidersRegistered pins.
@@ -1089,7 +1115,18 @@ func main() {
 	// sdkresource.Default() alone is a safe (merely less identifying)
 	// fallback, and refusing to serve MCP traffic over an identity-attribute
 	// problem would be a bad trade.
-	res, err := resource.New(cfg.Observability, version.Version())
+	//
+	// The fallback is unreachable as written: New's only error is Merge's
+	// ErrSchemaURLConflict, and it builds both sides from the same
+	// base.SchemaURL(), so they cannot differ. It is kept because that is a
+	// property of New's internals rather than of its contract. Note what it
+	// would cost if a future change made it reachable: sdkresource.Default()
+	// is the UNSTRIPPED base, so an empty OTEL_RESOURCE_ATTRIBUTES entry
+	// would put cloud.region="" back on target_info (SlogAttrs guards the
+	// log-line half independently, for any resource). Give it the stripped
+	// base instead of widening it (SOL-154727).
+	res, identity, err := resource.New(cfg.Observability, version.Version())
+	identityResolved := err == nil
 	if err != nil {
 		slog.Error("observability identity resource unavailable; falling back to SDK defaults",
 			slog.String("error", err.Error()))
@@ -1110,6 +1147,30 @@ func main() {
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
 	logStartupBanners(cfg)
+
+	// The resolved identity, and which input won each attribute. Nothing
+	// else announces this, and each resolves through a chain up to five
+	// sources deep (SOL-154727). It matters most for service.instance.id:
+	// since SOL-154608 an OTEL_RESOURCE_ATTRIBUTES entry outranks the
+	// downward-API pod name, so a platform injecting one shared value across
+	// a Deployment collapses every replica onto a single instance id — and
+	// service.instance.id is excluded from the per-line identity attributes,
+	// so nothing in the log stream would otherwise show it.
+	//
+	// Placed here for the same reason logStartupBanners is, and it is load
+	// bearing for the same reason: emitted after the reconfigure below, this
+	// line would vanish at log_level: warn or error, which is precisely when
+	// an operator has least other signal. A diagnostic for a silent
+	// misconfiguration cannot itself be silenceable.
+	//
+	// Skipped when New failed: res is then a bare sdkresource.Default() and
+	// the zero Identity would report four empty values under no source at
+	// all, which is worse than the error already logged above. See
+	// resource.Identity.LogAttrs for the key naming.
+	if identityResolved {
+		slog.LogAttrs(context.Background(), slog.LevelInfo,
+			"observability identity resolved", identity.LogAttrs()...)
+	}
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error. Same
@@ -1138,7 +1199,8 @@ func main() {
 	// audit and tracing remain flags with no emission behind them.
 	slog.Info("observability config loaded",
 		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
-		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
+		slog.Bool("metrics_scrape", cfg.Observability.MetricsScrapeEnabled),
+		slog.Bool("metrics_otlp", cfg.Observability.MetricsOTLPEnabled),
 		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
 		slog.Bool("tracing", cfg.Observability.TracingEnabled),
 		slog.Bool("saturation_events", cfg.Observability.SaturationEventsEnabled),
@@ -1479,15 +1541,12 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Metrics endpoint: start the listener for the provider built above,
-	// registered before SetInitialized so a bind or build failure shows on the
-	// first /readyz check. The provider's flush is a shutdown hook, registered
-	// below alongside the tracer provider's (registerShutdownHooks).
-	if metricsProvider != nil {
-		serveMetricsEndpoint(cfg, readiness, metricsProvider)
-	} else if metricsBuildErr != nil {
-		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
-	}
+	// Metrics endpoint: start the scrape listener for the provider built above
+	// (when the scrape egress is on), registered before SetInitialized so a
+	// bind or build failure shows on the first /readyz check. The provider's
+	// flush is a shutdown hook, registered below alongside the tracer
+	// provider's (registerShutdownHooks).
+	wireMetricsEndpoint(cfg, readiness, metricsProvider, metricsBuildErr)
 
 	// Tracing (SOL-152420): does nothing when disabled, or installs the real
 	// OTLP-exporting provider when enabled — tracing.New handles both

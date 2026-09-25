@@ -21,17 +21,19 @@ package metrics
 
 import "github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
-// Enabled reports whether metrics emission is turned on, reading the
-// OBS_METRICS_ENABLED flag off the observability config. Later wiring consults
-// this before registering metric instruments.
+// Enabled reports whether a metrics meter provider is built at all: true when
+// either egress flag — OBS_METRICS_SCRAPE_ENABLED or OBS_METRICS_OTLP_ENABLED —
+// is on (SOL-154607). cmd/server consults this before building the provider
+// and registering instruments; which egresses the provider then serves is the
+// provider's own concern (see New).
 func Enabled(cfg config.ObservabilityConfig) bool {
-	return cfg.MetricsEnabled
+	return cfg.MetricsProviderEnabled()
 }
 
 // AuthFailureCounterEnabled reports whether the auth-failure counter is turned
-// on. It follows OBS_METRICS_ENABLED unless OBS_AUTH_FAILURE_COUNTER_ENABLED is
-// explicitly set; that resolution happens at config load, so this accessor just
-// reads the resolved flag.
+// on. It follows Enabled (either metrics egress) unless
+// OBS_AUTH_FAILURE_COUNTER_ENABLED is explicitly set; that resolution happens
+// at config load, so this accessor just reads the resolved flag.
 func AuthFailureCounterEnabled(cfg config.ObservabilityConfig) bool {
 	return cfg.AuthFailureCounterEnabled
 }

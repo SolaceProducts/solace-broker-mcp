@@ -233,7 +233,22 @@ mcp_client_auth:
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-See the following Keycloak configuration for an example.
+That YAML is a valid load: `scopes_supported` is omitted, so RFC 9728 Protected Resource Metadata advertises `["openid"]`. That default is the Keycloak path. It is also what hides this field: the process starts, PRM is served, and an Entra app that needs this API’s delegated scope still sees only `openid`.
+
+Omit `scopes_supported` for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid` and add the Application ID URI scope registered on this MCP app:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+  audience: "11111111-1111-1111-1111-111111111111"
+  resource_url: "https://mcp.example.com/mcp"
+  scopes_supported:
+    - "openid"
+    - "https://mcp.example.com/mcp/access_as_user"
+```
+
+`openid` alone with RFC 8707 `resource` equal to the MCP URL may be refused by Entra (`AADSTS9010010`). Do not drop `openid` to avoid that; advertise both. This list is Hop 1 discovery. The server does not gate inbound tokens on it. It is not `brokers.*.auth.target` (Hop 2).
 
 The `audience` value must exactly match the value configured in step 1.2. Set `resource_url` to the externally reachable URL of the MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
@@ -242,6 +257,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 | `issuer` | The OIDC issuer URL of the IdP. The server fetches JWKS keys from here for token validation. |
 | `audience` | Must exactly match the audience value configured in the IdP in step 1.2. |
 | `resource_url` | The public URL of the MCP server endpoint, advertised to MCP clients for OAuth discovery. |
+| `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. Full field table: [Configuration](configuration.md#client-authentication-settings). |
 
 > **Keycloak:** The issuer URL follows the pattern `https://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8443 with TLS and a realm named `solace`:
 > ```yaml
@@ -750,6 +766,10 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 - The MCP server connects to the issuer's `/.well-known/openid-configuration` at startup to fetch JWKS keys
 - If egress to a cloud IdP requires an HTTP proxy, set `HTTPS_PROXY` — see [Outbound HTTP proxy](configuration.md#outbound-http-proxy). The same variable also governs broker SEMP traffic, so use `NO_PROXY` to keep internal brokers direct
 
+### Entra `AADSTS9010010` after Claude fetches PRM
+
+The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set both `openid` and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+
 ### "403 Forbidden" with a Valid Token
 
 - Verify the audience mapper is configured in the IdP so the `aud` claim matches the `audience` configuration value
@@ -760,15 +780,21 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 - Grep this process's logs for `registered OAuth protected resource metadata endpoint` (oauth startup only). That INFO is the snapshot of what this process advertised:
   - `resource` — PRM JSON `resource` (`mcp_client_auth.resource_url`)
   - `issuers` — PRM JSON `authorization_servers` (slog key is `issuers` because `authorization` in a log key is redacted)
-  - `scopes_supported` / `bearer_methods_supported` — rest of the JSON (today `openid` / `header`)
+  - `scopes_supported` — YAML `mcp_client_auth.scopes_supported` after defaulting (`["openid"]` when omitted or empty; otherwise the configured list)
+  - `bearer_methods_supported` — always `["header"]`
   - `resource_metadata_url` — exact URL on 401 `WWW-Authenticate` `resource_metadata` (bare well-known; no `/mcp` suffix)
   - `prm_paths` — GET paths on this process that return that JSON
 
-  Example (`mcp_client_auth.resource_url` `https://localhost:9090/mcp`):
+  Example at default log level (`info`) when `scopes_supported` is omitted (`mcp_client_auth.resource_url` `https://localhost:9090/mcp`):
   ```json
   {"time":"2026-09-11T13:43:10.924146-07:00","level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://localhost:9090/mcp","issuers":["https://auth.example.com"],"scopes_supported":["openid"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://localhost:9090/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
   ```
-- If that line is missing, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
+  Same message after the Entra YAML above (grep `scopes_supported`; the array is the proof the list left config):
+  ```json
+  {"level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://mcp.example.com/mcp","issuers":["https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"],"scopes_supported":["openid","https://mcp.example.com/mcp/access_as_user"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
+  ```
+- That line is `INFO`. `log_level: warn` or `error` hides it. You do not need `debug` to see it at the shipped default.
+- If that line is missing at `info`, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
 - Verify the live PRM endpoint returns the same document. Both paths return the same JSON:
   ```bash
   curl https://localhost:9090/.well-known/oauth-protected-resource

@@ -33,12 +33,13 @@ func clearObsEnv(t *testing.T) {
 	t.Helper()
 	vars := []string{
 		envObsCorrelationIDEnabled,
-		envObsMetricsEnabled,
+		envObsMetricsScrapeEnabled,
 		envObsAuditLogEnabled,
 		envObsTracingEnabled,
 		envObsSaturationEventsEnabled,
 		envObsAuthFailureCounterEnabled,
 		envObsMetricsOTLPEnabled,
+		envObsMetricsEnabledRetired,
 	}
 	for _, name := range vars {
 		if prev, ok := os.LookupEnv(name); ok {
@@ -85,7 +86,7 @@ func TestObservability_FlagDefaults(t *testing.T) {
 		want bool
 	}{
 		{"CorrelationIDEnabled", o.CorrelationIDEnabled, true},
-		{"MetricsEnabled", o.MetricsEnabled, false},
+		{"MetricsScrapeEnabled", o.MetricsScrapeEnabled, false},
 		{"AuditLogEnabled", o.AuditLogEnabled, false},
 		{"TracingEnabled", o.TracingEnabled, false},
 		{"SaturationEventsEnabled", o.SaturationEventsEnabled, false},
@@ -105,7 +106,7 @@ func TestObservability_FlagDefaults(t *testing.T) {
 // directions.
 func TestObservability_EnvOverridesBothDirections(t *testing.T) {
 	t.Setenv("OBS_CORRELATION_ID_ENABLED", "false")
-	t.Setenv("OBS_METRICS_ENABLED", "true")
+	t.Setenv("OBS_METRICS_SCRAPE_ENABLED", "true")
 
 	cfg, err := LoadConfig(writeTemp(t, obsYAML))
 	if err != nil {
@@ -115,52 +116,107 @@ func TestObservability_EnvOverridesBothDirections(t *testing.T) {
 	if cfg.Observability.CorrelationIDEnabled {
 		t.Error("OBS_CORRELATION_ID_ENABLED=false should turn correlation OFF")
 	}
-	if !cfg.Observability.MetricsEnabled {
-		t.Error("OBS_METRICS_ENABLED=true should turn metrics ON")
+	if !cfg.Observability.MetricsScrapeEnabled {
+		t.Error("OBS_METRICS_SCRAPE_ENABLED=true should turn metrics ON")
 	}
 }
 
-// TestObservability_MetricsOTLPEnabled_EnvOverride proves OBS_METRICS_OTLP_ENABLED
-// is read independently of OBS_METRICS_ENABLED — unlike the auth-failure
-// counter, it does not follow metrics; it is validated against metrics
-// separately (see TestValidate_MetricsOTLPRequiresMetricsEnabled), not
-// defaulted from it.
-func TestObservability_MetricsOTLPEnabled_EnvOverride(t *testing.T) {
-	t.Setenv("OBS_METRICS_ENABLED", "true")
-	t.Setenv("OBS_METRICS_OTLP_ENABLED", "true")
+// TestObservability_OTLPOnly_LoadsWithoutScrape pins SOL-154607's headline:
+// OBS_METRICS_OTLP_ENABLED no longer requires OBS_METRICS_SCRAPE_ENABLED.
+// Before the split this combination failed config load (the OTLP reader had
+// no provider to attach to, because the one flag also gated the provider);
+// now it is the configuration an OTLP-native shop runs, and it must load with
+// the scrape egress — and so the scrape listener — off.
+func TestObservability_OTLPOnly_LoadsWithoutScrape(t *testing.T) {
+	clearObsEnv(t)
+	t.Setenv(envObsMetricsOTLPEnabled, "true")
 
 	cfg, err := LoadConfig(writeTemp(t, obsYAML))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("OTLP-only must load, got: %v", err)
 	}
 	if !cfg.Observability.MetricsOTLPEnabled {
 		t.Error("OBS_METRICS_OTLP_ENABLED=true should turn the OTLP egress ON")
 	}
+	if cfg.Observability.MetricsScrapeEnabled {
+		t.Error("OBS_METRICS_SCRAPE_ENABLED unset must leave the scrape egress OFF")
+	}
 }
 
-// TestObservability_AuthFailureCounter_FollowsMetricsWhenUnset proves the
-// follow-metrics behavior: with its own var unset, the auth-failure counter
-// tracks OBS_METRICS_ENABLED.
-func TestObservability_AuthFailureCounter_FollowsMetricsWhenUnset(t *testing.T) {
-	t.Run("follows metrics on", func(t *testing.T) {
-		t.Setenv("OBS_METRICS_ENABLED", "true")
+// TestObservability_AuthFailureCounter_FollowsProviderWhenUnset proves the
+// follow behavior across every flag combination: with its own var unset, the
+// auth-failure counter tracks MetricsProviderEnabled — on whenever either
+// egress is on. The OTLP-only row is the one SOL-154607 exists for: under the
+// old single-parent rule it resolved to "counters off" and silently lost both
+// security counters, and a missing counter is indistinguishable from one
+// reading zero.
+func TestObservability_AuthFailureCounter_FollowsProviderWhenUnset(t *testing.T) {
+	boolEnv := map[bool]string{true: "true", false: "false"}
+	tests := []struct {
+		name         string
+		scrape, otlp bool
+		wantProvider bool
+	}{
+		{"neither egress", false, false, false},
+		{"scrape only", true, false, true},
+		{"OTLP only", false, true, true},
+		{"both", true, true, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clearObsEnv(t)
+			t.Setenv(envObsMetricsScrapeEnabled, boolEnv[tc.scrape])
+			t.Setenv(envObsMetricsOTLPEnabled, boolEnv[tc.otlp])
+
+			cfg, err := LoadConfig(writeTemp(t, obsYAML))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := cfg.Observability.MetricsProviderEnabled(); got != tc.wantProvider {
+				t.Errorf("MetricsProviderEnabled() = %v, want %v", got, tc.wantProvider)
+			}
+			if got := cfg.Observability.AuthFailureCounterEnabled; got != tc.wantProvider {
+				t.Errorf("AuthFailureCounterEnabled = %v, want %v (follows the provider when its own var is unset)", got, tc.wantProvider)
+			}
+		})
+	}
+}
+
+// TestObservability_RetiredMetricsFlag_WarnsAndIsIgnored pins SOL-154607's
+// no-alias rename: OBS_METRICS_ENABLED is not read, so setting it turns
+// nothing on — and because a deployment that still sets it would otherwise
+// get metrics silently off, config load says so once, naming the var and its
+// replacement, so the operator has one line to act on. Absent, nothing is
+// logged about it.
+func TestObservability_RetiredMetricsFlag_WarnsAndIsIgnored(t *testing.T) {
+	t.Run("set: ignored and warned", func(t *testing.T) {
+		clearObsEnv(t)
+		t.Setenv(envObsMetricsEnabledRetired, "true")
+		buf := captureSlog(t)
+
 		cfg, err := LoadConfig(writeTemp(t, obsYAML))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !cfg.Observability.AuthFailureCounterEnabled {
-			t.Error("auth-failure counter should follow metrics ON when its own var is unset")
+		if cfg.Observability.MetricsScrapeEnabled || cfg.Observability.MetricsOTLPEnabled {
+			t.Error("the retired OBS_METRICS_ENABLED must not turn any egress on (no alias)")
+		}
+		logged := buf.String()
+		if !strings.Contains(logged, envObsMetricsEnabledRetired) || !strings.Contains(logged, envObsMetricsScrapeEnabled) {
+			t.Errorf("expected a warning naming %s and its replacement %s; log was: %s",
+				envObsMetricsEnabledRetired, envObsMetricsScrapeEnabled, logged)
 		}
 	})
 
-	t.Run("follows metrics off", func(t *testing.T) {
-		t.Setenv("OBS_METRICS_ENABLED", "false")
-		cfg, err := LoadConfig(writeTemp(t, obsYAML))
-		if err != nil {
+	t.Run("unset: silent", func(t *testing.T) {
+		clearObsEnv(t)
+		buf := captureSlog(t)
+
+		if _, err := LoadConfig(writeTemp(t, obsYAML)); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.Observability.AuthFailureCounterEnabled {
-			t.Error("auth-failure counter should follow metrics OFF when its own var is unset")
+		if strings.Contains(buf.String(), envObsMetricsEnabledRetired) {
+			t.Errorf("no warning expected when the retired var is unset; log was: %s", buf.String())
 		}
 	})
 }
@@ -172,7 +228,7 @@ func TestObservability_AuthFailureCounter_FollowsMetricsWhenUnset(t *testing.T) 
 // than a plain default).
 func TestObservability_AuthFailureCounter_ExplicitOverridesMetrics(t *testing.T) {
 	t.Run("explicit on while metrics off", func(t *testing.T) {
-		t.Setenv("OBS_METRICS_ENABLED", "false")
+		t.Setenv("OBS_METRICS_SCRAPE_ENABLED", "false")
 		t.Setenv("OBS_AUTH_FAILURE_COUNTER_ENABLED", "true")
 		cfg, err := LoadConfig(writeTemp(t, obsYAML))
 		if err != nil {
@@ -184,7 +240,7 @@ func TestObservability_AuthFailureCounter_ExplicitOverridesMetrics(t *testing.T)
 	})
 
 	t.Run("explicit off while metrics on", func(t *testing.T) {
-		t.Setenv("OBS_METRICS_ENABLED", "true")
+		t.Setenv("OBS_METRICS_SCRAPE_ENABLED", "true")
 		t.Setenv("OBS_AUTH_FAILURE_COUNTER_ENABLED", "false")
 		cfg, err := LoadConfig(writeTemp(t, obsYAML))
 		if err != nil {
@@ -204,7 +260,7 @@ func TestObservability_AuthFailureCounter_ExplicitOverridesMetrics(t *testing.T)
 func TestObservability_BadBoolFallsBackToDefaultAndWarns(t *testing.T) {
 	clearObsEnv(t)
 	t.Setenv(envObsCorrelationIDEnabled, "yebbut") // default true
-	t.Setenv(envObsMetricsEnabled, "maybe")        // default false
+	t.Setenv(envObsMetricsScrapeEnabled, "maybe")  // default false
 
 	buf := captureSlog(t)
 
@@ -216,16 +272,16 @@ func TestObservability_BadBoolFallsBackToDefaultAndWarns(t *testing.T) {
 	if !cfg.Observability.CorrelationIDEnabled {
 		t.Error("unparseable OBS_CORRELATION_ID_ENABLED should fall back to default true")
 	}
-	if cfg.Observability.MetricsEnabled {
-		t.Error("unparseable OBS_METRICS_ENABLED should fall back to default false")
+	if cfg.Observability.MetricsScrapeEnabled {
+		t.Error("unparseable OBS_METRICS_SCRAPE_ENABLED should fall back to default false")
 	}
 
 	logged := buf.String()
 	if !strings.Contains(logged, envObsCorrelationIDEnabled) {
 		t.Errorf("expected a warning naming %s; log was: %s", envObsCorrelationIDEnabled, logged)
 	}
-	if !strings.Contains(logged, envObsMetricsEnabled) {
-		t.Errorf("expected a warning naming %s; log was: %s", envObsMetricsEnabled, logged)
+	if !strings.Contains(logged, envObsMetricsScrapeEnabled) {
+		t.Errorf("expected a warning naming %s; log was: %s", envObsMetricsScrapeEnabled, logged)
 	}
 }
 
@@ -255,8 +311,15 @@ func TestObservability_NumericDefaults(t *testing.T) {
 	if o.MetricsBindAddress != defaults.DefaultMetricsBindAddress {
 		t.Errorf("MetricsBindAddress = %q, want %q", o.MetricsBindAddress, defaults.DefaultMetricsBindAddress)
 	}
-	if o.ServiceName != defaults.DefaultServiceName {
-		t.Errorf("ServiceName = %q, want %q", o.ServiceName, defaults.DefaultServiceName)
+	// All four identity fields stay empty at this layer (SOL-154608): a value
+	// defaulted here is indistinguishable from one the operator wrote, leaving
+	// OTEL_SERVICE_NAME no gap to fall into. The "solace-broker-mcp" default
+	// still exists, at the end of internal/observability/resource's chain.
+	if o.ServiceName != "" {
+		t.Errorf("ServiceName = %q, want empty (resolved in internal/observability/resource, not defaulted here)", o.ServiceName)
+	}
+	if o.ServiceInstanceID != "" {
+		t.Errorf("ServiceInstanceID = %q, want empty (omitted, not defaulted)", o.ServiceInstanceID)
 	}
 	if o.DeploymentEnvironment != "" {
 		t.Errorf("DeploymentEnvironment = %q, want empty (omitted, not defaulted)", o.DeploymentEnvironment)
@@ -355,5 +418,27 @@ observability:
 	}
 	if o.ShutdownDrainDelayS != defaults.DefaultShutdownDrainDelayS {
 		t.Errorf("ShutdownDrainDelayS = %d, want default %d (negative re-defaulted)", o.ShutdownDrainDelayS, defaults.DefaultShutdownDrainDelayS)
+	}
+}
+
+// TestObservability_ServiceInstanceIDFromPodNameSubstitution pins the exact
+// migration docs/observability.md and the SOL-154608 CHANGELOG hand to
+// operators. TestObservability_NumericFromYAML already covers ${VAR}
+// generally; this pins the documented incantation, so it fails a build rather
+// than someone's cluster.
+func TestObservability_ServiceInstanceIDFromPodNameSubstitution(t *testing.T) {
+	clearObsEnv(t)
+	t.Setenv("POD_NAME", "solace-broker-mcp-7d8f9-abcde")
+
+	cfg, err := LoadConfig(writeTemp(t, obsYAML+`
+observability:
+  service_instance_id: "${POD_NAME}"
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Observability.ServiceInstanceID; got != "solace-broker-mcp-7d8f9-abcde" {
+		t.Errorf("ServiceInstanceID = %q, want the substituted POD_NAME; the documented "+
+			"`service_instance_id: \"${POD_NAME}\"` migration no longer works", got)
 	}
 }

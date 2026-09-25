@@ -20,14 +20,25 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
-// TestEnabled pins that Enabled reflects the MetricsEnabled flag rather than a
-// hardcoded constant — both directions.
+// TestEnabled pins that Enabled is the OR of the two egress flags
+// (SOL-154607): true for every provider-bearing configuration and false only
+// when neither egress is on — a reflection of both flags, not of one.
 func TestEnabled(t *testing.T) {
 	t.Parallel()
-	for _, want := range []bool{true, false} {
-		cfg := config.ObservabilityConfig{MetricsEnabled: want}
-		if got := Enabled(cfg); got != want {
-			t.Errorf("Enabled() = %v, want %v", got, want)
+	tests := []struct {
+		name         string
+		scrape, otlp bool
+		want         bool
+	}{
+		{"neither", false, false, false},
+		{"scrape only", true, false, true},
+		{"OTLP only", false, true, true},
+		{"both", true, true, true},
+	}
+	for _, tc := range tests {
+		cfg := config.ObservabilityConfig{MetricsScrapeEnabled: tc.scrape, MetricsOTLPEnabled: tc.otlp}
+		if got := Enabled(cfg); got != tc.want {
+			t.Errorf("%s: Enabled() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

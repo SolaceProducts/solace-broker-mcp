@@ -268,6 +268,11 @@ Tool errors include structured fields to help diagnose the problem:
 | `kind` | SEMPv1 error classification: `http`, `execute-fail`, `parse`, `permission`, `limit`, or `unknown`. | SEMPv1 |
 | `reasonCode` | SEMPv1 reason code from the event broker response. | SEMPv1 `execute-fail` responses |
 | `attempts` | Number of attempts made before retries were exhausted. | Retries exhausted |
+| `error_source` | Origin tag for an error not carrying a SEMP status/code of its own: `load_shed`, `token_exchange`, or `owner_validation` (the requested `owner` doesn't exist). Not set when the owner-existence check itself could not complete — see `error_stage` below, which can coexist with `load_shed`/`token_exchange` since that failure may itself be a shed request or a token-exchange error. | When applicable |
+| `error_stage` | Set to `owner_validation_check` when the pre-flight owner-existence check itself failed to complete (a transient error, distinct from the check completing and reporting the owner absent). Coexists with, and never overwrites, `error_source`. | `error_stage: owner_validation_check` |
+| `owner` | The client username involved in an owner-existence check. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
+| `msgVpnName` | The Message VPN the owner check ran against. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
+| `objectKind` | The object type being created/updated (`queue` or `topic endpoint`) when an `owner` check failed or could not complete. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:

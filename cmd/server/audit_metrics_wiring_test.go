@@ -34,7 +34,8 @@ var _ audit.DropRecorder = (*metrics.AuditMetrics)(nil)
 
 // buildAuditMetrics returns a recorder iff a provider exists (SOL-154569).
 // There is no second flag to pin here, unlike buildSecurityMetrics: the
-// provider's own existence IS the OBS_METRICS_ENABLED gate.
+// provider's own existence IS the metrics-egress gate (either
+// OBS_METRICS_SCRAPE_ENABLED or OBS_METRICS_OTLP_ENABLED).
 
 func TestBuildAuditMetrics_NoProvider_Nil(t *testing.T) {
 	if am := buildAuditMetrics(nil); am != nil {

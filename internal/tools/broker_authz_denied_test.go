@@ -228,7 +228,7 @@ func TestBrokerAuthzDenial_AuditLogOff_EmitsNoRecord(t *testing.T) {
 // CallTool, pinning the pairing in the direction the integration test does
 // not cover.
 func TestBrokerAuthzDenial_RecordsMetricErrorType(t *testing.T) {
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -253,7 +253,7 @@ func TestExemplars_OnlyASampledSpanProducesOne(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -365,7 +365,7 @@ func sdkTracer(t *testing.T, sampler sdktrace.Sampler) trace.Tracer {
 // the schema-freeze gate has stopped being a gate; fix the representation
 // split rather than regenerating the fixture.
 func TestExemplars_AbsentFromPlainTextScrape(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestExemplars_ExemplarFilterEnvVarOverridesTheDefault(t *testing.T) {
 			t.Setenv("OTEL_METRICS_EXEMPLAR_FILTER", tc.filter)
 
 			// After the Setenv, so the meter provider reads it.
-			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+			p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}

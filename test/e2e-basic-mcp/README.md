@@ -111,7 +111,7 @@ The extras are local to this suite — other suites' server configs stay minimal
   a full stderr pipe blocks the writer rather than failing the write, so nothing
   drops, and a closed stderr would swallow the `audit_drop` record too. Instead
   the scenario starts its own server at `log_level: error` with
-  `OBS_AUDIT_LOG_ENABLED` and `OBS_METRICS_ENABLED` on, a configuration the
+  `OBS_AUDIT_LOG_ENABLED` and `OBS_METRICS_SCRAPE_ENABLED` on, a configuration the
   server accepts and the runbook tells operators to fix, under which every
   INFO-level audit record is filtered out through the same drop path a refusing
   handler takes, and asserts: the counter is on `/metrics` at exactly `0` before

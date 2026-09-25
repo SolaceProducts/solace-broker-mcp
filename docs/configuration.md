@@ -161,7 +161,7 @@ Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sust
 | `open_state_duration` | `30s` | How long the breaker stays open (rejecting exchanges immediately) before probing recovery. |
 | `half_open_probe_requests` | `2` | Consecutive successful probes required to close the breaker again. |
 
-When Hop-2 is active, each state change still logs a `WARN` (`token exchange circuit breaker state change`). That log is the complete transition record; it is not an alert. With `OBS_METRICS_ENABLED` on (off by default), the same process also exposes `mcp_token_exchange_circuit_breaker_state` on `/metrics`. Alert on `{state="open"} == 1` per scrape target. Metrics off, or `circuit_breaker.enabled: false`, means the family is absent, not closed. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
+When Hop-2 is active, each state change still logs a `WARN` (`token exchange circuit breaker state change`). That log is the complete transition record; it is not an alert. With `OBS_METRICS_SCRAPE_ENABLED` on (off by default), the same process also exposes `mcp_token_exchange_circuit_breaker_state` on `/metrics`, and over OTLP under `OBS_METRICS_OTLP_ENABLED`. Alert on `{state="open"} == 1` per scrape target. With neither metrics egress on, or with `circuit_breaker.enabled: false`, the family is absent everywhere, not closed; with only `OBS_METRICS_OTLP_ENABLED` on it is absent from `/metrics` but still pushed. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
 
 ### Retry-After Gate
 
@@ -182,7 +182,10 @@ Configured under the `mcp_client_auth` key. The `mode` field is required and sel
 | `mcp_client_auth.issuer` | IdP issuer URL. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.audience` | Expected `aud` claim value. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `mcp_client_auth.mode` is `oauth`. |
+| `mcp_client_auth.scopes_supported` | Ordered list of OAuth scopes advertised in RFC 9728 Protected Resource Metadata. Clients that fetch PRM may include this list in the authorization request. This server does not authorize inbound tokens against it. **Default when omitted, `null`, or `[]`:** `["openid"]` (Keycloak). The process still starts; Entra deployments that need this API’s delegated scope will advertise only `openid` until the field is set. **Entra:** keep `openid` and add the fully-qualified Application ID URI scope (for example `"https://mcp.example.com/mcp/access_as_user"`). `openid` alone with RFC 8707 `resource` = MCP URL may be refused by Entra (`AADSTS9010010`). Do not drop `openid` to dodge that. **Load errors:** empty string or any entry containing whitespace (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Order and duplicate entries are preserved. Not `brokers.*.auth.target`. Scopes are public PRM JSON, not secrets. Setup: [Authentication](authentication.md#step-2-configure-the-mcp-server). |
 | `mcp_client_auth.tool_authorization` | Claim-based tool authorization block. Required under `mcp_client_auth.mode: oauth` — the `enabled` field must be set explicitly to `true` or `false`; omitting the block, or omitting `enabled` from it, is a startup error. Not legal under `static` or `disabled`. See [Tool authorization](#tool-authorization). |
+
+**Audit-log identity.** Under `mode: oauth`, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti`. Under `mode: disabled`, those fields are absent — the line carries no identity at all. Under `mode: static`, every invocation is attributed to the same hardcoded subject, `dev-user`, regardless of which caller sent it. **`disabled` and `static` modes are not real audit trails:** use `mode: oauth` for any deployment whose logs need to answer "who ran what tool against which event broker?"
 
 ## Tool Authorization
 
@@ -473,17 +476,24 @@ default, so the block may be omitted entirely, and every value supports `${VAR}`
 
 | YAML field | Env var | Default | Description |
 |---|---|---|---|
-| `observability.metrics_bind_address` | — | `:9091` | Address the Prometheus `/metrics` listener binds when `OBS_METRICS_ENABLED` is set. Must not share the MCP `port`; config load rejects the collision. The shipped Kubernetes `networkpolicy.yaml`, `service.yaml`, and `deployment.yaml` spell this port and must move with it — see [Observability § Scraping and securing the metrics endpoint](observability.md#scraping-and-securing-the-metrics-endpoint). |
+| `observability.metrics_bind_address` | — | `:9091` | Address the Prometheus `/metrics` listener binds when `OBS_METRICS_SCRAPE_ENABLED` is set; inert under an OTLP-only configuration, which opens no listener. Must not share the MCP `port`; config load rejects the collision whenever the scrape egress is on. The shipped Kubernetes `networkpolicy.yaml`, `service.yaml`, and `deployment.yaml` spell this port and must move with it — see [Observability § Scraping and securing the metrics endpoint](observability.md#scraping-and-securing-the-metrics-endpoint). |
 | `observability.shutdown_drain_delay_s` | — | `10` | Seconds the server waits after flipping `/readyz` to 503 on SIGTERM, before draining in-flight requests, so the orchestrator deregisters the pod first. Raise `terminationGracePeriodSeconds` with it. |
 | `observability.saturation_threshold_ms` | — | `1000` | Queue wait above which a `broker admission slow` warning fires, when `OBS_SATURATION_EVENTS_ENABLED` is set. Sizing guidance under [When a broker is too busy](#when-a-broker-is-too-busy). |
 | `observability.otel_self_stats_interval_s` | — | `60` | Interval of the `otel self stats` log line, emitted when tracing is on but no meter provider exists — see [Observability § otel self stats](observability.md#otel-self-stats--periodic-when-metrics-are-off). |
 | `observability.progress_signal_threshold_ms` | — | `5000` | Reserved. Parsed and defaulted, but no signal consumes it yet. |
-| `observability.service_name` | — | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. |
-| `observability.service_instance_id` | — | pod name, else hostname | OTel `service.instance.id`. Set only when neither the downward-API pod name nor the hostname identifies the instance. |
-| `observability.deployment_environment` | — | none | OTel `deployment.environment.name`. Omitted from telemetry when empty. |
-| `observability.cloud_region` | — | none | OTel `cloud.region`. Omitted from telemetry when empty. |
+| `observability.service_name` | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `solace-broker-mcp` | OTel `service.name` on metrics, traces, and logs. `OTEL_SERVICE_NAME` wins between the two. |
+| `observability.service_instance_id` | `OTEL_RESOURCE_ATTRIBUTES` | pod name, else hostname | OTel `service.instance.id`. Set only when neither the downward-API pod name nor the hostname identifies the instance. |
+| `observability.deployment_environment` | `OTEL_RESOURCE_ATTRIBUTES` | none | OTel `deployment.environment.name`. Omitted from telemetry when empty. |
+| `observability.cloud_region` | `OTEL_RESOURCE_ATTRIBUTES` | none | OTel `cloud.region`. Omitted from telemetry when empty. |
 
-The identity fields are described under
+**The four identity fields are the one place the env var does not simply override the YAML
+field — it is the other way round.** Each resolves as: the YAML field if set, else the
+standard OpenTelemetry variable, else the default in the table. Set the field to pin a value
+regardless of what the platform injects; leave it unset — or set it to `""`, which counts as
+unset — to honour the platform's variable.
+The other `OBS_*` variables in this document are unrelated capability switches. Full rules,
+including the ordering between `OTEL_SERVICE_NAME` and an `OTEL_RESOURCE_ATTRIBUTES`
+`service.name` entry, are under
 [Observability § Resource Attributes](observability.md#resource-attributes--implemented).
 
 ```yaml

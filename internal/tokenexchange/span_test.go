@@ -547,10 +547,10 @@ func TestExchange_Span_PanicRecordsErrorThenRepanics(t *testing.T) {
 // "tokenexchange.Exchange" spans at once — findSpan's "exactly one" scan
 // cannot be used here, hence the singleflight_role attribute itself is the
 // discriminator. Confirms the follower's span carries the winner's own
-// trace/span IDs, so an operator can pivot from a follower's span to the
-// trace that actually did the IdP work — this SDK's Span has no AddLink
-// method to attach a real span Link after the span has already started
-// (see Exchange's doc comment on singleflight_role for why).
+// trace/span IDs (and a post-start Link), so an operator can pivot from a
+// follower's span to the trace that actually did the IdP work. Role on both
+// spans is the same classification as the wait log (ranExchange), not a
+// second span-ID compare.
 func TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes(t *testing.T) {
 	sr := withRecordingTracer(t)
 

@@ -8,7 +8,7 @@
 # Services in its own namespace unless spec.namespaceSelector says otherwise.
 #
 # Four things must hold before a target appears; only the first fails loudly:
-#   1. OBS_METRICS_ENABLED=true on the Deployment (deployment.yaml carries the
+#   1. OBS_METRICS_SCRAPE_ENABLED=true on the Deployment (deployment.yaml carries the
 #      commented env entry), or every scrape is `connection refused`.
 #   2. The `metrics` port on service.yaml (shipped): `endpoints[].port` below
 #      names a Service port, not a container port.

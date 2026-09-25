@@ -823,7 +823,7 @@ func TestRequestPathSpans_BypassDispatchSitesSpan(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sr := recordRequestPathSpans(t)
-			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}

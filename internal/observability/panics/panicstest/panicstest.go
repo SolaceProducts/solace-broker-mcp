@@ -33,31 +33,66 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 )
 
-// InstallReader registers a fresh mcp.panic.recovered counter against a manual
-// reader and returns the reader. The counter is process-level state (see the
-// package doc on internal/observability/panics): every test that asserts
-// counts must call this, because a test reusing another test's reader would
-// see that test's totals. Callers must not run in parallel with another test
-// that also registers, for the same reason.
+// Register installs mcp.panic.recovered against meterProvider for the duration
+// of one test, clearing it via t.Cleanup so the registration cannot outlive the
+// test that made it. Use this instead of calling panics.Register directly from
+// any test outside the panics package (SOL-154365). It matters most when the
+// provider is one the test shuts down: without the cleanup the process-wide
+// counter is left pointing at a dead instrument for the rest of the binary's
+// run. See panics.Unregister for exactly what that does and does not break.
 //
-// The provider is deliberately NOT shut down on cleanup: this package cannot
-// unregister the process-level global, so shutting it down would leave the
-// process pointing at a dead provider for the rest of the run. Leaving it
-// live keeps a later stray increment harmless whatever order the tests
-// execute in (-shuffle included). A ManualReader holds no goroutines or
-// connections, so nothing leaks by not stopping it.
+// The counter is process-level state (see the package doc on
+// internal/observability/panics), so both the registration and the reset are
+// process-wide. Two constraints follow, and neither is enforceable by the type
+// system:
+//
+//   - No parallelism. A test calling this must not run in parallel with another
+//     test that registers or asserts counts. None do today — keep it that way
+//     rather than leaning on go test's serial-before-parallel ordering.
+//
+//   - No nesting, which IS enforced below. If a test registers and then a
+//     subtest registers too, the subtest's cleanup clears the pointer outright
+//     rather than restoring the outer one, so every later record call in the
+//     outer test silently goes nowhere — while its reader still reports both
+//     seeded series at zero, because the instrument is alive in its provider
+//     and only the package pointer was cleared. An outer assertion of the
+//     no-panic-no-count shape then passes vacuously, which is the exact failure
+//     this package's doc says it exists to prevent. Rather than document that
+//     and hope, Register fails loudly, mirroring postprocesstest.Register's
+//     already-registered guard.
+func Register(t *testing.T, meterProvider metric.MeterProvider) {
+	t.Helper()
+	if panics.IsRegistered() {
+		t.Fatal("panicstest: a registration is already in force — nested registration, " +
+			"or an earlier one leaked past its test; see this function's doc")
+	}
+	if err := panics.Register(meterProvider); err != nil {
+		t.Fatalf("panics.Register() error = %v", err)
+	}
+	t.Cleanup(panics.Unregister)
+}
+
+// InstallReader registers a fresh mcp.panic.recovered counter against a manual
+// reader and returns the reader. Every test that asserts counts must call it,
+// because a test reusing another test's reader would see that test's totals.
+// Register's no-parallel constraint applies here too.
+//
+// The provider is not shut down on cleanup, and no longer needs to be: Register
+// clears the registration, so nothing can reach this provider once the test
+// ends. A ManualReader holds no goroutines or connections, so nothing leaks by
+// leaving it alone — and keeping it live is what lets a test assert that a
+// post-cleanup write did NOT land, which is the regression this guards.
 func InstallReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	if err := panics.Register(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))); err != nil {
-		t.Fatalf("panics.Register() error = %v", err)
-	}
+	Register(t, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
 	return reader
 }
 

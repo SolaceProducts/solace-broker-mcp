@@ -27,7 +27,7 @@ import (
 
 func newAuditMetrics(t *testing.T) (*AuditMetrics, *Provider) {
 	t.Helper()
-	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

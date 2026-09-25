@@ -56,7 +56,7 @@ var dropRecorder atomic.Pointer[DropRecorder]
 // SetDropRecorder installs r as the process-wide recorder EmitDrop increments.
 // Call it once at startup, only when metrics are enabled; cmd/server/main.go
 // owns that gate, as it does for panics.Register. Until then — and permanently
-// when OBS_METRICS_ENABLED is false — the audit_drop record is the only drop
+// when no metrics egress flag is on — the audit_drop record is the only drop
 // signal, and EmitDrop's increment is a no-op. nil uninstalls (tests).
 //
 // Process state rather than a parameter, for the reason internal/observability/

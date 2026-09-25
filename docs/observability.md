@@ -85,7 +85,7 @@ capability headings carry the same tag:
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, both OTLP export-health counter pairs — spans and metrics (`mcp_otel_spans_exported_total` / `mcp_otel_spans_dropped_total` and `mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export Health](#otlp-export-health)) — `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), `mcp_auth_failure_total` and `mcp_authz_denied_total` (see [Authentication Failures](#authentication-failures--implemented) and [Authorization Denials](#authorization-denials--implemented)), `mcp_broker_authz_denied_total` (SOL-153332), `mcp_audit_events_dropped_total` (see [Audit Pipeline Health](#audit-pipeline-health--implemented)), `mcp_broker_reachable`, `mcp_broker_unreachable_reason`, and `mcp_broker_last_result_timestamp_seconds` (see [Broker Reachability](#broker-reachability)), `mcp_token_exchange_circuit_breaker_state` (see [Token-Exchange Circuit Breaker State](#token-exchange-circuit-breaker-state--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. **This list is a summary, not the source of truth: the CI-checked list is the blockquote under [Metrics](#metrics--planned-with-exceptions) — update that one first, this one to match.** |
-| Audit trail | **[Implemented]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is emitted. The `mcp_audit_events_dropped_total` counter that reports a lost record off the log stream is wired as of SOL-154569, behind `OBS_METRICS_ENABLED` (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). See [Audit Trail](#audit-trail--implemented). |
+| Audit trail | **[Implemented]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097), as does `broker_authz_denied` (SOL-153332) — every record type in the schema is emitted. The `mcp_audit_events_dropped_total` counter that reports a lost record off the log stream is wired as of SOL-154569, behind the metrics egress flags (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). See [Audit Trail](#audit-trail--implemented). |
 | Distributed tracing | **[Interim — request-path and per-attempt spans wired]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars linking the latency histograms to these traces are live too (Story 47, SOL-152419) — see [Trace Exemplars](#trace-exemplars--implemented). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -105,12 +105,12 @@ against a stated test rather than re-argued each release.
 | Flag | Default | Why, and what would change it |
 |---|---|---|
 | `OBS_CORRELATION_ID_ENABLED` | `true` | The schema is W3C-standard (`traceparent`) and purely additive, so there is no name to regret. On from day one. |
-| `OBS_METRICS_ENABLED` | `false` | Turning it on publishes every metric name and label in this document as a contract, and opens a second listener on `:9091`. The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
-| `OBS_METRICS_OTLP_ENABLED` | `false` (planned) | **Not in the current build** — ships with the OTLP push egress; see [Metrics](#metrics--planned-with-exceptions). Pushes metrics to a collector you run, and there is no safe default endpoint, so it is opt-in permanently, like tracing. It will require `OBS_METRICS_ENABLED`: setting it alone is a config error. |
+| `OBS_METRICS_SCRAPE_ENABLED` | `false` | Serves the Prometheus scrape egress: opens a second, unauthenticated listener on `:9091` and publishes every metric name and label in this document as a contract there — except the OTLP export-health pair, which exists only with `OBS_METRICS_OTLP_ENABLED` (see [OTLP Export Health](#otlp-export-health)). Until SOL-154607 this flag was `OBS_METRICS_ENABLED` and also gated the meter provider the OTLP egress pushes from; the two egresses are now independent (see [Metrics](#metrics--planned-with-exceptions)). The schema-review condition is satisfied (see [Schema Review Record](#schema-review-record)). It now flips when the Solace SDLC security review of metric label cardinality passes — tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040). |
+| `OBS_METRICS_OTLP_ENABLED` | `false` | Pushes the same `mcp_*` instruments over OTLP to a collector you run (Story 46, SOL-152418; see [Metrics](#metrics--planned-with-exceptions)). There is no safe default endpoint, so it is opt-in permanently, like tracing. Independent of `OBS_METRICS_SCRAPE_ENABLED` since SOL-154607: either flag alone builds the shared meter provider, and set alone it binds no scrape listener. |
 | `OBS_AUDIT_LOG_ENABLED` | `false` | The audit schema is a compliance contract. Both original conditions are satisfied: the identity chain landed with OAuth token exchange, and the schema review is on record. So is the one added later — that `mcp_audit_events_dropped_total` is emitted, because a best-effort audit stream is only defensible for compliance while a dropped record is visible rather than silent, including when the log stream itself is what failed — as of SOL-154569 (see [Audit Pipeline Health](#audit-pipeline-health--implemented)). It now flips when the Solace SDLC security review of the audit schema passes (tracked in [SOL-154040](https://sol-jira.atlassian.net/browse/SOL-154040), same ticket as the metrics row above). |
 | `OBS_TRACING_ENABLED` | `false` | Requires an OTel collector you deploy, and there is no safe default endpoint to send spans to. **Opt-in permanently** — this one is not waiting on a condition and will not default on. |
 | `OBS_SATURATION_EVENTS_ENABLED` | `false` | Emits a `WARN` line per slow admission, onto the same log stream that carries audit records. Its original condition (a configurable threshold) is satisfied — see `observability.saturation_threshold_ms`. It now flips when the metric form of this signal replaces the log lines, so operators are not opted into per-request log volume to get it. |
-| `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows `OBS_METRICS_ENABLED` | A counter that `/metrics` does not expose has no consumer. Set it explicitly to override in either direction. |
+| `OBS_AUTH_FAILURE_COUNTER_ENABLED` | follows the metrics egress flags | On whenever `OBS_METRICS_SCRAPE_ENABLED` or `OBS_METRICS_OTLP_ENABLED` is: a counter no egress carries has no consumer. Set it explicitly to override in either direction. |
 
 Panic recovery is not a flag: it is unconditional. `/livez` and `/readyz` are unconditional
 for the same reason — the check is cheap and commits us to nothing.
@@ -356,25 +356,42 @@ here can be reconciled.
 > Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is
 > not yet emitted._
 
-All metrics are served on the `/metrics` endpoint in Prometheus text exposition
-format, behind `OBS_METRICS_ENABLED`. One exception: whether the two security counters
-(`mcp_auth_failure_total` and `mcp_authz_denied_total`) are recorded has its own flag,
-`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, so with
-nothing set the counters are on exactly when metrics are. An explicit `false` suppresses both
-while the rest of the surface stays on; their series are then absent, not zero. An explicit
-`true` while `OBS_METRICS_ENABLED` is `false` has nothing to register against — there is no
-exporter and no `/metrics` listener — so the server logs a `WARN` naming the flag at startup
-and records nothing.
+Every `mcp_*` instrument registers against one meter provider, built whenever **either**
+metrics egress flag is on; the flags differ only in which egress carries the instruments.
+The Prometheus text-exposition surface on `/metrics` is behind `OBS_METRICS_SCRAPE_ENABLED`,
+together with the `go_*`/`process_*` collectors and the listener itself. One exception to the
+shared gate: whether the two security counters (`mcp_auth_failure_total` and
+`mcp_authz_denied_total`) are recorded has its own flag, `OBS_AUTH_FAILURE_COUNTER_ENABLED`.
+It defaults to whether any egress is on, so with nothing set the counters are on exactly when
+a meter provider exists — OTLP-only included. An explicit `false` suppresses both while the
+rest of the surface stays on; their series are then absent, not zero. An explicit `true` with
+neither egress flag set has nothing to register against — there is no provider, no exporter,
+and no `/metrics` listener — so the server logs a `WARN` naming the flags at startup and
+records nothing.
 
-The `mcp_*` instruments can additionally be **pushed over OTLP**, behind its own flag,
-`OBS_METRICS_OTLP_ENABLED`. The `go_*`/`process_*` collectors are scrape-only and are
+The `mcp_*` instruments can additionally, or instead, be **pushed over OTLP**, behind its own
+flag, `OBS_METRICS_OTLP_ENABLED`. The `go_*`/`process_*` collectors are scrape-only and are
 **not** pushed — see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics). The endpoint comes from the standard
 `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. Push is off by
 default and does not activate merely because an endpoint variable is present in the
 environment; see [Decided Since the First Draft](#decided-since-the-first-draft) for why.
-Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fails config
-load with an explicit error rather than emitting nothing quietly, because both egresses
-share one meter provider.
+`OBS_METRICS_OTLP_ENABLED=true` with `OBS_METRICS_SCRAPE_ENABLED` unset is the **OTLP-only**
+configuration (SOL-154607): the provider is built, every `mcp_*` instrument is pushed, and
+nothing listens on `:9091` — no registry, no Prometheus exporter, no listener to protect. Until
+SOL-154607 that combination failed config load, because the one flag gated both the provider
+and the listener. One consequence to plan for: the push's own health counters
+(`mcp_otel_metrics_exported_total` / `mcp_otel_metrics_dropped_total`, see [OTLP Export
+Health](#otlp-export-health)) ride the OTLP stream in this mode, so a push that is failing
+outright cannot report itself through them. The rate-limited `WARN` the exporter logs per
+failed export (`OTLP metrics export failed`) is the signal that survives, and an OTLP exporter
+that cannot even be constructed fails provider construction — reported on `/readyz` as
+`metrics_provider` — rather than falling back to a scrape surface that was never asked for.
+See [OTLP-only metrics with nothing arriving](#otlp-only-metrics-with-nothing-arriving) in the
+runbook. The push carries the same labels the scrape listener is fenced off for
+(`mcp_auth_failure_total{reason}`, `mcp_authz_denied_total{tool}`), and its transport posture
+comes entirely from the `OTEL_EXPORTER_OTLP_*` variables, so send it only to a TLS-terminated,
+authenticated collector you control; an `http://` endpoint or `OTEL_EXPORTER_OTLP_INSECURE=true`
+downgrades it to cleartext (see the transport-security note below).
 
 **Temporality is always cumulative, explicitly forced regardless of environment.** This server
 sets it in code rather than relying on the SDK's own default (which happens to already be
@@ -425,7 +442,8 @@ readable key-rotation signal through `signature_invalid`, and `mcp_authz_denied_
 tells a reader which tools authorization is refusing. Treat restricting the listener as the
 default posture, not optional hardening: `deploy/kubernetes/networkpolicy.yaml` ships it — see
 [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint). The
-listener is absent entirely unless `OBS_METRICS_ENABLED` is set.
+listener is absent entirely unless `OBS_METRICS_SCRAPE_ENABLED` is set; an OTLP-only deployment
+never opens it.
 
 ### Tool Invocations (RED)
 
@@ -654,7 +672,7 @@ denial rather than an MCP-server-side one (SOL-153332, Story 49).
   problem: the call already resolved to a configured broker, and that broker is what refused,
   so a denial that is a policy gap on one broker and correct on another is only
   distinguishable with the label.
-- Behind `OBS_METRICS_ENABLED`, like the rest of the scrape surface. Nothing is pre-seeded, so
+- Behind the metrics egress flags, like every other `mcp_*` instrument. Nothing is pre-seeded, so
   `absent()` is not a usable alert — alert on `increase()`.
 
 **Cardinality:** `|tool| x |broker| x 1`.
@@ -665,7 +683,7 @@ sample with `outcome=error` and — for a destructive tool — an `operation` au
 Counting denials means summing this counter, not counting calls.
 ### Audit Pipeline Health — [Implemented]
 
-> _Wired in the current build (SOL-154569). Registered whenever `OBS_METRICS_ENABLED` is on —
+> _Wired in the current build (SOL-154569). Registered whenever a metrics egress flag is on —
 > it does **not** also wait on `OBS_AUDIT_LOG_ENABLED`: with the audit log off nothing is
 > emitted, so nothing drops, and a seeded zero is the truthful reading. The series exists at
 > `0` from process start, before any drop, so `increase()` fires on the first one and an
@@ -709,7 +727,8 @@ no labels and answers only "did anything go missing?"
 ### Panic Recovery — [Implemented]
 
 > _Unlike the rest of this section, this counter **is** wired in the current build. It is
-> emitted on `/metrics` whenever `OBS_METRICS_ENABLED` is on._
+> emitted whenever a metrics egress flag is on — on `/metrics` under `OBS_METRICS_SCRAPE_ENABLED`,
+> over OTLP under `OBS_METRICS_OTLP_ENABLED`._
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -760,8 +779,8 @@ alert on this metric.** Use the metric for the paging signal and the log for cov
 "client went away, say nothing" sentinel, and the MCP streamable/SSE path raises it on
 ordinary client disconnect; counting it would make a panic alert fire on routine teardown.
 
-Recovery is unconditional and does not depend on this counter. With `OBS_METRICS_ENABLED`
-off, no instrument is registered, both recovery sites still recover and still log, and the
+Recovery is unconditional and does not depend on this counter. With neither metrics egress
+flag on, no instrument is registered, both recovery sites still recover and still log, and the
 increment is a no-op.
 
 ### OTLP Export Health
@@ -791,20 +810,22 @@ of Story 46 (SOL-152418).
 > a different state that SOL-154509 found had been described in this same language, letting a
 > schema promise go unexamined for a release cycle. Unlike this pair,
 > `mcp_broker_authz_denied_total` and `mcp_audit_events_dropped_total` need no separate opt-in
-> flag beyond `OBS_METRICS_ENABLED` itself — see [Broker-Side Authorization
+> flag beyond the metrics egress flags themselves — see [Broker-Side Authorization
 > Denials](#broker-side-authorization-denials) and [Audit Pipeline
 > Health](#audit-pipeline-health--implemented). Alert on the span pair unconditionally, and add
 > the metrics pair once push is enabled in your deployment.
 
 **The span pair's reach depends on both flags, not just one.** The counters are always
 registered in-process while tracing is enabled (`OBS_TRACING_ENABLED`); they reach this scrape
-surface only when a meter provider also exists to register them against, i.e. only when
-`OBS_METRICS_ENABLED` is **also** on. Tracing on with metrics off keeps the totals in-process
+surface only when a meter provider also exists to register them against, i.e. only when a
+metrics egress flag is **also** on — and this scrape surface specifically needs
+`OBS_METRICS_SCRAPE_ENABLED`; OTLP-only carries the pair on the push instead. Tracing on with
+metrics off keeps the totals in-process
 only — reported solely by the periodic `event=otel_self_stats` INFO log (see [Distributed
 Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
-(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
+(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_SCRAPE_ENABLED`, which governs the scrape surface alone;
 see [Metrics](#metrics--planned-with-exceptions)) — so the two pairs can legitimately be in
 different states in one process: spans exporting and their counters live, with the metrics
 pair absent because push is off. `reason` is a closed set of four, `queue_full`,
@@ -848,7 +869,7 @@ ours. The failure signature to alert on:
 
 The fallback for the span pair above when there is no meter provider to register it against —
 tracing on, metrics off, **or** metrics configured but its provider failing to build; that
-second case is why the trigger is "no meter provider", not simply `OBS_METRICS_ENABLED: false`.
+second case is why the trigger is "no meter provider", not simply both metrics egress flags off.
 With no `/metrics` surface to read span-export health from, this periodic `INFO` line is the
 only signal.
 
@@ -927,7 +948,8 @@ trace data source configured renders as a plain histogram.
 Standard `go_*` and `process_*` collectors from the Prometheus Go client library
 (`collectors.NewGoCollector()` and `collectors.NewProcessCollector()`): goroutine count,
 garbage-collection timing, memory stats, file descriptors, CPU. These are live whenever
-`OBS_METRICS_ENABLED` is on, with no extra configuration.
+`OBS_METRICS_SCRAPE_ENABLED` is on, with no extra configuration — and absent, not merely
+unexported, in an OTLP-only deployment, since they exist only inside the scrape pipeline.
 
 **Naming.** These are upstream Prometheus conventions, not Solace-defined schema. A future
 `client_golang` upgrade that renames them is not a breach of the additive-only commitment.
@@ -1511,8 +1533,8 @@ record the schema constructor rejected.
 
 > **Every drop is reported twice, on two surfaces that fail independently.** The `audit_drop`
 > *record* rides this stderr stream; `mcp_audit_events_dropped_total` (see [Audit Pipeline
-> Health](#audit-pipeline-health--implemented)) rides the `/metrics` scrape surface, behind
-> `OBS_METRICS_ENABLED`. Both move at the same point in the code, once per lost record. Alert
+> Health](#audit-pipeline-health--implemented)) rides the metrics egress — the `/metrics` scrape surface or the OTLP push — behind
+> the metrics egress flags. Both move at the same point in the code, once per lost record. Alert
 > on the counter — it is the signal that survives the log pipeline itself failing, which is
 > when a lost audit record matters most — and use the record for attribution: it names what
 > was lost, the counter does not.
@@ -1600,7 +1622,6 @@ Set the following environment variables on the MCP server deployment:
 ```
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 OBS_TRACING_ENABLED=true
-OBS_METRICS_ENABLED=true
 OBS_METRICS_OTLP_ENABLED=true
 ```
 
@@ -1608,9 +1629,11 @@ OBS_METRICS_OTLP_ENABLED=true
 needed. For a deployment without TLS between the server and collector, also set
 `OTEL_EXPORTER_OTLP_INSECURE=true`.
 
-`OBS_METRICS_OTLP_ENABLED` pushes metrics over OTLP to the same collector endpoint. It
-requires `OBS_METRICS_ENABLED=true` (which also enables the Prometheus scrape endpoint on
-`/metrics`). Omit both flags if you only want traces.
+`OBS_METRICS_OTLP_ENABLED` pushes metrics over OTLP to the same collector endpoint, and stands
+on its own (SOL-154607): with only this metrics flag set, the server builds the meter provider,
+pushes every `mcp_*` instrument, and opens no `/metrics` listener. Add
+`OBS_METRICS_SCRAPE_ENABLED=true` as well if you also want the Prometheus scrape endpoint on
+`/metrics`. Omit both metrics flags if you only want traces.
 
 #### Verify traces are arriving
 
@@ -1790,8 +1813,8 @@ distinction is the point, since they have different causes and different remedie
 | `http.response.status_code` | The status that attempt got, on `semp.attempt` and `tokenexchange.attempt`. Absent — never zero — when the attempt got no response at all (a connection error) | Solace |
 | `retry.decision` | Whether the retry policy chose to retry after this attempt, on `semp.attempt` and `tokenexchange.attempt`. **This is the decision the server acted on, not a re-reading of the status code**, so it can legitimately be `false` on a 503: a request the caller declared non-idempotent, or one on a non-idempotent method, is never replayed. A `true` alongside `retry.exhausted` means the policy wanted to retry and had nothing left | Solace |
 | `retry.exhausted` | `true` on the final attempt when a retry allowance ran out; absent otherwise. It means one thing: the policy stopped because something it was counting was already spent. On `semp.attempt` that covers all four allowances — the configured `semp.retries`, the internal 429/503 sub-cap (which fires well below `semp.retries`, and is how a real broker-overload episode usually ends), the once-only replay of a non-429/503 5xx, and the once-only 401 re-auth. **Absent when nothing ran out**, even though the call still failed: a replay the policy refused because the caller declared the request non-idempotent, a context that ended, a status never retried at all, or an auth mode that could not recover the first 401. Those need a different remedy from a bigger budget, which is why they are distinguishable. **On `tokenexchange.attempt` it means only that the IdP client's configured retry count (`MaxRetries`) was spent** — that path has no sub-cap, no non-idempotency guard, and no 401 re-auth allowance, so the four SEMP allowances and the four SEMP exclusions above do not apply. Raise the IdP retry setting, not `semp.retries` | Solace |
-| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
-| `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
+| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it. With tracing off — the default — the same distinction is the DEBUG log `waited for concurrent broker token exchange` under that request's own correlation ID (see [Correlation ID](#correlation-id--implemented)). The wait line and `singleflight_role=follower` name the same call; the log is not read off the span, so it still fires when tracing is off and the span has no role | Solace |
+| `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit and when tracing is off: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result). The waiting request's DEBUG log says `waited`, not `follower` — the span name shipped with Story 50; the log is the grep | Solace |
 | `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
 
 `outcome` and `error_type` carry the **same vocabulary here as on the metric labels and the
@@ -1916,18 +1939,71 @@ your own data-flow review before pointing this at a collector you don't operate.
 > are live today, sharing this same resource by construction (both readers attach to the one
 > meter provider Story 14 built)._
 
-Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
-tell instances apart without a label duplicated onto every series. All five follow the
-OpenTelemetry resource semantic conventions
+Set from server configuration, or from the standard OpenTelemetry environment variables when
+the configuration leaves a field unset (see Precedence below), on **both** metrics and spans,
+so an aggregated dashboard can tell instances apart without a label duplicated onto every
+series. All five follow the OpenTelemetry resource semantic conventions
 (https://opentelemetry.io/docs/specs/semconv/resource/).
 
 | Attribute | Source | Config key |
 |---|---|---|
-| `service.name` | config, default `solace-broker-mcp` | `observability.service_name` |
+| `service.name` | config, else `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`, else `solace-broker-mcp` | `observability.service_name` |
 | `service.version` | build-time injection | — |
-| `service.instance.id` | config, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
-| `deployment.environment.name` | config, when set | `observability.deployment_environment` |
-| `cloud.region` | config, when set | `observability.cloud_region` |
+| `service.instance.id` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
+| `deployment.environment.name` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else omitted | `observability.deployment_environment` |
+| `cloud.region` | config, else `OTEL_RESOURCE_ATTRIBUTES`, else omitted | `observability.cloud_region` |
+
+#### Precedence
+
+All four configurable identity attributes resolve through the same three-step chain, in
+order:
+
+1. **The YAML field** (`observability.service_name`, `service_instance_id`,
+   `deployment_environment`, `cloud_region`). An explicit operator choice, so it wins.
+2. **The standard OpenTelemetry environment variable** — `OTEL_SERVICE_NAME` for
+   `service.name`, and an `OTEL_RESOURCE_ATTRIBUTES` entry under the attribute's own key for
+   any of the four. Honoured only when the YAML field is unset. Where both environment routes
+   name a service, `OTEL_SERVICE_NAME` outranks an `OTEL_RESOURCE_ATTRIBUTES service.name`
+   entry, per the OTel specification.
+3. **The built-in default** — `solace-broker-mcp` for `service.name`; the downward-API pod
+   name, then the process hostname, for `service.instance.id`; and, for
+   `deployment.environment.name` and `cloud.region`, omitting the attribute entirely.
+
+Set the YAML field to pin a value regardless of what the platform injects; leave it unset to
+let the platform's variable through. This matters because platform teams and the
+OpenTelemetry Operator inject these variables across every workload as a matter of course.
+
+**An empty or whitespace-only value counts as unset, not as "pin empty".** `service_name: ""`
+behaves exactly like omitting the line — the chain moves on to step 2, and an injected
+`OTEL_SERVICE_NAME` takes effect. So does `service_name: "   "`, which is what a `${VAR}` that
+expanded to nothing leaves behind. The same holds for all four fields, and for the environment
+side: `OTEL_RESOURCE_ATTRIBUTES=cloud.region=` (an unset `${REGION}` in a manifest) reads as
+"no region", not as an empty region, and leaves the attribute omitted. Surrounding whitespace
+is trimmed rather than exported, so `service_name: "  my-mcp  "` resolves to `my-mcp`. There is
+no way to pin an attribute to the empty string, and none of the four has a meaningful empty
+value: an empty `service.name` would not identify anything, and for the two optional attributes
+"empty" and "absent" are the same request. To pin a value, write the value.
+
+> **Fixed in SOL-154727.** Two narrower cases used to slip through this rule. A whitespace-only
+> YAML field won the chain and exported `service.name: "   "` — worse than the default, because
+> it looks configured — while `OTEL_SERVICE_NAME="   "` correctly fell through to the default,
+> so one input got two answers depending on which side it arrived on. And an empty-valued
+> `OTEL_RESOURCE_ATTRIBUTES` entry for `cloud.region` or `deployment.environment.name` reached
+> `target_info` and every log line: the chain read it as absent and contributed no attribute,
+> which left the SDK's own copy of the empty value with nothing to override it. (`service.name`
+> and `service.instance.id` were never affected — both are always written with a resolved
+> value, which overrode the empty copy.) Both cases are now treated as unset. If you were
+> relying on an empty-valued entry to produce a blank `cloud.region` label, it is now absent
+> instead.
+
+> **Changed in SOL-154608.** `service_name` and `service_instance_id` previously ignored the
+> standard environment variables outright: config always had a value for both by the time the
+> resource was built, so they always won the merge and `OTEL_SERVICE_NAME` could never take
+> effect, with no error anywhere. `deployment_environment` and `cloud_region` already behaved
+> as described above. **If you set `OTEL_SERVICE_NAME`, saw it ignored, and built dashboards
+> against `solace-broker-mcp`, that variable now takes effect** — `service.name` is the join
+> key across metrics, traces, and logs, so the series will change name. Set
+> `observability.service_name: "solace-broker-mcp"` explicitly to keep the old value.
 
 An earlier draft called this attribute `region` and flagged the OTel name as a possible
 change. **It is now `cloud.region`**: where OTel publishes a convention we adopt it, and
@@ -1939,21 +2015,65 @@ sharing a hostname. Most Kubernetes deployments need neither this nor `POD_NAME`
 configuration: `deploy/kubernetes/deployment.yaml` already wires `POD_NAME` via the downward
 API.
 
-**The process hostname is what gets exported when neither override is set.** Outside
-Kubernetes (or with `POD_NAME` unset), `service.instance.id` falls all the way through to
-`os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
+**The process hostname is what gets exported when no other source supplies one.** Outside
+Kubernetes (or with `POD_NAME` unset), and with neither `observability.service_instance_id`
+nor an `OTEL_RESOURCE_ATTRIBUTES` entry set, `service.instance.id` falls all the way through
+to `os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
 recognizes) that now travels off-box on every span and appears on `target_info`. Set
 `observability.service_instance_id` explicitly if that's not a value you want to export.
 
-**Known limitation:** `service_name` and `service_instance_id` always win over the standard
-`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` environment variables, because config always
-has a value for both (a real one, or the stated default) by the time the shared resource is
-built, and this package's own attributes take precedence in the merge. `deployment_environment`
-and `cloud_region` do **not** have this problem — config leaves them genuinely empty when
-unset, so the standard `OTEL_RESOURCE_ATTRIBUTES` entries for those two reach the resource
-unopposed. An operator who wants `OTEL_SERVICE_NAME` or an `OTEL_RESOURCE_ATTRIBUTES`
-`service.instance.id` honored should use `observability.service_name` /
-`observability.service_instance_id` instead, for now.
+**The pod-name fallback sits below the environment variable, not above it.** An
+`OTEL_RESOURCE_ATTRIBUTES service.instance.id` entry outranks the downward-API pod name, so a
+platform that injects instance identity centrally overrides the Kubernetes default without
+any config change here. Set `observability.service_instance_id` to override both.
+
+> **Check this before upgrading past SOL-154608** — it is the change most likely to bite
+> silently, and it hides behind the `OTEL_SERVICE_NAME` headline. If your platform injects
+> `service.instance.id` through a **shared** `OTEL_RESOURCE_ATTRIBUTES` (one `envFrom`
+> ConfigMap across a Deployment, a Helm or Kyverno default), every replica previously got its
+> own pod name and will now report the same id — collapsing them into one series, with no
+> error. To keep per-pod identity without removing the shared variable, pin the field to the
+> downward-API value (`${VAR}` substitution works here, and the shipped `deployment.yaml`
+> always sets `POD_NAME`):
+>
+> ```yaml
+> observability:
+>   service_instance_id: "${POD_NAME}"
+> ```
+>
+> A platform injecting a genuinely per-pod value needs no action — that is the case this
+> change exists to honour.
+
+**Confirming what resolved, at startup.** The server logs one INFO line naming every resolved
+identity value and the chain step that supplied it, so the outcome of the precedence rules
+above is visible at deploy time rather than inferred from a dashboard later. It is emitted
+before `log_level` is applied, so it appears even at `warn` or `error` — a diagnostic for a
+silent misconfiguration is no use if turning down logging hides it. The one case where it does
+not appear is when the identity resource could not be built at all; an
+`observability identity resource unavailable; falling back to SDK defaults` ERROR line names
+that instead, and the server continues on the SDK's own defaults:
+
+```json
+{"time":"2026-09-23T10:14:02.481293-04:00","level":"INFO","msg":"observability identity resolved","deployment.environment.name":"production","service.name":"my-mcp","service_name":"my-mcp","service_name_source":"env","service_instance_id":"solace-broker-mcp-7d8f9-abcde","service_instance_id_source":"pod_name","deployment_environment":"production","deployment_environment_source":"config","cloud_region":"","cloud_region_source":"unset"}
+```
+
+The keys are the YAML field names, so the field to edit is the one named — and so they do not
+collide with the dotted attribute keys the handler already binds to every line (`service.name`
+and `deployment.environment.name` appear above for that reason, not as duplicates). Each
+`*_source` is one of `config`, `env`, `pod_name`, `hostname`, `default`, or `unset` — `unset`
+appearing only for the two optional attributes, paired with an empty value, meaning the
+attribute is omitted from the resource entirely.
+
+This is the line to check for the shared-`OTEL_RESOURCE_ATTRIBUTES` trap above, but read it
+wider than that trap: only `pod_name` and `hostname` are per-pod by construction. On a
+multi-replica Deployment, a `service_instance_id_source` of **either** `env` or `config` means
+the replicas may all be reporting the same id — a ConfigMap carrying a literal
+`service_instance_id` collapses them exactly as an injected `OTEL_RESOURCE_ATTRIBUTES` does.
+Compare the `service_instance_id` value across two replicas to confirm. It is also the only
+place `service.instance.id` appears in the log stream —
+`SlogAttrs` deliberately mirrors only `service.name`, `deployment.environment.name`, and
+`cloud.region` onto individual log lines (see this section's status note), so nothing else
+ties a log line back to the pod that produced it. Added in SOL-154727.
 
 **`deployment.environment.name`, not the FD's original `deployment.environment`.** OTel
 renamed the semantic-convention key ahead of this story landing; the SDK's own
@@ -1969,7 +2089,12 @@ key — nothing rejects it. Set that variable under the old spelling and the mer
 carries both keys with independent values; `target_info` shows both, and `SlogAttrs` mirrors
 only the new one, so logs and metrics can disagree about which environment a pod is in. Use
 `observability.deployment_environment` instead of the environment variable to avoid the
-ambiguity entirely.
+ambiguity entirely. The empty-value rule above does not reach the old spelling either:
+`OTEL_RESOURCE_ATTRIBUTES=deployment.environment=` still puts an empty `deployment.environment`
+on `target_info`, because only the four current keys are filtered. It cannot reach log lines —
+`SlogAttrs` never mirrors the old spelling — and the same caveat applies to any other key an
+`OTEL_RESOURCE_ATTRIBUTES` entry names with an empty value, which this server deliberately
+leaves to the SDK.
 
 **How to query them, per egress.** These are resource attributes, not per-series labels, so
 they arrive differently on each of the two metric egresses:
@@ -2022,10 +2147,84 @@ concurrent requests need the same broker token, the server performs one exchange
 all of them, and the lines describing that work — the identity-provider request/response, the
 cache write, retry exhaustion, the Retry-After gate, the audience-mismatch WARN, and the
 recovered-panic ERROR — carry the correlation ID of the request that initiated it. Every request still logs its own `broker token exchange completed` line
-under its own ID. So if a request's ID turns up no identity-provider lines, that request rode
-an exchange another request started: pivot to the `broker` attribute plus the time window
-around the request's own completion line. A failed exchange surfaces through each caller's own
-error handling rather than a per-caller line from the exchange itself. Three lines never carry
+under its own ID.
+
+At `log_level: debug`, a request that took a result it did not produce also says so directly:
+one `waited for concurrent broker token exchange` line, with `broker` and `waited`, under
+**that request's own** correlation ID. One grep of that ID then answers the question
+positively — this request did not run the exchange, it waited for a concurrent one — with no
+tracing enabled. With tracing on, that same request's `tokenexchange.Exchange` span is
+`singleflight_role=follower` (Story 50's name; the log says `waited` because that is the
+grep). The line does not bring the identity-provider chapter with it:
+`requesting broker token from identity provider` and `identity provider issued broker token`
+stay on the initiating request's ID, so reading what the IdP actually said still means
+pivoting to that ID (read it off the `requesting broker token from identity provider` line for
+the same `broker` in the same window). And the *absence* of identity-provider lines on a
+request's own ID remains corroboration, not proof — a Retry-After gate rejection, a
+circuit-breaker rejection, a request that never got built, and a dropped log line all produce
+the same absence.
+
+**At the default INFO level that line is dark**, so an INFO deployment still needs the older
+pivot: the `broker` attribute plus the time window around the request's own completion line.
+A failed exchange still surfaces its outcome through each caller's own error handling rather
+than a per-caller line from the exchange itself — but a request that waited on a shared
+exchange that then failed does get its own wait line, so at DEBUG "which requests were riding
+this failing exchange" is readable instead of inferred.
+
+A burst of three requests served by one IdP round trip, at `log_level: debug`. The records
+below were dumped verbatim from a run of the same three-caller burst the committed test
+`TestExchange_WaiterLogsWaitLineWinnerDoesNot` drives (that test asserts on the records rather
+than printing them), emitted through the production handler chain —
+`correlation.NewSlogHandler` over `slog.NewJSONHandler`, the composition `cmd/server/main.go`
+installs:
+
+```json
+{"time":"2026-09-21T19:23:24.108794-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.109184-07:00","level":"DEBUG","msg":"requesting broker token from identity provider","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.110185-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-b"}
+{"time":"2026-09-21T19:23:24.115803-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-burst-broker","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172233-07:00","level":"DEBUG","msg":"identity provider issued broker token","broker":"artifact-burst-broker","http_status":200,"attempts":0,"used_fallback":false,"correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.17225-07:00","level":"DEBUG","msg":"broker token cached","broker":"artifact-burst-broker","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.172257-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"56.440291ms","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172259-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"56.440291ms","correlation_id":"caller-c"}
+{"time":"2026-09-21T19:23:24.172262-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-burst-broker","waited":"62.066166ms","correlation_id":"caller-b"}
+{"time":"2026-09-21T19:23:24.172261-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"63.276083ms","correlation_id":"caller-a"}
+{"time":"2026-09-21T19:23:24.172264-07:00","level":"DEBUG","msg":"broker token exchange completed","broker":"artifact-burst-broker","exchange_total_elapsed":"62.066166ms","correlation_id":"caller-b"}
+```
+
+**This is test-captured output, not a production capture.** The handler chain, the messages
+and the keys are the production ones; the correlation IDs are the test's (`caller-a` initiated
+the exchange, `caller-b` and `caller-c` waited on it) where a real request carries a UUIDv7 or
+an inbound trace-id, the broker alias is the test's, and `attempts` reads `0` against the
+in-process test IdP. Three things to read off it: the wait line carries `broker` and `waited`
+and nothing else; each of the three requests — the two waiters and the initiator alike — still
+logs its own `broker token exchange completed` with `exchange_total_elapsed`, so the wait line
+*accompanies* the outcome rather than replacing it; and the identity-provider lines appear only
+under `caller-a`.
+
+The same shape when the shared exchange fails — here a `500` from the IdP, captured the same
+way — shows the wait line is not conditional on success, and that the failure itself is still
+the callers' to report:
+
+```json
+{"time":"2026-09-21T19:23:50.056266-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-a"}
+{"time":"2026-09-21T19:23:50.056709-07:00","level":"DEBUG","msg":"requesting broker token from identity provider","broker":"artifact-failed-broker","correlation_id":"failed-a"}
+{"time":"2026-09-21T19:23:50.05784-07:00","level":"DEBUG","msg":"no cached broker token","broker":"artifact-failed-broker","correlation_id":"failed-b"}
+{"time":"2026-09-21T19:23:50.114856-07:00","level":"DEBUG","msg":"waited for concurrent broker token exchange","broker":"artifact-failed-broker","waited":"56.999875ms","correlation_id":"failed-b"}
+```
+
+Neither request logs a completion line — a failed exchange is not a completion — and the error
+itself reaches the operator through each caller's own error result, as before. What is new is
+the one line naming `failed-b` as a request that joined `failed-a`'s exchange rather than
+having run an exchange of its own.
+
+Do not read the wait line as a fault or as a load signal. A waiting request is the
+deduplication working as designed: it is attribution, not degradation, there is no metric
+behind it, and it needs no response. Nor is it
+`token exchange abandoned by caller`, which carries the same `waited` key on a different
+message and means the opposite — that caller waited and left with nothing.
+
+Three lines never carry
 a correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
 on a window of failures, not on any one request — filter on its `breaker` attribute instead),
 the startup configuration WARN, and the `registered OAuth protected resource metadata endpoint`
@@ -2339,7 +2538,7 @@ design instead of climbing toward `limits.memory`, so a saturated pod and a comf
 look alike on that one line: distance-to-limit is no longer the leading indicator it was.
 What moves instead is GC effort — a pod holding the plateau by collecting harder shows it in
 `go_gc_duration_seconds` and `go_memstats_heap_inuse_bytes` on `/metrics`
-(`OBS_METRICS_ENABLED`, off by default), and in its CPU. Watch the plateau being *held*
+(`OBS_METRICS_SCRAPE_ENABLED`, off by default), and in its CPU. Watch the plateau being *held*
 rather than the gap to the limit.
 
 **Do not alarm on the working set crossing `GOMEMLIMIT`.** The two measure different things:
@@ -2359,11 +2558,11 @@ once (SOL-152424):
 
 | Piece | File | In `kubectl apply -f deploy/kubernetes/`? |
 |---|---|---|
-| A `metrics` Service port and the named `containerPort` it targets | `service.yaml`, `deployment.yaml` | Yes. Resolves to `connection refused` until `OBS_METRICS_ENABLED` is set |
+| A `metrics` Service port and the named `containerPort` it targets | `service.yaml`, `deployment.yaml` | Yes. Resolves to `connection refused` until `OBS_METRICS_SCRAPE_ENABLED` is set |
 | Ingress to `:9091` admitted from the monitoring namespace only | `networkpolicy.yaml` | Yes. A built-in API, safe on any cluster; enforced only by a CNI that supports it |
 | Prometheus Operator discovery | `servicemonitor.yaml.example` | No. The CRD is not on every cluster, and one missing kind fails the whole apply. Copy, edit, apply by hand |
 
-Nothing flips `OBS_METRICS_ENABLED`: it stays off per [Flag Defaults at GA](#flag-defaults-at-ga)
+Nothing flips `OBS_METRICS_SCRAPE_ENABLED`: it stays off per [Flag Defaults at GA](#flag-defaults-at-ga)
 and ships as a commented env entry in `deployment.yaml`.
 
 #### With Prometheus Operator
@@ -2690,7 +2889,7 @@ is most likely to mis-read as healthy.
 | `/metrics` reachable from pods that should not see it | [Scraping and securing the metrics endpoint](#scraping-and-securing-the-metrics-endpoint) |
 | Slow tool calls under load; no metric to show it | [Requests queueing behind the broker limit](#requests-queueing-behind-the-broker-limit) |
 | OTLP push on, collector receiving nothing | [OTLP metrics push arrives nowhere](#otlp-metrics-push-arrives-nowhere) |
-| Server refuses to start after enabling OTLP push | [OTLP push enabled while metrics are disabled](#otlp-push-enabled-while-metrics-are-disabled) |
+| OTLP-only metrics, collector receives nothing | [OTLP-only metrics with nothing arriving](#otlp-only-metrics-with-nothing-arriving) |
 | Pushing to Prometheus directly; nothing arrives | [Ingesting OTLP into Prometheus without a collector](#ingesting-otlp-into-prometheus-without-a-collector) |
 | `go_*` and `process_*` absent from an OTLP backend | [Runtime metrics missing from the OTLP pipeline](#runtime-metrics-missing-from-the-otlp-pipeline) |
 | Traces stop arriving; spans dropped | [OTLP collector unreachable](#otlp-collector-unreachable) |
@@ -2846,6 +3045,13 @@ credentials, or the egress path to the IdP is blocked.
 and that DNS resolves. Check the client credentials have not expired or been rotated. The
 breaker recovers on its own once exchanges succeed — do not restart to force it.
 
+If `log_level` is already `debug` for the window you are looking at, the
+`waited for concurrent broker token exchange` lines name the requests that were riding one
+failing exchange rather than each running their own, which is useful for telling an affected
+caller from an initiating one while reading logs. Treat it as attribution only: it is not a
+saturation or queue-depth signal, there is no metric behind it, and the number of such lines
+says nothing about IdP health.
+
 **Escalate.** To the IdP team if the IdP is unhealthy or the credentials were rotated without
 notice. To the platform team if the egress path is blocked.
 
@@ -2955,12 +3161,18 @@ is what takes the pod out of rotation before it stops accepting work. A router w
 entirely**, which presents as silence rather than an error. `mcp_metrics_scrape_total` is
 flat or missing.
 
-**Likely cause.** In order of likelihood: `OBS_METRICS_ENABLED` is off, so `:9091` is not
-listening at all and the target shows `connection refused`; the ServiceMonitor is not
-selected by your Prometheus; or the NetworkPolicy does not admit your Prometheus's namespace.
+**Likely cause.** In order of likelihood: the deployment still sets the retired
+`OBS_METRICS_ENABLED` (renamed in SOL-154607), which turns nothing on — the startup log then
+carries `retired observability flag is set and ignored: it enables nothing (no meter provider,
+no /metrics listener, no security counters); rename it to the replacement` with
+`var=OBS_METRICS_ENABLED replacement=OBS_METRICS_SCRAPE_ENABLED`; `OBS_METRICS_SCRAPE_ENABLED`
+is off — an OTLP-only deployment included — so `:9091` is not listening at all and the target
+shows `connection refused`; the ServiceMonitor is not selected by your Prometheus; or the
+NetworkPolicy does not admit your Prometheus's namespace.
 
-**First response.** Check `OBS_METRICS_ENABLED` first — it is off by default and ships
-commented out in `deployment.yaml`. Then confirm the target appears in Prometheus's
+**First response.** Grep the startup log for `retired observability flag`, then check
+`OBS_METRICS_SCRAPE_ENABLED` — it is off by default and ships commented out in
+`deployment.yaml`. Then confirm the target appears in Prometheus's
 *Status → Targets*. An unselected ServiceMonitor is simply not listed — not down, not logged.
 Verify with `mcp_metrics_scrape_total` rising, not with `kubectl get servicemonitor`, which
 only proves the object exists.
@@ -3045,19 +3257,33 @@ See [OTLP Export Health](#otlp-export-health) for the counters and their `reason
 
 ---
 
-### OTLP push enabled while metrics are disabled
+### OTLP-only metrics with nothing arriving
 
-**Symptom.** The server refuses to start, with an error naming both flags.
+**Symptom.** `OBS_METRICS_OTLP_ENABLED=true` without `OBS_METRICS_SCRAPE_ENABLED`, and the
+collector receives no metrics. There is no `/metrics` to read `mcp_otel_metrics_dropped_total`
+from: in this mode the push's own health counters ride the push (SOL-154607).
 
-**Likely cause.** `OBS_METRICS_OTLP_ENABLED=true` with `OBS_METRICS_ENABLED=false`.
+**Likely cause.** The same causes as [OTLP metrics push arrives nowhere](#otlp-metrics-push-arrives-nowhere)
+— endpoint, transport, or collector receiver — minus the counters that would usually say which.
+Or the OTLP exporter failed to construct at startup, which in OTLP-only mode fails the whole
+provider rather than falling back to a scrape surface that was never asked for.
 
-**First response.** Set `OBS_METRICS_ENABLED=true` as well, or turn the OTLP flag off.
+**First response.** Check `/readyz`: a provider build failure is reported there as
+`metrics_provider`, with `metrics provider build failed` in the startup log. If ready, look for
+the exporter's rate-limited `WARN` per failed export (`OTLP metrics export failed`, carrying
+`reason` and the data-point count) — that line is the signal that survives when the counters
+cannot. Then work the endpoint checks in the entry above. To put the counters back on a surface
+independent of the push, set `OBS_METRICS_SCRAPE_ENABLED=true` too; the scrape listener then
+carries them, and the NetworkPolicy applies to it.
 
-**Escalate.** Not applicable.
+**Escalate.** As for the entry above, once the `WARN` shows exports being attempted and the
+collector shows nothing received.
 
-**Why it is an error rather than a no-op.** Both egresses read from the same meter provider.
-With metrics disabled there is no provider, so the push would have nothing to send — and
-would do it silently. Failing at config load turns a silent nothing into an explicit message.
+**Why it is no longer a config error.** Until SOL-154607, `OBS_METRICS_OTLP_ENABLED` without the
+old `OBS_METRICS_ENABLED` was refused at config load, because that one flag also gated the
+meter provider. The flags are now independent — either builds the provider — so there is no
+incoherent combination left to reject, and the old error (`OBS_METRICS_OTLP_ENABLED=true
+requires OBS_METRICS_ENABLED=true`) no longer exists.
 
 ---
 
@@ -3128,8 +3354,8 @@ design. A collector outage should never look like an MCP outage.
 
 ### Diagnosing tracing export without metrics
 
-**Symptom.** You need to know whether spans are being exported, but `OBS_METRICS_ENABLED` is
-off so the counters are not available.
+**Symptom.** You need to know whether spans are being exported, but no metrics egress flag is
+on, so the counters are not available.
 
 **Likely cause.** Not a fault — this is the intended path when metrics are disabled.
 
@@ -3228,7 +3454,7 @@ Queries](#canonical-audit-queries) covers querying the stream.
 | Rising, **no** `audit_drop` records in stderr | The server cannot write to its own stderr at all; the notice was refused too | Container or runtime fault: platform team |
 | Flat while requests stall | stderr is blocked, not failing; nothing drops | See [Log-shipper or stderr backpressure](#log-shipper-or-stderr-backpressure) |
 | Absent, metrics on | Binary predates `metrics_schema` 1.8, or the counter failed to register at startup | Check `mcp_schema_version{metrics_schema}`; look for `audit drop counter unavailable` |
-| Absent, metrics off | Not served | Turn on `OBS_METRICS_ENABLED`, or alert on the record until you do |
+| Absent, metrics off | Not served | Turn on a metrics egress (`OBS_METRICS_SCRAPE_ENABLED` for `/metrics`), or alert on the record until you do |
 
 ---
 
@@ -3359,7 +3585,7 @@ telemetry format. The wire formats are the open ones your existing stack already
 
 | Signal | Format | Transport | Status |
 |---|---|---|---|
-| Metrics | OpenTelemetry, plus **Prometheus text exposition additionally** for scrape-based stacks | `/metrics` scrape endpoint (`OBS_METRICS_ENABLED`) | Live |
+| Metrics | OpenTelemetry, plus **Prometheus text exposition additionally** for scrape-based stacks | `/metrics` scrape endpoint (`OBS_METRICS_SCRAPE_ENABLED`) | Live |
 | Metrics | The same OpenTelemetry instruments | OTLP push (`OBS_METRICS_OTLP_ENABLED`) | Live (Story 46, SOL-152418) |
 | Traces | OpenTelemetry | OTLP over gRPC (`OBS_TRACING_ENABLED`) | Live |
 | Audit trail | Structured JSON on stderr, tagged `"event": "audit"` | Your log shipper, to any sink you route it to | Live |
