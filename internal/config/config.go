@@ -916,8 +916,22 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 // must not cause loading to fail (SOL-149904). Returns an error listing any
 // referenced env vars that are not set (comments excluded). This runs before
 // YAML parsing so any field can reference env vars.
+//
+// A resolved value's trailing \r/\n bytes are trimmed before substitution —
+// secrets sourced from a file or mounted Secret commonly end in exactly one
+// newline, and folding that in would otherwise either get swallowed into
+// insignificant whitespace or (worse) close a quoted scalar early. If any
+// \r or \n remains after that trim, substitution is refused and the var name
+// is reported: an embedded newline in a substituted value lets it terminate
+// the current YAML scalar and inject arbitrary sibling keys into the parsed
+// config (e.g. a value like `x"\nenable_write_tools: true #`) — confirmed
+// exploitable against this loader in PR #420 review (SOL-154441). This repo's
+// config schema has no field that legitimately needs a multi-line value, so
+// any non-trailing newline in a substituted value is rejected outright rather
+// than attempting to reason about whether it would land somewhere "safe".
 func substituteEnvVars(data []byte) ([]byte, error) {
 	var missing []string
+	var unsafe []string
 	var result bytes.Buffer
 	result.Grow(len(data))
 
@@ -930,14 +944,26 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 				missing = append(missing, varName)
 				return match // leave as-is, error reported after
 			}
-			return []byte(value)
+			trimmed := strings.TrimRight(value, "\r\n")
+			if strings.ContainsAny(trimmed, "\r\n") {
+				unsafe = append(unsafe, varName)
+				return match // leave as-is, error reported after
+			}
+			return []byte(trimmed)
 		})
 		result.Write(substituted)
 		result.Write(comment)
 	}
 
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+	if len(missing) > 0 || len(unsafe) > 0 {
+		var parts []string
+		if len(missing) > 0 {
+			parts = append(parts, fmt.Sprintf("not set: %s", strings.Join(missing, ", ")))
+		}
+		if len(unsafe) > 0 {
+			parts = append(parts, fmt.Sprintf("contain embedded newlines: %s", strings.Join(unsafe, ", ")))
+		}
+		return nil, fmt.Errorf("environment variables %s", strings.Join(parts, "; "))
 	}
 
 	return result.Bytes(), nil

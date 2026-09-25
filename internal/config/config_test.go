@@ -439,6 +439,93 @@ brokers:
 	}
 }
 
+// A single trailing newline is a common artifact of secrets sourced from a
+// file or mounted Secret (e.g. `cat /run/secrets/pw`). It must be trimmed
+// silently rather than rejected, in both unquoted and quoted scalar forms.
+func TestLoadConfig_EnvVarTrailingNewlineTrimmed(t *testing.T) {
+	t.Setenv("BROKER_PASS_UNQUOTED", "secret\n")
+	t.Setenv("BROKER_PASS_QUOTED", "secret\r\n")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: ${BROKER_PASS_UNQUOTED}
+      password: "${BROKER_PASS_QUOTED}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("trailing newline in env var value must not fail load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "secret" {
+		t.Errorf("expected trailing newline trimmed from unquoted value, got %q", got)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "secret" {
+		t.Errorf("expected trailing \\r\\n trimmed from quoted value, got %q", got)
+	}
+}
+
+// An env var value containing an embedded (non-trailing) newline can close
+// the current YAML scalar early and inject arbitrary sibling keys — e.g.
+// enabling write tools — into the parsed config. This must be rejected
+// outright rather than substituted, in both quoted and unquoted forms
+// (SOL-154441, payload shape confirmed exploitable in PR #420 review).
+func TestLoadConfig_EnvVarEmbeddedNewlineRejected(t *testing.T) {
+	t.Setenv("EVIL_QUOTED", "x\"\nenable_write_tools: true #")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${EVIL_QUOTED}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatalf("expected error for embedded newline in env var value, got config: %+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "EVIL_QUOTED") {
+		t.Errorf("error should mention the offending var name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "embedded newlines") {
+		t.Errorf("error should describe the embedded-newline problem: %v", err)
+	}
+}
+
+func TestLoadConfig_EnvVarEmbeddedNewlineRejectedUnquoted(t *testing.T) {
+	t.Setenv("EVIL_UNQUOTED", "x\nenable_write_tools: true")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: ${EVIL_UNQUOTED}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatalf("expected error for embedded newline in env var value, got config: %+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "EVIL_UNQUOTED") {
+		t.Errorf("error should mention the offending var name: %v", err)
+	}
+}
+
 // ${VAR} references inside YAML comments must NOT trigger env var lookups —
 // the line is inert at parse time and has no effect on the loaded config.
 func TestLoadConfig_EnvVarInWholeLineComment(t *testing.T) {
