@@ -390,6 +390,19 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return buildLocalErrorResult(toolErr), nil
 	}
 
+	// A caller-supplied topic-shaped parameter that looks HTML-escaped
+	// (SOL-154049) is a deterministic input mistake, exactly like a schema
+	// violation — checked here, in the same local-validation stage right
+	// after schema validation and before Handle ever runs, rather than as a
+	// ToolHandler-wrapping decorator: it needs no broker round-trip, so there
+	// is nothing decorator-shaped about it, and this stage is what
+	// buildLocalErrorResult and ErrorTypeValidationError already exist for.
+	if entityErr := validateHTMLEntityTopic(name, handlerParams); entityErr != nil {
+		errorType = metrics.ErrorTypeValidationError
+		toolErr = entityErr
+		return buildHTMLEntityTopicResult(entityErr), nil
+	}
+
 	// Destructive tools are the audit surface (SOL-152096). This is the same
 	// gate the pre-flip WARN stood at — after broker resolution and input
 	// validation — so enabling the audit log changes the FORM of the signal,

@@ -43,6 +43,13 @@ semp_config_for() {
     esac
 }
 
+semp_config_for() {
+    case "$1" in
+        broker-a) echo "$BROKER_A_SEMP_CONFIG" ;;
+        broker-b) echo "$BROKER_B_SEMP_CONFIG" ;;
+    esac
+}
+
 # Call a config tool and assert it succeeded: no JSON-RPC error and the tool
 # result is not flagged isError. On failure, logs the broker's message.
 #   $1 tool   $2 args_json   $3 description
@@ -379,6 +386,93 @@ test_queue_subscription_roundtrip() {
         "queue-subscription: delete-queue [$broker]" || return 1
 }
 
+# create-queue-subscription/delete-queue-subscription must reject a
+# subscriptionTopic that contains an HTML/XML-entity-encoded character
+# (SOL-154049) instead of silently creating/looking up a subscription on the
+# wrong, escaped topic — the exact failure this scenario's e2e-llm sibling
+# (c2-create-queue-then-subscribe.json) reproduces when the calling model
+# HTML-escapes the '>' wildcard. Asserts both the isError=true contract and,
+# for create, that the broker never actually got the escaped subscription
+# (a positive list check, not just the tool's own claim) — mirroring the
+# roundtrip test's "absence is asserted positively" precedent above.
+test_queue_subscription_rejects_html_entity() {
+    local broker="$1"
+    local name="e2e-config-queue-sub-htmlent-$broker"
+    local resp content
+
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{accessType:"non-exclusive"}}')" \
+        "queue-subscription-html-entity: create-queue [$broker]" || return 1
+
+    resp=$(mcp_call_tool "create-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"ABC/&gt;"}')") \
+        || { log_fail "create-queue-subscription [$broker]: transport failure on HTML-escaped topic"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "create-queue-subscription [$broker]: HTML-escaped topic (ABC/&gt;) is rejected" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" '(.subscriptions.data | length)' "0" \
+        "list-queue-subscriptions [$broker]: rejected create left no subscription behind (neither escaped nor literal)" || return 1
+
+    call_tool_ok "create-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"ABC/>"}')" \
+        "create-queue-subscription [$broker]: literal ABC/> still succeeds" || return 1
+
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
+        "queue-subscription-html-entity: delete-queue [$broker]" || return 1
+}
+
+# delete-queue-subscription must NOT reject an HTML-escaped topic (PR #446
+# review): guarding it the same way create-queue-subscription is guarded
+# would remove the only MCP-level way to clean up the exact wrong
+# subscriptions this bug creates — list-queue-subscriptions can show one, but
+# nothing could remove it short of delete-queue, which destroys the whole
+# queue and its spooled messages. This seeds a subscription with a literally
+# HTML-escaped topic directly via SEMP (bypassing create-queue-subscription's
+# own guard entirely, since that's the only way to get this state onto a
+# broker today — matching the historical case this recovery path exists for:
+# a subscription created by the bug before this fix existed), then verifies
+# delete-queue-subscription removes it using that same escaped string.
+test_queue_subscription_delete_recovers_html_entity_topic() {
+    local broker="$1"
+    local name="e2e-config-queue-sub-htmlent-del-$broker"
+    local semp_config resp content
+
+    semp_config=$(semp_config_for "$broker")
+
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{accessType:"non-exclusive"}}')" \
+        "queue-subscription-html-entity-delete: create-queue [$broker]" || return 1
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$name/subscriptions" \
+        '{"subscriptionTopic":"ABC/&gt;"}' >/dev/null \
+        || { log_fail "queue-subscription-html-entity-delete [$broker]: SEMP-direct seed of escaped-topic subscription failed"; return 1; }
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic) | index("ABC/&gt;")) != null' "true" \
+        "queue-subscription-html-entity-delete [$broker]: SEMP-direct seed is visible before the delete attempt" || return 1
+
+    call_tool_ok "delete-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"ABC/&gt;"}')" \
+        "delete-queue-subscription [$broker]: HTML-escaped topic (ABC/&gt;) is NOT rejected, and is removed" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" '(.subscriptions.data | length)' "0" \
+        "list-queue-subscriptions [$broker]: escaped-topic subscription is gone after delete" || return 1
+
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
+        "queue-subscription-html-entity-delete: delete-queue [$broker]" || return 1
+}
+
 # list-queue-subscriptions on a queue that was never created must fail, not
 # report an empty list — the exact confusion SOL-153868 exists to prevent.
 # Wording of the broker's own error (verified live: "Could not find match for
@@ -567,6 +661,10 @@ test_rdp_roundtrip_a()   { test_rdp_roundtrip broker-a; }
 test_rdp_roundtrip_b()   { test_rdp_roundtrip broker-b; }
 test_queue_subscription_roundtrip_a() { test_queue_subscription_roundtrip broker-a; }
 test_queue_subscription_roundtrip_b() { test_queue_subscription_roundtrip broker-b; }
+test_queue_subscription_rejects_html_entity_a() { test_queue_subscription_rejects_html_entity broker-a; }
+test_queue_subscription_rejects_html_entity_b() { test_queue_subscription_rejects_html_entity broker-b; }
+test_queue_subscription_delete_recovers_html_entity_topic_a() { test_queue_subscription_delete_recovers_html_entity_topic broker-a; }
+test_queue_subscription_delete_recovers_html_entity_topic_b() { test_queue_subscription_delete_recovers_html_entity_topic broker-b; }
 test_list_queue_subscriptions_nonexistent_queue_a() { test_list_queue_subscriptions_nonexistent_queue broker-a; }
 test_list_queue_subscriptions_nonexistent_queue_b() { test_list_queue_subscriptions_nonexistent_queue broker-b; }
 
@@ -588,6 +686,10 @@ run_test "RDP round-trip (broker-a)"            test_rdp_roundtrip_a
 run_test "RDP round-trip (broker-b)"            test_rdp_roundtrip_b
 run_test "Queue-subscription round-trip (broker-a)" test_queue_subscription_roundtrip_a
 run_test "Queue-subscription round-trip (broker-b)" test_queue_subscription_roundtrip_b
+run_test "Queue-subscription rejects HTML-entity topic (broker-a)" test_queue_subscription_rejects_html_entity_a
+run_test "Queue-subscription rejects HTML-entity topic (broker-b)" test_queue_subscription_rejects_html_entity_b
+run_test "Queue-subscription delete recovers HTML-entity topic (broker-a)" test_queue_subscription_delete_recovers_html_entity_topic_a
+run_test "Queue-subscription delete recovers HTML-entity topic (broker-b)" test_queue_subscription_delete_recovers_html_entity_topic_b
 run_test "list-queue-subscriptions on nonexistent queue (broker-a)" test_list_queue_subscriptions_nonexistent_queue_a
 run_test "list-queue-subscriptions on nonexistent queue (broker-b)" test_list_queue_subscriptions_nonexistent_queue_b
 run_test "Cross-broker isolation (queue)"       test_cross_broker_isolation

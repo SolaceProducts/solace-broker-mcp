@@ -1229,7 +1229,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to add the subscription to. |
-| `subscriptionTopic` | string | yes | The topic to subscribe to. Accepts Solace wildcards (`>` for multi-level, `*` for single-level). Pass the literal characters — some LLM clients have been observed HTML-escaping `>` to `&gt;` in a tool call, which silently creates a different (wrong) subscription. |
+| `subscriptionTopic` | string | yes | The topic to subscribe to. Accepts Solace wildcards (`>` for multi-level, `*` for single-level). Pass the literal characters — some LLM clients have been observed HTML-escaping `>` to `&gt;` in a tool call; an HTML-escaped topic is rejected with an error rather than silently creating a different (wrong) subscription. |
 
 **Returns:** step-keyed envelope, step `createQueueSubscription`.
 
@@ -1253,7 +1253,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to remove the subscription from. |
-| `subscriptionTopic` | string | yes | The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Pass the literal characters — some LLM clients have been observed HTML-escaping `>` to `&gt;` in a tool call, which won't match the real subscription. |
+| `subscriptionTopic` | string | yes | The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Normally pass the literal characters, not an HTML-escaped form (e.g. `&gt;`) — but this tool does not reject an escaped value: if a subscription was mistakenly created with a literally HTML-escaped topic, pass that same escaped string here to remove it. |
 
 **Returns:** step-keyed envelope, step `deleteQueueSubscription`.
 
