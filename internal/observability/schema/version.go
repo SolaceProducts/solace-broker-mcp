@@ -42,7 +42,8 @@ package schema
 // shipped as 1.6 instead — 1.4 was never a real, emitted value.)
 // 1.6 (SOL-153332): added the mcp_broker_authz_denied_total family.
 // 1.7 (SOL-152284): added mcp_token_exchange_circuit_breaker_state.
-const MetricsSchemaVersion = "1.7"
+// 1.8 (SOL-154569): added the mcp_audit_events_dropped_total family.
+const MetricsSchemaVersion = "1.8"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major

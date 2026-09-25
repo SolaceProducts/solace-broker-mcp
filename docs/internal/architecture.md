@@ -1,10 +1,10 @@
 # Architecture — Solace Broker MCP Server
 
 This document describes the architecture **as implemented**. Where a package
-exists only as a capability gate or is wired behind a feature flag, that status
-is called out inline (for example, _skeleton_, _gated_) so the doc never implies a
-subsystem is live when the code is a stub. Component claims carry `file:line`
-references so a reviewer can verify each one against the code.
+is wired behind a feature flag, that status is called out inline (for example,
+_gated_, default OFF) so the doc never implies a subsystem is live when it is
+off. Component claims carry `path:Symbol` or `file:line` references so a
+reviewer can verify each one against the code.
 
 For the trust boundaries implied by this design — what crosses them, what
 mitigates each threat, and what's an explicit accepted risk — see
@@ -35,10 +35,10 @@ internal/
 │   └── cache/                  TokenCache interface + Otter-v2 implementation for exchanged broker tokens
 │       └── cachetest/          Test helper: *testing.T-aware cache constructors with auto-Close
 ├── observability/
-│   ├── audit/                  Capability gate only — audit-record emission not yet implemented (skeleton)
+│   ├── audit/                  IMPLEMENTED: Emit/EmitDrop behind OBS_AUDIT_LOG_ENABLED (default OFF); destructive operation records plus other wired event types (see docs/observability.md)
 │   ├── correlation/            IMPLEMENTED: inbound correlation-ID middleware, context store, slog stamping (traceparent → X-Correlation-ID → UUIDv7)
 │   ├── health/                 IMPLEMENTED: /livez, /health, /readyz probes; readiness decoupled from broker (ADR-004)
-│   ├── metrics/                IMPLEMENTED: RED instruments + Prometheus /metrics endpoint (gated on OBS_METRICS_ENABLED)
+│   ├── metrics/                IMPLEMENTED: RED instruments; Prometheus /metrics endpoint (OBS_METRICS_SCRAPE_ENABLED) and/or OTLP push (OBS_METRICS_OTLP_ENABLED)
 │   ├── schema/                 Metrics/audit output schema-version constants
 │   └── tracing/                IMPLEMENTED: tracer provider + OTLP export, W3C propagator, request-path spans (gated on OBS_TRACING_ENABLED)
 ├── safego/                     Run errgroup goroutines with a panic-recovery net
@@ -120,7 +120,7 @@ graph TB
     subgraph "Observability"
         OCORR["correlation ✅"]
         OHEALTH["health ✅"]
-        OGATE["audit / metrics / tracing<br/>(gates only)"]
+        OGATE["audit / metrics / tracing<br/>(implemented, opt-in)"]
     end
 
     subgraph "External"
@@ -160,19 +160,19 @@ graph TB
 
 The server is a **resource server on hop 1** — it validates inbound tokens but
 is not the authorization authority; an external OIDC issuer is
-(`internal/auth/middleware.go:135`). On **hop 2** (oauth broker mode) it
+(`internal/auth/middleware.go:NewAuthMiddleware`). On **hop 2** (oauth broker mode) it
 switches roles and acts as an **OAuth client** of the IdP, exchanging the
 caller's token using its own registered client credentials
-(`client_secret_basic`/`client_secret_post`, `internal/tokenexchange/request.go:111`).
+(`client_secret_basic`/`client_secret_post`, `internal/tokenexchange/request.go:setClientAuth`).
 Identity crosses two hops:
 
 - **Hop 1 (inbound, always on when auth enabled):** validate the client's
   bearer token. `auth.NewAuthMiddleware` selects the backend by
-  `mcp_client_auth.mode` (`internal/auth/middleware.go:40`): `disabled`
+  `mcp_client_auth.mode` (`internal/auth/middleware.go:NewAuthMiddleware`): `disabled`
   (pass-through, no auth), `static` (constant-time compare against a dev token,
-  returns a fixed `dev-user`; dev/test only, `middleware.go:102`), or `oauth`
+  returns a fixed `dev-user`; dev/test only, `internal/auth/middleware.go:createStaticTokenVerifier`), or `oauth`
   (OIDC signature/`iss`/`aud`/`exp` verification against the issuer's JWKS,
-  `middleware.go:141`). Validated claims land on `req.Extra.TokenInfo`, from
+  `internal/auth/middleware.go:createOIDCTokenVerifier`). Validated claims land on `req.Extra.TokenInfo`, from
   which `auth.PrincipalMiddleware` builds the canonical caller `Principal`
   once per request and attaches it to the context. Each audit site projects a
   **log-only** `Identity` off that principal via `auth.PrincipalFrom(ctx)`
@@ -196,7 +196,7 @@ Identity crosses two hops:
 - **Hop 2 (outbound, GATED):** for brokers with `auth.mode: oauth`, the raw
   subject token captured by `auth.RequestExtraMiddleware`
   (`internal/auth/request_extra.go:66`) is exchanged
-  (RFC 8693, `internal/tokenexchange/exchange.go:30`) for a broker-scoped token,
+  (RFC 8693, `internal/tokenexchange/exchange.go:Exchange`) for a broker-scoped token,
   cached and singleflight-deduped. Hop 2 is built only when `Hop2OAuthActive()`
   is true (`cmd/server/main.go`); under `basic`/`bearer` broker auth a shared
   static credential is used instead.
@@ -331,7 +331,7 @@ sequenceDiagram
 
 - **No compensation or rollback.** The engine is fail-fast: on any step error it
   returns immediately and does not undo completed steps
-  (`internal/composite/executor.go:102`). Every shipped write tool is
+  (`internal/composite/executor.go:Execute`). Every shipped write tool is
   **single-step**, so there is no *cross-step* partial state today — but that is
   a property of the current tool definitions, not a guarantee the engine
   provides. Adding a multi-step write reintroduces partial-state risk.
@@ -350,7 +350,7 @@ sequenceDiagram
 - **Destructive confirmation is prompt-only.** Destructive handlers carry
   description text instructing the agent to obtain separate user confirmation;
   there is no server-side confirmation gate, token, two-phase step, or dry-run.
-  `manager.go` logs a WARNING for destructive ops (`internal/tools/manager.go`)
+  `CallTool` logs a WARNING for destructive ops (`internal/tools/manager.go:CallTool`)
   and proceeds.
 - **No per-caller write authorization at the MCP layer.** The only switch is the
   server-wide `enable_write_tools` flag. Per-caller authz exists only when the
@@ -363,11 +363,11 @@ sequenceDiagram
 
 | Signal | Status | Notes |
 |---|---|---|
-| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; the resolved ID is also written back onto the inbound `X-Correlation-ID` request header before `next` runs, so the SDK's per-message `Extra.Header` carries it even when the client generated none. Propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
+| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:Middleware`); stamped on every request-scoped slog record and echoed on the response header; the resolved ID is also written back onto the inbound `X-Correlation-ID` request header before `next` runs, so the SDK's per-message `Extra.Header` carries it even when the client generated none. Propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:Set`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go:stampCorrelationID`). Default ON. |
 | **Health / readiness** | Implemented | `/livez`, `/health`, `/readyz` (readiness decoupled from broker per ADR-004; `internal/observability/health/readiness.go`). |
-| **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
-| **Metrics** | Implemented | RED instruments and a Prometheus `/metrics` endpoint on a dedicated listener (`internal/observability/metrics/`). Default OFF (`OBS_METRICS_ENABLED`). |
-| **Tracing** | Implemented | Tracer provider with OTLP export, the W3C Trace Context propagator, and spans at the HTTP boundary, tool dispatcher, composite executor and each SEMP call (`internal/observability/tracing/`, `internal/tools/spans.go`). Per-*attempt* SEMP spans are still pending (SOL-152422). Default OFF (`OBS_TRACING_ENABLED`). |
+| **Audit log** | Implemented | Production callers gate emission with `tools.WithAuditLog` / `audit.Enabled` (`OBS_AUDIT_LOG_ENABLED`, default OFF). The emitters themselves always write when invoked (`internal/observability/audit/emit.go:Emit`, `internal/observability/audit/emit.go:EmitDrop`). Destructive `operation` records plus the other wired event types in `docs/observability.md`. Off means callers do not emit, not degraded. Best-effort. |
+| **Metrics** | Implemented | RED instruments and a Prometheus `/metrics` endpoint on a dedicated listener (`internal/observability/metrics/`). Default OFF for both egresses: `OBS_METRICS_SCRAPE_ENABLED` (the scrape listener) and `OBS_METRICS_OTLP_ENABLED` (OTLP push); either alone builds the meter provider. |
+| **Tracing** | Implemented | Tracer provider with OTLP export, the W3C Trace Context propagator, and spans at the HTTP boundary, tool dispatcher, composite executor, each SEMP call, each SEMP *attempt* (`semp.attempt`), and each token-exchange attempt (`tokenexchange.attempt`) (`internal/observability/tracing/`, `internal/tools/spans.go`, `internal/semp/resilience/attempt_span.go`, `internal/idpclient/retrying.go`). Default OFF (`OBS_TRACING_ENABLED`). |
 | **Saturation events** | Implemented (logs) | Interim log-based signal, not the roadmap metric (SOL-153443). Per-request `broker admission slow` WARN from `internal/semp/resilience/sender.go` (`admit`/`warnSlowAdmission`) once a request's admission wait passes `observability.saturation_threshold_ms`; periodic per-broker `broker in-flight occupancy` from `internal/observability/health/saturation.go`, fed by `semp.BrokerPool.OccupancySnapshot`. Default OFF. |
 
 Middleware ordering on `/mcp` (outermost first): panic recovery → body-limit →
@@ -460,13 +460,13 @@ cap is per broker.
 | Decision | Why |
 |---|---|
 | **Lazy broker client creation** | With 500 configured brokers, only active ones allocate HTTP clients and TCP connections (`internal/semp/pool.go`) |
-| **sempv2.Client is an interface** | Enables mock testing of the executor without HTTP. OAuth support did not need it: it shipped via the separate `auth.Authenticator` seam (`internal/semp/auth/oauth.go:25`), built by `NewBrokerClient` and invoked per request via `AddAuth(ctx, req)`, so the executor and this interface stay untouched by auth. |
+| **sempv2.Client is an interface** | Enables mock testing of the executor without HTTP. OAuth support did not need it: it shipped via the separate `auth.Authenticator` seam (`internal/semp/auth/auth.go:Authenticator`, `internal/semp/auth/oauth.go:NewOAuthAuthenticator`), built by `NewBrokerClient` and invoked per request via `AddAuth(ctx, req)`, so the executor and this interface stay untouched by auth. |
 | **Monitor, config and action specs are all embedded** | The private monitor spec backs read tools (exposes extended fields like `bindCount` absent from the public spec); the private config spec backs the write/CRUD tools; the private action spec backs the action tools (`delete-queue-messages`, `disconnect-client`, the `clear-*-stats` pair). `specs/embed.go` embeds `*.json`, and `validSpecTypes` in `internal/semp/sempv2/operation.go` recognizes all three (`__private_monitor__`, `__private_config__`, `__private_action__`) and gates any addition. |
 | **Operation IDs prefixed with spec type** | Keys like `monitor/getMsgVpnQueue` stay unambiguous — operationIds repeat across the SEMP monitor/config/action APIs, so re-embedding a spec later can't collide |
 | **$ref parameters resolved at parse time** | Shared query params (select, where, count, cursor) are available to all operations, not silently lost |
 | **Handler resolves broker, executor receives client** | Executor is pure orchestration — no knowledge of brokers, auth, or pools (`internal/composite/executor.go`) |
 | **Broker param is always required** | No default broker concept. The LLM always specifies which broker to target. |
-| **Write tools gated at registration** | A single `enable_write_tools` flag (default false) decides whether state-changing tools register at all (`internal/tools/register.go:149`); safest default surface |
+| **Write tools gated at registration** | A single `enable_write_tools` flag (default false) decides whether state-changing tools register at all (`internal/tools/register.go:isWriteTool`); safest default surface |
 | **Retry policy keyed on HTTP method, overridable per tool** | POST/PATCH never retried (unsafe double-write); PUT/DELETE retried as RFC-idempotent; a tool declaring `idempotent: false` suppresses replay entirely except 401 re-auth, via `resilience.WithRetryUnsafe` (`internal/semp/resilience/retry.go`) |
 | **Engine is fail-fast, no compensation** | Simpler engine; safe today only because writes are single-step. Multi-step writes await a compensating engine (SOL-148546). |
 | **Two-hop identity, token exchange over passthrough** | Broker stays the authz authority in oauth mode; hop-2 exchange (RFC 8693) is gated behind `Hop2OAuthActive()` (`internal/tokenexchange/`) |
@@ -479,29 +479,29 @@ cap is per broker.
 | Component | Knows about | Does NOT know about | Ref |
 |---|---|---|---|
 | **Recovery middleware** | The whole mux; panics | Anything downstream-specific | `internal/middleware/recovery/middleware.go` |
-| **Correlation middleware** | Request context, trace/correlation IDs, slog | Auth, brokers, tools | `internal/observability/correlation/middleware.go:97` |
-| **Auth middleware** | Client auth mode, OIDC verifier, static token | Brokers, SEMP, tools | `internal/auth/middleware.go:40` |
+| **Correlation middleware** | Request context, trace/correlation IDs, slog | Auth, brokers, tools | `internal/observability/correlation/middleware.go:Middleware` |
+| **Auth middleware** | Client auth mode, OIDC verifier, static token | Brokers, SEMP, tools | `internal/auth/middleware.go:NewAuthMiddleware` |
 | **Registry (register.go)** | MCP SDK, write-tool gate, correlation stamping, audit identity | HTTP calls, SEMP protocol | `internal/tools/register.go` |
 | **ToolManager** | Routing, broker resolution, param/output validation, audit logging | HTTP, SEMP wire format | `internal/tools/manager.go` |
 | **Composite Executor** | Tool definitions, steps, templates, result strategies | Brokers, HTTP, auth | `internal/composite/executor.go` |
 | **postprocess handlers** | Step result maps → summary | HTTP, brokers, MCP protocol | `internal/composite/postprocess/` |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details | `internal/semp/pool.go` |
-| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore, rate limiter and admission scheduler at construction, then hands them downstream. Owns the lifetime of both the rate limiter and the scheduler — `Close()` is the single stop site for each, and stopping the scheduler is what ends its dispatcher goroutine and releases parked waiters | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
+| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore, rate limiter and admission scheduler at construction, then hands them downstream. Owns the lifetime of both the rate limiter and the scheduler — `Close()` is the single stop site for each, and stopping the scheduler is what ends its dispatcher goroutine and releases parked waiters | Tools, steps, MCP protocol | `internal/semp/broker.go:NewBrokerClient` |
 | **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, admission bound and shedding, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
 | **resilience Scheduler** | Per-broker fair admission: round-robin over per-caller queues for the pace, per-caller ceiling and last-slot reservation for in-flight slots, caller-state lifecycle | Who a caller *is* (it receives an opaque key), HTTP, retries, brokers by name | `internal/semp/resilience/scheduler.go` |
 | **Broker Authenticator** | basic / bearer / oauth outbound auth | Tools, MCP protocol | `internal/semp/auth/` |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv2/client.go` |
 | **sempv1.HTTPClient** | SEMPv1 XML envelope, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv1/client.go` |
-| **correlationhdr** | Reading correlation ID from ctx; writing broker request headers | Auth, tools, brokers by name | `internal/semp/correlationhdr/correlationhdr.go:48` |
-| **tokenexchange (gated)** | RFC 8693 exchange, token cache, singleflight dedup | Tools, SEMP wire format | `internal/tokenexchange/exchange.go:30` |
+| **correlationhdr** | Reading correlation ID from ctx; writing broker request headers | Auth, tools, brokers by name | `internal/semp/correlationhdr/correlationhdr.go:Set` |
+| **tokenexchange (gated)** | RFC 8693 exchange, token cache, singleflight dedup | Tools, SEMP wire format | `internal/tokenexchange/exchange.go:Exchange` |
 | **idpclient** | Building an IdP-bound HTTP client (TLS roots, timeout) | Tools, brokers | `internal/idpclient/client.go` |
 | **oauth/cache** | TokenCache interface + Otter implementation | Exchange logic, tools | `internal/oauth/cache/cache.go` |
 | **Native SEMPv1 tools** | get-broker-status, get-discard-stats, get-redundancy-status | Composite engine, other protocols | `internal/tools/sempv1/` |
 | **queuemetrics** | get-queue-metrics (SEMPv2 metrics + SEMPv1 live depth) | Composite engine | `internal/tools/queuemetrics/handler.go:51` |
 | **sempv2 action tools** | delete-queue-messages, clear-queue-stats, disconnect-client, clear-client-stats | Composite engine | `internal/tools/sempv2/` |
-| **audit (skeleton)** | A capability-gate bool over config | Anything else — emission not built | `internal/observability/audit/` |
-| **metrics** | RED instruments, Prometheus endpoint | Trace exemplars (SOL-152419) | `internal/observability/metrics/` |
-| **tracing** | Tracer provider, OTLP export, W3C propagator, request-path spans | Per-attempt SEMP spans (SOL-152422) | `internal/observability/tracing/`, `internal/tools/spans.go` |
+| **audit** | Emit/EmitDrop, schema constructor, Enabled() gate | Raw arguments (hashed only); non-destructive `operation` coverage | `internal/observability/audit/` |
+| **metrics** | RED instruments, Prometheus endpoint | The rest of the planned catalog in `docs/observability.md` | `internal/observability/metrics/` |
+| **tracing** | Tracer provider, OTLP export, W3C propagator, request-path and per-attempt spans | — | `internal/observability/tracing/`, `internal/tools/spans.go`, `internal/semp/resilience/attempt_span.go`, `internal/idpclient/retrying.go` |
 | **health** | Liveness/readiness state | Broker health (decoupled, ADR-004) | `internal/observability/health/` |
 | **observability/schema** | Metrics/audit output schema-version constants | Emission logic | `internal/observability/schema/version.go` |
 | **Embedded assets** | `sempv2/specs` (OpenAPI JSON), `composite/definitions` (tools.yaml) embedded at build time | Runtime logic | `internal/semp/sempv2/specs/`, `internal/composite/definitions/` |

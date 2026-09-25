@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
@@ -38,12 +39,13 @@ type AdvertisedPRM struct {
 	paths               []string
 }
 
-// AdvertisedPRMInput names the three fields NewAdvertisedPRM needs.
+// AdvertisedPRMInput names the fields NewAdvertisedPRM needs.
 // Pass by value; callers own the source config and copy these fields at the call site.
 type AdvertisedPRMInput struct {
-	Mode        string // one of config.AuthMode* constants
-	ResourceURL string
-	Issuer      string
+	Mode            string // one of config.AuthMode* constants
+	ResourceURL     string
+	Issuer          string
+	ScopesSupported []string
 }
 
 // NewAdvertisedPRM builds the RFC 9728 PRM snapshot from in.
@@ -65,7 +67,7 @@ func NewAdvertisedPRM(in AdvertisedPRMInput) *AdvertisedPRM {
 	prm.metadata = &oauthex.ProtectedResourceMetadata{
 		Resource:               in.ResourceURL,
 		AuthorizationServers:   []string{in.Issuer},
-		ScopesSupported:        []string{"openid"},
+		ScopesSupported:        slices.Clone(in.ScopesSupported),
 		BearerMethodsSupported: []string{"header"},
 	}
 	prm.handler = sdkauth.ProtectedResourceMetadataHandler(prm.metadata)

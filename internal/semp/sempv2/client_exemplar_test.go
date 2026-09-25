@@ -101,7 +101,7 @@ func scrapeExemplarBearing(t *testing.T, p *metrics.Provider, family string) (wi
 func TestExecute_LatencyBucketCarriesTheRequestSpansTraceID(t *testing.T) {
 	sr := recordSpans(t)
 
-	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{})
+	prov, err := metrics.New("vtest", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

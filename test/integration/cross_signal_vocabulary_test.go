@@ -100,7 +100,7 @@ func crossSignalCall(t *testing.T, h tools.ToolHandler, brokerAlias string,
 	t.Helper()
 
 	sr := recordRequestPathSpans(t)
-	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

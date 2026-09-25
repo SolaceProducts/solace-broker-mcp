@@ -27,6 +27,10 @@ import (
 // instrument is package state: a test reusing a previous test's reader would see
 // that test's totals.
 //
+// The cleanup goes through Unregister rather than touching counter directly, so
+// this package's tests and panicstest's t.Cleanup hook exercise the same reset
+// path (SOL-154365).
+//
 // This package cannot import internal/observability/panics/panicstest — that
 // package imports panics, and this file is package panics (white-box, for
 // direct access to the unexported counter below), so importing it back would be
@@ -37,7 +41,7 @@ func newTestReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { counter.Store(nil) })
+	t.Cleanup(Unregister)
 	if err := Register(mp); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -135,13 +139,14 @@ func TestRecovered_RecordsOnCancelledContext(t *testing.T) {
 	}
 }
 
-// TestRecovered_NoOpBeforeRegister covers the OBS_METRICS_ENABLED=false case:
+// TestRecovered_NoOpBeforeRegister covers the no-metrics-egress case (neither
+// OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED):
 // with no meter provider ever supplied, a recovery site still calls these on
 // every panic and must neither panic nor record. The recovery nets themselves
 // are unconditional, so this is the normal state with metrics off.
 func TestRecovered_NoOpBeforeRegister(t *testing.T) {
-	counter.Store(nil)
-	t.Cleanup(func() { counter.Store(nil) })
+	Unregister()
+	t.Cleanup(Unregister)
 
 	RecoveredHTTP(context.Background())
 	RecoveredTool(context.Background())
@@ -152,13 +157,48 @@ func TestRecovered_NoOpBeforeRegister(t *testing.T) {
 // reach it is calling Register with metrics disabled, which is the caller's gate
 // to get right.
 func TestRegister_NilMeterProviderIsRejected(t *testing.T) {
-	counter.Store(nil)
-	t.Cleanup(func() { counter.Store(nil) })
+	Unregister()
+	t.Cleanup(Unregister)
 
 	if err := Register(nil); err == nil {
 		t.Fatal("Register(nil) error = nil, want an error")
 	}
 	if counter.Load() != nil {
 		t.Error("Register(nil) installed a counter, want none")
+	}
+}
+
+// TestUnregister_ReturnsCounterToNoOp pins the two contracts panicstest depends
+// on (SOL-154365): after Unregister the record functions are no-ops again, so a
+// registration cannot outlive the test that made it, and IsRegistered tracks
+// that transition in both directions. The reader stays live throughout, so a
+// write that still reached the instrument would be visible here rather than
+// silently discarded.
+func TestUnregister_ReturnsCounterToNoOp(t *testing.T) {
+	reader := newTestReader(t)
+
+	RecoveredHTTP(context.Background())
+	if got := countsByBoundary(t, reader)["http"]; got != 1 {
+		t.Fatalf("http count before Unregister = %d, want 1", got)
+	}
+
+	if !IsRegistered() {
+		t.Error("IsRegistered() = false while an instrument is installed, want true")
+	}
+
+	Unregister()
+	if counter.Load() != nil {
+		t.Fatal("Unregister() left an instrument installed, want none")
+	}
+	// panicstest.Register's nested-registration guard is built on this
+	// returning false once the cleanup has run; if it ever reported stale
+	// state the guard would reject every legitimate sequential registration.
+	if IsRegistered() {
+		t.Error("IsRegistered() = true after Unregister(), want false")
+	}
+
+	RecoveredHTTP(context.Background())
+	if got := countsByBoundary(t, reader)["http"]; got != 1 {
+		t.Errorf("http count after Unregister = %d, want 1 (the write must not land)", got)
 	}
 }

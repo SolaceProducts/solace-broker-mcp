@@ -62,8 +62,8 @@ const (
 // Unlike tracing's exportStats (internal/observability/tracing/stats.go),
 // this has no atomics-plus-nil-checked-counter split and no periodic INFO
 // fallback for a "metrics disabled" case: the OTLP reader this type
-// instruments only ever exists when the metrics capability itself is on
-// (validateMetricsOTLPCoherence rejects the opposite at config load), so the
+// instruments only ever exists inside the meter provider New is building —
+// attached at construction, never to a provider that is absent — so the
 // counters below are always registered by the time anything calls them.
 type otlpStats struct {
 	exportedCounter metric.Int64Counter

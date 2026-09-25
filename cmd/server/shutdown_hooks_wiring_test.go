@@ -55,7 +55,7 @@ func TestRegisterShutdownHooks_BothProvidersRegistered(t *testing.T) {
 		t.Fatalf("resource: %v", err)
 	}
 
-	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRegisterShutdownHooks_BothProvidersRegistered(t *testing.T) {
 }
 
 // TestRegisterShutdownHooks_NilProvidersRegisterNothing covers the two
-// disabled-capability cases (OBS_METRICS_ENABLED / OBS_TRACING_ENABLED both
+// disabled-capability cases (every metrics egress flag / OBS_TRACING_ENABLED
 // off) main() hits in production far more often than the both-enabled case
 // above: registerShutdownHooks must not panic on a nil provider, and must
 // register nothing for one.
@@ -105,7 +105,7 @@ func TestRegisterShutdownHooks_OnlyMetricsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resource: %v", err)
 	}
-	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("v1.2.3", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
@@ -130,7 +130,8 @@ func TestRegisterShutdownHooks_OnlyMetricsRegistered(t *testing.T) {
 // resource.New exercises the same construction path main() uses.
 func resourceForTest(t *testing.T) (*sdkresource.Resource, error) {
 	t.Helper()
-	return resource.New(config.ObservabilityConfig{
+	res, _, err := resource.New(config.ObservabilityConfig{
 		ServiceName: "test-service",
 	}, "v1.2.3")
+	return res, err
 }

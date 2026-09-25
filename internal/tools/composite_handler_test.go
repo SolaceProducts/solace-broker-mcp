@@ -52,6 +52,7 @@ func strictOutputSchema(t *testing.T, schema map[string]any) map[string]any {
 type mockClient struct {
 	mu        sync.Mutex
 	calls     []string
+	callArgs  []map[string]any // args for the call at the same index as calls; additive, most tests ignore it
 	responses map[string]*sempv2.Result
 	errors    map[string]error
 }
@@ -63,9 +64,10 @@ func newMockClient() *mockClient {
 	}
 }
 
-func (m *mockClient) Execute(_ context.Context, op *sempv2.Operation, _ map[string]any) (*sempv2.Result, error) {
+func (m *mockClient) Execute(_ context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, op.ID)
+	m.callArgs = append(m.callArgs, args)
 	m.mu.Unlock()
 
 	if err, ok := m.errors[op.ID]; ok {

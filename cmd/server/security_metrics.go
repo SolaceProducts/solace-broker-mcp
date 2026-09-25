@@ -24,17 +24,18 @@ import (
 // buildSecurityMetrics decides whether the security counters (SOL-152099) are
 // recorded: a recorder iff OBS_AUTH_FAILURE_COUNTER_ENABLED resolves true and a
 // metrics provider exists, otherwise nil, which every consumer treats as
-// inert. The flag follows OBS_METRICS_ENABLED unless set explicitly. Forced on
-// while metrics are off has nothing to register against, so it warns; a nil
-// provider with metrics on means the provider build failed, which main has
-// already logged as an ERROR.
+// inert. The flag follows the metrics provider (either OBS_METRICS_SCRAPE_ENABLED
+// or OBS_METRICS_OTLP_ENABLED) unless set explicitly. Forced on while no
+// egress is on has nothing to register against, so it warns; a nil provider
+// with an egress on means the provider build failed, which main has already
+// logged as an ERROR.
 func buildSecurityMetrics(cfg *config.ServerConfig, p *metrics.Provider) *metrics.SecurityMetrics {
 	if !metrics.AuthFailureCounterEnabled(cfg.Observability) {
 		return nil
 	}
 	if p == nil {
 		if !metrics.Enabled(cfg.Observability) {
-			slog.Warn("OBS_AUTH_FAILURE_COUNTER_ENABLED is true but OBS_METRICS_ENABLED is false; mcp_auth_failure_total and mcp_authz_denied_total have no exporter and will not be emitted")
+			slog.Warn("OBS_AUTH_FAILURE_COUNTER_ENABLED is true but neither OBS_METRICS_SCRAPE_ENABLED nor OBS_METRICS_OTLP_ENABLED is enabled; mcp_auth_failure_total and mcp_authz_denied_total have no exporter and will not be emitted")
 		}
 		return nil
 	}

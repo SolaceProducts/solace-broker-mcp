@@ -2520,6 +2520,82 @@ func captureJSONLogsAt(t *testing.T, level slog.Level) *jsonLogBuffer {
 	return buf
 }
 
+// captureJSONLogsSplit installs ONE logger that fans every record out to two
+// independent production compositions: a DEBUG buffer a test uses only to
+// observe an exchange's progress, and an INFO buffer — the shipped default —
+// which is what it asserts on. That separation is what lets a test synchronize
+// on a Debug line while still proving the level it cares about is dark. Same
+// no-t.Parallel() convention as captureJSONLogs.
+//
+// slog.NewMultiHandler is the stdlib form of the fan-out below, but it landed
+// in Go 1.26 and go.mod pins 1.25, so this stays local.
+func captureJSONLogsSplit(t *testing.T) (debugLogs, infoLogs *jsonLogBuffer) {
+	t.Helper()
+	debugLogs, infoLogs = &jsonLogBuffer{}, &jsonLogBuffer{}
+	sink := func(buf *jsonLogBuffer, level slog.Level) slog.Handler {
+		return correlation.NewSlogHandler(
+			slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: level}))
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(fanoutHandler{handlers: []slog.Handler{
+		sink(debugLogs, slog.LevelDebug),
+		sink(infoLogs, slog.LevelInfo),
+	}}))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return debugLogs, infoLogs
+}
+
+// fanoutHandler delivers each record to every child that accepts its level, so
+// sinks with different minimum levels see the same emit sites. Enabled is the
+// union: a record any child wants must reach Handle.
+type fanoutHandler struct {
+	handlers []slog.Handler
+}
+
+func (h fanoutHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, child := range h.handlers {
+		if child.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h fanoutHandler) Handle(ctx context.Context, rec slog.Record) error {
+	for _, child := range h.handlers {
+		if !child.Enabled(ctx, rec.Level) {
+			continue
+		}
+		// Clone per child: the handler contract lets a handler mutate the
+		// record it is given (correlation.NewSlogHandler adds correlation_id),
+		// and rec.Add appends to the record's own attribute slice.
+		if err := child.Handle(ctx, rec.Clone()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h fanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return fanoutHandler{handlers: deriveHandlers(h.handlers, func(c slog.Handler) slog.Handler {
+		return c.WithAttrs(attrs)
+	})}
+}
+
+func (h fanoutHandler) WithGroup(name string) slog.Handler {
+	return fanoutHandler{handlers: deriveHandlers(h.handlers, func(c slog.Handler) slog.Handler {
+		return c.WithGroup(name)
+	})}
+}
+
+func deriveHandlers(handlers []slog.Handler, derive func(slog.Handler) slog.Handler) []slog.Handler {
+	out := make([]slog.Handler, len(handlers))
+	for i, child := range handlers {
+		out[i] = derive(child)
+	}
+	return out
+}
+
 func countMsg(recs []map[string]any, msg string) int {
 	n := 0
 	for _, r := range recs {
@@ -3041,4 +3117,493 @@ func TestExchange_DetachedLinesCarryWinnerIDNotWaiterID(t *testing.T) {
 	if !seen["winner-id"] || !seen["waiter-id"] {
 		t.Errorf("completion line IDs = %v, want exactly {winner-id, waiter-id} — each caller must log completion under its own ID", completionIDs)
 	}
+}
+
+// ---------- SOL-153545: a waiter names itself ----------
+
+// These proofs assert on msgWaitedForConcurrentExchange (exchange.go), the
+// same constant the emit site uses, so the message an operator greps for and
+// the message asserted here cannot drift.
+
+// waitForCacheMiss blocks until the caller with the given correlation ID has
+// logged its own "no cached broker token" line — the last thing a caller emits
+// before joining the flight, so it is the deterministic "this caller has
+// arrived" signal. Same bounded-poll shape as
+// TestExchange_DetachedLinesCarryWinnerIDNotWaiterID.
+func waitForCacheMiss(t *testing.T, logs *jsonLogBuffer, alias, corrID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		for _, r := range forBroker(logs.records(t), alias) {
+			if r["msg"] == "no cached broker token" && r["correlation_id"] == corrID {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("caller %q never reached its cache miss within 2s", corrID)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// trackSingleflightDispatches observes the point immediately after DoChan has
+// registered a caller. Waiting for the expected count is a deterministic proof
+// that every intended waiter joined before a test releases the shared call.
+func trackSingleflightDispatches(e *Exchanger) <-chan struct{} {
+	dispatched := make(chan struct{}, 8)
+	e.afterSingleflightDispatch = func() { dispatched <- struct{}{} }
+	return dispatched
+}
+
+func waitForSingleflightDispatches(t *testing.T, dispatched <-chan struct{}, want int) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for i := 0; i < want; i++ {
+		select {
+		case <-dispatched:
+		case <-timer.C:
+			t.Fatalf("singleflight dispatches = %d, want %d within 2s", i, want)
+		}
+	}
+}
+
+func recordsWithMsg(recs []map[string]any, msg string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if r["msg"] == msg {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func countRecordMsg(recs []logRecord, msg string) int {
+	n := 0
+	for _, rec := range recs {
+		if rec.Message == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// The headline proof: in a burst of N callers served by one IdP round trip,
+// the N-1 callers that took a result they did not produce each emit the wait
+// line under their own correlation ID, and the caller that actually ran the
+// exchange never does.
+//
+// Mutation-check: swapping the emit-site guard for res.Shared turns
+// assertions 4 and 5 below red — singleflight sets Shared on EVERY result of
+// a call with dups > 0, the winner's included, so all three callers would
+// claim to have waited. A single-caller test cannot catch that (dups == 0 ⇒
+// Shared == false), which is why this proof is a burst.
+func TestExchange_WaiterLogsWaitLineWinnerDoesNot(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	var callCount atomic.Int32
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var enteredOnce sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("wait-line-tok", 3600))
+	}))
+	// Defer ordering matters: srv.Close() waits on the outstanding handler
+	// request, so the gate unblock — registered later, therefore running
+	// FIRST — must release the handler on every exit path.
+	defer srv.Close()
+	var gateOnce sync.Once
+	openGate := func() { gateOnce.Do(func() { close(gate) }) }
+	defer openGate()
+
+	// Real clock, not pinnedNow: waited must parse to a POSITIVE duration.
+	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
+	input := validInput()
+	input.BrokerAlias = "wait-line-burst-broker"
+
+	var wg sync.WaitGroup
+	call := func(corrID string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tok, err := e.Exchange(correlation.With(context.Background(), corrID), input)
+			if err != nil {
+				t.Errorf("Exchange(%s): %v", corrID, err)
+				return
+			}
+			if tok == nil {
+				t.Errorf("Exchange(%s) returned a nil token", corrID)
+			}
+		}()
+	}
+
+	call("caller-a")
+	<-entered // caller-a is the winner: its IdP call holds the flight key
+
+	for _, id := range []string{"caller-b", "caller-c"} {
+		call(id)
+		waitForCacheMiss(t, logs, input.BrokerAlias, id)
+	}
+	waitForSingleflightDispatches(t, dispatched, 3)
+	openGate()
+	wg.Wait()
+
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1 — the burst never shared a flight, so winner/waiter attribution cannot be asserted", n)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+
+	requested := findMsg(recs, "requesting broker token from identity provider")
+	if requested == nil {
+		t.Fatal(`no "requesting broker token from identity provider" line captured; cannot identify the winner`)
+	}
+	winnerID, _ := requested["correlation_id"].(string)
+
+	waitLines := recordsWithMsg(recs, msgWaitedForConcurrentExchange)
+	// Errorf, not Fatalf: the per-line checks below are the independent second
+	// half of the mutation proof, and the misattribution they catch must be
+	// reported alongside the count rather than hidden behind it.
+	if len(waitLines) != 2 {
+		t.Errorf("%q lines = %d, want 2 (one per waiter, N-1 of a 3-caller burst)",
+			msgWaitedForConcurrentExchange, len(waitLines))
+	}
+
+	seen := map[string]bool{}
+	for _, r := range waitLines {
+		id, _ := r["correlation_id"].(string)
+		if id == winnerID {
+			t.Errorf("the winner (correlation_id %q, the caller that ran the IdP exchange) emitted %q — the wait line must never be attributed to the caller that produced the result",
+				winnerID, msgWaitedForConcurrentExchange)
+		}
+		if seen[id] {
+			t.Errorf("two wait lines carry correlation_id %q, want one per distinct waiter", id)
+		}
+		seen[id] = true
+
+		if got, _ := r["level"].(string); got != "DEBUG" {
+			t.Errorf("wait line level = %q, want DEBUG", got)
+		}
+		if got, _ := r["broker"].(string); got != input.BrokerAlias {
+			t.Errorf("wait line broker = %q, want %q", got, input.BrokerAlias)
+		}
+		waited, _ := r["waited"].(string)
+		d, err := time.ParseDuration(waited)
+		if err != nil {
+			t.Errorf("wait line waited = %q, not a parsable duration: %v", waited, err)
+		} else if d <= 0 {
+			t.Errorf("wait line waited = %v, want > 0 on a real clock", d)
+		}
+		for k := range r {
+			if strings.Contains(strings.ToLower(k), "token") {
+				t.Errorf("wait line carries key %q; no token-shaped key may appear on it", k)
+			}
+		}
+	}
+
+	// The wait line ADDS to the per-caller completion line (SOL-153363); it
+	// does not replace it.
+	if n := countMsg(recs, "broker token exchange completed"); n != 3 {
+		t.Errorf("completion lines = %d, want 3 (one per caller, unchanged by the wait line)", n)
+	}
+}
+
+// A waiter that joined a flight the gate then rejected still says so. The
+// gate rejects INSIDE the singleflight func without any IdP call, which is
+// exactly where "no identity-provider lines" has always been ambiguous: this
+// pins that the wait line — not an absence — is what separates the caller
+// that joined from the caller that ran.
+//
+// Determinism comes from the only injected clock seam the func touches:
+// gateCheck calls nowFunc exactly once, and only when the gate is raised. With
+// one caller in flight the call order is fixed — #1 is the winner's start
+// above the DoChan dispatch, #2 is the gate check inside it — so holding the
+// clock on call #2 holds the flight open for the waiter to join.
+func TestExchange_WaiterOnSharedGateRejectionStillLogsWait(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("never-issued-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
+	input := validInput()
+	input.BrokerAlias = "wait-line-gate-broker"
+
+	base := pinnedNow()
+	e.nowFunc = func() time.Time { return base }
+	e.raiseGate(time.Minute)
+
+	// Swapped in only after raiseGate, so its own nowFunc call is not counted.
+	var clockCalls atomic.Int32
+	gateEntered := make(chan struct{})
+	release := make(chan struct{})
+	e.nowFunc = func() time.Time {
+		if clockCalls.Add(1) == 2 {
+			close(gateEntered)
+			<-release
+		}
+		return base
+	}
+	var releaseOnce sync.Once
+	releaseClock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseClock()
+
+	winnerErr := make(chan error, 1)
+	waiterErr := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := e.Exchange(correlation.With(context.Background(), "gate-winner-id"), input)
+		winnerErr <- err
+	}()
+
+	<-gateEntered // the winner is held inside the gate check; the flight key is held
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := e.Exchange(correlation.With(context.Background(), "gate-waiter-id"), input)
+		waiterErr <- err
+	}()
+
+	waitForCacheMiss(t, logs, input.BrokerAlias, "gate-waiter-id")
+	waitForSingleflightDispatches(t, dispatched, 2)
+	releaseClock()
+	wg.Wait()
+
+	if n := callCount.Load(); n != 0 {
+		t.Fatalf("IdP called %d times, want 0 — the gate must reject before any round trip (and clock call #2 must really have been the gate check)", n)
+	}
+
+	assertGateRejected := func(role string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrExchangeRateLimited) {
+			t.Fatalf("%s err = %v, want ErrExchangeRateLimited", role, err)
+		}
+		var exchErr *ExchangeError
+		if !errors.As(err, &exchErr) {
+			t.Fatalf("%s err = %v, want an *ExchangeError", role, err)
+		}
+		if exchErr.BrokerAlias != input.BrokerAlias {
+			t.Errorf("%s err BrokerAlias = %q, want %q — the shared error must still be enriched per caller",
+				role, exchErr.BrokerAlias, input.BrokerAlias)
+		}
+		attrs := attrMap(exchErr.LogAttrs())
+		if _, ok := attrs["gate"]; !ok {
+			t.Errorf(`%s err missing the "gate" marker`, role)
+		}
+		if _, ok := attrs["breaker_state"]; ok {
+			t.Errorf(`%s err carries "breaker_state"; a gate rejection must not be conflated with a circuit-open one`, role)
+		}
+	}
+	assertGateRejected("winner", <-winnerErr)
+	assertGateRejected("waiter", <-waiterErr)
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	waitLines := recordsWithMsg(recs, msgWaitedForConcurrentExchange)
+	if len(waitLines) != 1 {
+		t.Fatalf("%q lines = %d, want 1 (the waiter only) on a shared gate rejection",
+			msgWaitedForConcurrentExchange, len(waitLines))
+	}
+	if got, _ := waitLines[0]["correlation_id"].(string); got != "gate-waiter-id" {
+		t.Errorf("wait line correlation_id = %q, want gate-waiter-id — the winner must never claim to have waited", got)
+	}
+	// The pinned clock makes this "0s"; the positive-duration claim is
+	// proof 1's, which runs a real clock.
+	if _, ok := waitLines[0]["waited"].(string); !ok {
+		t.Error("wait line missing the waited attribute")
+	}
+
+	if n := countMsg(recs, "broker token exchange completed"); n != 0 {
+		t.Errorf("completion lines = %d, want 0 — a rejection is not a completion, so the wait line is the only thing telling the two callers apart", n)
+	}
+}
+
+// The line is a live-debugging tool, not new production volume: at the
+// shipped INFO default it must not appear at all.
+//
+// The burst has to be real for that to mean anything, and the INFO sink shows
+// none of the Debug lines that prove it formed. So the logger fans out to two
+// sinks: the DEBUG buffer synchronizes the waiters' arrival and afterwards
+// proves each one actually joined the winner's flight — it emitted the wait
+// line, and never "using cached broker token", which is what a caller that
+// missed the join and found the winner's cache Put would have emitted instead.
+// The INFO buffer is the only thing asserted on for darkness. A one-sink
+// version of this test could not tell a joined waiter from a cache hit, and
+// callCount==1 holds either way, which is why it is a secondary check here.
+func TestExchange_WaitLineDarkAtInfo(t *testing.T) {
+	// NOT parallel: captureJSONLogsSplit swaps the global logger.
+	debugLogs, infoLogs := captureJSONLogsSplit(t)
+
+	var callCount atomic.Int32
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var enteredOnce sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("dark-tok", 3600))
+	}))
+	defer srv.Close()
+	var gateOnce sync.Once
+	openGate := func() { gateOnce.Do(func() { close(gate) }) }
+	defer openGate()
+
+	e := newTestExchanger(t, srv.URL)
+	dispatched := trackSingleflightDispatches(e)
+	input := validInput()
+	input.BrokerAlias = "wait-line-dark-broker"
+
+	var wg sync.WaitGroup
+	call := func(corrID string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := e.Exchange(correlation.With(context.Background(), corrID), input); err != nil {
+				t.Errorf("Exchange(%s): %v", corrID, err)
+			}
+		}()
+	}
+
+	call("dark-a")
+	<-entered // dark-a is the winner: its IdP call holds the flight key
+
+	// The gate stays shut until both waiters have reached their own cache
+	// miss, the last thing a caller emits before joining the flight — visible
+	// on the DEBUG sink even though the assertions below read the INFO one.
+	for _, id := range []string{"dark-b", "dark-c"} {
+		call(id)
+		waitForCacheMiss(t, debugLogs, input.BrokerAlias, id)
+	}
+	waitForSingleflightDispatches(t, dispatched, 3)
+	openGate()
+	wg.Wait()
+
+	// Join proof, on the DEBUG sink: each waiter took the winner's result
+	// rather than a cached one. Not a restatement of the wait-line proof
+	// above — here it is the precondition that gives the INFO assertions
+	// their meaning.
+	debugRecs := forBroker(debugLogs.records(t), input.BrokerAlias)
+	waiterIDs := map[string]bool{}
+	for _, r := range recordsWithMsg(debugRecs, msgWaitedForConcurrentExchange) {
+		id, _ := r["correlation_id"].(string)
+		waiterIDs[id] = true
+	}
+	for _, id := range []string{"dark-b", "dark-c"} {
+		if !waiterIDs[id] {
+			t.Fatalf("caller %s never emitted %q, so it did not join the winner's flight; the INFO assertions below would prove nothing",
+				id, msgWaitedForConcurrentExchange)
+		}
+	}
+	if n := countMsg(debugRecs, "using cached broker token"); n != 0 {
+		t.Fatalf("%d callers were served from cache, want 0 — a cache hit is the one way this burst can leave callCount at 1 without a join", n)
+	}
+	// Secondary: consistent with the join above, and the cheap signal that
+	// fails first if the flight key was never shared at all.
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1", n)
+	}
+
+	// The subject of the test: nothing above INFO's threshold reaches the
+	// shipped sink, even though the DEBUG sink just saw all of it.
+	infoRecs := forBroker(infoLogs.records(t), input.BrokerAlias)
+	if n := countMsg(infoRecs, msgWaitedForConcurrentExchange); n != 0 {
+		t.Errorf("%q lines at INFO = %d, want 0", msgWaitedForConcurrentExchange, n)
+	}
+	// Stated for the whole DEBUG family, not just the new line.
+	if n := countMsg(infoRecs, "broker token exchange completed"); n != 0 {
+		t.Errorf("completion lines at INFO = %d, want 0", n)
+	}
+	// Guards against the inverse failure — an INFO sink that saw nothing
+	// because the burst never ran — by pinning that the same records the INFO
+	// sink dropped did reach the DEBUG one.
+	if n := countMsg(debugRecs, "broker token exchange completed"); n != 3 {
+		t.Errorf("completion lines at DEBUG = %d, want 3 (one per caller); the INFO sink's silence is only meaningful against real emissions", n)
+	}
+}
+
+// Two callers that never took someone else's result: one served from cache,
+// one that left before the result arrived. Neither may claim to have waited
+// for a concurrent exchange.
+func TestExchange_NoWaitLineOnCacheHitOrAbandonment(t *testing.T) {
+	t.Run("cache hit", func(t *testing.T) {
+		records, restore := captureLogs(t)
+		defer restore()
+
+		var callCount atomic.Int32
+		srv := countingIdP(&callCount)
+		defer srv.Close()
+
+		// Real clock: Otter compares ExpiresAt to time.Now(), so a pinned
+		// past clock would drop the Put and turn the second call into a miss.
+		e := newTestExchanger(t, srv.URL)
+
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("priming Exchange: %v", err)
+		}
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("second Exchange: %v", err)
+		}
+
+		if got := callCount.Load(); got != 1 {
+			t.Fatalf("IdP called %d times, want 1 — the second call must be the cache hit this test is about", got)
+		}
+		recs := records()
+		if countRecordMsg(recs, "using cached broker token") == 0 {
+			t.Fatal(`no "using cached broker token" line; the second call did not take the cache-hit return`)
+		}
+		if n := countRecordMsg(recs, msgWaitedForConcurrentExchange); n != 0 {
+			t.Errorf("%q lines = %d, want 0 — a cache hit returns above the singleflight group and waits for nobody",
+				msgWaitedForConcurrentExchange, n)
+		}
+	})
+
+	t.Run("abandoned on the result branch", func(t *testing.T) {
+		records, restore := captureLogs(t)
+		defer restore()
+
+		ctx := newLateCancelContext()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ctx.cancel()
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("abandoned-tok", 3600))
+		}))
+		defer srv.Close()
+
+		e := newTestExchanger(t, srv.URL)
+		e.nowFunc = func() time.Time { return pinnedNow() }
+
+		if _, err := e.Exchange(ctx, validInput()); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+
+		recs := records()
+		assertAbandonedBreadcrumb(t, recs, "result")
+		// Same waited key, opposite meaning: this caller waited and left with
+		// nothing, so it must not also claim it took a concurrent result.
+		if n := countRecordMsg(recs, msgWaitedForConcurrentExchange); n != 0 {
+			t.Errorf("%q lines = %d, want 0 — an abandoned caller took no result at all",
+				msgWaitedForConcurrentExchange, n)
+		}
+	})
 }

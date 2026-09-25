@@ -164,14 +164,14 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 	// mcp_broker_authz_denied_total (SOL-153332, Story 49): a hop-2 counterpart
 	// to hop-1's mcp_authz_denied_total, counting a broker-side permission
 	// denial rather than an MCP-server-side one. Registered here, gated only by
-	// OBS_METRICS_ENABLED (this instrument's meter), rather than on
+	// the metrics provider existing (this instrument's meter), rather than on
 	// SecurityMetrics: that struct's whole-struct nil gate additionally follows
 	// OBS_AUTH_FAILURE_COUNTER_ENABLED (cmd/server/security_metrics.go), a
 	// narrower, independently-settable flag SOL-152099 scoped to exactly two
 	// counters (mcp_auth_failure_total, mcp_authz_denied_total) — moving this
 	// counter there would let that flag silently gate a signal never in its
 	// documented scope, contradicting this story's own committed contract that
-	// mcp_broker_authz_denied_total is gated by OBS_METRICS_ENABLED alone.
+	// mcp_broker_authz_denied_total is gated by the metrics egress flags alone.
 	brokerAuthzDenied, err := meter.Int64Counter(
 		"mcp.broker.authz_denied",
 		metric.WithDescription("Number of tool calls denied by broker-side (hop-2) authorization."),
@@ -341,7 +341,7 @@ func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Durati
 //
 // mcp_broker_authz_denied_total (SOL-153332, Story 49) is NOT here despite
 // being the same shape of signal (a security denial counter): it is gated
-// only by OBS_METRICS_ENABLED, while this struct's whole-struct nil gate
+// only by the metrics egress flags, while this struct's whole-struct nil gate
 // additionally follows OBS_AUTH_FAILURE_COUNTER_ENABLED, a narrower,
 // independently-settable flag SOL-152099 scoped to exactly the two counters
 // above (cmd/server/security_metrics.go). Moving it here would let that flag

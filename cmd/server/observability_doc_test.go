@@ -70,7 +70,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
@@ -111,7 +111,7 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// the actually-representative default (docs/observability.md: "Push is
 	// off by default"), so there's no fidelity lost, only a real hazard
 	// avoided.
-	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{})
+	mp, err := metrics.New("test-version", res, config.ObservabilityConfig{MetricsScrapeEnabled: true})
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}
@@ -153,11 +153,18 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// way as the hop-1 authz-denied counter above, via ToolMetrics.
 	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", metrics.DenialReasonPermissionDenied)
 
-	// SOL-154365: this leaves the package-level counter pointed at a
-	// provider this test shuts down, with no way to reset it from here.
-	if err := panics.Register(mp.MeterProvider()); err != nil {
-		t.Fatalf("panics.Register: %v", err)
+	// mcp_audit_events_dropped_total (SOL-154569): seeded at zero on
+	// registration, so registering it is enough — main.go's buildAuditMetrics
+	// does exactly this and nothing more.
+	if _, err := mp.AuditMetrics(); err != nil {
+		t.Fatalf("AuditMetrics: %v", err)
 	}
+
+	// mcp_panic_recovered_total (SOL-154037): seeded at zero on registration,
+	// so registering it is enough. Routed through panicstest.Register so the
+	// registration ends with this test instead of outliving it pointed at the
+	// provider the Shutdown cleanup above kills (SOL-154365).
+	panicstest.Register(t, mp.MeterProvider())
 
 	// mcp_token_exchange_circuit_breaker_state (SOL-152284): an observable
 	// gauge, so registering it is enough — the SDK invokes the callback on

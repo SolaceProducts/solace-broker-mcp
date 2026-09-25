@@ -85,7 +85,7 @@ func (p *Provider) Resource() *sdkresource.Resource {
 // in-process — nil only means they are not exposed on /metrics — and the
 // periodic INFO fallback (Decision #12) starts automatically whenever
 // meterProvider is nil, which is the actual "nothing else surfaces this"
-// condition; gating it on cfg.MetricsEnabled instead would leave both
+// condition; gating it on the metrics egress flags instead would leave both
 // surfaces dark if metrics is configured on but its provider failed to
 // build (confirmed by review — see cmd/server/main.go's metricsProvider
 // wiring).

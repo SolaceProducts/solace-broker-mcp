@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/banner"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
@@ -327,6 +328,9 @@ type MCPClientAuthConfig struct {
 	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
 	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
 	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") — required when mode == "oauth"
+	// ScopesSupported is the ordered RFC 9728 scope list advertised to MCP
+	// clients. It defaults to ["openid"] when omitted or empty.
+	ScopesSupported []string `yaml:"scopes_supported,omitempty"`
 	// Mode selects the client authentication backend. One of AuthModeDisabled,
 	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
 	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
@@ -454,12 +458,13 @@ func (b BrokerConfig) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer for MCPClientAuthConfig. It exposes the auth
-// mode and OAuth configuration (issuer, audience, resource URL) but excludes
-// DevToken to prevent credential leaks in log output. Mode is listed first
-// because it is the most important operator-facing piece of information —
-// operators need to confirm which auth mode the server loaded at startup.
-// Issuer and ResourceURL are routed through SanitizeURLString for the same
-// defense-in-depth reason as BrokerConfig.LogValue.
+// mode and OAuth configuration (issuer, audience, resource URL, advertised
+// scopes) but excludes DevToken to prevent credential leaks in log output.
+// Mode is listed first because it is the most important operator-facing piece
+// of information — operators need to confirm which auth mode the server loaded
+// at startup. Issuer and ResourceURL are routed through SanitizeURLString for
+// the same defense-in-depth reason as BrokerConfig.LogValue. Scopes are public
+// RFC 9728 identifiers, logged with slog.Any as a JSON array.
 // See docs/secure-logging-rules.md Rule 2.
 func (c MCPClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
@@ -467,6 +472,7 @@ func (c MCPClientAuthConfig) LogValue() slog.Value {
 		slog.String("issuer", SanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", SanitizeURLString(c.ResourceURL)),
+		slog.Any("scopes_supported", c.ScopesSupported),
 	)
 }
 
@@ -740,6 +746,9 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	if cfg.SEMP.RetryMaxInterval == 0 {
 		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
+	}
+	if len(cfg.MCPClientAuth.ScopesSupported) == 0 {
+		cfg.MCPClientAuth.ScopesSupported = []string{"openid"}
 	}
 
 	applyToolAuthorizationDefaults(cfg)
@@ -1179,6 +1188,7 @@ func validate(cfg *ServerConfig) error {
 	//   - oauth: production, https:// required everywhere
 	// mode was normalized to lowercase at the top of validate() so every check
 	// above (broker TLS, IsProductionMode) and the switch below agree on it.
+	errs = append(errs, validateScopesSupported(cfg.MCPClientAuth.ScopesSupported)...)
 	switch cfg.MCPClientAuth.Mode {
 	case "":
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode is required (must be one of %v)", validAuthClientModes))
@@ -1254,11 +1264,6 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, err)
 	}
 
-	// Reject OTLP metrics push enabled while the metrics capability itself is off.
-	if err := validateMetricsOTLPCoherence(cfg); err != nil {
-		errs = append(errs, err)
-	}
-
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
@@ -1278,6 +1283,17 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func validateScopesSupported(scopes []string) []error {
+	var errs []error
+	for i, scope := range scopes {
+		if scope == "" || strings.IndexFunc(scope, unicode.IsSpace) >= 0 {
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.scopes_supported[%d] must be a non-empty string without whitespace", i))
+		}
+	}
+	return errs
 }
 
 // countHop2Brokers returns the number of brokers configured with
@@ -1694,9 +1710,11 @@ func isLoopbackHost(host string) bool {
 }
 
 // validateMetricsBindAddress rejects a metrics listener that shares the MCP
-// server's port. Only when metrics are enabled; otherwise no listener starts.
+// server's port. Only when the scrape egress is enabled; otherwise no listener
+// starts — an OTLP-only deployment (SOL-154607) binds nothing, so its
+// metrics_bind_address is inert and a collision there is not an error.
 func validateMetricsBindAddress(cfg *ServerConfig) error {
-	if !cfg.Observability.MetricsEnabled {
+	if !cfg.Observability.MetricsScrapeEnabled {
 		return nil
 	}
 	host, port, err := net.SplitHostPort(cfg.Observability.MetricsBindAddress)
@@ -1712,20 +1730,6 @@ func validateMetricsBindAddress(cfg *ServerConfig) error {
 		return fmt.Errorf(
 			"observability.metrics_bind_address %q collides with the MCP server listener %q (same port): set metrics_bind_address to a free port, or move the MCP server off it",
 			cfg.Observability.MetricsBindAddress, cfg.BindAddress())
-	}
-	return nil
-}
-
-// validateMetricsOTLPCoherence rejects OBS_METRICS_OTLP_ENABLED=true while
-// metrics themselves are off (SOL-152418, Story 46). The OTLP reader attaches
-// to the same meter provider Story 14 builds — there is no provider to attach
-// to when OBS_METRICS_ENABLED is false, so this combination cannot work.
-// Failing at config load beats emitting nothing and leaving an operator to
-// discover it from a silent dashboard.
-func validateMetricsOTLPCoherence(cfg *ServerConfig) error {
-	if cfg.Observability.MetricsOTLPEnabled && !cfg.Observability.MetricsEnabled {
-		return fmt.Errorf(
-			"observability: OBS_METRICS_OTLP_ENABLED=true requires OBS_METRICS_ENABLED=true: the OTLP metrics reader attaches to the same meter provider the Prometheus scrape uses, so there is nothing to push from with metrics disabled")
 	}
 	return nil
 }

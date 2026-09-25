@@ -100,7 +100,7 @@ func TestNew_Disabled_NilResourceStillReturnsNilNil(t *testing.T) {
 func TestNew_NilResourceIsRejected(t *testing.T) {
 	withRestoredGlobalTracer(t)
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true}
+	cfg := config.ObservabilityConfig{TracingEnabled: true}
 	if _, err := New(cfg, nil, nil); err == nil {
 		t.Fatal("New(enabled, nil resource) error = nil, want an error")
 	}
@@ -114,7 +114,7 @@ func TestNew_Enabled_SamplesByDefault(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
@@ -149,7 +149,7 @@ func TestNew_Enabled_Shutdown_RespectsTimeoutBound(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
@@ -219,7 +219,7 @@ func TestProvider_Shutdown_ActuallyDrainsTheTracerProvider(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "50") // ms; keeps the test fast
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
@@ -238,10 +238,10 @@ func TestProvider_Shutdown_ActuallyDrainsTheTracerProvider(t *testing.T) {
 	}
 }
 
-// TestNew_MetricsEnabled_RegistersInstrumentsWithoutError is the wiring-level
+// TestNew_WithMeterProvider_RegistersInstrumentsWithoutError is the wiring-level
 // counterpart to TestExportStats_RegisterInstruments_MirrorsToMeter: New must
 // not fail just because a real meter provider was supplied.
-func TestNew_MetricsEnabled_RegistersInstrumentsWithoutError(t *testing.T) {
+func TestNew_WithMeterProvider_RegistersInstrumentsWithoutError(t *testing.T) {
 	withRestoredGlobalTracer(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
@@ -250,7 +250,7 @@ func TestNew_MetricsEnabled_RegistersInstrumentsWithoutError(t *testing.T) {
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true}
+	cfg := config.ObservabilityConfig{TracingEnabled: true}
 	p, err := New(cfg, mp, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
@@ -272,7 +272,7 @@ func TestNew_NonPositiveSelfStatsInterval_DoesNotPanic(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: false, OTelSelfStatsIntervalS: 0}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 0}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
@@ -305,7 +305,7 @@ func TestProvider_Shutdown_StopsSelfStatsEmitter(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	buf := captureLogs(t)
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: false, OTelSelfStatsIntervalS: 1}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 1}
 	// A 1s configured interval would be slow to observe directly; instead,
 	// confirm indirectly that no more otel_self_stats lines appear after
 	// Shutdown returns, by racing a fast poll against a short window.
@@ -377,7 +377,7 @@ func TestNew_Enabled_ExportTimeoutClassifiedAgainstRealExporter(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "300") // ms; keeps the test fast
 
-	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
+	cfg := config.ObservabilityConfig{TracingEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil, sdkresource.Default())
 	if err != nil {
 		t.Fatalf("New() error = %v, want nil", err)

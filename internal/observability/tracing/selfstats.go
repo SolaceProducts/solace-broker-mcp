@@ -34,7 +34,7 @@ import (
 // stop is idempotent. Call only when the caller has already checked
 // interval > 0 and meterProvider == nil (provider.go) — that condition
 // covers metrics being off and metrics being configured but its provider
-// failing to build, not just cfg.MetricsEnabled being false.
+// failing to build, not just both metrics egress flags being off.
 func startSelfStatsEmitter(interval time.Duration, stats *exportStats) (stop func()) {
 	done := make(chan struct{})
 	var exited sync.WaitGroup

@@ -19,11 +19,12 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 - [Quickstart](#quickstart)
   - [Configuration](#configuration)
   - [Binary Deployment](#binary-deployment)
+  - [Connect from Claude Code](#connect-from-claude-code)
+  - [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh)
+- [Alternative Deployment Methods](#alternative-deployment-methods)
   - [Docker Deployment](#docker-deployment)
   - [Install with go install](#install-with-go-install)
   - [Kubernetes Deployment](#kubernetes-deployment)
-  - [Connect from Claude Code](#connect-from-claude-code)
-  - [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh)
 - [Development Setup](#development-setup)
   - [Configuration Options](#configuration-options)
 - [Project Structure](#project-structure)
@@ -121,10 +122,10 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 ## Quickstart
 
-Binary, Docker, and `go install` deployments share the same configuration step
-below — complete it, then pick a deployment method. Kubernetes uses its own
-checked-in manifests instead of this step; see
-[Kubernetes Deployment](#kubernetes-deployment).
+Configure, run the binary, connect — three steps to a first successful query.
+Already know you want Docker, `go install`, or Kubernetes instead of the
+binary? Finish [Configuration](#configuration) below, then see
+[Alternative Deployment Methods](#alternative-deployment-methods).
 
 ### Configuration
 
@@ -145,13 +146,9 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`mcp_client_auth.mode: disabled` skips client authentication entirely; use this only for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with a realistic authentication flow. See [Authentication](docs/authentication.md) for full setup instructions.
+`mcp_client_auth.mode: disabled` skips client authentication entirely; use this only for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. Optional `scopes_supported` is the PRM scope list this process advertises (omit or empty → `["openid"]`; Entra needs `openid` plus this API’s delegated scope). This server does not authorize inbound tokens against that list. See [Authentication](docs/authentication.md#step-2-configure-the-mcp-server). A third mode, `static`, accepts a fixed bearer token for local development with a realistic authentication flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
-**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the identity provider (IdP) does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client authentication runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which event broker?"
-
-Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id`, logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
-
-The same policy can also narrow `tools/list` to the tools each caller may invoke, so an agent is not handed tools it will be denied. Off by default; opt in with `filter_tools_list: true` and see [Filtering `tools/list`](docs/configuration.md#filtering-toolslist). This is discovery hygiene rather than access control; `tools/call` remains the enforcement point either way.
+`disabled` and `static` logs carry no real caller attribution (`static` logs every call as `dev-user`); use `oauth` when audit logs must identify who ran a tool — see [Client Authentication Settings](docs/configuration.md#client-authentication-settings). Other production concerns beyond this Quickstart — claim-based tool authorization and narrowing `tools/list` per caller — are covered in [Tool authorization](docs/configuration.md#tool-authorization) and the [Audit Trail](docs/observability.md#audit-trail--implemented) reference; none of them are required to get a first query working.
 
 Each event broker needs:
 - `url` — the SEMP management API base URL
@@ -159,6 +156,8 @@ Each event broker needs:
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
 
 **Event broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive; `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
+
+Add more brokers by adding more entries under `brokers:` — see [Multi-Broker Configuration](docs/examples.md#multi-broker-configuration) for a worked example.
 
 **2. Create a `.env` file** next to the configuration file:
 
@@ -171,13 +170,12 @@ The `.env` file is loaded automatically. Environment variables set directly (for
 
 ---
 
-Select a deployment method:
-- **[Binary](#binary-deployment)** — Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick.
-- **[Docker](#docker-deployment)** — Containerized deployment; suitable for production and Kubernetes environments
-- **[go install](#install-with-go-install)** — Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`
-- **[Kubernetes](#kubernetes-deployment)** — Cluster deployment via the reference manifests; suitable when you already run workloads on Kubernetes
-
-For contributors running from source, see [Development Setup](#development-setup).
+This Quickstart continues with the binary — a single executable with no
+dependencies, suitable for local development and VM deployment. Already know
+you want Docker, `go install`, or Kubernetes instead? Skip ahead to
+[Alternative Deployment Methods](#alternative-deployment-methods); each shares
+the configuration above. For contributors running from source, see
+[Development Setup](#development-setup).
 
 ### Binary Deployment
 
@@ -193,19 +191,7 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
-Every release archive also carries a build provenance attestation. Verifying it proves the archive was produced by this repository's `release.yml` workflow, not rebuilt or replaced by someone else. This is a stronger guarantee than the checksum, which only proves the file matches the checksums list published beside it. Verification requires the [GitHub CLI](https://cli.github.com/), authenticated with `gh auth login` (the attestation is fetched from the GitHub API, which needs a token even for a public repository):
-
-```bash
-gh attestation verify solace-broker-mcp-v1.2.0-linux-amd64.tar.gz \
-  --repo SolaceProducts/solace-broker-mcp \
-  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
-```
-
-Pass the exact archive filename: the command takes a single file, so a glob such as `solace-broker-mcp-v*.tar.gz` fails when you have more than one archive in the directory. `--signer-workflow` is what pins the attestation to the release workflow; `--repo` alone would accept an attestation minted by any workflow in this repository.
-
-Most releases also carry a CycloneDX SBOM (`solace-broker-mcp-<tag>.cdx.json`), covered by the same checksums file above. Generation is best-effort and never blocks a release, so its absence on a given release means generation failed that run, not that this project doesn't publish one — see [RELEASING.md](RELEASING.md#sbom-and-dependency-classification) for how it's produced and verified.
-
-The archive contains the binary, an example configuration file (`broker-config.example.yaml`), and the license. Copy the example configuration file to `broker-config.yaml` and modify as needed.
+The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
 Run the MCP server with the configuration file:
 
@@ -224,7 +210,67 @@ curl http://localhost:9090/livez
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
 
+**Optional: verify supply-chain provenance.** Every release archive also carries a build provenance attestation. Verifying it proves the archive was produced by this repository's `release.yml` workflow, not rebuilt or replaced by someone else. This is a stronger guarantee than the checksum, which only proves the file matches the checksums list published beside it. Verification requires the [GitHub CLI](https://cli.github.com/), authenticated with `gh auth login` (the attestation is fetched from the GitHub API, which needs a token even for a public repository):
+
+```bash
+gh attestation verify solace-broker-mcp-v1.2.0-linux-amd64.tar.gz \
+  --repo SolaceProducts/solace-broker-mcp \
+  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
+```
+
+Pass the exact archive filename: the command takes a single file, so a glob such as `solace-broker-mcp-v*.tar.gz` fails when you have more than one archive in the directory. `--signer-workflow` is what pins the attestation to the release workflow; `--repo` alone would accept an attestation minted by any workflow in this repository.
+
+Most releases also carry a CycloneDX SBOM (`solace-broker-mcp-<tag>.cdx.json`), covered by the same checksums file above. Generation is best-effort and never blocks a release, so its absence on a given release means generation failed that run, not that this project doesn't publish one — see [RELEASING.md](RELEASING.md#sbom-and-dependency-classification) for how it's produced and verified.
+
+### Connect from Claude Code
+
+After the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
+
+```bash
+claude mcp add solace-broker --transport http http://localhost:9090/mcp
+```
+
+> **If `claude mcp add` can't reach the server,** try `http://127.0.0.1:9090/mcp` instead of `localhost`. On some systems `localhost` resolves to the IPv6 loopback (`::1`) while the server listens on IPv4 only, so the connection fails even though the server is up.
+
+Example query:
+
+```
+List queues in <your-vpn-name> on my-broker
+```
+
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
+
+### Connect from Solace Agent Mesh
+
+The Quickstart configuration above (`mcp_client_auth.mode: disabled`) already matches the guide's local no-auth example — no configuration change is needed to try this. For a shared or production deployment, switch to `mcp_client_auth.mode: static` or `oauth` and set the connector's Authentication Type to match; see [Authentication](docs/authentication.md).
+
+In your Agent Mesh project, add an MCP-tooled agent that points at this server. For complete setup instructions, including the connector wizard fields, see [Agent Mesh Integration](docs/sam-integration.md).
+
+Example queries through the Agent Mesh web UI:
+
+```
+What event brokers are configured?
+List the queues on my-broker's <your-vpn-name> VPN.
+```
+
+The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
+
+## Alternative Deployment Methods
+
+Docker and `go install` share the [Configuration](#configuration) step from the Quickstart above, with one addition required for Docker (below) before running the container.
+
 ### Docker Deployment
+
+**Required:** the Quickstart configuration above (like `broker-config.example.yaml`) uses `mcp_client_auth.mode: disabled`, which binds `127.0.0.1` only — inside a container that is the *container's* loopback, so the published port refuses connections. Bind all interfaces and pair that with a token so the port is not left unauthenticated:
+
+```yaml
+listen_address: "0.0.0.0"
+mcp_client_auth:
+  mode: static
+  dev_token: "${DEV_TOKEN}"
+```
+
+Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
 
 ```bash
 docker run -d \
@@ -240,26 +286,7 @@ docker run -d \
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
 
-> **Important:** `broker-config.example.yaml` ships with `mcp_client_auth.mode: disabled`, which binds `127.0.0.1` only — inside a container that is the *container's* loopback, so the published port refuses connections. For a container, bind all interfaces and pair that with a token so the port is not left unauthenticated:
-> ```yaml
-> listen_address: "0.0.0.0"
-> mcp_client_auth:
->   mode: static
->   dev_token: "${DEV_TOKEN}"
-> ```
-> Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
-
 > **If you cap the container's memory** — `--memory`, or `mem_limit` in Compose — pass `-e GOMEMLIMIT` at 75% of that cap alongside it. The Go runtime reads the cgroup CPU limit but never the memory one, so an uninformed process runs right up against a cap it cannot see. The command above sets no memory limit and so needs no `GOMEMLIMIT`; the two belong together. Note the suffix is Go's `MiB`, not Docker's `m`, and an unparseable value kills the process at startup. See [Resource requests and limits](docs/observability.md#resource-requests-and-limits) for the rule and what it is measured against.
-
-The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's `release.yml` workflow:
-
-```bash
-gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
-  --repo SolaceProducts/solace-broker-mcp \
-  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
-```
-
-As with the binary attestation command shown earlier, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
 
 The container reads configuration from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
@@ -273,6 +300,16 @@ curl http://localhost:9090/livez
 The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`, and the reason for a failure with `docker inspect --format '{{json .State.Health.Log}}' solace-broker-mcp`.
 
 With TLS configured, the probe verifies the server's certificate against the file at `tls_cert_file`, which must therefore be readable inside the container and must carry at least one DNS or IP Subject Alternative Name (SAN); a certificate identified only by Common Name reports the container unhealthy even though the server serves HTTPS fine. See [Health Check Fails](docs/user-guide.md#troubleshooting) for the diagnostics.
+
+**Optional: verify image provenance.** The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's `release.yml` workflow:
+
+```bash
+gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
+  --repo SolaceProducts/solace-broker-mcp \
+  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
+```
+
+As with the binary attestation command shown earlier, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
 
 **Docker Compose:**
 
@@ -304,7 +341,7 @@ Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your con
 CONFIG_FILE=./broker-config.yaml server
 ```
 
-> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — copy `broker-config.example.yaml` from the repository.
+> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — the `broker-config.yaml` from [Configuration](#configuration) above is enough to run; for the full field-by-field reference, copy `broker-config.example.yaml` from the repository.
 
 Verify:
 
@@ -327,43 +364,7 @@ lists the values that must be set before applying (`DEV_TOKEN` ships empty and
 the pod will not start without it), the image-tag naming, and how to switch to
 production OAuth.
 
-### Connect from Claude Code
-
-After the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
-
-```bash
-claude mcp add solace-broker --transport http http://localhost:9090/mcp
-```
-
-Example query:
-
-```
-List queues in <your-vpn-name> on the dev event broker
-```
-
-The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
-
-### Connect from Solace Agent Mesh
-
-After the MCP server is running, configure it to accept a static development token (local development only). For production, use `mcp_client_auth.mode: oauth`; see [Authentication](docs/authentication.md).
-
-```yaml
-# broker-config.yaml
-mcp_client_auth:
-  mode: static
-  dev_token: "sam-mcp-dev-token-local-only"
-```
-
-Then in your Agent Mesh project, add an MCP-tooled agent that points at this server with the matching bearer token. For complete setup instructions, see [Agent Mesh Integration](docs/sam-integration.md).
-
-Example queries through the Agent Mesh web UI:
-
-```
-What event brokers are configured?
-List the queues on event-broker-one's <your-vpn-name> VPN.
-```
-
-The VPN name is per-broker — see [Natural-Language Queries](docs/examples.md#natural-language-queries) for how to find yours.
+Once the server is running via any of the above, continue with [Connect from Claude Code](#connect-from-claude-code) or [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh).
 
 ## Development Setup
 

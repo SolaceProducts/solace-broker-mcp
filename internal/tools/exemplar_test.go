@@ -172,7 +172,7 @@ func TestBrokerlessDispatchSites_LatencyBucketCarriesTheDispatchSpansTraceID(t *
 		t.Run(tc.name, func(t *testing.T) {
 			sr := recordSpans(t)
 
-			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{})
+			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}

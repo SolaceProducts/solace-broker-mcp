@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metrics provides the server's Prometheus metrics: an OTel meter
-// provider, a client_golang registry, the self-observation instruments, and
-// the /metrics handler. The v1 default is OFF (door-closing policy) — operators
-// opt in. Emitted records carry schema.MetricsSchemaVersion.
+// Package metrics provides the server's metrics: one OTel meter provider, the
+// self-observation instruments, and per egress flag either a client_golang
+// registry with the /metrics handler (OBS_METRICS_SCRAPE_ENABLED), an OTLP push
+// reader (OBS_METRICS_OTLP_ENABLED), or both sharing the one provider. The v1
+// default is OFF for both (door-closing policy) — operators opt in. Emitted
+// records carry schema.MetricsSchemaVersion.
 package metrics
 
 import (
@@ -67,6 +69,10 @@ type Provider struct {
 	securityMetrics     *SecurityMetrics
 	securityMetricsErr  error
 
+	auditMetricsOnce sync.Once
+	auditMetrics     *AuditMetrics
+	auditMetricsErr  error
+
 	brokerMetricsOnce sync.Once
 	brokerMetrics     *BrokerMetrics
 	brokerMetricsErr  error
@@ -79,9 +85,25 @@ type Provider struct {
 // instrumentScope names the meter that owns the server's own instruments.
 const instrumentScope = "github.com/SolaceProducts/solace-broker-mcp"
 
-// New builds the metrics provider: one registry holding both the OTel
-// instruments (via the exporter) and the client_golang runtime collectors.
-// buildVersion labels the mcp_build_info gauge.
+// New builds the metrics provider: the OTel meter provider every instrument
+// registers against, plus whichever egress readers cfg asks for. At least one
+// egress flag must be set — a config with neither is a caller error, not a
+// provider with nothing behind it (cmd/server gates the call on
+// metrics.Enabled, which is exactly that OR). buildVersion labels the
+// mcp_build_info gauge.
+//
+// cfg.MetricsScrapeEnabled (OBS_METRICS_SCRAPE_ENABLED) builds the Prometheus
+// pipeline: a client_golang registry, the Go/process runtime collectors, and
+// the OTel Prometheus exporter that renders into it — the surface Handler
+// serves and cmd/server binds a listener for. Without it none of those exist:
+// an OTLP-only deployment (SOL-154607) gets no registry and no listener to
+// bind, and Handler returns nil.
+//
+// cfg.MetricsOTLPEnabled (OBS_METRICS_OTLP_ENABLED, SOL-152418, Story 46)
+// attaches the OTLP push reader. With both flags set the two readers share
+// ONE meter provider, so both egresses observe one instrument set and share
+// res — no second set of instruments, and no possibility of the two
+// disagreeing.
 //
 // res is the shared identity resource (SOL-152425, Story 34) — the same
 // resource.Resource the tracer provider (Story 25) uses, constructed once by
@@ -92,13 +114,6 @@ const instrumentScope = "github.com/SolaceProducts/solace-broker-mcp"
 // "no identity" case — every real caller has one to pass (see
 // cmd/server/main.go); tests that don't care about identity can pass
 // sdkresource.Default() or any other non-nil resource.
-//
-// cfg.MetricsOTLPEnabled (SOL-152418, Story 46) attaches a second reader — an
-// OTLP push exporter — to the SAME meter provider the Prometheus exporter
-// reads from, so both egresses observe one instrument set and share res. A
-// zero-value config.ObservabilityConfig{} (every test that doesn't care about
-// OTLP) leaves the OTLP reader out entirely, byte-for-byte the pre-Story-46
-// construction.
 func New(buildVersion string, res *sdkresource.Resource, cfg config.ObservabilityConfig) (*Provider, error) {
 	if res == nil {
 		// Enforces the doc comment above: sdkmetric.WithResource(nil)
@@ -111,35 +126,50 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 		// explicitly, not nil.
 		return nil, fmt.Errorf("metrics: res must not be nil (pass sdkresource.Default() if identity doesn't matter)")
 	}
-	registry := promclient.NewRegistry()
-
-	// Free Go-runtime and process numbers (memory, goroutines, FDs). These
-	// register directly on the client_golang registry, never through the OTel
-	// SDK pipeline below — which is what keeps them off the OTLP egress (Story
-	// 46's own scope note): the OTLP reader only ever sees what passes through
-	// meterProvider's Meter(...), and these two collectors never do.
-	registry.MustRegister(
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-	)
-
-	// The exporter is a metric Reader that renders into the registry.
-	// WithoutScopeInfo drops the otel_scope_* labels.
-	exporter, err := otlprom.New(
-		otlprom.WithRegisterer(registry),
-		otlprom.WithoutScopeInfo(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create prometheus exporter: %w", err)
+	if !cfg.MetricsProviderEnabled() {
+		// A meter provider with no reader records into nothing while looking
+		// built; refusing here keeps "no egress" meaning "no provider" at
+		// every call site, not just cmd/server's gate.
+		return nil, fmt.Errorf("metrics: no egress enabled (set MetricsScrapeEnabled and/or MetricsOTLPEnabled)")
 	}
 
-	// readers always carries the Prometheus exporter; the OTLP reader joins it
-	// conditionally. Both must be passed to sdkmetric.NewMeterProvider in one
-	// call — the SDK does not support adding a reader after construction —
-	// which is also why otlpStats (below) is built in two steps: the reader
-	// needs to exist before the MeterProvider does, but its own counters can
-	// only register against the MeterProvider once built.
-	readers := []sdkmetric.Option{sdkmetric.WithReader(exporter)}
+	// Every reader must be passed to sdkmetric.NewMeterProvider in one call —
+	// the SDK does not support adding a reader after construction — which is
+	// also why otlpStats (below) is built in two steps: the reader needs to
+	// exist before the MeterProvider does, but its own counters can only
+	// register against the MeterProvider once built.
+	var readers []sdkmetric.Option
+
+	var registry *promclient.Registry
+	var exporter *otlprom.Exporter
+	if cfg.MetricsScrapeEnabled {
+		registry = promclient.NewRegistry()
+
+		// Free Go-runtime and process numbers (memory, goroutines, FDs). These
+		// register directly on the client_golang registry, never through the
+		// OTel SDK pipeline below — which is what keeps them off the OTLP
+		// egress (Story 46's own scope note): the OTLP reader only ever sees
+		// what passes through meterProvider's Meter(...), and these two
+		// collectors never do. It is also why they are absent, not merely
+		// unexported, in an OTLP-only deployment: they exist only inside this
+		// branch.
+		registry.MustRegister(
+			collectors.NewGoCollector(),
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		)
+
+		// The exporter is a metric Reader that renders into the registry.
+		// WithoutScopeInfo drops the otel_scope_* labels.
+		var err error
+		exporter, err = otlprom.New(
+			otlprom.WithRegisterer(registry),
+			otlprom.WithoutScopeInfo(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create prometheus exporter: %w", err)
+		}
+		readers = append(readers, sdkmetric.WithReader(exporter))
+	}
 
 	var otlpStatsInstance *otlpStats
 	if cfg.MetricsOTLPEnabled {
@@ -167,14 +197,20 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 			// before this call can fail) is the other half, closing the
 			// SDK's own global-channel leak for the same construction.
 			//
-			// Service continuity over strict correctness here too: a
-			// malformed OTLP endpoint override must not take down the
-			// Prometheus scrape, which is the capability with no further
-			// opt-in gate once metrics are on at all.
-			// validateMetricsOTLPCoherence (config package) already caught
-			// the "OTLP on, metrics off" case at config load; this is a
-			// narrower, rarer construction failure the coherence check
-			// cannot see.
+			// Service continuity over strict correctness when there is
+			// something to continue with: a malformed OTLP endpoint override
+			// must not take down the Prometheus scrape, so with the scrape
+			// pipeline built this logs and carries on without the OTLP
+			// reader. OTLP-only (SOL-154607) has no other reader to fall
+			// back to — continuing would hand back a provider whose
+			// instruments record into nothing while the process looks
+			// healthy — so that configuration fails construction instead,
+			// and cmd/server surfaces it on /readyz the way it does any
+			// provider build failure. The error is a constant for the same
+			// Rule 5 reason the log line is.
+			if !cfg.MetricsScrapeEnabled {
+				return nil, fmt.Errorf("metrics: OTLP is the only egress enabled and its exporter failed to build")
+			}
 			slog.Error("OTLP metrics egress unavailable: exporter build failed")
 			otlpStatsInstance = nil
 		} else {
@@ -283,11 +319,11 @@ func (p *Provider) Meter(name string) metric.Meter {
 }
 
 // ForceFlush flushes every reader attached at construction — the Prometheus
-// exporter (a no-op; it is pulled, not pushed) and, when MetricsOTLPEnabled
-// was set, the OTLP push reader (SOL-152418, Story 46). Exists so a caller
-// (a test, or an operator-triggered pre-shutdown flush) can force an
-// immediate OTLP push rather than waiting for the reader's own periodic
-// interval.
+// exporter (a no-op; it is pulled, not pushed) when MetricsScrapeEnabled was
+// set and the OTLP push reader (SOL-152418, Story 46) when MetricsOTLPEnabled
+// was. Exists so a caller (a test, or an operator-triggered pre-shutdown
+// flush) can force an immediate OTLP push rather than waiting for the
+// reader's own periodic interval.
 func (p *Provider) ForceFlush(ctx context.Context) error {
 	return p.meterProvider.ForceFlush(ctx)
 }
@@ -295,7 +331,16 @@ func (p *Provider) ForceFlush(ctx context.Context) error {
 // Handler serves the registry in Prometheus/OpenMetrics format for /metrics,
 // counting each scrape via mcp_metrics_scrape_total. EnableOpenMetrics is
 // required so a later change can emit exemplars.
+//
+// nil when the scrape egress was not enabled at construction (OTLP-only,
+// SOL-154607): there is no registry to render, and cmd/server never binds
+// the listener that would call this. A nil handler handed to a mux panics,
+// which is the right outcome for a wiring bug — better than a silent 404
+// on a port that should not be open at all.
 func (p *Provider) Handler() http.Handler {
+	if p.registry == nil {
+		return nil
+	}
 	base := promhttp.HandlerFor(p.registry, promhttp.HandlerOpts{EnableOpenMetrics: true})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Count before serving so this scrape's own render includes the increment.
@@ -330,6 +375,15 @@ func (p *Provider) SecurityMetrics() (*SecurityMetrics, error) {
 		p.securityMetrics, p.securityMetricsErr = NewSecurityMetrics(p.Meter(instrumentScope))
 	})
 	return p.securityMetrics, p.securityMetricsErr
+}
+
+// AuditMetrics returns the audit-pipeline counter (SOL-154569), registering
+// it once on first call — the same contract as ToolMetrics.
+func (p *Provider) AuditMetrics() (*AuditMetrics, error) {
+	p.auditMetricsOnce.Do(func() {
+		p.auditMetrics, p.auditMetricsErr = NewAuditMetrics(p.Meter(instrumentScope))
+	})
+	return p.auditMetrics, p.auditMetricsErr
 }
 
 // BrokerMetrics returns the broker reachability gauges, registering them once on first call.

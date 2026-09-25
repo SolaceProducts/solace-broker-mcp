@@ -131,7 +131,7 @@ Ingress needs a hostname and TLS secret only you can supply.
 that the Service exposes as `metrics`. Three shipped pieces make it scrapeable
 from day one:
 
-1. **Turn the listener on.** Uncomment `OBS_METRICS_ENABLED` in
+1. **Turn the listener on.** Uncomment `OBS_METRICS_SCRAPE_ENABLED` in
    `deployment.yaml`. Until then the port resolves to `connection refused`.
 2. **Restrict who can reach it.** `networkpolicy.yaml` applies with the
    directory and admits `:9091` only from the `monitoring` namespace. `:9090`
