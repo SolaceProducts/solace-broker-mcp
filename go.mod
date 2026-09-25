@@ -1,6 +1,6 @@
 module github.com/SolaceProducts/solace-broker-mcp
 
-go 1.26.0
+go 1.25.0
 
 require (
 	github.com/getkin/kin-openapi v0.149.0
@@ -23,7 +23,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	go.opentelemetry.io/proto/otlp v1.11.0
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.22.0
 	google.golang.org/grpc v1.83.2
 	gopkg.in/yaml.v3 v3.0.1
 )
