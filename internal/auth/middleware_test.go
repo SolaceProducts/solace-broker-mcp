@@ -1207,6 +1207,182 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			t.Errorf("groups = %v, want empty slice", groups)
 		}
 	})
+
+	// Entra-shaped claims (SOL-154398): a role/group list can arrive as a
+	// "roles" claim instead of "groups", and Entra may put both roles and
+	// groups on the same token. The named claim is the only one honored.
+
+	t.Run("groups_claim_name roles with populated roles array", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("roles"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles": []interface{}{"operator"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key for a populated roles claim")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "operator" {
+			t.Errorf("groups = %v, want [operator]", groups)
+		}
+	})
+
+	t.Run("both roles and groups present, named claim is roles", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("roles"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles":  []interface{}{"operator"},
+			"groups": []interface{}{"reader-object-id"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "operator" {
+			t.Errorf("groups = %v, want [operator] (groups claim must not be unioned in)", groups)
+		}
+	})
+
+	t.Run("both roles and groups present, named claim is groups", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("groups"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles":  []interface{}{"operator"},
+			"groups": []interface{}{"reader-object-id"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "reader-object-id" {
+			t.Errorf("groups = %v, want [reader-object-id] (roles claim must not be unioned in)", groups)
+		}
+	})
+
+	t.Run("only scp claim present, named claim is roles", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("roles"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		// scp is a delegated-scope claim, not a role/group list. Its presence
+		// must not satisfy the named "roles" claim.
+		token, err := mock.createToken(map[string]interface{}{
+			"scp": "access_as_user",
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when only scp is present")
+		}
+	})
 }
 
 // --- buildTokenInfo unit tests (no IdP needed) -------------------------------
