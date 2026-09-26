@@ -116,6 +116,37 @@ mcp_client_auth:
 	}
 }
 
+// groups_claim_name is fully operator-arbitrary: an Entra-shaped "roles"
+// claim name loads with enabled: true, not just the enabled: false case
+// covered above (SOL-154398).
+func TestToolAuthorization_RolesClaimNameWithEnabledTrueLoads(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    groups_claim_name: "roles"
+    access_level_groups:
+      Ops:
+        - get-broker-status
+` + oauthBaseYAML
+
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("enabled: true with groups_claim_name: roles should load, got: %v", err)
+	}
+	ta := cfg.MCPClientAuth.ToolAuthorization
+	if ta.Enabled == nil || !*ta.Enabled {
+		t.Fatal("Enabled should be non-nil and true")
+	}
+	if ta.GroupsClaimName == nil || *ta.GroupsClaimName != "roles" {
+		t.Errorf("GroupsClaimName should be %q, got %v", "roles", ta.GroupsClaimName)
+	}
+}
+
 // Omitted groups_claim_name defaults to pointer-to-"groups".
 func TestToolAuthorization_OmittedGroupsClaimNameDefaultsToGroups(t *testing.T) {
 	yaml := `
