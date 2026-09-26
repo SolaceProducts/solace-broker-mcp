@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-15; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-18; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -78,7 +78,7 @@ A standalone module. It builds the Model Context Protocol (MCP) client that driv
 | Component | Version | License | License text |
 |---|---|---|---|
 | `github.com/google/jsonschema-go` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
-| `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
+| `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
