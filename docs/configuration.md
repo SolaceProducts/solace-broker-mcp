@@ -30,7 +30,9 @@ brokers:
 
 The server resolves variables at startup. The `.env` file loads automatically before substitution. Precedence: environment variable > `.env` file > YAML literal value.
 
-Substitution runs on the raw configuration text, one line at a time, before the result is handed to the YAML parser. It skips YAML comments on a best-effort basis: a `${VAR_NAME}` reference inside a real `#` comment is normally not substituted and doesn't need the variable set. This is a hand-written line scanner, not a full YAML parser, so it is not a security boundary — quote any value containing `'`, `"`, `#`, or `:` (as the examples above do) so it parses as the single scalar you intend rather than being split by one of those characters.
+Substitution runs on the *parsed* configuration, not the raw text: the YAML is parsed first, and `${VAR_NAME}` is then replaced only inside the resulting value's already-decoded string — never spliced into the document text itself. A `${VAR_NAME}` reference inside a real `#` comment is never substituted and doesn't need the variable set, since comments aren't part of any value. A substituted value can contain anything — a quote, a colon, a newline — without changing the shape of the document; quoting a value (as the examples above do) is only needed to force it to be treated as a string rather than a number, boolean, or null.
+
+A resolved value's single trailing newline (`\n` or `\r\n`) is trimmed automatically — the common shape of a secret read from a file or mounted Secret. Nothing else about a resolved value is rejected or altered.
 
 ## Server Settings
 
