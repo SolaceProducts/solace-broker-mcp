@@ -82,8 +82,8 @@ spec:
           env:
             - name: CONFIG_FILE
               value: /etc/mcp-server/config.yaml
-            # Metrics are off by default (docs/observability.md § "Flag Defaults
-            # at GA"). Uncomment to open the /metrics listener that the `metrics`
+            # Metrics are off by default (docs/observability.md § "Feature
+            # switches"). Uncomment to open the /metrics listener that the `metrics`
             # port above, servicemonitor.yaml.example, and networkpolicy.yaml expect.
             # - name: OBS_METRICS_SCRAPE_ENABLED
             #   value: "true"

@@ -1,6 +1,6 @@
 # Authentication Guide
 
-The Solace Event Broker MCP Server supports three authentication modes for MCP client-to-server communication. This guide describes how to configure each mode.
+The Solace Broker MCP Server supports three authentication modes for MCP client-to-server communication. This guide describes how to configure each mode.
 
 ## Table of Contents
 
@@ -338,7 +338,7 @@ audience_parameter_name: "audience"
 One optional field controls handling of IdPs that omit token lifetime, and two optional sub-blocks tune runtime resilience — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
 - `broker_oauth.token_expiry_fallback` — supplies a lifetime only when the IdP returns no usable `expires_in`; a positive IdP value always takes precedence. Values of `30s` or less pass configuration validation but return an immediately stale token that is not cached.
-- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional. Each transition still logs a `WARN`. With metrics enabled, the current state is also on `/metrics` as `mcp_token_exchange_circuit_breaker_state` so you can alert without grepping logs — see [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
+- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional. Each transition still logs a `WARN`. With scrape metrics enabled, the current state is also on `/metrics` as `mcp_token_exchange_circuit_breaker_state`; with OTLP metrics enabled it is pushed instead. With neither metrics egress on the family is absent. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state).
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
 
 > **Configured vs. used vs. first-fire.** Creating the Hop 2 exchanger logs one INFO line, `token exchanger created for broker OAuth`, with `expiry_fallback_configured` (plus `expiry_fallback` when the setting is present) — that reports the fallback is armed, not that the IdP ever omitted `expires_in`. The first time a live exchange on that exchanger actually applies that duration, the server logs one INFO, `broker OAuth token expiry fallback supplied a lifetime`, again with `expiry_fallback`. Later fallback uses on the same exchanger do not repeat that INFO. Production constructs one Hop 2 exchanger per process, so operators normally see one first-fire line per server. Per-exchange `used_fallback` stays on the Debug line `identity provider issued broker token`; a cache hit produces none, and a fail-closed exchange returns an error instead. Absence of a later first-fire line does not mean the IdP started sending `expires_in`.

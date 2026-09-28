@@ -1,6 +1,6 @@
 # User Guide
 
-The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes event broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query event broker status, inspect queues, diagnose client issues, and monitor message traffic through natural language.
+The Solace Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes event broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query event broker status, inspect queues, diagnose client issues, and monitor message traffic through natural language.
 
 Application scenarios:
 
@@ -26,7 +26,7 @@ Built with Go using the official [MCP Go SDK](https://github.com/modelcontextpro
 
 ## Prerequisites
 
-The Solace Event Broker MCP Server requires:
+The Solace Broker MCP Server requires:
 
 | Requirement | Details |
 |---|---|
@@ -186,7 +186,7 @@ These read the provisioned client-username and client-profile configuration obje
 
 ### Actions
 
-These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager records every destructive invocation: with `OBS_AUDIT_LOG_ENABLED` on it emits one `operation` audit record per call carrying the broker, a hash of the arguments, the outcome, and the caller when one was authenticated — not the only audit record a call can produce, since a broker-side (hop-2) authorization denial also emits its own `broker_authz_denied` record alongside it (see [Audit Trail](observability.md#audit-trail--implemented)); with it off, it emits the WARNING line it has always logged.
+These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager records every destructive invocation: with `OBS_AUDIT_LOG_ENABLED` on it emits one `operation` audit record per call carrying the broker, a hash of the arguments, the outcome, and the caller when one was authenticated — not the only audit record a call can produce, since a broker-side (hop-2) authorization denial also emits its own `broker_authz_denied` record alongside it (see [Audit Trail](observability.md#audit-trail)); with it off, it emits the WARNING line it has always logged.
 
 **Naming convention.** Action API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. A sub-resource of one of those objects follows the same pattern one level down (`create-queue-subscription`, `delete-queue-subscription`) and has no `update-` tool, since SEMP has no update operation for it — a subscription is immutable; changing one is delete-and-recreate. Action tools run an operational action against a live object; management tools change configuration.
 

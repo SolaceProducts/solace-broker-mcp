@@ -191,7 +191,7 @@ semp:
   retry_max_interval: 30s
 
 # Observability tunables. The on/off switches are OBS_* environment variables,
-# not YAML — see docs/observability.md § "Flag Defaults at GA". Every key has a
+# not YAML — see docs/observability.md § "Feature switches". Every key has a
 # default, so the block can be omitted; docs/configuration.md § "Observability
 # Settings" lists them all.
 # observability:

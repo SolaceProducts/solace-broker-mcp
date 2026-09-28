@@ -7,7 +7,7 @@ panel authoring required.
 
 Full documentation, including exemplar setup and the OTLP-ingestion caveats
 below, lives in
-[`docs/observability.md` → Grafana Dashboard](../../docs/observability.md#grafana-dashboard--implemented).
+[`docs/observability.md` → Grafana Dashboard](../../docs/observability.md#grafana-dashboard).
 This file is a quick-start pointer, not a substitute for that section.
 
 ## Import
@@ -27,8 +27,7 @@ dashboard's `${DS_PROMETHEUS}` variable to. Requires Grafana 9 or later.
   Prometheus.** And that path needs an OTel Collector in front of it — this
   server's OTLP metrics exporter is gRPC-only, and a bare Prometheus's native
   OTLP receiver only speaks OTLP/HTTP, so a direct push does not work. See
-  the "Works against both ingestion paths" subsection in
-  [`docs/observability.md`](../../docs/observability.md#grafana-dashboard--implemented)
+  [`docs/observability.md` → Grafana Dashboard](../../docs/observability.md#grafana-dashboard)
   for what's required.
 - **`$service_name` reflects your Prometheus scrape job, not necessarily "one
   service."** It's sourced from `target_info`'s `job` label, which on the
