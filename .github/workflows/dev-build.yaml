@@ -33,8 +33,7 @@ on:
 # `dev-<sha>` published while `dev` still points at the old build — and the skip
 # check keys on `dev-<sha>`, so every later run skips and `dev` never catches up.
 # Nothing queues at one run a day, so cancelling can only cause that.
-# (llm-eval.yml:54, same call.) release.yml declares no group, so this cannot
-# cancel a release run.
+# release.yml declares no group, so this cannot cancel a release run.
 concurrency:
   group: dev-build
   cancel-in-progress: false
@@ -45,10 +44,8 @@ permissions:
 jobs:
   dev-build:
     name: dev-build
-    # Upstream only, and unconditional rather than schedule-only: a fork's token
-    # cannot push to this org's package, so a dispatched run there would build
-    # for minutes and then fail. llm-eval.yml guards only its schedule because a
-    # manual run is useful on a fork; publishing to our package never is.
+    # Upstream only: a fork's token cannot push to this org's package, so a
+    # dispatched run there would build for minutes and then fail.
     if: github.repository == 'SolaceProducts/solace-broker-mcp'
     runs-on: ubuntu-latest
     # ~4 min build; uncapped, a hung one holds a runner for six hours.

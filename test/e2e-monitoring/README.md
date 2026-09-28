@@ -12,13 +12,12 @@ Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 An LLM-driven eval harness that exercises these fixtures (F1–F7) through
 natural-language prompts via the Claude Code CLI lives in the sibling
 [`test/e2e-llm/`](../e2e-llm/README.md) suite. It sources this suite's
-`helpers.sh` for fixture provisioning, but is otherwise independent — it's
-non-gating and runs on demand via the
-[`LLM E2E Eval`](../../.github/workflows/llm-eval.yml) workflow, plus daily
-through 2026-09-03 for the SOL-153184 collection window. Delete this clause
-when the schedule goes.
+`helpers.sh` for fixture provisioning, but is otherwise independent, and
+runs from [`LLM E2E Eval`](../../.github/workflows/llm-eval.yml). A `v*` tag
+runs it before the image push and the GitHub Release. A manual dispatch
+remains. It does not run on pull requests, and there is no daily run.
 
-The daily run does not touch this suite's brokers — `test/e2e-llm/` brings up
+An llm-eval run does not touch this suite's brokers — `test/e2e-llm/` brings up
 its own (`solace-e2e-llm-a/b`) and seeds the fixtures there through the shared
 `helpers.sh`. It does *depend on* the standing objects those helpers create:
 `b5-select-delete-rdp` asserts `test-rdp` still exists after the agent is told

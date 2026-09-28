@@ -93,6 +93,13 @@ on:
 # because both resolve to the same `github.sha`. That costs the release run a
 # wait, not a verdict. Two runs in a group means one runs and one pends, and
 # nothing is dropped until a third arrives.
+#
+# Inside a Release run this expression is Release-<sha>, because a called
+# workflow's github.workflow is the caller name. guardian-scan.yaml computes
+# the same string, so test and the Guardian scan already share one queue.
+# A third workflow Release calls joins that queue and cancels whichever
+# member is waiting. A new callee must use a literal group name.
+# llm-eval.yml uses llm-eval-<sha>.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
