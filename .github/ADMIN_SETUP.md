@@ -1055,13 +1055,22 @@ pull request's `GITHUB_TOKEN` is read-only here
 (`default_workflow_permissions: read`) and cannot approve reviews
 (`can_approve_pull_request_reviews: false`), and Environment secrets are withheld
 from fork-triggered runs regardless. What approval actually buys is a human look
-before *someone else's* code consumes this repository's runners.
+  before *someone else's* code consumes this repository's runners.
 
 This has a cost worth knowing: until a maintainer approves the run, **no checks
 report at all** on an external contributor's pull request, so it shows pending
 required contexts rather than a verdict. That is expected behavior, not a CI
 failure. The fork-pull-request warning at the end of the Branch Protection section
 explains what maintainers should do about it.
+
+### LLM eval on a release
+
+A `v*` tag runs `.github/workflows/llm-eval.yml` before the GHCR push and the GitHub Release. The job reads:
+
+- Repository secret `LLM_SERVICE_API_KEY`, required. `release.yml` passes this secret by name. It does not use `secrets: inherit`.
+- Repository variables `LLM_SERVICE_ENDPOINT` and `LLM_SERVICE_MODEL_NAME`.
+
+A missing, expired, or rotated key fails the suite and publishes nothing. Fix the secret or the variable, then `gh run rerun <run-id> --failed`. That is not a new tag. `RELEASING.md` has the rest of the gate.
 
 ---
 

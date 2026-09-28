@@ -24,7 +24,9 @@ A `v*` tag runs this suite on that tag's commit. `release.yml` calls
 until it passes. The binary build does not wait, so a finished archive job
 is not a sign the release is clear. Manual dispatch still checks out
 `target_branch` (default `main`). There is no pull-request run and no daily
-run. One attempt. A red release job is `gh run rerun`. The run record's
+run. One attempt. A red release job is `gh run rerun <run-id> --failed`. A missing
+or rotated `LLM_SERVICE_API_KEY`, or an empty endpoint or model variable, is
+fixed in repo settings and then that same rerun. It is not a new tag. The run record's
 `head` line is `git rev-parse HEAD`. It matches `commit` when the checkout
 is the tag. A full run costs API credits (~$4.78 measured 2026-08-05).
 
