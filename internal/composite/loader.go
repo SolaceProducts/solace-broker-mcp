@@ -104,6 +104,9 @@ func validateTool(tool *CompositeTool) error {
 		if err := validateFanOut(step, stepIDs, stepSelects); err != nil {
 			return err
 		}
+		if err := validateOptionalArgs(step); err != nil {
+			return err
+		}
 	}
 
 	// A step in the action/ namespace invokes an RPC whose replay safety cannot
@@ -184,6 +187,15 @@ func validateTool(tool *CompositeTool) error {
 //     so the key is guaranteed to reach the executor on parent rows.
 //   - Concurrency is in [0, fanOutMaxConcurrency]; 0 means "use the framework default".
 //   - Any fan-out field on a step without ForEach is a config smell and rejected.
+func validateOptionalArgs(step Step) error {
+	for _, k := range step.OptionalArgs {
+		if _, ok := step.Args[k]; !ok {
+			return fmt.Errorf("step %s: optionalArgs entry %q is not a key of args", step.ID, k)
+		}
+	}
+	return nil
+}
+
 func validateFanOut(step Step, priorStepIDs map[string]bool, priorStepSelects map[string][]string) error {
 	if step.ForEach == "" {
 		if step.ForEachIf != "" || step.ForEachKey != "" || step.Concurrency != 0 {

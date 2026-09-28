@@ -66,7 +66,7 @@ func TestWarnIfOTLPEndpointUnset_FlagOn_NeitherEndpointSet_Warns(t *testing.T) {
 	out := captureWarnings(t, func() {
 		warnIfOTLPEndpointUnset(config.ObservabilityConfig{MetricsOTLPEnabled: true})
 	})
-	if !strings.Contains(out, "OTLP metrics push") || !strings.Contains(out, "localhost:4317") {
+	if !strings.Contains(out, otlpMetricsEndpointUnsetWarning) {
 		t.Errorf("expected a warning naming the SDK's default endpoint, got:\n%s", out)
 	}
 }

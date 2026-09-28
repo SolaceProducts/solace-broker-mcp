@@ -169,7 +169,6 @@ mcp_client_auth:
 #     client_secret_basic:                 # or client_secret_post — exactly one
 #       secret: "${MCP_SERVER_CLIENT_SECRET}"
 #   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-#   audience_parameter_name: "audience"    # the only value this version accepts
 #   # token_expiry_fallback: 1h            # optional; omit = fail-closed when the IdP is silent
 
 # SEMP client settings — controls how the server talks to brokers.
@@ -191,7 +190,7 @@ semp:
   retry_max_interval: 30s
 
 # Observability tunables. The on/off switches are OBS_* environment variables,
-# not YAML — see docs/observability.md § "Flag Defaults at GA". Every key has a
+# not YAML — see docs/observability.md § "Feature switches". Every key has a
 # default, so the block can be omitted; docs/configuration.md § "Observability
 # Settings" lists them all.
 # observability:
@@ -218,5 +217,5 @@ brokers:
       username: "${BROKER_USERNAME}"
       password: "${BROKER_PASSWORD}"
       # token: "${BROKER_TOKEN}"  # for bearer mode
-      # audience: "solace-broker-prod"  # for oauth mode; forwarded to the IdP during
-      #                                 # token exchange. Requires broker_oauth: above.
+      # target: "solace-broker-prod"  # for oauth mode; forwarded to the IdP as the
+      #                               # token-exchange audience. Requires broker_oauth: above.

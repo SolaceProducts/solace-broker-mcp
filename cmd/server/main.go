@@ -806,6 +806,10 @@ func runShutdownHooks(shutdownHooks *hooks.Registry, forceSig <-chan os.Signal) 
 	}
 }
 
+const otlpMetricsEndpointUnsetWarning = "OTLP metrics push is enabled but neither OTEL_EXPORTER_OTLP_ENDPOINT nor " +
+	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set; the SDK defaults to localhost:4317, " +
+	"which pushes into nothing unless a collector is actually listening there"
+
 // warnIfOTLPEndpointUnset logs the effective OTLP endpoint and its source
 // (an explicit env var, or the SDK's own default) when the push flag is on.
 // With neither OTEL_EXPORTER_OTLP_ENDPOINT nor OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
@@ -821,9 +825,7 @@ func warnIfOTLPEndpointUnset(cfg config.ObservabilityConfig) {
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") != "" {
 		return
 	}
-	slog.Warn("OTLP metrics push is enabled but neither OTEL_EXPORTER_OTLP_ENDPOINT nor " +
-		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set; the SDK defaults to localhost:4317, " +
-		"which pushes into nothing unless a collector is actually listening there")
+	slog.Warn(otlpMetricsEndpointUnsetWarning)
 }
 
 // registerShutdownHooks registers the shutdown flush for each provider that

@@ -27,10 +27,10 @@ import (
 )
 
 type fakeExchanger struct {
-	returnToken    *tokenexchange.Token
-	returnErr      error
-	mu             sync.Mutex
-	calls          []tokenexchange.ExchangeInput
+	returnToken     *tokenexchange.Token
+	returnErr       error
+	mu              sync.Mutex
+	calls           []tokenexchange.ExchangeInput
 	invalidateCalls []tokenexchange.DeduplicationKeyInput
 }
 
@@ -87,8 +87,8 @@ func TestOAuthAuthenticator_AddAuth(t *testing.T) {
 	if call.BrokerAlias != "my-broker" {
 		t.Errorf("BrokerAlias = %q, want %q", call.BrokerAlias, "my-broker")
 	}
-	if call.Audience != "broker-audience" {
-		t.Errorf("Audience = %q, want %q", call.Audience, "broker-audience")
+	if call.Target != "broker-audience" {
+		t.Errorf("Target = %q, want %q", call.Target, "broker-audience")
 	}
 }
 
@@ -169,8 +169,8 @@ func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	}
 	// Regression guard for SOL-152981: Invalidate's key must include every
 	// field Exchange's own key does, or it evicts the wrong cache entry.
-	if exchg.invalidateCalls[0].Audience != "aud" {
-		t.Errorf("audience = %q, want %q", exchg.invalidateCalls[0].Audience, "aud")
+	if exchg.invalidateCalls[0].Target != "aud" {
+		t.Errorf("target = %q, want %q", exchg.invalidateCalls[0].Target, "aud")
 	}
 }
 

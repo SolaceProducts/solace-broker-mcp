@@ -25,7 +25,7 @@ import (
 
 // buildIdPRequest assembles a POST to the IdP token endpoint. Each
 // concern — grant-type wire shape, subject token, client authentication,
-// audience format — is handled by its own method so new grant types or
+// target placement — is handled by its own method so new grant types or
 // auth methods grow in isolation.
 //
 // Note on scopes: the request omits the RFC 6749 §3.3 "scope" parameter
@@ -56,7 +56,7 @@ func (e *Exchanger) buildIdPRequest(ctx context.Context, input ExchangeInput) (*
 	if err := e.setClientAuth(form, req); err != nil {
 		return nil, err
 	}
-	if err := e.setAudience(form, input); err != nil {
+	if err := e.setTarget(form, input); err != nil {
 		return nil, err
 	}
 
@@ -126,17 +126,18 @@ func (e *Exchanger) setClientAuth(form url.Values, req *http.Request) error {
 	return nil
 }
 
-// setAudience places the per-broker audience value into the form field
-// selected by the configured AudienceFormat. V1 implements only the
-// canonical RFC 8693 "audience" parameter.
-func (e *Exchanger) setAudience(form url.Values, input ExchangeInput) error {
-	switch e.audienceParam {
-	case AudienceParamAudience:
-		if input.Audience != "" {
-			form.Set("audience", input.Audience)
+// setTarget places the per-broker target (brokers.<alias>.auth.target) into
+// the form field the grant type defines — the operator names one downstream
+// API, and the protocol decides how it is spelled on the wire. RFC 8693
+// token exchange carries it as "audience". An empty target omits the field.
+func (e *Exchanger) setTarget(form url.Values, input ExchangeInput) error {
+	switch e.grantType {
+	case GrantTypeTokenExchange:
+		if input.Target != "" {
+			form.Set("audience", input.Target)
 		}
 	default:
-		return fmt.Errorf("tokenexchange: unknown AudienceFormat %d (programming error — Params built outside FromConfig)", e.audienceParam)
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for target placement (programming error — Params built outside FromConfig)", e.grantType)
 	}
 	return nil
 }

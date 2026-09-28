@@ -41,7 +41,6 @@ type Exchanger struct {
 	clientAuthMethod ClientAuthMethod
 	clientSecret     string
 	grantType        GrantType
-	audienceParam    AudienceFormat
 	// tokenExpiryFallback is used only when the IdP omits expires_in or
 	// returns zero. Zero preserves fail-closed behavior.
 	tokenExpiryFallback time.Duration
@@ -53,7 +52,7 @@ type Exchanger struct {
 	chainDeadline time.Duration
 	cache         cache.TokenCache
 	group         singleflight.Group
-	nowFunc func() time.Time
+	nowFunc       func() time.Time
 	// afterSingleflightDispatch is a test seam called after DoChan has
 	// registered this caller. Production leaves it nil.
 	afterSingleflightDispatch func()
@@ -128,7 +127,6 @@ func New(p Params) (*Exchanger, error) {
 		clientAuthMethod:    p.ClientAuthMethod,
 		clientSecret:        p.ClientSecret,
 		grantType:           p.GrantType,
-		audienceParam:       p.AudienceParam,
 		tokenExpiryFallback: p.TokenExpiryFallback,
 		httpClient:          p.HTTPClient,
 		// Chain deadline is derived from the retry knobs so all timing

@@ -102,18 +102,18 @@ type ServerConfig struct {
 // and its sub-blocks (ClientSecretAuth, future PrivateKeyJWTAuth, etc.). Exactly
 // one sub-block must be populated; the validator enforces this structurally.
 //
-// GrantType and AudienceParam are required string fields validated against
-// their respective allowlists (validGrantTypes, validAudienceParams). No
-// defaults — operators acknowledge each protocol choice explicitly.
+// GrantType is a required string field validated against validGrantTypes.
+// No default — operators acknowledge the protocol choice explicitly. The
+// grant type also decides which form field carries each broker's
+// auth.target on the wire, so there is no separate parameter-name knob.
 type BrokerOAuthConfig struct {
-	TokenURL            string                   `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
-	ClientID            string                   `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
-	ClientAuth          BrokerClientAuth         `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
-	GrantType           string                   `yaml:"grant_type"`              // required; must be in validGrantTypes
-	AudienceParam       string                   `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
-	TokenExpiryFallback *time.Duration           `yaml:"token_expiry_fallback"`   // optional; used only when the IdP omits or returns zero expires_in
-	CircuitBreaker      *IdPCircuitBreakerConfig `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
-	RetryAfter          *IdPRetryAfterConfig     `yaml:"retry_after"`             // optional; nil → shipped default cap (SOL-152285)
+	TokenURL            string                   `yaml:"idp_token_endpoint"`     // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
+	ClientID            string                   `yaml:"mcp_server_client_id"`   // MCP server's client_id registered at the IdP
+	ClientAuth          BrokerClientAuth         `yaml:"mcp_server_client_auth"` // discriminated union; exactly one sub-block populated
+	GrantType           string                   `yaml:"grant_type"`             // required; must be in validGrantTypes
+	TokenExpiryFallback *time.Duration           `yaml:"token_expiry_fallback"`  // optional; used only when the IdP omits or returns zero expires_in
+	CircuitBreaker      *IdPCircuitBreakerConfig `yaml:"circuit_breaker"`        // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
+	RetryAfter          *IdPRetryAfterConfig     `yaml:"retry_after"`            // optional; nil → shipped default cap (SOL-152285)
 }
 
 // IdPCircuitBreakerConfig, its BreakerEnabled helper, validation, and the
@@ -219,23 +219,6 @@ var validGrantTypes = []string{
 	GrantTypeTokenExchange,
 }
 
-// AudienceParamAudience is the only audience_param value this version
-// implements: which OAuth request parameter carries the per-broker audience
-// value on the wire (RFC 8693 default).
-const AudienceParamAudience = "audience"
-
-// validAudienceParams is the allowlist of audience-carrying parameter names
-// accepted at config load. Only AudienceParamAudience — schema and runtime
-// support must land together: a value that validates here but isn't
-// implemented would move the failure from config load (joined with every
-// other broker_oauth error) to server startup once the Hop-2 runtime is
-// actually constructed, which only happens when Hop 1 is oauth AND
-// broker_oauth: is set AND a broker uses auth.mode: oauth — a worse and
-// later place for an operator to discover a typo-shaped mistake.
-var validAudienceParams = []string{
-	AudienceParamAudience,
-}
-
 // LogValue implements slog.LogValuer for BrokerOAuthConfig. It exposes the
 // non-secret fields and the resolved authentication method but deliberately
 // excludes the secret material in nested ClientAuth sub-blocks. See
@@ -251,7 +234,6 @@ func (b BrokerOAuthConfig) LogValue() slog.Value {
 		slog.String("mcp_server_client_id", b.ClientID),
 		slog.String("mcp_server_client_auth_method", method),
 		slog.String("grant_type", b.GrantType),
-		slog.String("audience_parameter_name", b.AudienceParam),
 		slog.Bool("expiry_fallback_configured", b.TokenExpiryFallback != nil),
 		// Whether the breaker is on is operationally important and non-secret.
 		// Only the enabled state is surfaced here; the resolved threshold values
@@ -428,10 +410,12 @@ type AuthConfig struct {
 	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
 
 	// OAuth-mode field. Used when Mode == "oauth"; ignored otherwise.
-	// Optional in V1 — the broker's OAuth profile may have audience
-	// validation disabled. The runtime omits the field from the
-	// token-exchange request when empty.
-	Audience string `yaml:"audience,omitempty"`
+	// Target names this broker's downstream API at the IdP — one string,
+	// whatever the grant type. The grant type decides the wire form field
+	// (token-exchange: "audience"). Optional — the broker's OAuth profile
+	// may have audience validation disabled; the runtime omits the field
+	// from the IdP request when empty.
+	Target string `yaml:"target,omitempty"`
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
@@ -592,6 +576,31 @@ func sanitizeYAMLError(err error) error {
 	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
 }
 
+// retiredKeyHints maps the strict decoder's unknown-field message for a key
+// this server renamed or removed to the migration step. The decode still
+// fails; the hint saves an upgrading operator a trip to the CHANGELOG. The
+// needles embed yaml.v3's message format and the Go type name, so tests pin
+// them against real decoder output.
+var retiredKeyHints = []struct{ unknownField, hint string }{
+	{"field audience not found in type config.AuthConfig", "brokers.<alias>.auth.audience was renamed auth.target"},
+	{"field audience_parameter_name not found in type config.BrokerOAuthConfig", "broker_oauth.audience_parameter_name was removed; delete it"},
+}
+
+// withRetiredKeyHints appends the migration hint for every retired key the
+// decode error names, and returns err unchanged when it names none.
+func withRetiredKeyHints(err error) error {
+	var hints []string
+	for _, h := range retiredKeyHints {
+		if strings.Contains(err.Error(), h.unknownField) {
+			hints = append(hints, h.hint)
+		}
+	}
+	if len(hints) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w (%s)", err, strings.Join(hints, "; "))
+}
+
 // ReadResolvedConfigFile performs steps 1-3 of LoadConfig's processing order —
 // read, .env load, ${VAR_NAME} substitution — returning the resolved YAML bytes
 // without parsing or validating them. LoadConfig calls it, so a reader that needs
@@ -648,7 +657,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		decodeErr := fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
+		decodeErr := fmt.Errorf("parsing config YAML: %w", withRetiredKeyHints(sanitizeYAMLError(err)))
 		if remarshaled {
 			// data was re-marshaled from the parsed node tree by
 			// substituteEnvVars, so the line numbers above refer to that
@@ -1447,15 +1456,14 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		// Per-broker OAuth params. The global broker_oauth block (IdP
 		// coordinates) is validated separately in validateBrokerOAuthConfig.
 		//
-		// Audience is optional in V1: the broker's OAuth profile may have
-		// audience validation disabled (resourceServerValidateAudienceEnabled
-		// is configurable per the SEMP v2 OauthProfile). The runtime omits the
-		// audience parameter from the token-exchange request when empty.
-		// When SET, reject whitespace-only — a ${VAR} resolving to "   "
-		// would silently land as the audience claim and break every
-		// token-exchange request.
-		if broker.Auth.Audience != "" && strings.TrimSpace(broker.Auth.Audience) == "" {
-			errs = append(errs, fmt.Errorf("broker %q: auth.audience is empty or whitespace-only", alias))
+		// Target is optional: the broker's OAuth profile may have audience
+		// validation disabled (resourceServerValidateAudienceEnabled is
+		// configurable per the SEMP v2 OauthProfile). The runtime omits it
+		// from the IdP request when empty. When SET, reject whitespace-only —
+		// a ${VAR} resolving to "   " would silently land as the requested
+		// target and break every IdP request.
+		if broker.Auth.Target != "" && strings.TrimSpace(broker.Auth.Target) == "" {
+			errs = append(errs, fmt.Errorf("broker %q: auth.target is empty or whitespace-only", alias))
 		}
 	}
 
@@ -1517,23 +1525,15 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_id is required"))
 	}
 
-	// grant_type and audience_param: required, no defaults. Operators must
-	// explicitly acknowledge each protocol choice — see the decisions doc for
-	// the rationale on removing defaults from these discriminator fields.
+	// grant_type: required, no default. Operators must explicitly
+	// acknowledge the protocol choice — see the decisions doc for the
+	// rationale on removing defaults from discriminator fields.
 	if cfg.BrokerOAuth.GrantType == "" {
 		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", validGrantTypes))
 	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
 		errs = append(errs, fmt.Errorf(
 			"broker_oauth.grant_type %q is not supported in this version (must be one of %v)",
 			cfg.BrokerOAuth.GrantType, validGrantTypes))
-	}
-
-	if cfg.BrokerOAuth.AudienceParam == "" {
-		errs = append(errs, fmt.Errorf("broker_oauth.audience_parameter_name is required (must be one of %v)", validAudienceParams))
-	} else if !slices.Contains(validAudienceParams, cfg.BrokerOAuth.AudienceParam) {
-		errs = append(errs, fmt.Errorf(
-			"broker_oauth.audience_parameter_name %q is not supported in this version (must be one of %v)",
-			cfg.BrokerOAuth.AudienceParam, validAudienceParams))
 	}
 
 	// mcp_server_client_auth is a discriminated union: exactly one sub-block populated.

@@ -215,6 +215,23 @@ tools:
 `,
 			wantSub: `require forEach to be set`,
 		},
+		{
+			name: "optionalArgs entry must be a key of args",
+			yaml: `
+tools:
+  - name: t
+    description: d
+    steps:
+      - id: solo
+        operation: monitor/getMsgVpns
+        args:
+          count: "10"
+        optionalArgs: [forceFullPage]
+    result:
+      strategy: collect
+`,
+			wantSub: `optionalArgs entry "forceFullPage" is not a key of args`,
+		},
 	}
 
 	for _, tc := range cases {

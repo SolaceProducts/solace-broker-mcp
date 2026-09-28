@@ -24,7 +24,7 @@ import (
 )
 
 // ExchangeError is a structured error returned by the token exchange
-// layer. It carries diagnostic context (endpoint, broker, audience,
+// layer. It carries diagnostic context (endpoint, broker, target,
 // HTTP status, elapsed time) through the fmt.Errorf wrapping chain so
 // logToolResult can extract and log it on the single per-tool-invocation
 // error line — same pattern as sempv1.Error and sempv2.SEMPError.
@@ -42,13 +42,13 @@ import (
 //   - Sentinel, Message, HTTPStatus, FailureClass
 //
 // Fields enriched by Exchange() before returning:
-//   - TokenEndpoint, BrokerAlias, Audience, Elapsed
+//   - TokenEndpoint, BrokerAlias, Target, Elapsed
 type ExchangeError struct {
 	Sentinel      error
 	Message       string
 	TokenEndpoint string
 	BrokerAlias   string
-	Audience      string
+	Target        string
 	HTTPStatus    int
 	// FailureClass survives the ErrExchangeRetriesExhausted rewrap, which
 	// replaces Sentinel — it is the only signal of the underlying transport
@@ -110,8 +110,8 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 	if e.BrokerAlias != "" {
 		attrs = append(attrs, slog.String("exchange_broker", e.BrokerAlias))
 	}
-	if e.Audience != "" {
-		attrs = append(attrs, slog.String("audience", e.Audience))
+	if e.Target != "" {
+		attrs = append(attrs, slog.String("target", e.Target))
 	}
 	if e.HTTPStatus != 0 {
 		attrs = append(attrs, slog.Int("idp_http_status", e.HTTPStatus))

@@ -1,6 +1,6 @@
 # Authentication Guide
 
-The Solace Event Broker MCP Server supports three authentication modes for MCP client-to-server communication. This guide describes how to configure each mode.
+The Solace Broker MCP Server supports three authentication modes for MCP client-to-server communication. This guide describes how to configure each mode.
 
 ## Table of Contents
 
@@ -291,7 +291,6 @@ broker_oauth:
     client_secret_basic:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: "audience"
   # token_expiry_fallback: 1h  # optional; omit = fail-closed when the IdP is silent
 
 brokers:
@@ -299,7 +298,7 @@ brokers:
     url: "https://broker.example.com:943"
     auth:
       mode: oauth
-      audience: "solace-broker-prod"
+      target: "solace-broker-prod"
 ```
 
 | Field | Description |
@@ -308,10 +307,9 @@ brokers:
 | `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant Type](#grant-type). |
-| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-event-broker audience value — see [Audience Parameter Name](#audience-parameter-name). |
 | `broker_oauth.token_expiry_fallback` | Optional positive duration used only when the IdP omits `expires_in`, returns `null`, or returns `0`. Omit it to preserve fail-closed behavior. Any positive duration passes configuration validation, but `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this event broker. |
-| `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This event broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the event broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails configuration load). |
+| `brokers.<alias>.auth.target` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. One string naming this event broker's API at the IdP, forwarded during exchange in the request parameter the grant type selects (token exchange: `audience`) — see [Target](#target); when omitted, the exchange request carries no audience parameter at all. Omit if the event broker's OAuth profile does not validate audience; set it only if it does. A whitespace-only value fails configuration load; an empty value (for example a `${VAR}` that resolves to `""`) is treated as omitted. |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target event broker's audience).
 
@@ -325,20 +323,24 @@ grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 
 This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a configuration schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at configuration load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
-#### Audience Parameter Name
+#### Target
 
-`audience_parameter_name` tells the runtime which OAuth request parameter carries each event broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
+`brokers.<alias>.auth.target` names this event broker's API at the IdP — one string per event broker, whatever the grant type. The grant type decides which request parameter carries it on the wire; with token exchange, the only grant type this version implements, the runtime sends it as the RFC 8693 `audience` parameter:
 
 ```yaml
-audience_parameter_name: "audience"
+brokers:
+  prod:
+    auth:
+      mode: oauth
+      target: "solace-broker-prod"
 ```
 
-`audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at configuration load with `broker_oauth.audience_parameter_name "scope" is not supported in this version (must be one of [audience])`. If your IdP requires one of those styles, event broker OAuth is not yet usable against it in this version.
+Set it to the audience value your IdP expects for this event broker. It is a single string: to reach a second event broker, configure a second alias with its own `target`, not a list. There is no separate parameter-name setting — `broker_oauth.audience_parameter_name` was removed and now fails configuration load, as does the old `brokers.<alias>.auth.audience` key.
 
 One optional field controls handling of IdPs that omit token lifetime, and two optional sub-blocks tune runtime resilience — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
 - `broker_oauth.token_expiry_fallback` — supplies a lifetime only when the IdP returns no usable `expires_in`; a positive IdP value always takes precedence. Values of `30s` or less pass configuration validation but return an immediately stale token that is not cached.
-- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional. Each transition still logs a `WARN`. With metrics enabled, the current state is also on `/metrics` as `mcp_token_exchange_circuit_breaker_state` so you can alert without grepping logs — see [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
+- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional. Each transition still logs a `WARN`. With scrape metrics enabled, the current state is also on `/metrics` as `mcp_token_exchange_circuit_breaker_state`; with OTLP metrics enabled it is pushed instead. With neither metrics egress on the family is absent. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state).
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
 
 > **Configured vs. used vs. first-fire.** Creating the Hop 2 exchanger logs one INFO line, `token exchanger created for broker OAuth`, with `expiry_fallback_configured` (plus `expiry_fallback` when the setting is present) — that reports the fallback is armed, not that the IdP ever omitted `expires_in`. The first time a live exchange on that exchanger actually applies that duration, the server logs one INFO, `broker OAuth token expiry fallback supplied a lifetime`, again with `expiry_fallback`. Later fallback uses on the same exchanger do not repeat that INFO. Production constructs one Hop 2 exchanger per process, so operators normally see one first-fire line per server. Per-exchange `used_fallback` stays on the Debug line `identity provider issued broker token`; a cache hit produces none, and a fail-closed exchange returns an error instead. Absence of a later first-fire line does not mean the IdP started sending `expires_in`.
@@ -689,7 +691,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
    ◀───── 9b ─────│              │              │       9b. Cache miss
    │──────────── 9c ─────────────▶              │       9c. RFC 8693 token exchange: subject_token
                                                             = the agent's Hop 1 JWT, audience = this
-                                                            broker's configured auth.audience
+                                                            broker's configured auth.target
    ◀──────────── 9d ─────────────│              │       9d. Broker-bound access token
    │───── 9e ─────▶              │              │       9e. Cache the access token just received
                                                             from the IdP in 9d, keyed by (agent,

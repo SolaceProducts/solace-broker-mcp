@@ -86,7 +86,7 @@ Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and 
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail configuration load or startup. RFC 8693 audience value for this event broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Event Broker OAuth (Hop 2)](#event-broker-oauth-hop-2)). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the event broker's OAuth profile does not validate audience; set it only if the event broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail configuration load. |
+| `auth.target` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail configuration load or startup. One string naming this event broker's API at the IdP (requires the top-level `broker_oauth:` block — see [Event Broker OAuth (Hop 2)](#event-broker-oauth-hop-2)). The grant type decides which request parameter carries it: token exchange sends it as the RFC 8693 `audience` parameter. When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the event broker's OAuth profile does not validate audience; set it only if the event broker's OAuth profile does. A whitespace-only value fails configuration load; an empty value (for example a `${VAR}` that resolves to `""`) is treated as omitted. It is a single string, not a list: a second event broker is a second alias. Replaces `auth.audience`, which now fails configuration load. |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see Event Broker TLS in production). |
 
 Under `mcp_client_auth.mode: oauth`, `https://` is required — and enforced at configuration load, before the server's listener starts — for every configured event broker's `url`, and the same check also covers `mcp_client_auth.issuer`, `mcp_client_auth.resource_url`, and `broker_oauth.idp_token_endpoint`. A plain `http://` value on any of these fails startup. Outside `oauth` mode, Solace still recommends `https://` event broker URLs, but it isn't enforced.
@@ -117,7 +117,6 @@ Configured under the top-level `broker_oauth` key. Required when any event broke
 | `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
 | `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at configuration load. |
-| `audience_parameter_name` | — | **Required.** Which request parameter carries each event broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at configuration load. |
 | `token_expiry_fallback` | omitted (fail closed) | Optional positive duration used only when a successful IdP response omits `expires_in`, returns `null`, or returns `0`. A positive IdP value always wins; a negative or unsafe value is still rejected. When both the response lifetime and this setting are absent, token exchange fails. Any positive duration passes configuration validation, but after the server subtracts its 30-second safety margin, a fallback of `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit Breaker](#circuit-breaker). |
 | `retry_after` | omitted (default cap) | Optional. See [Retry-After Gate](#retry-after-gate). |
@@ -136,7 +135,6 @@ broker_oauth:
     client_secret_basic:
       secret: "${MCP_SERVER_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: "audience"
   # token_expiry_fallback: 1h  # optional; omit = fail-closed when the IdP is silent
 
 brokers:
@@ -144,7 +142,7 @@ brokers:
     url: "https://broker.example.com:943"
     auth:
       mode: oauth
-      audience: "solace-broker-prod"
+      target: "solace-broker-prod"
 ```
 
 **Configured is not the same as used.** Once at startup, when the Hop 2 exchanger is created, the server logs one INFO line — `token exchanger created for broker OAuth` — carrying `expiry_fallback_configured` (and `expiry_fallback` with the duration when the setting is present). That line says the fallback is armed, not that the IdP ever omitted `expires_in`. The first time a live exchange on that exchanger actually applies that duration, the server logs one INFO — `broker OAuth token expiry fallback supplied a lifetime` — with the same `expiry_fallback` key. Later fallback uses on the same exchanger do not emit another copy. Production constructs one Hop 2 exchanger per process, so operators normally see one first-fire line per server. Whether any given live exchange used it remains on Debug: `identity provider issued broker token` with `used_fallback` — `true` only when the fallback supplied the lifetime, `false` when the IdP returned a positive `expires_in`. A cache hit performs no exchange and so emits neither the Debug line nor a second first-fire INFO, and an exchange that fails closed (no fallback configured, no usable `expires_in`) returns an error rather than these lines.
@@ -163,7 +161,7 @@ Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sust
 | `open_state_duration` | `30s` | How long the breaker stays open (rejecting exchanges immediately) before probing recovery. |
 | `half_open_probe_requests` | `2` | Consecutive successful probes required to close the breaker again. |
 
-When Hop-2 is active, each state change still logs a `WARN` (`token exchange circuit breaker state change`). That log is the complete transition record; it is not an alert. With `OBS_METRICS_SCRAPE_ENABLED` on (off by default), the same process also exposes `mcp_token_exchange_circuit_breaker_state` on `/metrics`, and over OTLP under `OBS_METRICS_OTLP_ENABLED`. Alert on `{state="open"} == 1` per scrape target. With neither metrics egress on, or with `circuit_breaker.enabled: false`, the family is absent everywhere, not closed; with only `OBS_METRICS_OTLP_ENABLED` on it is absent from `/metrics` but still pushed. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state--implemented).
+When Hop-2 is active, each state change still logs a `WARN` (`token exchange circuit breaker state change`). That log is the complete transition record; it is not an alert. With `OBS_METRICS_SCRAPE_ENABLED` on (off by default), the same process also exposes `mcp_token_exchange_circuit_breaker_state` on `/metrics`, and over OTLP under `OBS_METRICS_OTLP_ENABLED`. Alert on `{state="open"} == 1` per scrape target. With neither metrics egress on, or with `circuit_breaker.enabled: false`, the family is absent everywhere, not closed; with only `OBS_METRICS_OTLP_ENABLED` on it is absent from `/metrics` but still pushed. See [Token-Exchange Circuit Breaker State](observability.md#token-exchange-circuit-breaker-state).
 
 ### Retry-After Gate
 
@@ -467,12 +465,12 @@ routinely waits about one pacing interval, and a fan-out step waits several)
 and below `max_queue_wait`. Set it at or above `max_queue_wait` and the signal
 is silently dead, because the request is shed before the warning fires. Neither
 bound is validated. See
-[Observability](observability.md#load-and-saturation-visibility--interim--logs-only).
+[Observability](observability.md#load-and-saturation-visibility).
 
 ## Observability Settings
 
 The observability on/off switches are `OBS_*` environment variables, not YAML — see
-[Observability § Flag Defaults at GA](observability.md#flag-defaults-at-ga). The
+[Observability § Feature switches](observability.md#feature-switches). The
 `observability:` block carries only the tunables and identity fields below. Every key has a
 default, so the block may be omitted entirely, and every value supports `${VAR}` substitution.
 
@@ -496,7 +494,7 @@ unset — to honour the platform's variable.
 The other `OBS_*` variables in this document are unrelated capability switches. Full rules,
 including the ordering between `OTEL_SERVICE_NAME` and an `OTEL_RESOURCE_ATTRIBUTES`
 `service.name` entry, are under
-[Observability § Resource Attributes](observability.md#resource-attributes--implemented).
+[Observability § Resource attributes](observability.md#resource-attributes).
 
 ```yaml
 observability:

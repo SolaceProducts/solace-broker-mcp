@@ -17,8 +17,10 @@ package composite
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -275,11 +277,38 @@ func (ce *CompositeExecutor) runSingle(ctx context.Context, step Step, client se
 	}
 
 	result, err := client.Execute(ctx, op, args)
+	if err != nil && retryWithoutOptionalArgs(step, args, err) {
+		result, err = client.Execute(ctx, op, args)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
 	return result.Data, nil
+}
+
+// retryWithoutOptionalArgs reports whether a failed SEMP call should be
+// reissued without the step's OptionalArgs, and strips them from args when it
+// should. Only an HTTP 400 counts as "the broker rejected the request", and
+// only when at least one optional arg was actually sent — a 400 on a request
+// that carried none of them is a real error the retry could not fix. Any
+// other failure (transport error, 401/403/404/5xx) propagates as-is.
+func retryWithoutOptionalArgs(step Step, args map[string]any, err error) bool {
+	if len(step.OptionalArgs) == 0 {
+		return false
+	}
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) || sempErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	stripped := false
+	for _, k := range step.OptionalArgs {
+		if _, ok := args[k]; ok {
+			delete(args, k)
+			stripped = true
+		}
+	}
+	return stripped
 }
 
 // Fan-out concurrency defaults. Both are framework-level: fanOutDefaultConcurrency

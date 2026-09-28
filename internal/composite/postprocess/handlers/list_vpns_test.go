@@ -15,6 +15,8 @@
 package handlers
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -33,15 +35,38 @@ func vpn(enabled bool, state, name string) map[string]any {
 }
 
 // clients builds a real-clients fan-out result keyed by VPN name. Each entry
-// carries {data: [rows...]}. Pass an empty slice for "VPN was probed but had
-// no real clients" (the zero-conn signal). Omit a VPN entirely for
-// "forEachIf skipped this row" (disabled VPNs never enter the map).
+// carries {data: [rows...]} with no paging metadata, i.e. a probe the broker
+// ran to exhaustion. Pass an empty slice for "VPN was probed but had no real
+// clients" (the zero-conn signal). Omit a VPN entirely for "forEachIf skipped
+// this row" (disabled VPNs never enter the map).
 func clients(byVpn map[string][]any) map[string]map[string]any {
 	byKey := make(map[string]any, len(byVpn))
 	for name, rows := range byVpn {
 		byKey[name] = map[string]any{"data": rows}
 	}
 	return map[string]map[string]any{"byKey": {"byKey": byKey}}
+}
+
+// indeterminateEntry builds the probe result for a VPN whose scan stopped
+// early: no matching rows, but a nextPageUri still pointing onward. This is
+// what the broker returns when forceFullPage is not honoured, and it must not
+// be read as "no real client".
+func indeterminateEntry() map[string]any {
+	return map[string]any{
+		"data": []any{},
+		"meta": map[string]any{
+			"paging": map[string]any{
+				"nextPageUri": "http://broker/SEMP/v2/__private_monitor__/msgVpns/x/clients?cursor=abc",
+			},
+		},
+	}
+}
+
+// withEntry overwrites one VPN's probe entry in an assembled input, for the
+// cases the clients() shorthand cannot express.
+func withEntry(in map[string]map[string]any, vpnName string, entry map[string]any) map[string]map[string]any {
+	in["real-clients"]["byKey"].(map[string]any)[vpnName] = entry
+	return in
 }
 
 // input assembles both step results into the shape ListVpns receives.
@@ -338,6 +363,190 @@ func TestListVpns_SkippedOmittedWhenZero(t *testing.T) {
 	}
 	if _, present := got["skipped"]; present {
 		t.Errorf("skipped key should be omitted when 0, got %v", got["skipped"])
+	}
+}
+
+// TestListVpns_IndeterminateProbeIsNotZeroConn is the guard that keeps an
+// unhonoured forceFullPage from silently reproducing SOL-153071. A probe that
+// returned no rows but still advertises a next page established nothing, so the
+// VPN must land in indeterminateConnectionCount — never in zeroConnectionCount,
+// which an operator may act on by decommissioning the VPN.
+func TestListVpns_IndeterminateProbeIsNotZeroConn(t *testing.T) {
+	items := []any{
+		vpn(true, "up", "unverified"),
+		vpn(true, "up", "genuinely-empty"),
+		vpn(true, "up", "has-client"),
+	}
+	in := input(items, map[string][]any{
+		"genuinely-empty": {},
+		"has-client":      {clientRow()},
+	})
+	in = withEntry(in, "unverified", indeterminateEntry())
+
+	got, err := ListVpns(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["zeroConnectionCount"] != 1 {
+		t.Errorf("zeroConnectionCount: got %v, want 1 (only genuinely-empty)", got["zeroConnectionCount"])
+	}
+	if got["indeterminateConnectionCount"] != 1 {
+		t.Errorf("indeterminateConnectionCount: got %v, want 1", got["indeterminateConnectionCount"])
+	}
+	byKey := in["real-clients"]["byKey"].(map[string]any)
+	// The indeterminate entry must not expose hasRealClient at all: a consumer
+	// testing `hasRealClient == false` would otherwise treat it as idle.
+	entry := byKey["unverified"].(map[string]any)
+	if _, present := entry["hasRealClient"]; present {
+		t.Errorf("indeterminate entry must not carry hasRealClient, got %#v", entry)
+	}
+	if entry["indeterminate"] != true {
+		t.Errorf("byKey[unverified]: want {indeterminate:true}, got %#v", entry)
+	}
+}
+
+// TestListVpns_IndeterminateProbeWarns asserts the degradation is not silent.
+// The summary field alone is insufficient — an MCP client may never surface it
+// to a human — so an indeterminate probe must also reach the operator's logs.
+// A test that only checked the count would leave that guarantee unverified,
+// which is the same gap this whole change set exists to close.
+func TestListVpns_IndeterminateProbeWarns(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	in := input([]any{vpn(true, "up", "unverified")}, map[string][]any{})
+	in = withEntry(in, "unverified", indeterminateEntry())
+	if _, err := ListVpns(in); err != nil {
+		t.Fatal(err)
+	}
+
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("indeterminate probe produced no log output; the degradation would be silent")
+	}
+	for _, want := range []string{
+		"level=WARN",
+		"indeterminate_vpns=1",
+		"unverified",
+		"forceFullPage",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("warning missing %q\ngot: %s", want, logged)
+		}
+	}
+}
+
+// TestListVpns_NoWarningWhenAllProbesComplete is the companion: a healthy run
+// must stay quiet, or the warning becomes noise operators learn to ignore.
+func TestListVpns_NoWarningWhenAllProbesComplete(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	items := []any{vpn(true, "up", "has-client"), vpn(true, "up", "empty")}
+	if _, err := ListVpns(input(items, map[string][]any{
+		"has-client": {clientRow()},
+		"empty":      {},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "" {
+		t.Errorf("healthy run must not warn, got: %s", got)
+	}
+}
+
+// TestListVpns_ExhaustedEmptyProbeIsZeroConn is the other half of the pair: an
+// empty probe with NO next page means the broker scanned the whole collection
+// and found nothing, which is a definitive zero-connection answer.
+func TestListVpns_ExhaustedEmptyProbeIsZeroConn(t *testing.T) {
+	got, err := ListVpns(input([]any{vpn(true, "up", "empty")}, map[string][]any{"empty": {}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["zeroConnectionCount"] != 1 {
+		t.Errorf("zeroConnectionCount: got %v, want 1", got["zeroConnectionCount"])
+	}
+	if _, present := got["indeterminateConnectionCount"]; present {
+		t.Errorf("indeterminateConnectionCount must be omitted when zero, got %v", got["indeterminateConnectionCount"])
+	}
+}
+
+// TestListVpns_IndeterminateIgnoredWhenRowsPresent: a probe that returned a
+// match is definitive even if a next page remains — the broker stops as soon
+// as the page holds `count` matches, so a trailing cursor is normal and must
+// not downgrade a positive result.
+func TestListVpns_IndeterminateIgnoredWhenRowsPresent(t *testing.T) {
+	entry := indeterminateEntry()
+	entry["data"] = []any{clientRow()}
+	in := withEntry(input([]any{vpn(true, "up", "has-client")}, map[string][]any{}), "has-client", entry)
+	got, err := ListVpns(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["zeroConnectionCount"] != 0 {
+		t.Errorf("zeroConnectionCount: got %v, want 0", got["zeroConnectionCount"])
+	}
+	if _, present := got["indeterminateConnectionCount"]; present {
+		t.Errorf("a matched probe must not be indeterminate, got %v", got["indeterminateConnectionCount"])
+	}
+	entryOut := in["real-clients"]["byKey"].(map[string]any)["has-client"].(map[string]any)
+	if entryOut["hasRealClient"] != true {
+		t.Errorf("byKey[has-client]: want {hasRealClient:true}, got %#v", entryOut)
+	}
+}
+
+// TestListVpns_ScrubsRawClientRows locks in the payload-leak fix: after
+// ListVpns returns, real-clients.byKey must hold exactly one verdict shape for
+// every VPN it probed — {hasRealClient: true}, {hasRealClient: false}, or
+// {indeterminate: true} — never the raw client rows or paging metadata the
+// probe fetched. stepResults is shared with the executor's response assembly
+// (no copy is made after this handler returns), so anything left in byKey
+// here is returned to the MCP caller verbatim.
+func TestListVpns_ScrubsRawClientRows(t *testing.T) {
+	items := []any{
+		vpn(true, "up", "healthy"),
+		vpn(true, "up", "empty"),
+		vpn(true, "up", "degraded"),
+	}
+	byVpn := map[string][]any{
+		"healthy":  {clientRow(), clientRow()},
+		"empty":    {},
+		"degraded": {},
+	}
+	in := withEntry(input(items, byVpn), "degraded", indeterminateEntry())
+	if _, err := ListVpns(in); err != nil {
+		t.Fatal(err)
+	}
+	byKey, ok := in["real-clients"]["byKey"].(map[string]any)
+	if !ok {
+		t.Fatalf("real-clients.byKey missing or wrong type after ListVpns: %#v", in["real-clients"])
+	}
+	cases := map[string]map[string]any{
+		"healthy":  {"hasRealClient": true},
+		"empty":    {"hasRealClient": false},
+		"degraded": {"indeterminate": true},
+	}
+	for vpnName, want := range cases {
+		entry, ok := byKey[vpnName].(map[string]any)
+		if !ok {
+			t.Fatalf("byKey[%q]: want map[string]any, got %#v", vpnName, byKey[vpnName])
+		}
+		for _, raw := range []string{"data", "meta"} {
+			if _, leaked := entry[raw]; leaked {
+				t.Errorf("byKey[%q] still has raw %q after ListVpns: %#v", vpnName, raw, entry)
+			}
+		}
+		if len(entry) != len(want) {
+			t.Errorf("byKey[%q]: want exactly %#v, got %#v", vpnName, want, entry)
+		}
+		for k, v := range want {
+			if entry[k] != v {
+				t.Errorf("byKey[%q][%q]: got %v, want %v", vpnName, k, entry[k], v)
+			}
+		}
 	}
 }
 
