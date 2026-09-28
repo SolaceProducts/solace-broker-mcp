@@ -240,7 +240,7 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
-		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, alias), nil
+		return auth.NewOAuthAuthenticator(exchanger, cfg.Target, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
 	}

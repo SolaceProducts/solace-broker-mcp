@@ -564,7 +564,6 @@ func TestParseSuccessBody_IssuedTokenTypeSkippedForNonTokenExchangeGrant(t *test
 		clientAuthMethod: ClientSecretPost,
 		clientSecret:     "sec",
 		grantType:        GrantType(99), // not GrantTypeTokenExchange (which is 1)
-		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
 	}
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

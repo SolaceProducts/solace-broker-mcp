@@ -57,24 +57,24 @@ func TestComputeDeduplicationKey_DifferentAliasesDifferentKeys(t *testing.T) {
 	}
 }
 
-// TestComputeDeduplicationKey_DifferentAudiencesDifferentKeys is the
-// regression test for SOL-152981: Audience must participate in the key like
+// TestComputeDeduplicationKey_DifferentTargetsDifferentKeys is the
+// regression test for SOL-152981: Target must participate in the key like
 // every other field, per this struct's own documented contract.
-func TestComputeDeduplicationKey_DifferentAudiencesDifferentKeys(t *testing.T) {
+func TestComputeDeduplicationKey_DifferentTargetsDifferentKeys(t *testing.T) {
 	t.Parallel()
 
-	key1 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Audience: "aud-a"})
-	key2 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Audience: "aud-b"})
+	key1 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Target: "aud-a"})
+	key2 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Target: "aud-b"})
 
 	if key1 == key2 {
-		t.Errorf("different audiences produced same key: %q", key1)
+		t.Errorf("different targets produced same key: %q", key1)
 	}
 }
 
 func TestComputeDeduplicationKey_EmptyInputsProduceValidKey(t *testing.T) {
 	t.Parallel()
 
-	key := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "", BrokerAlias: "", Audience: ""})
+	key := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "", BrokerAlias: "", Target: ""})
 
 	if len(key) != 64 {
 		t.Errorf("key length = %d, want 64", len(key))

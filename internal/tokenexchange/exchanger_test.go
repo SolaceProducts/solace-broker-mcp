@@ -39,7 +39,6 @@ func validParams(t *testing.T) Params {
 		ClientAuthMethod: ClientSecretPost,
 		ClientSecret:     "test-secret",
 		GrantType:        GrantTypeTokenExchange,
-		AudienceParam:    AudienceParamAudience,
 		HTTPClient:       &http.Client{},
 		Cache:            cachetest.Default(t),
 	}

@@ -137,7 +137,7 @@ func TestExchangeError_NeverContainsSecrets(t *testing.T) {
 		Message:       "IdP rejected the grant",
 		TokenEndpoint: "https://idp.example.com/token",
 		BrokerAlias:   "my-broker",
-		Audience:      "https://broker.example.com",
+		Target:        "https://broker.example.com",
 		HTTPStatus:    400,
 		Elapsed:       150 * time.Millisecond,
 	}
@@ -161,6 +161,40 @@ func TestExchangeError_NeverContainsSecrets(t *testing.T) {
 				t.Errorf("LogAttrs attr %q contains secret %q: %s", attr.Key, secret, val)
 			}
 		}
+	}
+}
+
+// TestExchangeError_LogAttrs_Target pins the tool-error-line key the
+// CHANGELOG records as a BREAKING rename (audience → target, SOL-154654):
+// operators' log queries match on it, so a set Target logs under "target"
+// with its value, and an empty one logs nothing.
+func TestExchangeError_LogAttrs_Target(t *testing.T) {
+	t.Parallel()
+
+	find := func(attrs []slog.Attr, key string) (slog.Attr, bool) {
+		for _, a := range attrs {
+			if a.Key == key {
+				return a, true
+			}
+		}
+		return slog.Attr{}, false
+	}
+
+	set := (&ExchangeError{Sentinel: ErrExchangeRejected, Target: "solace-broker-prod"}).LogAttrs()
+	got, ok := find(set, "target")
+	if !ok {
+		t.Fatalf("LogAttrs() has no %q attr: %v", "target", set)
+	}
+	if got.Value.String() != "solace-broker-prod" {
+		t.Errorf("target = %q, want %q", got.Value.String(), "solace-broker-prod")
+	}
+	if _, ok := find(set, "audience"); ok {
+		t.Errorf("LogAttrs() still emits the pre-SOL-154654 %q key", "audience")
+	}
+
+	empty := (&ExchangeError{Sentinel: ErrExchangeRejected}).LogAttrs()
+	if _, ok := find(empty, "target"); ok {
+		t.Errorf("LogAttrs() emits %q for an empty Target", "target")
 	}
 }
 
@@ -218,7 +252,7 @@ func TestExchangeError_LogAttrs_EndpointSurvivesRedaction(t *testing.T) {
 				Message:       "IdP rejected the grant",
 				TokenEndpoint: credentialedEndpoint,
 				BrokerAlias:   "my-broker",
-				Audience:      "https://broker.example.com",
+				Target:        "https://broker.example.com",
 				HTTPStatus:    502,
 				FailureClass:  FailureClassUpstream5xx,
 				Elapsed:       150 * time.Millisecond,

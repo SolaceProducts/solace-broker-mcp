@@ -139,7 +139,6 @@ func newTraceAuthenticator(t *testing.T, idpURL string) *sempauth.OAuthAuthentic
 		ClientAuthMethod: tokenexchange.ClientSecretBasic,
 		ClientSecret:     traceClientSecret,
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       httpClient,
 		Cache:            tokenCache,
 	})
@@ -515,7 +514,6 @@ func Test_BrokerTokenTrace_CancelledDuringCacheHitClaimsNothing(t *testing.T) {
 		ClientAuthMethod: tokenexchange.ClientSecretBasic,
 		ClientSecret:     traceClientSecret,
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       httpClient,
 		Cache:            wrapped,
 	})

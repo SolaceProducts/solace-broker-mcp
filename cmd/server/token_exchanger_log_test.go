@@ -39,7 +39,6 @@ func TestNewTokenExchanger_LogsConfiguredExpiryFallback(t *testing.T) {
 			ClientSecretBasic: &config.ClientSecretAuth{Secret: "test-secret"},
 		},
 		GrantType:           config.GrantTypeTokenExchange,
-		AudienceParam:       config.AudienceParamAudience,
 		TokenExpiryFallback: &fallback,
 	}
 
@@ -81,8 +80,7 @@ func TestNewTokenExchanger_LogsUnconfiguredExpiryFallback(t *testing.T) {
 		ClientAuth: config.BrokerClientAuth{
 			ClientSecretBasic: &config.ClientSecretAuth{Secret: "test-secret"},
 		},
-		GrantType:     config.GrantTypeTokenExchange,
-		AudienceParam: config.AudienceParamAudience,
+		GrantType: config.GrantTypeTokenExchange,
 		// TokenExpiryFallback intentionally nil: omission is the default path.
 	}
 
