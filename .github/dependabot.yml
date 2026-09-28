@@ -94,7 +94,15 @@ updates:
       interval: "daily"
     cooldown:
       default-days: 14
+      exclude:
+        - "Solace*"
     groups:
-      github-actions:
-        patterns: ["*"]
+      internal-reusable-workflows:
+        patterns:
+          - "Solace*"
+      third-party-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "Solace*"
     open-pull-requests-limit: 10
