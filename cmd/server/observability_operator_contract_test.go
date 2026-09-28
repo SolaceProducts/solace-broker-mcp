@@ -51,18 +51,45 @@ func archivedObservabilityDoc(t *testing.T) string {
 	return readRepoFile(t, "docs", "internal", "observability-schema-review.md")
 }
 
+func markdownSection(t *testing.T, raw, heading string) string {
+	t.Helper()
+	level := 0
+	for level < len(heading) && heading[level] == '#' {
+		level++
+	}
+	if level == 0 || len(heading) == level || heading[level] != ' ' {
+		t.Fatalf("invalid Markdown heading %q", heading)
+	}
+
+	lines := strings.Split(raw, "\n")
+	start := -1
+	for i, line := range lines {
+		if line == heading {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("no %q heading", heading)
+	}
+
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		nextLevel := 0
+		for nextLevel < len(lines[i]) && lines[i][nextLevel] == '#' {
+			nextLevel++
+		}
+		if nextLevel > 0 && nextLevel <= level && len(lines[i]) > nextLevel && lines[i][nextLevel] == ' ' {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
 func operatorRunbookSection(t *testing.T, raw string) string {
 	t.Helper()
-	const start = "## Operator Runbook"
-	i := strings.Index(raw, start)
-	if i < 0 {
-		t.Fatalf("no %q heading", start)
-	}
-	section := raw[i:]
-	if next := regexp.MustCompile(`(?m)^## `).FindStringIndex(section[len(start):]); next != nil {
-		section = section[:len(start)+next[0]]
-	}
-	return section
+	return markdownSection(t, raw, "## Operator Runbook")
 }
 
 func normalizeHeading(s string) string {
@@ -262,12 +289,12 @@ func TestObservabilityDoc_DocumentsMuxProbeRoutes(t *testing.T) {
 				return true
 			}
 		}
-		switch path {
-		case "/livez", "/health", "/readyz", "/ready", "/metrics", "/mcp":
-			routes[path] = true
-		}
+		routes[path] = true
 		return true
 	})
+	// This is intentionally the operator-facing observability/protocol surface,
+	// not every mux route. The root 404 handler and configuration-dependent OAuth
+	// metadata paths do not belong in the observability guide.
 	required := []string{"/livez", "/health", "/readyz", "/ready", "/metrics", "/mcp"}
 	doc := publicObservabilityDoc(t)
 	for _, path := range required {
@@ -323,6 +350,58 @@ func TestObservabilityDoc_DocumentsExtraCodeBackedScenarios(t *testing.T) {
 	}
 }
 
+func TestObservabilityDoc_DocumentsSharedOTLPTransportSecurity(t *testing.T) {
+	doc := publicObservabilityDoc(t)
+	section := markdownSection(t, doc, "### OTLP transport security")
+	for _, needle := range []string{
+		"both OTLP metrics and traces",
+		"TLS is the default",
+		"`http://`",
+		"`OTEL_EXPORTER_OTLP_INSECURE=true`",
+		"cleartext gRPC",
+		"`OTEL_EXPORTER_OTLP_CERTIFICATE`",
+		"`OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`",
+		"`OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`",
+		"`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`",
+		"`OTEL_EXPORTER_OTLP_CLIENT_KEY`",
+	} {
+		if !strings.Contains(section, needle) {
+			t.Errorf("OTLP transport-security section does not explain %q", needle)
+		}
+	}
+
+	tracing := markdownSection(t, doc, "## Distributed Tracing")
+	if !strings.Contains(tracing, "#otlp-transport-security") {
+		t.Error("Distributed Tracing does not link to the shared OTLP transport-security contract")
+	}
+}
+
+func TestObservabilityDoc_QuotesUnsetOTLPMetricsEndpointWarning(t *testing.T) {
+	section := markdownSection(t, publicObservabilityDoc(t), "### OTLP metrics push arrives nowhere")
+	if !strings.Contains(section, otlpMetricsEndpointUnsetWarning) {
+		t.Errorf("OTLP metrics runbook does not quote startup warning %q", otlpMetricsEndpointUnsetWarning)
+	}
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"} {
+		if !strings.Contains(section, "`"+name+"`") {
+			t.Errorf("OTLP metrics runbook does not name endpoint variable `%s`", name)
+		}
+	}
+}
+
+func TestObservabilityDoc_DocumentsShutdownDrainSignalScope(t *testing.T) {
+	doc := publicObservabilityDoc(t)
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.Contains(line, "`observability.shutdown_drain_delay_s`") {
+			continue
+		}
+		if !strings.Contains(line, "SIGTERM") || !strings.Contains(line, "SIGINT skips") {
+			t.Errorf("shutdown_drain_delay_s row must say SIGTERM uses the drain and SIGINT skips it: %s", line)
+		}
+		return
+	}
+	t.Fatal("no observability.shutdown_drain_delay_s row in docs/observability.md")
+}
+
 var slogCallRE = regexp.MustCompile(`slog\.(Warn|Error)(?:Context)?\(\s*(?:[^,\s"]+,\s*)?"([^"]+)"`)
 
 // internalObservabilityLogMessages are Warn/Error strings in
@@ -330,13 +409,12 @@ var slogCallRE = regexp.MustCompile(`slog\.(Warn|Error)(?:Context)?\(\s*(?:[^,\s
 // plumbing, shutdown internals). Anything else extracted from that tree
 // must appear in docs/observability.md.
 var internalObservabilityLogMessages = map[string]string{
-	"readyz: failed to write response body": "handler write fallback after status is committed",
-	"shutdown hook failed":                  "internal hook registry",
+	"shutdown hook failed": "internal hook registry",
 	"shutdown hook budget exceeded; abandoning any hooks still running": "internal hook registry",
 	"otel sdk emitted an internal diagnostic on its own error/log channel; suppressed here because that channel is not audited for OTLP headers or endpoint credentials — see docs/observability.md": "SDK diagnostic suppression",
 	"otel self-stats interval is non-positive; periodic fallback disabled": "config already re-defaults this; defensive ticker guard",
-	"recovered panic in otel self-stats emitter": "safego around the emitter; covered by panic_recovered discussion",
-	"OTLP metrics flush incomplete at shutdown":  "shutdown drain, not a standing operator symptom",
+	"recovered panic in otel self-stats emitter":                           "safego around the emitter; covered by panic_recovered discussion",
+	"OTLP metrics flush incomplete at shutdown":                            "shutdown drain, not a standing operator symptom",
 }
 
 func goFilesUnder(t *testing.T, root string) []string {
@@ -386,6 +464,11 @@ func TestObservabilityDoc_DocumentsObservabilityWarnAndErrorLogs(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatal("no slog.Warn/Error string literals under internal/observability")
+	}
+	for msg := range internalObservabilityLogMessages {
+		if !seen[msg] {
+			t.Errorf("internalObservabilityLogMessages contains stale exclusion %q", msg)
+		}
 	}
 }
 

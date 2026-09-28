@@ -53,7 +53,6 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -74,18 +73,6 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
-
-// readObservabilityDoc reads the real docs/observability.md from the repo
-// root. cmd/server is two directories below it (cmd/server -> cmd -> root),
-// hence the two ".." segments below.
-func readObservabilityDoc(t *testing.T) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "observability.md"))
-	if err != nil {
-		t.Fatalf("read docs/observability.md: %v", err)
-	}
-	return string(raw)
-}
 
 // buildLiveRegistry assembles the same combination cmd/server/main.go does —
 // a metrics.Provider plus a tracing.Provider sharing its meter provider and
@@ -330,7 +317,7 @@ var activityGated = map[string]bool{
 // observability_doc_helpers_test.go) — plus label keys must agree on names
 // both sides recognize as live.
 func TestObservabilityDocMatchesRegistry(t *testing.T) {
-	inv, err := parseObservabilityDoc(readObservabilityDoc(t))
+	inv, err := parseObservabilityDoc(publicObservabilityDoc(t))
 	if err != nil {
 		t.Fatalf("parseObservabilityDoc: %v", err)
 	}

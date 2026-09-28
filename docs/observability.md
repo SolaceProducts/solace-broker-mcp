@@ -48,6 +48,18 @@ export OTEL_TRACES_SAMPLER_ARG=0.10
 Setting an `OTEL_*` endpoint does not enable metrics or tracing. The matching `OBS_*` flag is
 always required.
 
+### OTLP transport security
+
+This applies to both OTLP metrics and traces. TLS is the default. An `http://` endpoint or
+`OTEL_EXPORTER_OTLP_INSECURE=true` switches the exporter to cleartext gRPC without another
+warning. Use an `https://` endpoint to a collector you control.
+
+For a private CA, set `OTEL_EXPORTER_OTLP_CERTIFICATE` or its
+`OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE` / `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` variant.
+For mTLS, set the matching `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and
+`OTEL_EXPORTER_OTLP_CLIENT_KEY` pair; the `_METRICS_` and `_TRACES_` variants apply the
+credentials to one signal only.
+
 ## Feature switches
 
 Capability switches are environment variables. They are deliberately not accepted in YAML.
@@ -86,7 +98,7 @@ on/off switches.
 | YAML field | Default | Used when | Effect |
 |---|---:|---|---|
 | `observability.metrics_bind_address` | `:9091` | Scrape metrics is on | Address for the separate `/metrics` listener |
-| `observability.shutdown_drain_delay_s` | `10` | Always | Delay after readiness becomes false and before graceful HTTP shutdown |
+| `observability.shutdown_drain_delay_s` | `10` | SIGTERM graceful shutdown | Delay after readiness becomes false and before graceful HTTP shutdown; SIGINT skips it |
 | `observability.saturation_threshold_ms` | `1000` | Saturation logs are on | Queue wait that triggers `broker admission slow` |
 | `observability.otel_self_stats_interval_s` | `60` | Tracing has no meter provider; also saturation occupancy reporting | Periodic reporting interval in seconds |
 | `observability.progress_signal_threshold_ms` | `5000` | Not used in this release | Reserved; changing it has no effect |
@@ -487,10 +499,8 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.example.com:4317
 export OBS_TRACING_ENABLED=true
 ```
 
-The server honors `OTEL_EXPORTER_OTLP_INSECURE`,
-`OTEL_EXPORTER_OTLP_CERTIFICATE`, and the standard client-certificate/key variables.
-Use TLS to a collector you control. Traces carry client network identity, tool/broker
-attributes, and token-exchange error details.
+The shared [OTLP transport-security rules](#otlp-transport-security) apply. Traces carry
+client network identity, tool/broker attributes, and token-exchange error details.
 
 Sampling uses `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`. With neither set, the OTel
 SDK uses `parentbased_always_on`. Setting only the argument does not select a ratio sampler.
@@ -952,13 +962,21 @@ Confirm `saturation_threshold_ms` is below `semp.max_queue_wait` and above norma
 **Symptom.** Silence. The process starts, `/metrics` may look healthy, the collector
 receives nothing.
 
-**Likely cause.** Blocked egress, wrong endpoint, or a collector receiver that is not
-OTLP/gRPC 4317.
+**Likely cause.** Blocked egress, wrong endpoint, an unset endpoint falling back to
+`localhost:4317`, or a collector receiver that is not OTLP/gRPC 4317.
 
-**First response.** Read `mcp_otel_metrics_dropped_total` from scrape when scrape is on.
-Read the rate-limited WARN `OTLP metrics export failed`. Check `OTEL_EXPORTER_OTLP_ENDPOINT`
-scheme and port 4317. The shipped NetworkPolicy is ingress-only; your egress policy must
-allow DNS and TCP 4317.
+**First response.** At startup, an unset endpoint emits:
+
+```text
+OTLP metrics push is enabled but neither OTEL_EXPORTER_OTLP_ENDPOINT nor OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set; the SDK defaults to localhost:4317, which pushes into nothing unless a collector is actually listening there
+```
+
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` overrides the generic
+`OTEL_EXPORTER_OTLP_ENDPOINT` for metrics. Read `mcp_otel_metrics_dropped_total` from
+scrape when scrape is on, and the rate-limited WARN `OTLP metrics export failed`.
+Check the endpoint scheme and port 4317, including the
+[transport-security rules](#otlp-transport-security). The shipped NetworkPolicy is
+ingress-only; your egress policy must allow DNS and TCP 4317.
 
 ### OTLP push failed while scrape still works
 
