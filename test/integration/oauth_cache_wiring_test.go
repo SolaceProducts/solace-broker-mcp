@@ -115,7 +115,6 @@ func assertTwoRequestsSameBearerHitIdPOnce(
 		ClientAuthMethod:    tokenexchange.ClientSecretBasic,
 		ClientSecret:        "fake-secret",
 		GrantType:           tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:       tokenexchange.AudienceParamAudience,
 		TokenExpiryFallback: tokenExpiryFallback,
 		HTTPClient:          fakeIdP.Client(),
 		Cache:               tc,

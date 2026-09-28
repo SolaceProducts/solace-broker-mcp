@@ -70,7 +70,7 @@ func validInput() ExchangeInput {
 	return ExchangeInput{
 		SubjectToken: "test-subject-token",
 		BrokerAlias:  "test-broker",
-		Audience:     "https://broker.example.com",
+		Target:       "https://broker.example.com",
 	}
 }
 
@@ -140,7 +140,7 @@ func TestExchange_AudienceMismatchWarnsButSucceeds(t *testing.T) {
 	if !strings.Contains(out, "WARN") {
 		t.Errorf("expected a WARN line for the audience mismatch, got: %q", out)
 	}
-	if !strings.Contains(out, validInput().Audience) {
+	if !strings.Contains(out, validInput().Target) {
 		t.Errorf("expected the requested audience in the WARN, got: %q", out)
 	}
 }
@@ -223,8 +223,8 @@ func TestExchange_DifferentKeysRunConcurrently(t *testing.T) {
 	e := newTestExchanger(t, srv.URL)
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
-	input1 := ExchangeInput{SubjectToken: "tok-A", BrokerAlias: "broker-A", Audience: "aud"}
-	input2 := ExchangeInput{SubjectToken: "tok-B", BrokerAlias: "broker-B", Audience: "aud"}
+	input1 := ExchangeInput{SubjectToken: "tok-A", BrokerAlias: "broker-A", Target: "aud"}
+	input2 := ExchangeInput{SubjectToken: "tok-B", BrokerAlias: "broker-B", Target: "aud"}
 
 	tokens := make([]*Token, 2)
 	errs := make([]error, 2)
@@ -287,8 +287,8 @@ func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
 	e := newTestExchanger(t, srv.URL)
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
-	input1 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-A", Audience: "aud"}
-	input2 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-B", Audience: "aud"}
+	input1 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-A", Target: "aud"}
+	input2 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-B", Target: "aud"}
 
 	tokens := make([]*Token, 2)
 	errs := make([]error, 2)
@@ -356,9 +356,9 @@ func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
 	e := newTestExchanger(t, srv.URL)
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
-	userA_brokerX := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Audience: "aud"}
-	userA_brokerY := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-y", Audience: "aud"}
-	userC_brokerX := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+	userA_brokerX := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Target: "aud"}
+	userA_brokerY := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-y", Target: "aud"}
+	userC_brokerX := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Target: "aud"}
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 
@@ -479,8 +479,8 @@ func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
 	e := newTestExchanger(t, srv.URL)
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
-	input1 := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Audience: "aud"}
-	input2 := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+	input1 := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Target: "aud"}
+	input2 := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Target: "aud"}
 
 	tokens := make([]*Token, 2)
 	errs := make([]error, 2)
@@ -995,7 +995,6 @@ func TestDoExchange_BuildRequestFailureClassifiesAsRequestBuild(t *testing.T) {
 		clientAuthMethod: ClientSecretPost,
 		clientSecret:     "sec",
 		grantType:        GrantTypeTokenExchange,
-		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
 		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },
@@ -1486,7 +1485,6 @@ func TestExchange_UnknownGrantTypeReturnsRequestBuildError(t *testing.T) {
 		clientAuthMethod: ClientSecretPost,
 		clientSecret:     "sec",
 		grantType:        GrantType(99),
-		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
 		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },

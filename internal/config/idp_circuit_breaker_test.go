@@ -48,7 +48,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 `
 
 const breakerYAMLBrokerSuffix = `

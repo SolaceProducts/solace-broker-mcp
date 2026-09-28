@@ -245,7 +245,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 - **Configuration file not found** — The server looks for the YAML configuration file in this order: `CONFIG_FILE` environment variable, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth configuration missing** — When `mcp_client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `mcp_client_auth.mode: disabled` or `static`.
-- **Broker OAuth (Hop 2) configuration rejected** — An event broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at configuration load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.
+- **Broker OAuth (Hop 2) configuration rejected** — An event broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at configuration load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference. A config that still uses the removed `broker_oauth.audience_parameter_name` or the renamed `brokers.<alias>.auth.audience` (now `auth.target`) fails to load with an error naming the rename or removal.
 
 ### Cannot Connect to Event Broker
 

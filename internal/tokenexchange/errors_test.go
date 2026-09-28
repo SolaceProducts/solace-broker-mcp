@@ -137,7 +137,7 @@ func TestExchangeError_NeverContainsSecrets(t *testing.T) {
 		Message:       "IdP rejected the grant",
 		TokenEndpoint: "https://idp.example.com/token",
 		BrokerAlias:   "my-broker",
-		Audience:      "https://broker.example.com",
+		Target:        "https://broker.example.com",
 		HTTPStatus:    400,
 		Elapsed:       150 * time.Millisecond,
 	}
@@ -218,7 +218,7 @@ func TestExchangeError_LogAttrs_EndpointSurvivesRedaction(t *testing.T) {
 				Message:       "IdP rejected the grant",
 				TokenEndpoint: credentialedEndpoint,
 				BrokerAlias:   "my-broker",
-				Audience:      "https://broker.example.com",
+				Target:        "https://broker.example.com",
 				HTTPStatus:    502,
 				FailureClass:  FailureClassUpstream5xx,
 				Elapsed:       150 * time.Millisecond,

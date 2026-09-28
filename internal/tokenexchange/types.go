@@ -14,9 +14,9 @@
 
 // Package tokenexchange implements RFC 8693 OAuth 2.0 token exchange against
 // a single IdP. The Exchanger is a process singleton: deployment-global
-// protocol state (IdP endpoint, MCP server client credentials, grant type,
-// audience-param wire format) lives on the struct; per-broker values
-// (subject token, audience) flow through the Exchange method.
+// protocol state (IdP endpoint, MCP server client credentials, grant type)
+// lives on the struct; per-broker values (subject token, target) flow
+// through the Exchange method.
 //
 // Two entry points: tokenexchange.New(Params) for tests, and
 // tokenexchange.FromConfig(*config.BrokerOAuthConfig, *http.Client) for
@@ -61,19 +61,6 @@ const (
 	ClientSecretPost
 )
 
-// AudienceFormat identifies the wire format the Exchanger uses to carry
-// the per-broker audience value to the IdP. Different IdP families expect
-// different parameter names; this enum selects between them.
-type AudienceFormat int
-
-const (
-	// AudienceParamAudience uses the RFC 8693 "audience" parameter — the
-	// canonical token-exchange spelling. The only implemented format;
-	// internal/config.validAudienceParams rejects any other value before
-	// FromConfig is ever reached.
-	AudienceParamAudience AudienceFormat = iota + 1
-)
-
 // GrantType identifies the OAuth grant-type URN sent in the form body.
 // Only RFC 8693 token exchange is implemented.
 type GrantType int
@@ -113,9 +100,6 @@ type Params struct {
 	ClientSecret string
 	// GrantType is the OAuth grant-type URN. V1: GrantTypeTokenExchange.
 	GrantType GrantType
-	// AudienceParam selects the wire format for the per-broker audience.
-	// V1: AudienceParamAudience.
-	AudienceParam AudienceFormat
 	// TokenExpiryFallback is used only when a successful IdP response omits
 	// expires_in or returns zero. Zero preserves fail-closed behavior.
 	TokenExpiryFallback time.Duration
@@ -154,8 +138,8 @@ type Params struct {
 // (HTTPClient, Cache) are omitted as noise. Value receivers so *Params is
 // covered too. Pattern mirrors cache.CachedCredential.
 func (p Params) String() string {
-	return fmt.Sprintf("Params{TokenURL: %q, ClientID: %q, ClientAuthMethod: %d, GrantType: %d, AudienceParam: %d}",
-		p.TokenURL, p.ClientID, p.ClientAuthMethod, p.GrantType, p.AudienceParam)
+	return fmt.Sprintf("Params{TokenURL: %q, ClientID: %q, ClientAuthMethod: %d, GrantType: %d}",
+		p.TokenURL, p.ClientID, p.ClientAuthMethod, p.GrantType)
 }
 
 func (p Params) GoString() string {
@@ -171,7 +155,6 @@ func (p Params) LogValue() slog.Value {
 		slog.String("client_id", p.ClientID),
 		slog.Int("client_auth_method", int(p.ClientAuthMethod)),
 		slog.Int("grant_type", int(p.GrantType)),
-		slog.Int("audience_param", int(p.AudienceParam)),
 	)
 }
 
@@ -187,10 +170,10 @@ type ExchangeInput struct {
 	// BrokerAlias identifies which broker this exchange is for. Logging
 	// label only — does not appear in the IdP request body.
 	BrokerAlias string
-	// Audience is the per-broker audience value
-	// (brokers.<alias>.auth.oauth.audience). Sent to the IdP in the form
-	// field selected by Params.AudienceParam.
-	Audience string
+	// Target is the per-broker downstream API identifier
+	// (brokers.<alias>.auth.target). Sent to the IdP in the form field the
+	// grant type selects (token-exchange: "audience"); omitted when empty.
+	Target string
 }
 
 // String, GoString, and LogValue redact SubjectToken (the inbound JWT) so
@@ -198,7 +181,7 @@ type ExchangeInput struct {
 // Value receivers so *ExchangeInput is covered too. Pattern mirrors
 // cache.CachedCredential.
 func (i ExchangeInput) String() string {
-	return fmt.Sprintf("ExchangeInput{BrokerAlias: %q, Audience: %q}", i.BrokerAlias, i.Audience)
+	return fmt.Sprintf("ExchangeInput{BrokerAlias: %q, Target: %q}", i.BrokerAlias, i.Target)
 }
 
 // DedupKeyInput converts to the fields that determine cache/singleflight
@@ -224,7 +207,7 @@ func (i ExchangeInput) GoString() string {
 func (i ExchangeInput) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("broker_alias", i.BrokerAlias),
-		slog.String("audience", i.Audience),
+		slog.String("target", i.Target),
 	)
 }
 

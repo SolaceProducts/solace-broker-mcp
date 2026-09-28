@@ -102,7 +102,6 @@ func runOAuthVisibilityTest(t *testing.T, label string, idpHandler http.HandlerF
 		ClientAuthMethod: tokenexchange.ClientSecretBasic,
 		ClientSecret:     "fake-secret",
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
 		Cache:            tc,
 	})
@@ -144,7 +143,6 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 		ClientAuthMethod: tokenexchange.ClientSecretBasic,
 		ClientSecret:     "fake-secret",
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
-		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
 		Cache:            tc,
 	})
@@ -213,14 +211,13 @@ broker_oauth:
     client_secret_basic:
       secret: fake-secret
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   oauth-broker:
     url: %q
     insecure_skip_verify: true
     auth:
       mode: oauth
-      audience: "solace-broker"
+      target: "solace-broker"
 `, idpURL, brokerURL)
 
 	path := filepath.Join(t.TempDir(), "broker-config.yaml")

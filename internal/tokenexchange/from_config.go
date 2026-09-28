@@ -31,8 +31,7 @@ import (
 //
 // The config validator (internal/config.validateBrokerOAuthConfig) has
 // already enforced structural validity at startup: non-empty fields,
-// exactly-one client-auth sub-block, grant_type and audience_parameter_name
-// in their respective allowlists. FromConfig translates the validated
+// exactly-one client-auth sub-block, grant_type in its allowlist. FromConfig translates the validated
 // YAML-level types (strings, discriminated unions) into the typed Params
 // enums the Exchanger expects.
 func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCache cache.TokenCache) (*Exchanger, error) {
@@ -50,11 +49,6 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		return nil, err
 	}
 
-	audienceParam, err := resolveAudienceParam(cfg.AudienceParam)
-	if err != nil {
-		return nil, err
-	}
-
 	// Resolve the breaker config: start from the shipped defaults and overlay
 	// only the fields the operator set. A nil result means the operator
 	// disabled the breaker (enabled: false) — Params.CircuitBreaker nil leaves
@@ -67,7 +61,6 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		ClientAuthMethod:     authMethod,
 		ClientSecret:         secret,
 		GrantType:            grantType,
-		AudienceParam:        audienceParam,
 		TokenExpiryFallback:  resolveTokenExpiryFallback(cfg.TokenExpiryFallback),
 		HTTPClient:           httpClient,
 		Cache:                tokenCache,
@@ -154,18 +147,5 @@ func resolveGrantType(gt string) (GrantType, error) {
 		return GrantTypeTokenExchange, nil
 	default:
 		return 0, fmt.Errorf("tokenexchange: unsupported grant_type %q", gt)
-	}
-}
-
-// resolveAudienceParam accepts only "audience" — internal/config.validAudienceParams
-// rejects every other value at config load, before FromConfig is ever reached in
-// production, so any other string here is equally unsupported regardless of whether
-// it names a real (but unimplemented) OAuth style or a typo.
-func resolveAudienceParam(ap string) (AudienceFormat, error) {
-	switch ap {
-	case config.AudienceParamAudience:
-		return AudienceParamAudience, nil
-	default:
-		return 0, fmt.Errorf("tokenexchange: unsupported audience_parameter_name %q", ap)
 	}
 }

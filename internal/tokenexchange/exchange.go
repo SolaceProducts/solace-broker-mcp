@@ -428,7 +428,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 			if errors.As(err, &exchErr) {
 				enriched := *exchErr
 				enriched.BrokerAlias = input.BrokerAlias
-				enriched.Audience = input.Audience
+				enriched.Target = input.Target
 				enriched.TokenEndpoint = e.tokenURL
 				enriched.Elapsed = elapsed
 				return nil, &enriched
@@ -754,7 +754,7 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).
-	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Audience, parsed.Value)
+	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
 	return parsed.Token, nil
 }
 

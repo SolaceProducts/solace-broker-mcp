@@ -215,7 +215,6 @@ broker_oauth:
     client_secret_basic:
       secret: "${HOP2_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: "audience"
 
 semp:
   max_concurrent_per_broker: 10
@@ -231,19 +230,19 @@ brokers:
     insecure_skip_verify: true
     auth:
       mode: oauth
-      audience: "${BROKER_A_AUDIENCE}"
+      target: "${BROKER_A_AUDIENCE}"
   ${BROKER_B_ALIAS}:
     url: "https://localhost:${BROKER_B_SEMP_TLS_PORT}"
     insecure_skip_verify: true
     auth:
       mode: oauth
-      audience: "${BROKER_B_AUDIENCE}"
+      target: "${BROKER_B_AUDIENCE}"
   test-us-wrong-audience:
     url: "https://localhost:${BROKER_B_SEMP_TLS_PORT}"
     insecure_skip_verify: true
     auth:
       mode: oauth
-      audience: "${BROKER_A_AUDIENCE}"
+      target: "${BROKER_A_AUDIENCE}"
 EOF
     log_info "OAuth config written to $config_file"
 }

@@ -545,7 +545,7 @@ brokers:
 	}
 }
 
-// YAML escapes a literal ' inside a single-quoted scalar as ''. A # between
+// YAML escapes a literal ' inside a single-quoted scalar as ”. A # between
 // the doubled quote and the real closing quote must still be treated as part
 // of the string, not a comment marker.
 func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
@@ -1197,10 +1197,10 @@ brokers:
 //  1. client_secret_basic / client_secret_post: the secret inside the
 //     discriminated-union sub-block must be trimmed before the empty
 //     check, matching the broker basic/bearer credential rule.
-//  2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
+//  2. per-broker auth.target (oauth mode): the field is OPTIONAL, so
 //     the check uses a conditional "set-but-whitespace" pattern instead
 //     of bare "trim == empty" — a future refactor that collapses it to
-//     the simple form would incorrectly reject absent-audience configs.
+//     the simple form would incorrectly reject absent-target configs.
 //
 // Other operator-supplied required strings (dev_token, issuer, broker.url,
 // idp_token_endpoint, etc.) also have the trim rule but are not separately
@@ -1222,7 +1222,6 @@ broker_oauth:
 `
 	const grantAndAud = `
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 `
 
 	cases := []struct {
@@ -1263,7 +1262,7 @@ mcp_client_auth:
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_post.secret is required",
 		},
 		{
-			name: "per-broker auth.audience whitespace-only (optional-but-set semantics)",
+			name: "per-broker auth.target whitespace-only (optional-but-set semantics)",
 			yaml: oauthHop1 + brokerOAuthHeader + `  mcp_server_client_auth:
     client_secret_basic:
       secret: s
@@ -1272,9 +1271,9 @@ mcp_client_auth:
     url: "https://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: "   "
+      target: "   "
 `,
-			wantErrSubstring: `auth.audience is empty or whitespace-only`,
+			wantErrSubstring: `auth.target is empty or whitespace-only`,
 		},
 	}
 	for _, tc := range cases {
@@ -3047,11 +3046,59 @@ brokers:
 	}
 }
 
+// TestWithRetiredKeyHints_NoMatchReturnsErrUnchanged: an unknown field that
+// isn't a retired key gets no hint, so the decoder's message stays as-is.
+func TestWithRetiredKeyHints_NoMatchReturnsErrUnchanged(t *testing.T) {
+	in := errors.New("yaml: unmarshal errors:\n  line 3: field bogus not found in type config.AuthConfig")
+	if got := withRetiredKeyHints(in); got != in {
+		t.Errorf("withRetiredKeyHints() = %q, want the input error unchanged", got)
+	}
+}
+
+// TestLoadConfig_BrokerAuthTarget pins that auth.target decodes as one
+// string onto AuthConfig.Target — the value the runtime sends to the IdP and
+// keys the token cache on.
+func TestLoadConfig_BrokerAuthTarget(t *testing.T) {
+	cfg, err := LoadConfig(writeTemp(t, `
+tls_terminated_upstream: true
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
+broker_oauth:
+  idp_token_endpoint: "https://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: oauth
+      target: "api://broker-a/.default"
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	b, ok := cfg.Broker("prod")
+	if !ok {
+		t.Fatal("broker prod not found")
+	}
+	if b.Auth.Target != "api://broker-a/.default" {
+		t.Errorf("Auth.Target = %q, want %q", b.Auth.Target, "api://broker-a/.default")
+	}
+}
+
 // TestLoadConfig_BrokerOAuth covers the validator surface for the
 // broker_oauth block. The client-auth method is chosen by the populated
 // sub-block under mcp_server_client_auth (discriminated union, no separate
-// discriminator field), and the schema requires grant_type and
-// audience_parameter_name explicitly — no defaults.
+// discriminator field), and the schema requires grant_type explicitly — no
+// default.
 func TestLoadConfig_BrokerOAuth(t *testing.T) {
 	// All cases run with mcp_client_auth.mode: static (so the deployment is in
 	// dev mode and http:// broker URLs are accepted). Production-mode
@@ -3073,7 +3120,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 `
 
 	cases := []struct {
@@ -3093,7 +3139,7 @@ brokers:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "mcp_client_auth.mode must be oauth",
@@ -3106,7 +3152,7 @@ brokers:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth block is required when any broker uses auth.mode",
@@ -3120,13 +3166,12 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.idp_token_endpoint is required",
@@ -3140,13 +3185,12 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.mcp_server_client_id is required",
@@ -3160,13 +3204,12 @@ broker_oauth:
   mcp_server_client_id: mcp-server
   mcp_server_client_auth: {}
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth: at least one method sub-block is required",
@@ -3184,13 +3227,12 @@ broker_oauth:
     client_secret_post:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth: only one method sub-block may be configured",
@@ -3204,13 +3246,12 @@ broker_oauth:
   mcp_server_client_auth:
     client_secret_basic: {}
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_basic.secret is required",
@@ -3224,13 +3265,12 @@ broker_oauth:
   mcp_server_client_auth:
     client_secret_post: {}
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_post.secret is required",
@@ -3245,22 +3285,21 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.idp_token_endpoint",
 		},
 		{
-			// Audience is optional — the broker's OAuth profile may have
+			// Target is optional — the broker's OAuth profile may have
 			// audience validation disabled. The schema accepts the omission,
 			// and with Hop1 also set to oauth the config loads cleanly.
-			name: "per-broker audience omitted when mode is oauth — accepted",
+			name: "per-broker target omitted when mode is oauth — accepted",
 			yaml: `
 tls_terminated_upstream: true
 mcp_client_auth:
@@ -3277,7 +3316,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -3300,7 +3338,7 @@ brokers:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
       scopes:
         - "semp:read"
 `,
@@ -3316,13 +3354,12 @@ broker_oauth:
   mcp_server_client_auth:
     client_secret_basic:
       secret: shhh
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
 			wantErrSubstring: "broker_oauth.grant_type is required",
@@ -3337,27 +3374,45 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      target: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.grant_type",
+		},
+		{
+			// audience_parameter_name was removed: the grant type now decides
+			// which form field carries auth.target, so a leftover key must
+			// fail loudly at decode rather than be silently ignored.
+			name: "broker_oauth.audience_parameter_name is a removed field — strict decoder rejects it",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.grant_type",
+			wantErrSubstring: `field audience_parameter_name not found in type config.BrokerOAuthConfig (broker_oauth.audience_parameter_name was removed; delete it)`,
 		},
 		{
-			name: "broker_oauth.audience_parameter_name missing",
-			yaml: clientAuthBlock + `
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+			// auth.audience was renamed to auth.target. A config that still
+			// uses the old key must fail at decode, not load with no target.
+			name: "per-broker auth.audience is a renamed field — strict decoder rejects it",
+			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3366,19 +3421,13 @@ brokers:
       audience: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.audience_parameter_name is required",
+			wantErrSubstring: `field audience not found in type config.AuthConfig (brokers.<alias>.auth.audience was renamed auth.target)`,
 		},
 		{
-			name: "broker_oauth.audience_parameter_name invalid value",
-			yaml: clientAuthBlock + `
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: gibberish
+			// A v0.9.0 OAuth config carries both retired keys; the decoder
+			// reports both in one error, so both hints must appear.
+			name: "both retired Hop 2 keys — one error carries both hints",
+			yaml: clientAuthBlock + validBrokerOAuth + `  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3387,55 +3436,24 @@ brokers:
       audience: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.audience_parameter_name",
+			wantErrSubstring: `(brokers.<alias>.auth.audience was renamed auth.target; broker_oauth.audience_parameter_name was removed; delete it)`,
 		},
 		{
-			// scope (Entra OBO style) and resource (RFC 8707) are recognized
-			// concepts but not yet implemented at the wire-construction layer
-			// (internal/tokenexchange.resolveAudienceParam). Rejecting them
-			// here, at config load, means the failure is joined with every
-			// other broker_oauth error instead of only surfacing once the
-			// Hop-2 runtime is actually constructed at server startup.
-			name: "broker_oauth.audience_parameter_name scope — not yet implemented",
-			yaml: clientAuthBlock + `
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: scope
+			// One target per broker alias. A second downstream broker is a
+			// second alias, not a second list entry.
+			name: "per-broker auth.target as a YAML list — decoder rejects it",
+			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
     url: "http://broker.example.com:8080"
     auth:
       mode: oauth
-      audience: solace-broker-prod
+      target:
+        - api://broker-a/.default
+        - api://broker-b/.default
 `,
 			wantErr:          true,
-			wantErrSubstring: `broker_oauth.audience_parameter_name "scope" is not supported in this version`,
-		},
-		{
-			name: "broker_oauth.audience_parameter_name resource — not yet implemented",
-			yaml: clientAuthBlock + `
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: resource
-brokers:
-  prod:
-    url: "http://broker.example.com:8080"
-    auth:
-      mode: oauth
-      audience: solace-broker-prod
-`,
-			wantErr:          true,
-			wantErrSubstring: `broker_oauth.audience_parameter_name "resource" is not supported in this version`,
+			wantErrSubstring: `cannot unmarshal !!seq into string`,
 		},
 		{
 			// Backwards-compatibility: a config without broker_oauth and no
@@ -3490,7 +3508,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3537,7 +3554,6 @@ broker_oauth:
     client_secret_post:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3587,7 +3603,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "https://broker.example.com:943"
@@ -3622,7 +3637,6 @@ broker_oauth:
     client_secret_basic:
       secret: "${MCP_TEST_OAUTH_CLIENT_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3670,7 +3684,6 @@ broker_oauth:
     client_secret_basic:
       secret: "${MCP_TEST_OAUTH_EMPTY_SECRET}"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3703,7 +3716,6 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   legacy:
     url: "http://broker.example.com:8080"
@@ -3839,13 +3851,12 @@ broker_oauth:
     client_secret_basic:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   staging:
     url: "https://broker.example.com:943"
     auth:
       mode: oauth
-      audience: "solace-broker-staging"
+      target: "solace-broker-staging"
 `
 	var buf bytes.Buffer
 	old := slog.Default()
@@ -3932,7 +3943,6 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 			ClientSecretBasic: &ClientSecretAuth{Secret: secretClientSecret},
 		},
 		GrantType:           GrantTypeTokenExchange,
-		AudienceParam:       AudienceParamAudience,
 		TokenExpiryFallback: &expiryFallback,
 	}
 
@@ -4606,13 +4616,12 @@ mcp_client_auth:
     client_secret_post:
       secret: "secret"
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
 brokers:
   prod:
     url: "https://broker.example.com"
     auth:
       mode: oauth
-      audience: "broker-app"
+      target: "broker-app"
 `,
 		},
 	}

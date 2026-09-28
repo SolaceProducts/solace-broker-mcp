@@ -52,7 +52,7 @@ func TestBuildIdPRequest_MandatoryRFCFields(t *testing.T) {
 	}
 	input := ExchangeInput{
 		SubjectToken: "tok-abc",
-		Audience:     "https://broker.example.com",
+		Target:       "https://broker.example.com",
 	}
 
 	req, err := e.buildIdPRequest(context.Background(), input)
@@ -90,7 +90,7 @@ func TestBuildIdPRequest_ClientSecretPost(t *testing.T) {
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -126,7 +126,7 @@ func TestBuildIdPRequest_ClientSecretBasic(t *testing.T) {
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -184,7 +184,7 @@ func TestBuildIdPRequest_NeverBothCredentials(t *testing.T) {
 			}
 			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 				SubjectToken: "tok",
-				Audience:     "aud",
+				Target:       "aud",
 			})
 			if err != nil {
 				t.Fatalf("buildIdPRequest: %v", err)
@@ -231,11 +231,10 @@ func TestBuildIdPRequest_UnknownGrantType(t *testing.T) {
 				clientAuthMethod: ClientSecretPost,
 				clientSecret:     "sec",
 				grantType:        tc.grantType,
-				audienceParam:    AudienceParamAudience,
 			}
 			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 				SubjectToken: "tok",
-				Audience:     "aud",
+				Target:       "aud",
 			})
 
 			if err == nil {
@@ -254,9 +253,9 @@ func TestBuildIdPRequest_UnknownGrantType(t *testing.T) {
 
 // TestBuildIdPRequest_UnknownClientAuthMethod verifies that any
 // ClientAuthMethod value outside the defined constants returns an error
-// mentioning "ClientAuthMethod" and a nil request. audienceParam is set
-// to AudienceParamAudience so the audience switch stays valid and the
-// auth-method error fires first.
+// mentioning "ClientAuthMethod" and a nil request. grantType is set to
+// GrantTypeTokenExchange so the grant-type switches stay valid and the
+// auth-method error fires.
 func TestBuildIdPRequest_UnknownClientAuthMethod(t *testing.T) {
 	t.Parallel()
 
@@ -278,12 +277,11 @@ func TestBuildIdPRequest_UnknownClientAuthMethod(t *testing.T) {
 				clientID:         "cid",
 				clientAuthMethod: tc.method,
 				clientSecret:     "sec",
-				grantType:        GrantTypeTokenExchange,  // REQUIRED: passes grant-type switch
-				audienceParam:    AudienceParamAudience,   // REQUIRED: keeps audience switch valid so the auth-method error fires first
+				grantType:        GrantTypeTokenExchange, // REQUIRED: passes grant-type switch
 			}
 			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 				SubjectToken: "tok",
-				Audience:     "aud",
+				Target:       "aud",
 			})
 
 			if err == nil {
@@ -300,68 +298,38 @@ func TestBuildIdPRequest_UnknownClientAuthMethod(t *testing.T) {
 	}
 }
 
-// TestBuildIdPRequest_UnknownAudienceFormat verifies that any
-// AudienceFormat value outside the defined constants returns an error
-// mentioning "AudienceFormat" and a nil request. clientAuthMethod is set
-// to ClientSecretPost so the auth switch passes and the audience-format
-// error fires.
-func TestBuildIdPRequest_UnknownAudienceFormat(t *testing.T) {
+// TestSetTarget_UnknownGrantType calls setTarget directly: buildIdPRequest
+// can't reach its default branch because setGrantFields rejects an unknown
+// grant type first. A grant type added to setGrantFields without a matching
+// setTarget case must still fail closed instead of silently dropping the
+// target from the IdP request.
+func TestSetTarget_UnknownGrantType(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name  string
-		param AudienceFormat
-	}{
-		{"zero value", 0},
-		{"out of range positive", 2},
-		{"negative", -1},
+	e := &Exchanger{grantType: 0}
+	err := e.setTarget(url.Values{}, ExchangeInput{Target: "aud"})
+	if err == nil {
+		t.Fatal("expected error for unknown GrantType, got nil")
 	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := &Exchanger{
-				tokenURL:         "https://idp.example.com/token",
-				clientID:         "cid",
-				clientAuthMethod: ClientSecretPost,        // REQUIRED: passes auth switch so the audience-format error fires
-				clientSecret:     "sec",
-				grantType:        GrantTypeTokenExchange,  // REQUIRED: passes grant-type switch
-				audienceParam:    tc.param,
-			}
-			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
-				SubjectToken: "tok",
-				Audience:     "aud",
-			})
-
-			if err == nil {
-				t.Fatal("expected error for unknown AudienceFormat, got nil")
-				return
-			}
-			if req != nil {
-				t.Errorf("expected nil request on error, got non-nil")
-			}
-			if !strings.Contains(err.Error(), "AudienceFormat") {
-				t.Errorf("error = %q, want mention of AudienceFormat", err.Error())
-			}
-		})
+	if !strings.Contains(err.Error(), "GrantType") {
+		t.Errorf("error = %q, want mention of GrantType", err.Error())
 	}
 }
 
-// TestBuildIdPRequest_AudienceConditional verifies that the "audience" form
-// field is present with the correct value when ExchangeInput.Audience is
-// non-empty, and absent when it is empty.
-func TestBuildIdPRequest_AudienceConditional(t *testing.T) {
+// TestBuildIdPRequest_TargetConditional verifies that token exchange carries
+// ExchangeInput.Target in the RFC 8693 "audience" form field when it is
+// non-empty, and omits the field when it is empty.
+func TestBuildIdPRequest_TargetConditional(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name        string
-		audience    string
+		target      string
 		wantPresent bool
 		wantValue   string
 	}{
-		{"non-empty audience", "https://broker.example.com", true, "https://broker.example.com"},
-		{"empty audience", "", false, ""},
+		{"non-empty target", "https://broker.example.com", true, "https://broker.example.com"},
+		{"empty target", "", false, ""},
 	}
 
 	for _, tc := range tests {
@@ -374,7 +342,7 @@ func TestBuildIdPRequest_AudienceConditional(t *testing.T) {
 			}
 			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 				SubjectToken: "tok",
-				Audience:     tc.audience,
+				Target:       tc.target,
 			})
 			if err != nil {
 				t.Fatalf("buildIdPRequest: %v", err)
@@ -409,7 +377,7 @@ func TestBuildIdPRequest_NoScopeParameter(t *testing.T) {
 	}
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -446,7 +414,7 @@ func TestBuildIdPRequest_ContentTypeAlwaysSet(t *testing.T) {
 			}
 			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 				SubjectToken: "tok",
-				Audience:     "aud",
+				Target:       "aud",
 			})
 			if err != nil {
 				t.Fatalf("buildIdPRequest: %v", err)
@@ -474,7 +442,7 @@ func TestBuildIdPRequest_ContextPropagation(t *testing.T) {
 
 	req, err := e.buildIdPRequest(ctx, ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -498,12 +466,11 @@ func TestBuildIdPRequest_MalformedTokenURL(t *testing.T) {
 		clientAuthMethod: ClientSecretPost,
 		clientSecret:     "sec",
 		grantType:        GrantTypeTokenExchange,
-		audienceParam:    AudienceParamAudience,
 	}
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 
 	if err == nil {
@@ -535,7 +502,7 @@ func TestBuildIdPRequest_MethodIsPOST(t *testing.T) {
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -561,7 +528,7 @@ func TestBuildIdPRequest_URLEqualsTokenURL(t *testing.T) {
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -586,7 +553,7 @@ func TestBuildIdPRequest_BrokerAliasExcluded(t *testing.T) {
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "tok",
 		BrokerAlias:  "my-broker",
-		Audience:     "aud",
+		Target:       "aud",
 	})
 	if err != nil {
 		t.Fatalf("buildIdPRequest: %v", err)
@@ -615,7 +582,7 @@ func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 
 	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
 		SubjectToken: "", // intentionally empty — pins current pass-through behavior
-		Audience:     "aud",
+		Target:       "aud",
 	})
 
 	// Current behavior: no error returned for empty SubjectToken.
@@ -636,4 +603,3 @@ func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 		t.Errorf("subject_token = %q, want empty string", got)
 	}
 }
-
