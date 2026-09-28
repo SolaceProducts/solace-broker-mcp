@@ -1211,6 +1211,22 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	// Entra-shaped claims (SOL-154398): a role/group list can arrive as a
 	// "roles" claim instead of "groups", and Entra may put both roles and
 	// groups on the same token. The named claim is the only one honored.
+	//
+	// These four subtests pin claim EXTRACTION only — which claim name
+	// buildTokenInfo reads and what lands on TokenInfo.Extra. They stop
+	// short of the allow/deny decision (Authorize), so AccessLevelGroups
+	// is deliberately absent from every cfg below: nothing in this call
+	// path (verifier -> buildTokenInfo) ever reads it, so setting it would
+	// only look like more coverage than these subtests actually have. The
+	// decision half is already pinned, generically (it takes a []string,
+	// with no notion of claim name or IdP shape): allow —
+	// TestWithAuthorization_Allow_PassesThroughToNext
+	// (internal/tools/authorization_test.go); missing-claim deny —
+	// TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult (same
+	// file) and TestWithListFiltering_MissingGroupsClaim_FailsClosedAndWarns
+	// (internal/tools/listfilter_test.go); discovery-tool exemption —
+	// TestRegisterListBrokers_NeverComposesWithAuthorization
+	// (internal/tools/register_test.go).
 
 	t.Run("groups_claim_name roles with populated roles array", func(t *testing.T) {
 		cfg := &config.ServerConfig{
@@ -1219,9 +1235,8 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:           boolPtr(true),
-					GroupsClaimName:   strPtr("roles"),
-					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
 				},
 			},
 		}
@@ -1263,9 +1278,8 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:           boolPtr(true),
-					GroupsClaimName:   strPtr("roles"),
-					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
 				},
 			},
 		}
@@ -1308,9 +1322,8 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:           boolPtr(true),
-					GroupsClaimName:   strPtr("groups"),
-					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
 				},
 			},
 		}
@@ -1353,9 +1366,8 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:           boolPtr(true),
-					GroupsClaimName:   strPtr("roles"),
-					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
 				},
 			},
 		}

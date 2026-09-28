@@ -81,69 +81,55 @@ mcp_client_auth:
 	}
 }
 
-// enabled: false with populated fields loads; structural rules still apply.
-func TestToolAuthorization_EnabledFalseWithPopulatedFieldsLoads(t *testing.T) {
-	yaml := `
+// A populated groups_claim_name: "roles" fixture loads with structural rules
+// applied the same way whether enabled is true or false — including the
+// Entra-shaped claim name itself, which is fully operator-arbitrary
+// regardless of whether tool RBAC is actually turned on (SOL-154398).
+func TestToolAuthorization_RolesClaimNameLoads(t *testing.T) {
+	cases := []struct {
+		name    string
+		enabled bool
+	}{
+		{"enabled false", false},
+		{"enabled true", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := fmt.Sprintf(`
 mcp_client_auth:
   mode: oauth
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
   tool_authorization:
-    enabled: false
+    enabled: %t
     groups_claim_name: "roles"
     access_level_groups:
       Ops:
         - get-broker-status
-` + oauthBaseYAML
+`, tc.enabled) + oauthBaseYAML
 
-	cfg, err := LoadConfig(writeTemp(t, yaml))
-	if err != nil {
-		t.Fatalf("enabled: false with populated fields should load, got: %v", err)
-	}
-	ta := cfg.MCPClientAuth.ToolAuthorization
-	if ta == nil {
-		t.Fatal("ToolAuthorization should not be nil")
-	}
-	if ta.GroupsClaimName == nil || *ta.GroupsClaimName != "roles" {
-		t.Errorf("GroupsClaimName should be %q, got %v", "roles", ta.GroupsClaimName)
-	}
-	if len(ta.AccessLevelGroups) != 1 {
-		t.Errorf("expected 1 group, got %d", len(ta.AccessLevelGroups))
-	}
-	if tools, ok := ta.AccessLevelGroups["Ops"]; !ok || len(tools) != 1 || tools[0] != "get-broker-status" {
-		t.Errorf("expected Ops: [get-broker-status], got %v", ta.AccessLevelGroups)
-	}
-}
-
-// groups_claim_name is fully operator-arbitrary: an Entra-shaped "roles"
-// claim name loads with enabled: true, not just the enabled: false case
-// covered above (SOL-154398).
-func TestToolAuthorization_RolesClaimNameWithEnabledTrueLoads(t *testing.T) {
-	yaml := `
-mcp_client_auth:
-  mode: oauth
-  issuer: "https://idp.example.com"
-  audience: "mcp"
-  resource_url: "https://mcp.example.com/mcp"
-  tool_authorization:
-    enabled: true
-    groups_claim_name: "roles"
-    access_level_groups:
-      Ops:
-        - get-broker-status
-` + oauthBaseYAML
-
-	cfg, err := LoadConfig(writeTemp(t, yaml))
-	if err != nil {
-		t.Fatalf("enabled: true with groups_claim_name: roles should load, got: %v", err)
-	}
-	ta := cfg.MCPClientAuth.ToolAuthorization
-	if ta.Enabled == nil || !*ta.Enabled {
-		t.Fatal("Enabled should be non-nil and true")
-	}
-	if ta.GroupsClaimName == nil || *ta.GroupsClaimName != "roles" {
-		t.Errorf("GroupsClaimName should be %q, got %v", "roles", ta.GroupsClaimName)
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("enabled: %t with groups_claim_name: roles should load, got: %v", tc.enabled, err)
+			}
+			ta := cfg.MCPClientAuth.ToolAuthorization
+			if ta == nil {
+				t.Fatal("ToolAuthorization should not be nil")
+			}
+			if ta.Enabled == nil || *ta.Enabled != tc.enabled {
+				t.Errorf("Enabled should be non-nil and %t, got %v", tc.enabled, ta.Enabled)
+			}
+			if ta.GroupsClaimName == nil || *ta.GroupsClaimName != "roles" {
+				t.Errorf("GroupsClaimName should be %q, got %v", "roles", ta.GroupsClaimName)
+			}
+			if len(ta.AccessLevelGroups) != 1 {
+				t.Errorf("expected 1 group, got %d", len(ta.AccessLevelGroups))
+			}
+			if tools, ok := ta.AccessLevelGroups["Ops"]; !ok || len(tools) != 1 || tools[0] != "get-broker-status" {
+				t.Errorf("expected Ops: [get-broker-status], got %v", ta.AccessLevelGroups)
+			}
+		})
 	}
 }
 
