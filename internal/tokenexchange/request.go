@@ -137,7 +137,7 @@ func (e *Exchanger) setTarget(form url.Values, input ExchangeInput) error {
 			form.Set("audience", input.Target)
 		}
 	default:
-		return fmt.Errorf("tokenexchange: unknown GrantType %d for target placement", e.grantType)
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for target placement (programming error — Params built outside FromConfig)", e.grantType)
 	}
 	return nil
 }

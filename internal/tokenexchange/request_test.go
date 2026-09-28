@@ -307,12 +307,16 @@ func TestSetTarget_UnknownGrantType(t *testing.T) {
 	t.Parallel()
 
 	e := &Exchanger{grantType: 0}
-	err := e.setTarget(url.Values{}, ExchangeInput{Target: "aud"})
+	form := url.Values{}
+	err := e.setTarget(form, ExchangeInput{Target: "aud"})
 	if err == nil {
 		t.Fatal("expected error for unknown GrantType, got nil")
 	}
 	if !strings.Contains(err.Error(), "GrantType") {
 		t.Errorf("error = %q, want mention of GrantType", err.Error())
+	}
+	if len(form) != 0 {
+		t.Errorf("form = %v, want empty — an unknown grant type must not place the target", form)
 	}
 }
 

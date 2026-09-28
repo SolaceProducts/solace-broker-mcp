@@ -31,9 +31,9 @@ import (
 //
 // The config validator (internal/config.validateBrokerOAuthConfig) has
 // already enforced structural validity at startup: non-empty fields,
-// exactly-one client-auth sub-block, grant_type in its allowlist. FromConfig translates the validated
-// YAML-level types (strings, discriminated unions) into the typed Params
-// enums the Exchanger expects.
+// exactly-one client-auth sub-block, grant_type in its allowlist.
+// FromConfig translates the validated YAML-level types (strings,
+// discriminated unions) into the typed Params enums the Exchanger expects.
 func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCache cache.TokenCache) (*Exchanger, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("tokenexchange: broker_oauth config is nil")

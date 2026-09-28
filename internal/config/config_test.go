@@ -545,7 +545,7 @@ brokers:
 	}
 }
 
-// YAML escapes a literal ' inside a single-quoted scalar as ”. A # between
+// YAML escapes a literal ' inside a single-quoted scalar as ''. A # between
 // the doubled quote and the real closing quote must still be treated as part
 // of the string, not a comment marker.
 func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
