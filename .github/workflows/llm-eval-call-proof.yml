@@ -1,0 +1,24 @@
+name: LLM eval call proof
+
+# Temporary. Dispatched once from amorade/SOL-152815 to show the workflow_call
+# path: summary.txt head equals commit, and this job overlaps build-and-test
+# instead of waiting on Release-<sha>. Deleted after that run is linked.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-and-test.yml
+
+  llm-eval:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/llm-eval.yml
+    secrets:
+      LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
