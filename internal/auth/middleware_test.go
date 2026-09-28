@@ -1207,6 +1207,194 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 			t.Errorf("groups = %v, want empty slice", groups)
 		}
 	})
+
+	// Entra-shaped claims (SOL-154398): a role/group list can arrive as a
+	// "roles" claim instead of "groups", and Entra may put both roles and
+	// groups on the same token. The named claim is the only one honored.
+	//
+	// These four subtests pin claim EXTRACTION only — which claim name
+	// buildTokenInfo reads and what lands on TokenInfo.Extra. They stop
+	// short of the allow/deny decision (Authorize), so AccessLevelGroups
+	// is deliberately absent from every cfg below: nothing in this call
+	// path (verifier -> buildTokenInfo) ever reads it, so setting it would
+	// only look like more coverage than these subtests actually have. The
+	// decision half is already pinned, generically (it takes a []string,
+	// with no notion of claim name or IdP shape): allow —
+	// TestWithAuthorization_Allow_PassesThroughToNext
+	// (internal/tools/authorization_test.go); missing-claim deny —
+	// TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult (same
+	// file) and TestWithListFiltering_MissingGroupsClaim_FailsClosedAndWarns
+	// (internal/tools/listfilter_test.go); discovery-tool exemption —
+	// TestRegisterListBrokers_NeverComposesWithAuthorization
+	// (internal/tools/register_test.go).
+
+	t.Run("groups_claim_name roles with populated roles array", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles": []interface{}{"operator"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key for a populated roles claim")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "operator" {
+			t.Errorf("groups = %v, want [operator]", groups)
+		}
+	})
+
+	t.Run("both roles and groups present, named claim is roles", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles":  []interface{}{"operator"},
+			"groups": []interface{}{"reader-object-id"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "operator" {
+			t.Errorf("groups = %v, want [operator] (groups claim must not be unioned in)", groups)
+		}
+	})
+
+	t.Run("both roles and groups present, named claim is groups", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"roles":  []interface{}{"operator"},
+			"groups": []interface{}{"reader-object-id"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 1 || groups[0] != "reader-object-id" {
+			t.Errorf("groups = %v, want [reader-object-id] (roles claim must not be unioned in)", groups)
+		}
+	})
+
+	t.Run("only scp claim present, named claim is roles", func(t *testing.T) {
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		// scp is a delegated-scope claim, not a role/group list. Its presence
+		// must not satisfy the named "roles" claim.
+		token, err := mock.createToken(map[string]interface{}{
+			"scp": "access_as_user",
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when only scp is present")
+		}
+	})
 }
 
 // --- buildTokenInfo unit tests (no IdP needed) -------------------------------
