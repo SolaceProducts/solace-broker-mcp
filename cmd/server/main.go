@@ -374,7 +374,7 @@ func healthConfigFromFile() healthConfig {
 	// .env loading and ${VAR_NAME} substitution match what the server saw. A probe
 	// that read `tls_cert_file: "${TLS_CERT_PATH}"` literally would fail to open a
 	// certificate the server is serving from perfectly well.
-	data, err := config.ReadResolvedConfigFile(path)
+	data, _, err := config.ReadResolvedConfigFile(path)
 	if err != nil {
 		return healthConfig{Scheme: "http"}
 	}

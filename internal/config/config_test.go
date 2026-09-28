@@ -566,6 +566,48 @@ brokers:
 	}
 }
 
+// Compatibility break from the parse-first fix (PR #452 review, bczoma): an
+// unquoted ${VAR} inside a flow collection ([...] or {...}) fails to parse,
+// because it is now parsed as a plain scalar *before* substitution, and { }
+// are flow indicators a plain scalar cannot contain. On main, the old
+// raw-text substitution replaced ${VAR} — braces and all — before the YAML
+// was ever parsed, so this loaded. Quoting the reference, as
+// docs/configuration.md now documents, avoids the ambiguity entirely.
+func TestLoadConfig_UnquotedEnvVarInFlowCollectionFailsToParse(t *testing.T) {
+	t.Setenv("FLOW_HOST", "broker.example.com")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod: { url: "https://broker.example.com:1943", auth: { mode: basic, username: ${FLOW_HOST}, password: secret } }
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err == nil {
+		t.Fatal("expected an unquoted ${VAR} inside a flow collection to fail to parse")
+	}
+}
+
+// The quoted form of the same reference parses and substitutes normally.
+func TestLoadConfig_QuotedEnvVarInFlowCollectionSubstitutes(t *testing.T) {
+	t.Setenv("FLOW_HOST", "broker.example.com")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod: { url: "https://placeholder:1943", auth: { mode: basic, username: "${FLOW_HOST}", password: secret } }
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("quoted ${VAR} inside a flow collection must load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "broker.example.com" {
+		t.Errorf("username: got %q, want %q", got, "broker.example.com")
+	}
+}
+
 // A single trailing break is trimmed, but only one — a value with two
 // trailing breaks after real content loses just the last one, not both.
 func TestLoadConfig_EnvVarOnlyOneTrailingBreakTrimmed(t *testing.T) {
@@ -620,6 +662,119 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "password is required for basic auth") {
 		t.Errorf("expected the whitespace-only-password error, got: %v", err)
+	}
+}
+
+// A lone trailing CR (not paired with LF) is trimmed the same as a lone
+// trailing LF or a CRLF pair — TestLoadConfig_EnvVarTrailingNewlineTrimmed
+// only pinned those two.
+func TestLoadConfig_EnvVarLoneTrailingCRTrimmed(t *testing.T) {
+	t.Setenv("BROKER_PASS_CR", "secret\r")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${BROKER_PASS_CR}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("trailing CR in env var value must not fail load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "secret" {
+		t.Errorf("expected trailing \\r trimmed, got %q", got)
+	}
+}
+
+// A quoted "${VAR}" must decode with its literal text preserved even when
+// that text looks like a bool or an int — unlike the unquoted case
+// (TestObservability_NumericFromYAML), quoting keeps the scalar's original
+// !!str tag (see substituteEnvVars's Style/Tag handling), so it is never a
+// candidate for re-resolving into another type.
+func TestLoadConfig_QuotedEnvVarNumericLikeValueStaysString(t *testing.T) {
+	t.Setenv("LOOKS_LIKE_BOOL", "true")
+	t.Setenv("LOOKS_LIKE_INT", "123")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: "${LOOKS_LIKE_BOOL}"
+      password: "${LOOKS_LIKE_INT}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "true" {
+		t.Errorf("username: got %q, want the literal string %q", got, "true")
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "123" {
+		t.Errorf("password: got %q, want the literal string %q", got, "123")
+	}
+}
+
+// An anchored scalar (&cred) and its alias (*cred) share one underlying
+// yaml.Node, so a single substitution reaches both — walk() visits the
+// anchored node once at its own position and never descends into the
+// AliasNode itself (see that branch's comment in substituteEnvVars).
+func TestLoadConfig_EnvVarAliasSharesSubstitutedValue(t *testing.T) {
+	t.Setenv("SHARED_SECRET", "shared-value")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: &cred "${SHARED_SECRET}"
+      password: *cred
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "shared-value" {
+		t.Errorf("username: got %q, want %q", got, "shared-value")
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "shared-value" {
+		t.Errorf("password (via alias): got %q, want %q", got, "shared-value")
+	}
+}
+
+// ${VAR} appearing only in a map KEY, never in a value, must not be
+// substituted, must not require the var to be set, and — since no scalar
+// value changed — must not trigger the parse/remarshal round-trip at all:
+// the bytes come back byte-for-byte identical (see substituteEnvVars's
+// "changed" tracking, added after PR #452 review flagged that a comment- or
+// key-only match still re-marshaled the whole document, shifting later
+// decode-error line numbers away from the original file for no reason).
+func TestSubstituteEnvVars_KeyOnlyMatchLeavesDataUnchanged(t *testing.T) {
+	data := []byte("\"${UNSET_ONLY_IN_KEY}\": value\n")
+
+	got, remarshaled, err := substituteEnvVars(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if remarshaled {
+		t.Error("expected remarshaled = false when ${VAR} matched only in a key")
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want the input returned unchanged: %q", got, data)
 	}
 }
 
@@ -729,9 +884,10 @@ brokers:
 	}
 }
 
-// YAML escapes a literal ' inside a single-quoted scalar as ”. A # between
-// the doubled quote and the real closing quote must still be treated as part
-// of the string, not a comment marker.
+// YAML represents an escaped apostrophe inside a single-quoted scalar as two
+// consecutive single quotes. A # between the escaped quote and the real
+// closing quote must still be treated as part of the string, not a comment
+// marker.
 func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
 	t.Setenv("ESCAPED_PWD", "live")
 
@@ -4181,7 +4337,7 @@ func TestReadResolvedConfigFile_SubstitutesEnvVars(t *testing.T) {
 	}
 	t.Setenv("TEST_CERT_PATH", "/etc/certs/server.pem")
 
-	got, err := ReadResolvedConfigFile(path)
+	got, _, err := ReadResolvedConfigFile(path)
 	if err != nil {
 		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
 	}
@@ -4194,7 +4350,7 @@ func TestReadResolvedConfigFile_SubstitutesEnvVars(t *testing.T) {
 }
 
 func TestReadResolvedConfigFile_ErrorsOnMissingFile(t *testing.T) {
-	if _, err := ReadResolvedConfigFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
+	if _, _, err := ReadResolvedConfigFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
 		t.Fatal("ReadResolvedConfigFile(missing file) = nil error, want an error")
 	}
 }
@@ -4208,7 +4364,7 @@ func TestReadResolvedConfigFile_ErrorsOnUnsetEnvVar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ReadResolvedConfigFile(path); err == nil {
+	if _, _, err := ReadResolvedConfigFile(path); err == nil {
 		t.Fatal("ReadResolvedConfigFile(unset var) = nil error, want an error")
 	}
 }
@@ -4268,7 +4424,7 @@ func TestReadResolvedConfigFile_ResolvesVarsFromEnvFile(t *testing.T) {
 	os.Unsetenv("TEST_ENVFILE_ONLY_CERT")                       //nolint:errcheck // only the .env file may supply it
 	t.Cleanup(func() { os.Unsetenv("TEST_ENVFILE_ONLY_CERT") }) //nolint:errcheck // loadEnvFile sets it process-wide
 
-	got, err := ReadResolvedConfigFile(cfgPath)
+	got, _, err := ReadResolvedConfigFile(cfgPath)
 	if err != nil {
 		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
 	}

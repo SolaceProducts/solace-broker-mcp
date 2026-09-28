@@ -583,8 +583,11 @@ var yamlNodeValuePattern = regexp.MustCompile("`[^`]*`")
 // a mismatched target type — most plausibly a credential pulled into a
 // non-string field by a wrong ${VAR} reference, since env substitution runs
 // before decode. The secret would ride inside the error string where the
-// slog ReplaceAttr redaction net cannot reach it. Line numbers and type
-// diagnostics are preserved.
+// slog ReplaceAttr redaction net cannot reach it. Type diagnostics are
+// preserved, and so are line numbers — but only relative to the document
+// dec.Decode actually saw, which after a substitution that changed a scalar
+// is the re-marshaled one, not the original file (LoadConfig appends a note
+// in that case).
 func sanitizeYAMLError(err error) error {
 	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
 }
@@ -600,19 +603,23 @@ func sanitizeYAMLError(err error) error {
 // resolved `tls_cert_file: "${TLS_CERT_PATH}"` differently from the server would
 // report a correctly-serving container as unhealthy. Prefer LoadConfig for
 // anything that needs a validated ServerConfig.
-func ReadResolvedConfigFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
+//
+// The second return value reports whether ${VAR_NAME} substitution actually
+// re-marshaled the document (see substituteEnvVars); LoadConfig uses it to
+// annotate a subsequent decode error's line numbers.
+func ReadResolvedConfigFile(path string) (data []byte, remarshaled bool, err error) {
+	data, err = os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
 	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+		return nil, false, fmt.Errorf("reading config file: %w", err)
 	}
 
 	loadEnvFile(path)
 
-	data, err = substituteEnvVars(data)
+	data, remarshaled, err = substituteEnvVars(data)
 	if err != nil {
-		return nil, fmt.Errorf("substituting env vars: %w", err)
+		return nil, false, fmt.Errorf("substituting env vars: %w", err)
 	}
-	return data, nil
+	return data, remarshaled, nil
 }
 
 // LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
@@ -632,7 +639,7 @@ func ReadResolvedConfigFile(path string) ([]byte, error) {
 // --health probe — share this preprocessing rather than reimplementing it. A
 // change to the order or semantics here therefore reaches them too.
 func LoadConfig(path string) (*ServerConfig, error) {
-	data, err := ReadResolvedConfigFile(path)
+	data, remarshaled, err := ReadResolvedConfigFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +648,14 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
+		decodeErr := fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
+		if remarshaled {
+			// data was re-marshaled from the parsed node tree by
+			// substituteEnvVars, so the line numbers above refer to that
+			// re-encoded document, not the original file.
+			decodeErr = fmt.Errorf("%w (line numbers refer to the config after ${VAR_NAME} substitution)", decodeErr)
+		}
+		return nil, decodeErr
 	}
 
 	if raw.DevelopmentMode != nil {
@@ -945,21 +959,31 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 // rolling a quote/comment scanner over YAML's grammar).
 //
 // Returns an error listing any referenced env vars that are not set.
-func substituteEnvVars(data []byte) ([]byte, error) {
+//
+// The second return value reports whether the output was actually
+// re-marshaled from the parsed node tree. It is false both on the fast path
+// above and when ${VAR} matched somewhere in the raw bytes — a comment or a
+// map key — but substituteScalar never touched a value: in that case data is
+// returned unchanged rather than round-tripped through yaml.Marshal, so a
+// later decode error's line numbers still refer to the original file (PR
+// #452 review).
+func substituteEnvVars(data []byte) (result []byte, remarshaled bool, err error) {
 	if !envVarPattern.Match(data) {
-		return data, nil // nothing to substitute; skip the parse/remarshal round-trip entirely
+		return data, false, nil // nothing to substitute; skip the parse/remarshal round-trip entirely
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
+		return nil, false, fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
 	}
 
 	var missing []string
+	var changed bool
 	substituteScalar := func(n *yaml.Node) {
 		if !envVarPattern.MatchString(n.Value) {
 			return
 		}
+		changed = true
 		n.Value = envVarPattern.ReplaceAllStringFunc(n.Value, func(match string) string {
 			varName := envVarPattern.FindStringSubmatch(match)[1]
 			value, exists := os.LookupEnv(varName)
@@ -1009,14 +1033,18 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 	walk(&doc, false)
 
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+		return nil, false, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+	}
+
+	if !changed {
+		return data, false, nil
 	}
 
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
-		return nil, fmt.Errorf("re-encoding config after env var substitution: %w", err)
+		return nil, false, fmt.Errorf("re-encoding config after env var substitution: %w", err)
 	}
-	return out, nil
+	return out, true, nil
 }
 
 // trimOneTrailingLineBreak removes exactly one trailing "\r\n" pair, or a

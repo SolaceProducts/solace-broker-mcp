@@ -295,8 +295,9 @@ The server searches for configuration in this order:
 
 ### Credential substitution
 
-Use `${VAR_NAME}` in any YAML field to reference environment variables. The
-server substitutes these before parsing the YAML:
+Use `${VAR_NAME}` in any YAML value (not a key) to reference environment
+variables. The server parses the YAML first, then substitutes these into the
+already-decoded scalar values:
 
 ```yaml
 brokers:

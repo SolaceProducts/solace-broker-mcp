@@ -185,9 +185,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Environment-variable substitution (`${VAR}` in the YAML config) now happens only after the
   config is parsed, substituting inside an already-decoded scalar's value instead of splicing
   into the raw document text. A resolved value can no longer close the current YAML scalar or
-  inject sibling keys such as `enable_write_tools: true`, regardless of embedded quotes, line
-  breaks (including yaml.v3's Unicode breaks), or flow-style braces. A single trailing line break
-  is still trimmed for file-sourced secrets. Tracked under SOL-154441.
+  inject sibling keys such as `enable_write_tools: true`, regardless of embedded quotes, Unicode
+  line breaks, or flow-style braces. A single trailing line break is now trimmed for file-sourced
+  secrets; the value is otherwise inserted verbatim, with no backslash/quote interpretation or
+  truncation at `#`. Compatibility note: an unquoted `${VAR}` inside a flow collection
+  (`[...]`/`{...}`) must now be quoted. Tracked under SOL-154441.
 
 ## [0.9.0] - 2026-09-11
 

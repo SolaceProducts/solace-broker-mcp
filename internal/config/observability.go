@@ -44,8 +44,9 @@ import (
 //
 //   - Numeric tunables (the int fields, YAML-tagged) parse from the YAML
 //     config like every other field, so they inherit the existing ${VAR}
-//     substitution for free (substituteEnvVars runs over the raw bytes before
-//     decode). Defaults are applied in applyDefaults alongside the rest.
+//     substitution for free (substituteEnvVars substitutes into the already-
+//     parsed scalar values, then re-encodes, before decode). Defaults are
+//     applied in applyDefaults alongside the rest.
 type ObservabilityConfig struct {
 	// Capability flags. Loaded from OBS_* env vars in applyObservabilityEnv,
 	// not from YAML. The yaml:"-" tags are intentional: they exclude these
