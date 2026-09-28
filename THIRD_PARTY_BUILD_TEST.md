@@ -14,10 +14,10 @@ itself**, and which are **not compiled into the shipped binary**.
 
 **Generated** 2026-09-18; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
-2026-08-14 when the Dependabot `github-actions` group update moved the five
+2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
-2026-09-03 (#373), again 2026-09-08 (#383), and again 2026-09-10 (#397),
-each time re-pinning the same five actions. Every license in the following
+2026-09-03 (#373), again 2026-09-08 (#383), again 2026-09-10 (#397), and again
+2026-09-28 (#457), which re-pinned all six actions to `668d31d`. Every license in the following
 tables was read from the component's own license file or from the GitHub
 API for its source repository, at the ref in use rather than at the default
 branch. None was inferred from a package name or carried over from another
@@ -194,25 +194,24 @@ unusual.
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
-All six come from one repository. Five share a single pin; `update-manifest.yaml`
-is pinned separately, for the reason below the table.
+All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `7b54c55` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `7b54c55` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `7b54c55` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `7b54c55` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `7b54c55` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `7b54c55` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `668d31d` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `668d31d` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `668d31d` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `668d31d` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `668d31d` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `668d31d` | Solace |
 
-`7b54c55` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-09-10 by the Dependabot
-`github-actions` group update (#397); the prior pin was `6527948`.
+`668d31d` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-09-28 by the Dependabot
+`github-actions` group update (#457); the prior pin was `7b54c55`.
 
-`7b54c55` is a branch commit on that same repository. It sits apart from the
-group only because `update-manifest.yaml` postdates `6527948` and so could not be
-pinned there; expect the next group update to collapse the two.
+This update collapsed `update-manifest.yaml` into the shared pin: all six now
+agree on `668d31d`, so the separate-pin note that once stood here no longer
+applies.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
