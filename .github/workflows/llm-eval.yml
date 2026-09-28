@@ -5,7 +5,8 @@ name: LLM E2E Eval
 # workflow_dispatch still evaluates inputs.target_branch (default main).
 # No per-PR trigger and no schedule. One attempt per run. A full matrix
 # costs API credits (~$4.78 measured 2026-08-05). A red run is re-run with
-# `gh run rerun`; there is no admin skip.
+# `gh run rerun <run-id> --failed`; there is no admin skip. The call path
+# has no inputs: a caller cannot narrow the matrix or point it at a lab broker.
 #
 # Checkout is inputs.target_branch when that input is set (manual dispatch,
 # default main). On workflow_call that input does not exist, so the ref is
@@ -15,15 +16,6 @@ name: LLM E2E Eval
 
 on:
   workflow_call:
-    inputs:
-      broker_target:
-        required: false
-        type: string
-        default: local-docker
-      scenario_filter:
-        required: false
-        type: string
-        default: ''
     secrets:
       LLM_SERVICE_API_KEY:
         required: true
@@ -47,16 +39,18 @@ on:
 
 # Do not cancel an in-progress run. Cancelling spends the API credits and
 # leaves broker containers on a runner that is about to be reclaimed.
-# On a called workflow github.workflow is the caller name (Release on a tag)
-# and github.sha is that tag's commit. GitHub keeps one running and one
-# pending run per group, so a group of only github.workflow would queue every
-# release together and a third tag would cancel the waiting one. Adding the
-# SHA puts each tag in its own group; two runs of the same commit still
-# share one. Hosted runners do not share a Docker daemon, and the release
-# call is local-docker, so it does not share a lab broker with a manual lab
-# run.
+# The group is a literal name plus the commit SHA. On a called workflow
+# github.workflow is the caller name, so a group built from it is
+# Release-<sha> for every workflow Release calls. test and the Guardian
+# scan already share that string. GitHub keeps one running job and one
+# pending job per group, and a third member cancels the pending one.
+# llm-eval-<sha> is not that string. Two runs of the same commit still
+# share this group, including a manual dispatch of a commit a release is
+# already evaluating. Hosted runners do not share a Docker daemon. The
+# release path is local-docker, so it does not share a lab broker with a
+# manual lab run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
+  group: llm-eval-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -95,6 +89,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
+          # A tag runs this job once. The default cache writes the same gha
+          # cache build-docker reads via cache-from: type=gha.
+          cache: false
 
       - name: Setup Node (for Claude CLI install)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -237,8 +234,9 @@ jobs:
           # them under a stage that never ran. A step is `skipped` when an
           # earlier step (Checkout, Setup Go, npm ci) failed first, and
           # `cancelled` when the job hit `timeout-minutes` or was stopped by
-          # hand. The infra-vs-scenario split is read mechanically at window
-          # end, so a misfiled row silently inflates the infra column.
+          # hand. The release engineer reads failure_class in summary.txt to
+          # tell a fixture failure from a scenario failure. A misfiled row
+          # hides which one held the publish.
           if [ "$SUITE_OUTCOME" = "cancelled" ] || [ "$FIXTURES_OUTCOME" = "cancelled" ]; then
             CLASS="infrastructure (run cancelled or timed out)"
           elif [ "$FIXTURES_OUTCOME" = "skipped" ]; then
@@ -287,7 +285,7 @@ jobs:
             fi
           } > "$ART_DIR/summary.txt"
 
-          # Same content on the run's summary page, so a day's result is
+          # Same content on the run's summary page, so the gate result is
           # readable without downloading the artifact.
           {
             echo '```'
@@ -296,8 +294,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload run record
-        # Retention outlasts the 20-day collection window plus write-up time, so
-        # day 1 is still readable on the day the window closes.
+        # The run log expires before someone is back to diagnose a red gate.
+        # This artifact is the failed scenarios plus the broker and MCP logs.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

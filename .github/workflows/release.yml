@@ -274,7 +274,8 @@ jobs:
   # the GHCR push and the GitHub Release. build-binaries does not wait.
   # This job starts with the other roots. A red test, release-notes,
   # licenses, or release-readiness job does not stop it starting. It only
-  # stops what this job protects. Re-run a flake with `gh run rerun`.
+  # stops what this job protects. Re-run a flake with
+  # `gh run rerun <run-id> --failed`. A full rerun starts the suite again.
   # There is no admin skip.
   # Name LLM_SERVICE_API_KEY. Do not use secrets: inherit here — that is
   # load-bearing on release-readiness above, and it would hand this key to
@@ -284,9 +285,6 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/llm-eval.yml
-    with:
-      broker_target: local-docker
-      scenario_filter: ''
     secrets:
       LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
 
@@ -456,7 +454,7 @@ jobs:
   # release-readiness and llm-eval: a registry push is irreversible and moves
   # `latest`, so it waits for the Guardian gate and for the LLM suite.
   # Admin skip_security_checks can publish over a Guardian block. It does
-  # not skip llm-eval. A red suite is `gh run rerun`.
+  # not skip llm-eval. A red suite is `gh run rerun <run-id> --failed`.
   build-docker:
     needs: [test, release-notes, licenses, release-readiness, llm-eval]
     runs-on: ubuntu-latest
