@@ -103,7 +103,7 @@ func TestParseObservabilityDoc(t *testing.T) {
 // clear parser error, rather than surfacing as a confusing failure in
 // TestObservabilityDocMatchesRegistry.
 func TestParseObservabilityDoc_AgainstRealDoc(t *testing.T) {
-	raw := readObservabilityDoc(t)
+	raw := publicObservabilityDoc(t)
 	inv, err := parseObservabilityDoc(raw)
 	if err != nil {
 		t.Fatalf("parseObservabilityDoc(docs/observability.md): %v", err)
