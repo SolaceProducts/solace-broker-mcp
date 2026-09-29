@@ -18,11 +18,12 @@ deliverable of its own.
   root-squash there breaks Docker bind mounts).
 - Image under test: `ghcr.io/solaceproducts/solace-broker-mcp:latest`, resolving to the
   published `v0.9.0` release — not a local or dev build.
-- Broker: `lab-129-78` (`admin`/`admin`, reachable over the default VPN).
+- Broker: `lab-129-78` (default lab credentials, reachable over the default VPN).
 - Stack: `mcp-server` + `prometheus-scrape` (pull path) + `otel-collector` + `prometheus-otlp`
   (push path) + `tempo` (traces) + `grafana`, modeled on
-  `test/e2e-dashboard/docker-compose.yml`.
-- All `OBS_*` flags on. Grafana exposed on the LAN (`192.168.2.26:3000`, `admin`/`admin`)
+  `test/e2e-dashboard/docker-compose.yml` (metrics and Grafana) and
+  `test/e2e-tracing/docker-compose.yml` (Tempo).
+- All `OBS_*` flags on. Grafana exposed on the LAN (`192.168.2.26:3000`, default Grafana credentials)
   after a plain `ssh -L` port-forward from a Mac to the devserver failed (`channel N: open
   failed: connect failed: open failed`, likely an sshd `PermitOpen` restriction that could
   not be confirmed without root on the devserver).
@@ -44,8 +45,9 @@ paths — is met.
 `docs/observability.md` on `main` documents `OBS_METRICS_SCRAPE_ENABLED` as the flag that
 enables Prometheus scrape metrics, and describes the older `OBS_METRICS_ENABLED` name as
 retired and ignored. That rename shipped in commit `db29c30` (SOL-154607), which is **not**
-in the `v0.9.0` tag — `git merge-base --is-ancestor v0.9.0 db29c30` confirms `db29c30` is 25
-commits ahead of `v0.9.0`, and `v0.9.0` is the newest tag and the release published as
+in the `v0.9.0` tag — `git merge-base --is-ancestor v0.9.0 db29c30` confirms `v0.9.0` is an
+ancestor of `db29c30`, and `git rev-list --count v0.9.0..db29c30` returns 25 commits ahead.
+`v0.9.0` is the newest tag and the release published as
 `ghcr.io/solaceproducts/solace-broker-mcp:latest` today.
 
 Following the current docs against the actual released image fails: the `v0.9.0` binary
