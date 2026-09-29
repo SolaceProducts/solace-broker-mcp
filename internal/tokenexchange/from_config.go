@@ -145,6 +145,8 @@ func resolveGrantType(gt string) (GrantType, error) {
 	switch gt {
 	case config.GrantTypeTokenExchange:
 		return GrantTypeTokenExchange, nil
+	case config.GrantTypeJWTBearer:
+		return GrantTypeJWTBearer, nil
 	default:
 		return 0, fmt.Errorf("tokenexchange: unsupported grant_type %q", gt)
 	}

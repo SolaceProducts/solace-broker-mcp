@@ -16,6 +16,8 @@ package tokenexchange
 
 import (
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -142,30 +144,70 @@ func TestFromConfig_BothClientAuthMethodsReturnsError(t *testing.T) {
 func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	t.Parallel()
 
-	cfg := validBrokerOAuthConfig()
-	cfg.GrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	// A nickname, and a well-formed grant-type URN this version does not implement.
+	for _, gt := range []string{"jwt-bearer", "urn:ietf:params:oauth:grant-type:saml2-bearer"} {
+		t.Run(gt, func(t *testing.T) {
+			t.Parallel()
+			cfg := validBrokerOAuthConfig()
+			cfg.GrantType = gt
 
-	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err == nil {
-		t.Fatal("FromConfig with unknown grant type = nil error, want error")
-		return
+			_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+			if err == nil {
+				t.Fatal("FromConfig with unknown grant type = nil error, want error")
+			}
+			if !strings.Contains(err.Error(), strconv.Quote(gt)) {
+				t.Errorf("error = %q, want it to mention the unsupported grant type", err.Error())
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "jwt-bearer") {
-		t.Errorf("error = %q, want it to mention the unsupported grant type", err.Error())
+}
+
+// TestGrantTypeAllowlistsAgree keeps internal/config's grant_type allowlist and
+// this package's grant switches from drifting apart. A grant type config
+// accepts but resolveGrantType or setGrantFields does not know would pass
+// startup validation and then fail every call on the "programming error"
+// path instead of a clear config error.
+func TestGrantTypeAllowlistsAgree(t *testing.T) {
+	t.Parallel()
+
+	for _, gt := range config.ValidGrantTypes() {
+		t.Run(gt, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := resolveGrantType(gt)
+			if err != nil {
+				t.Fatalf("resolveGrantType(%q): %v; config accepts it, so it needs a case here", gt, err)
+			}
+			e := &Exchanger{grantType: resolved}
+			if err := e.setGrantFields(url.Values{}); err != nil && strings.Contains(err.Error(), "unknown GrantType") {
+				t.Errorf("setGrantFields has no case for %q: %v", gt, err)
+			}
+		})
 	}
 }
 
 func TestFromConfig_GrantTypeMapsToCorrectEnum(t *testing.T) {
 	t.Parallel()
 
-	cfg := validBrokerOAuthConfig()
-	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err != nil {
-		t.Fatalf("FromConfig: %v", err)
+	tests := []struct {
+		yaml string
+		want GrantType
+	}{
+		{config.GrantTypeTokenExchange, GrantTypeTokenExchange},
+		{config.GrantTypeJWTBearer, GrantTypeJWTBearer},
 	}
-
-	if e.grantType != GrantTypeTokenExchange {
-		t.Errorf("grantType = %v, want GrantTypeTokenExchange", e.grantType)
+	for _, tc := range tests {
+		t.Run(tc.yaml, func(t *testing.T) {
+			t.Parallel()
+			cfg := validBrokerOAuthConfig()
+			cfg.GrantType = tc.yaml
+			e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+			if err != nil {
+				t.Fatalf("FromConfig: %v", err)
+			}
+			if e.grantType != tc.want {
+				t.Errorf("grantType = %v, want %v", e.grantType, tc.want)
+			}
+		})
 	}
 }
 

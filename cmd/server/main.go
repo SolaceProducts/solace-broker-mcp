@@ -1044,6 +1044,21 @@ func logStartupBanners(cfg *config.ServerConfig) {
 	}
 }
 
+// logUnusableGrantType warns once at startup when broker_oauth.grant_type is
+// the jwt-bearer URN and an oauth broker will use it. HOP2_JWT_BEARER_ENABLED
+// lets that config load, but the exchanger fails closed on every call until
+// the On-Behalf-Of POST lands (SOL-154400), so without this line the first
+// sign is a failed tool call. Gated on Hop2OAuthActive, the same condition
+// that builds the exchanger. Remove it with setGrantFields' fail-closed case.
+func logUnusableGrantType(cfg *config.ServerConfig) {
+	if !cfg.Hop2OAuthActive() || cfg.BrokerOAuth.GrantType != config.GrantTypeJWTBearer {
+		return
+	}
+	slog.Warn("jwt-bearer grant type is not implemented in this version: "+
+		"every tool call on an oauth broker will fail, and no token request is sent to the identity provider",
+		slog.String("grant_type", cfg.BrokerOAuth.GrantType))
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -1149,6 +1164,10 @@ func main() {
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
 	logStartupBanners(cfg)
+
+	// Same window, same reason: this names a configuration that starts but
+	// cannot work, so it must survive log_level: error.
+	logUnusableGrantType(cfg)
 
 	// The resolved identity, and which input won each attribute. Nothing
 	// else announces this, and each resolves through a chain up to five

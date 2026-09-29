@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -3542,7 +3543,8 @@ brokers:
 			wantErrSubstring: "broker_oauth.grant_type is required",
 		},
 		{
-			name: "broker_oauth.grant_type invalid value",
+			// Only the full URNs are accepted, never the nicknames.
+			name: "broker_oauth.grant_type nickname jwt-bearer is rejected",
 			yaml: clientAuthBlock + `
 broker_oauth:
   idp_token_endpoint: "http://idp.example.com/token"
@@ -3550,7 +3552,7 @@ broker_oauth:
   mcp_server_client_auth:
     client_secret_basic:
       secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+  grant_type: jwt-bearer
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3559,7 +3561,49 @@ brokers:
       target: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.grant_type",
+			wantErrSubstring: `broker_oauth.grant_type "jwt-bearer" is not supported`,
+		},
+		{
+			// Only the full URNs are accepted, never the nicknames.
+			name: "broker_oauth.grant_type nickname token-exchange is rejected",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: token-exchange
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      target: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: `broker_oauth.grant_type "token-exchange" is not supported`,
+		},
+		{
+			// A well-formed grant-type URN this version does not implement.
+			name: "broker_oauth.grant_type unsupported URN is rejected",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:saml2-bearer"
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      target: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:saml2-bearer" is not supported`,
 		},
 		{
 			// audience_parameter_name was removed: the grant type now decides
@@ -3662,6 +3706,186 @@ brokers:
 				}
 			} else if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// hop2OAuthYAML is a production-mode (oauth) config whose one broker uses
+// auth.mode: oauth under the given broker_oauth.grant_type. It omits
+// mcp_client_auth.scopes_supported, so it also exercises the Hop 1 ["openid"]
+// default. brokerAuth is spliced under brokers.prod.auth.
+func hop2OAuthYAML(grantType, brokerAuth string) string {
+	return `
+tls_terminated_upstream: true
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
+broker_oauth:
+  idp_token_endpoint: "https://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "` + grantType + `"
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: oauth
+` + brokerAuth
+}
+
+// TestLoadConfig_JWTBearerFlag pins the HOP2_JWT_BEARER_ENABLED ship door: the
+// jwt-bearer grant type refuses to load unless the flag parses as true, and
+// the flag changes nothing else about grant_type validation.
+func TestLoadConfig_JWTBearerFlag(t *testing.T) {
+	const target = "      target: \"api://broker-app/.default\"\n"
+	jwtBearer := hop2OAuthYAML(GrantTypeJWTBearer, target)
+
+	refused := []struct {
+		name  string
+		value *string // nil = unset
+		warns bool    // envBool WARNs on a set but unparseable value
+	}{
+		{"unset", nil, false},
+		{"false", ptr("false"), false},
+		{"unparseable", ptr("yes-please"), true},
+	}
+	for _, tc := range refused {
+		t.Run("flag "+tc.name+" refuses jwt-bearer", func(t *testing.T) {
+			t.Setenv(envHop2JWTBearerEnabled, "")
+			if tc.value == nil {
+				os.Unsetenv(envHop2JWTBearerEnabled) //nolint:errcheck // t.Setenv above restores it
+			} else {
+				t.Setenv(envHop2JWTBearerEnabled, *tc.value)
+			}
+			buf := captureSlog(t)
+			_, err := LoadConfig(writeTemp(t, jwtBearer))
+			if err == nil {
+				t.Fatal("LoadConfig = nil error, want the flag-off refusal")
+			}
+			want := `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not contain %q", err.Error(), want)
+			}
+			if tc.warns && !strings.Contains(buf.String(), envHop2JWTBearerEnabled) {
+				t.Errorf("expected a WARN naming %s; log was: %s", envHop2JWTBearerEnabled, buf.String())
+			}
+		})
+	}
+
+	t.Run("flag on loads, with the Hop 1 openid default", func(t *testing.T) {
+		t.Setenv(envHop2JWTBearerEnabled, "true")
+		cfg, err := LoadConfig(writeTemp(t, jwtBearer))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if !cfg.Hop2JWTBearerEnabled {
+			t.Error("Hop2JWTBearerEnabled = false, want true")
+		}
+		if cfg.BrokerOAuth.GrantType != GrantTypeJWTBearer {
+			t.Errorf("GrantType = %q, want %q", cfg.BrokerOAuth.GrantType, GrantTypeJWTBearer)
+		}
+		if got := cfg.MCPClientAuth.ScopesSupported; !slices.Equal(got, []string{"openid"}) {
+			t.Errorf("ScopesSupported = %v, want [openid]", got)
+		}
+		b, _ := cfg.Broker("prod")
+		if b.Auth.Target != "api://broker-app/.default" {
+			t.Errorf("Auth.Target = %q, want %q", b.Auth.Target, "api://broker-app/.default")
+		}
+	})
+
+	// Any strconv.ParseBool spelling of true opens the door, not only "true".
+	for _, v := range []string{"1", "TRUE"} {
+		t.Run("flag "+v+" loads jwt-bearer", func(t *testing.T) {
+			t.Setenv(envHop2JWTBearerEnabled, v)
+			if _, err := LoadConfig(writeTemp(t, jwtBearer)); err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+		})
+	}
+
+	// Omitted scopes_supported is covered above. Empty and openid-only lists
+	// must load with the same ["openid"] default.
+	for _, tc := range []struct{ name, scopes string }{
+		{"empty", `[]`},
+		{"openid-only", `["openid"]`},
+	} {
+		t.Run("flag on loads with "+tc.name+" scopes_supported", func(t *testing.T) {
+			t.Setenv(envHop2JWTBearerEnabled, "true")
+			yaml := strings.Replace(jwtBearer,
+				"  tool_authorization:", "  scopes_supported: "+tc.scopes+"\n  tool_authorization:", 1)
+			if yaml == jwtBearer {
+				t.Fatal("scopes_supported splice did not apply")
+			}
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if got := cfg.MCPClientAuth.ScopesSupported; !slices.Equal(got, []string{"openid"}) {
+				t.Errorf("ScopesSupported = %v, want [openid]", got)
+			}
+		})
+	}
+
+	t.Run("flag on loads without auth.target", func(t *testing.T) {
+		t.Setenv(envHop2JWTBearerEnabled, "true")
+		if _, err := LoadConfig(writeTemp(t, hop2OAuthYAML(GrantTypeJWTBearer, ""))); err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+	})
+
+	// token-exchange loads, and nicknames stay rejected, whatever the flag
+	// says. The "must be one of" hint lists the jwt-bearer URN only while the
+	// flag would accept it.
+	for _, on := range []bool{false, true} {
+		state := "off"
+		if on {
+			state = "on"
+		}
+		// Off means unset, the default deployment state.
+		setFlag := func(t *testing.T) {
+			t.Helper()
+			t.Setenv(envHop2JWTBearerEnabled, "true")
+			if !on {
+				os.Unsetenv(envHop2JWTBearerEnabled) //nolint:errcheck // t.Setenv above restores it
+			}
+		}
+		t.Run("flag "+state+" loads token-exchange", func(t *testing.T) {
+			setFlag(t)
+			if _, err := LoadConfig(writeTemp(t, hop2OAuthYAML(GrantTypeTokenExchange, target))); err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+		})
+		t.Run("flag "+state+" rejects the jwt-bearer nickname", func(t *testing.T) {
+			setFlag(t)
+			_, err := LoadConfig(writeTemp(t, hop2OAuthYAML("jwt-bearer", target)))
+			if err == nil || !strings.Contains(err.Error(), `broker_oauth.grant_type "jwt-bearer" is not supported`) {
+				t.Fatalf("LoadConfig error = %v, want the nickname rejected", err)
+			}
+			if listed := strings.Contains(err.Error(), GrantTypeJWTBearer); listed != on {
+				t.Errorf("hint lists %s = %v, want %v; error: %v", GrantTypeJWTBearer, listed, on, err)
+			}
+		})
+	}
+
+	for _, kv := range []struct{ key, value string }{
+		{"scope", "api://broker-app/.default"},
+		{"requested_token_use", "on_behalf_of"},
+	} {
+		t.Run("flag on rejects broker_oauth."+kv.key, func(t *testing.T) {
+			t.Setenv(envHop2JWTBearerEnabled, "true")
+			yaml := strings.Replace(jwtBearer,
+				"  grant_type:", "  "+kv.key+": "+kv.value+"\n  grant_type:", 1)
+			_, err := LoadConfig(writeTemp(t, yaml))
+			want := "field " + kv.key + " not found in type config.BrokerOAuthConfig"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("LoadConfig error = %v, want %q", err, want)
 			}
 		})
 	}

@@ -16,6 +16,7 @@ package tokenexchange
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,6 +76,13 @@ func (e *Exchanger) setGrantFields(form url.Values) error {
 	switch e.grantType {
 	case GrantTypeTokenExchange:
 		form.Set("grant_type", URNGrantTypeTokenExchange)
+	case GrantTypeJWTBearer:
+		// Fail closed until the On-Behalf-Of POST lands (SOL-154400): never
+		// fall back to an RFC 8693 request for a jwt-bearer deployment.
+		// doExchange reports this as ErrExchangeRequestBuild, so no HTTP call
+		// is made, and the breaker excludes it as it does every request-build
+		// failure (isBreakerExcluded), not just this one.
+		return errors.New("tokenexchange: jwt-bearer grant type is not implemented in this version; no token request sent")
 	default:
 		return fmt.Errorf("tokenexchange: unknown GrantType %d (programming error — Params built outside FromConfig)", e.grantType)
 	}
