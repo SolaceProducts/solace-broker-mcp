@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-18; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-29; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -234,7 +234,7 @@ published artifact; see [Scope](#scope).
 
 | Image | Tag | Used for | Upstream license |
 |---|---|---|---|
-| `golang` | `1.25-alpine` | `Dockerfile` builder stage | BSD-3-Clause (Go) |
+| `golang` | `1.26-alpine` | `Dockerfile` builder stage | BSD-3-Clause (Go) |
 | `gcr.io/distroless/static-debian12` | `nonroot` | `Dockerfile` runtime base | Apache-2.0 (distroless) |
 | `solace/solace-pubsub-standard` | `latest` | Broker fixture for e2e suites | Solace, proprietary |
 | `quay.io/keycloak/keycloak` | `26.2.5` | identity provider (IdP) fixture for the OAuth e2e suite | Apache-2.0 |
