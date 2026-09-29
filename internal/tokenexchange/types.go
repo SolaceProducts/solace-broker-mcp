@@ -62,13 +62,16 @@ const (
 )
 
 // GrantType identifies the OAuth grant-type URN sent in the form body.
-// Only RFC 8693 token exchange is implemented.
 type GrantType int
 
 const (
 	// GrantTypeTokenExchange is urn:ietf:params:oauth:grant-type:token-exchange
-	// (RFC 8693). The only V1-implemented grant type.
+	// (RFC 8693).
 	GrantTypeTokenExchange GrantType = iota + 1
+	// GrantTypeJWTBearer is urn:ietf:params:oauth:grant-type:jwt-bearer
+	// (RFC 7523, Entra On-Behalf-Of). Accepted at startup, but setGrantFields
+	// fails closed until the On-Behalf-Of POST lands (SOL-154400).
+	GrantTypeJWTBearer
 )
 
 // RFC 8693 wire-format URNs. Used in both request construction and
@@ -98,7 +101,7 @@ type Params struct {
 	// ClientSecret is the shared secret resolved from the populated
 	// sub-block of broker_oauth.mcp_server_client_auth. Never logged.
 	ClientSecret string
-	// GrantType is the OAuth grant-type URN. V1: GrantTypeTokenExchange.
+	// GrantType is the OAuth grant-type URN.
 	GrantType GrantType
 	// TokenExpiryFallback is used only when a successful IdP response omits
 	// expires_in or returns zero. Zero preserves fail-closed behavior.

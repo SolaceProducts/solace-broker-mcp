@@ -48,6 +48,15 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 	if err != nil {
 		return nil, err
 	}
+	if grantType == GrantTypeJWTBearer {
+		// Context-free, like the breaker-disabled WARN in
+		// resolveCircuitBreakerConfig: this runs once at startup. Without it
+		// the first sign is a failed tool call. Remove it with setGrantFields'
+		// fail-closed case (SOL-154400).
+		slog.Warn("jwt-bearer grant type is not implemented in this version: "+
+			"every tool call on an oauth broker will fail, and no token request is sent to the identity provider",
+			slog.String("grant_type", cfg.GrantType))
+	}
 
 	// Resolve the breaker config: start from the shipped defaults and overlay
 	// only the fields the operator set. A nil result means the operator
@@ -145,6 +154,8 @@ func resolveGrantType(gt string) (GrantType, error) {
 	switch gt {
 	case config.GrantTypeTokenExchange:
 		return GrantTypeTokenExchange, nil
+	case config.GrantTypeJWTBearer:
+		return GrantTypeJWTBearer, nil
 	default:
 		return 0, fmt.Errorf("tokenexchange: unsupported grant_type %q", gt)
 	}

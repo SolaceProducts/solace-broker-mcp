@@ -15,7 +15,9 @@
 package tokenexchange
 
 import (
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -142,30 +144,82 @@ func TestFromConfig_BothClientAuthMethodsReturnsError(t *testing.T) {
 func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	t.Parallel()
 
-	cfg := validBrokerOAuthConfig()
-	cfg.GrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+	// A nickname, and a well-formed grant-type URN this version does not implement.
+	for _, gt := range []string{"jwt-bearer", "urn:ietf:params:oauth:grant-type:saml2-bearer"} {
+		t.Run(gt, func(t *testing.T) {
+			t.Parallel()
+			cfg := validBrokerOAuthConfig()
+			cfg.GrantType = gt
 
-	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err == nil {
-		t.Fatal("FromConfig with unknown grant type = nil error, want error")
-		return
+			_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+			if err == nil {
+				t.Fatal("FromConfig with unknown grant type = nil error, want error")
+			}
+			if !strings.Contains(err.Error(), strconv.Quote(gt)) {
+				t.Errorf("error = %q, want it to mention the unsupported grant type", err.Error())
+			}
+		})
 	}
-	if !strings.Contains(err.Error(), "jwt-bearer") {
-		t.Errorf("error = %q, want it to mention the unsupported grant type", err.Error())
+}
+
+// TestFromConfig_JWTBearerWarnsAtStartup pins the startup signal that a
+// jwt-bearer Exchanger cannot work yet, so an operator does not first learn it
+// from a failed tool call. Not parallel: captureLogs swaps the process-wide
+// default logger.
+func TestFromConfig_JWTBearerWarnsAtStartup(t *testing.T) {
+	for _, tc := range []struct {
+		grantType string
+		wantWarn  bool
+	}{
+		{config.GrantTypeJWTBearer, true},
+		{config.GrantTypeTokenExchange, false},
+	} {
+		t.Run(tc.grantType, func(t *testing.T) {
+			records, restore := captureLogs(t)
+			defer restore()
+
+			cfg := validBrokerOAuthConfig()
+			cfg.GrantType = tc.grantType
+			if _, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t)); err != nil {
+				t.Fatalf("FromConfig: %v", err)
+			}
+
+			warned := false
+			for _, r := range records() {
+				if r.Level == slog.LevelWarn && strings.Contains(r.Message, "jwt-bearer grant type is not implemented") {
+					warned = true
+				}
+			}
+			if warned != tc.wantWarn {
+				t.Errorf("jwt-bearer startup WARN logged = %v, want %v; records = %+v", warned, tc.wantWarn, records())
+			}
+		})
 	}
 }
 
 func TestFromConfig_GrantTypeMapsToCorrectEnum(t *testing.T) {
 	t.Parallel()
 
-	cfg := validBrokerOAuthConfig()
-	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err != nil {
-		t.Fatalf("FromConfig: %v", err)
+	tests := []struct {
+		yaml string
+		want GrantType
+	}{
+		{config.GrantTypeTokenExchange, GrantTypeTokenExchange},
+		{config.GrantTypeJWTBearer, GrantTypeJWTBearer},
 	}
-
-	if e.grantType != GrantTypeTokenExchange {
-		t.Errorf("grantType = %v, want GrantTypeTokenExchange", e.grantType)
+	for _, tc := range tests {
+		t.Run(tc.yaml, func(t *testing.T) {
+			t.Parallel()
+			cfg := validBrokerOAuthConfig()
+			cfg.GrantType = tc.yaml
+			e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+			if err != nil {
+				t.Fatalf("FromConfig: %v", err)
+			}
+			if e.grantType != tc.want {
+				t.Errorf("grantType = %v, want %v", e.grantType, tc.want)
+			}
+		})
 	}
 }
 

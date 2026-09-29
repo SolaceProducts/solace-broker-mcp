@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
@@ -1500,6 +1501,55 @@ func TestExchange_UnknownGrantTypeReturnsRequestBuildError(t *testing.T) {
 	}
 	if errors.Is(err, ErrExchangeTransport) {
 		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — request-build failure must NOT be a transport failure")
+	}
+}
+
+// TestExchange_JWTBearerFailsClosed pins the Entra 4 fail-closed contract: an
+// Exchanger built by FromConfig from a jwt-bearer broker_oauth config sends no
+// request at all (in particular no RFC 8693 token exchange), and the breaker
+// excludes the request-build failure however often it repeats.
+func TestExchange_JWTBearerFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := validBrokerOAuthConfig()
+	cfg.TokenURL = srv.URL
+	cfg.GrantType = config.GrantTypeJWTBearer
+	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+	if err != nil {
+		t.Fatalf("FromConfig: %v", err)
+	}
+
+	const attempts = 20
+	for i := range attempts {
+		tok, err := e.Exchange(context.Background(), validInput())
+		if tok != nil {
+			t.Fatalf("call %d: tok = %v, want nil", i, tok)
+		}
+		if !errors.Is(err, ErrExchangeRequestBuild) {
+			t.Fatalf("call %d: errors.Is(err, ErrExchangeRequestBuild) = false; err = %v", i, err)
+		}
+		if !strings.Contains(err.Error(), "jwt-bearer grant type is not implemented") {
+			t.Fatalf("call %d: err = %q, want the jwt-bearer not-implemented message", i, err.Error())
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("IdP received %d requests, want 0", n)
+	}
+
+	// Assert the counts, not only that the breaker stayed closed: a
+	// request-build error carries FailureClassNone, so without the exclusion
+	// each call would count as a breaker success and the breaker would still
+	// never open.
+	c := e.breaker.Counts()
+	if c.TotalExclusions != attempts || c.TotalSuccesses != 0 || c.TotalFailures != 0 {
+		t.Errorf("breaker counts = %+v, want %d exclusions and no successes or failures", c, attempts)
 	}
 }
 
