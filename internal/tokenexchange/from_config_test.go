@@ -15,8 +15,8 @@
 package tokenexchange
 
 import (
-	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,36 +162,24 @@ func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	}
 }
 
-// TestFromConfig_JWTBearerWarnsAtStartup pins the startup signal that a
-// jwt-bearer Exchanger cannot work yet, so an operator does not first learn it
-// from a failed tool call. Not parallel: captureLogs swaps the process-wide
-// default logger.
-func TestFromConfig_JWTBearerWarnsAtStartup(t *testing.T) {
-	for _, tc := range []struct {
-		grantType string
-		wantWarn  bool
-	}{
-		{config.GrantTypeJWTBearer, true},
-		{config.GrantTypeTokenExchange, false},
-	} {
-		t.Run(tc.grantType, func(t *testing.T) {
-			records, restore := captureLogs(t)
-			defer restore()
+// TestGrantTypeAllowlistsAgree keeps internal/config's grant_type allowlist and
+// this package's grant switches from drifting apart. A grant type config
+// accepts but resolveGrantType or setGrantFields does not know would pass
+// startup validation and then fail every call on the "programming error"
+// path instead of a clear config error.
+func TestGrantTypeAllowlistsAgree(t *testing.T) {
+	t.Parallel()
 
-			cfg := validBrokerOAuthConfig()
-			cfg.GrantType = tc.grantType
-			if _, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t)); err != nil {
-				t.Fatalf("FromConfig: %v", err)
+	for _, gt := range config.ValidGrantTypes() {
+		t.Run(gt, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := resolveGrantType(gt)
+			if err != nil {
+				t.Fatalf("resolveGrantType(%q): %v; config accepts it, so it needs a case here", gt, err)
 			}
-
-			warned := false
-			for _, r := range records() {
-				if r.Level == slog.LevelWarn && strings.Contains(r.Message, "jwt-bearer grant type is not implemented") {
-					warned = true
-				}
-			}
-			if warned != tc.wantWarn {
-				t.Errorf("jwt-bearer startup WARN logged = %v, want %v; records = %+v", warned, tc.wantWarn, records())
+			e := &Exchanger{grantType: resolved}
+			if err := e.setGrantFields(url.Values{}); err != nil && strings.Contains(err.Error(), "unknown GrantType") {
+				t.Errorf("setGrantFields has no case for %q: %v", gt, err)
 			}
 		})
 	}

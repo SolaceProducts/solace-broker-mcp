@@ -235,6 +235,25 @@ var validGrantTypes = []string{
 	GrantTypeJWTBearer,
 }
 
+// acceptedGrantTypes is validGrantTypes minus any grant type whose flag is off,
+// for the grant_type error hints: they never offer the jwt-bearer URN while
+// the HOP2_JWT_BEARER_ENABLED check would refuse it.
+func acceptedGrantTypes(cfg *ServerConfig) []string {
+	if cfg.Hop2JWTBearerEnabled {
+		return validGrantTypes
+	}
+	return slices.DeleteFunc(slices.Clone(validGrantTypes), func(g string) bool {
+		return g == GrantTypeJWTBearer
+	})
+}
+
+// ValidGrantTypes returns a copy of validGrantTypes. It exists so
+// internal/tokenexchange can test that every grant type config accepts has a
+// runtime mapping; config cannot import tokenexchange to test it here.
+func ValidGrantTypes() []string {
+	return slices.Clone(validGrantTypes)
+}
+
 // LogValue implements slog.LogValuer for BrokerOAuthConfig. It exposes the
 // non-secret fields and the resolved authentication method but deliberately
 // excludes the secret material in nested ClientAuth sub-blocks. See
@@ -1544,21 +1563,12 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	// grant_type: required, no default. Operators must explicitly
 	// acknowledge the protocol choice — see the decisions doc for the
 	// rationale on removing defaults from discriminator fields.
-	//
-	// The hints list only what this process accepts right now, so they never
-	// offer the jwt-bearer URN while the flag check below would refuse it.
-	accepted := validGrantTypes
-	if !cfg.Hop2JWTBearerEnabled {
-		accepted = slices.DeleteFunc(slices.Clone(validGrantTypes), func(g string) bool {
-			return g == GrantTypeJWTBearer
-		})
-	}
 	if cfg.BrokerOAuth.GrantType == "" {
-		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", accepted))
+		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", acceptedGrantTypes(cfg)))
 	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
 		errs = append(errs, fmt.Errorf(
 			"broker_oauth.grant_type %q is not supported in this version (must be one of %v)",
-			cfg.BrokerOAuth.GrantType, accepted))
+			cfg.BrokerOAuth.GrantType, acceptedGrantTypes(cfg)))
 	} else if cfg.BrokerOAuth.GrantType == GrantTypeJWTBearer && !cfg.Hop2JWTBearerEnabled {
 		errs = append(errs, fmt.Errorf(
 			"broker_oauth.grant_type %q requires %s=true", GrantTypeJWTBearer, envHop2JWTBearerEnabled))
