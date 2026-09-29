@@ -321,9 +321,9 @@ The IdP needs a second client registration for the MCP server itself (distinct f
 grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 ```
 
-This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a configuration schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at configuration load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
+Two grant types are implemented: RFC 8693 token exchange (above) and `"urn:ietf:params:oauth:grant-type:jwt-bearer"` (RFC 7523, for Entra On-Behalf-Of). Any other value — including a value your IdP itself recognizes for some other flow — is rejected at configuration load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
-One exception is not ready for use: `"urn:ietf:params:oauth:grant-type:jwt-bearer"` (RFC 7523, for Entra On-Behalf-Of) loads only when the env var `HOP2_JWT_BEARER_ENABLED` is `true`, and fails configuration load otherwise with `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`. Even with the flag on, this version sends no jwt-bearer request: the server logs a startup WARN, and every tool call on an oauth event broker fails with an authentication error.
+The jwt-bearer grant is gated behind the env var `HOP2_JWT_BEARER_ENABLED` while it soaks: with the flag off, that value fails configuration load with `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`. With the flag on, this server obtains a token via Entra On-Behalf-Of for each call, the same role token exchange plays for Keycloak. Full Entra configuration guidance is tracked separately (SOL-154399).
 
 #### Target
 

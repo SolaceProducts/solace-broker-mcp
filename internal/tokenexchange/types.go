@@ -74,15 +74,28 @@ const (
 	GrantTypeJWTBearer
 )
 
-// RFC 8693 wire-format URNs. Used in both request construction and
-// response validation — defined once to prevent drift across files.
+// RFC 8693 / RFC 7523 wire-format URNs. Used in both request construction
+// and response validation — defined once to prevent drift across files.
 const (
 	// URNGrantTypeTokenExchange is the grant_type value for RFC 8693.
 	URNGrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 
+	// URNGrantTypeJWTBearer is the grant_type value for RFC 7523, the
+	// protocol Entra On-Behalf-Of uses (Microsoft's OBO flow is not RFC
+	// 8693 token-exchange). SOL-154400: replaces setGrantFields' fail-closed
+	// case with the real POST.
+	URNGrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer" // #nosec G101 -- public RFC 7523 grant-type URN, not a credential.
+
 	// URNTokenTypeAccessToken is the subject_token_type and
-	// issued_token_type value for access tokens (RFC 8693 §3).
+	// issued_token_type value for access tokens (RFC 8693 §3). RFC 7523
+	// jwt-bearer has no subject_token_type field and does not require
+	// issued_token_type on success (see parseSuccessBody).
 	URNTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token" // #nosec G101 -- public RFC 8693 token-type URN, not a credential.
+
+	// requestedTokenUseOnBehalfOf is the fixed value Entra's On-Behalf-Of
+	// flow requires on the requested_token_use form field. It is a wire
+	// constant, never an operator-facing YAML key (SOL-153245 FD lock).
+	requestedTokenUseOnBehalfOf = "on_behalf_of" // #nosec G101 -- public wire constant, not a credential.
 )
 
 // Params are the construction-time inputs to New. YAML-sourced fields

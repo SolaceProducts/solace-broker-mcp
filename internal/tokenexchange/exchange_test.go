@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1504,17 +1505,22 @@ func TestExchange_UnknownGrantTypeReturnsRequestBuildError(t *testing.T) {
 	}
 }
 
-// TestExchange_JWTBearerFailsClosed pins the Entra 4 fail-closed contract: an
-// Exchanger built by FromConfig from a jwt-bearer broker_oauth config sends no
-// request at all (in particular no RFC 8693 token exchange), and the breaker
-// excludes the request-build failure however often it repeats.
-func TestExchange_JWTBearerFailsClosed(t *testing.T) {
+// TestExchange_JWTBearerNoLongerFailsClosed_ViaFromConfig proves the
+// SOL-154396 fail-closed contract (an Exchanger built by FromConfig from a
+// jwt-bearer broker_oauth config sent no request at all) is now superseded:
+// SOL-154400 replaces that dead-end with the real On-Behalf-Of POST, built
+// through the same FromConfig production path, not just via New(Params{}).
+// The end-to-end wire-shape and error-path proofs live in the
+// TestExchange_JWTBearer_* tests below; this one only proves FromConfig
+// wiring didn't leave the old fail-closed case somewhere.
+func TestExchange_JWTBearerNoLongerFailsClosed_ViaFromConfig(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"obo-tok","token_type":"Bearer","expires_in":3600}`)
 	}))
 	defer srv.Close()
 
@@ -1526,30 +1532,15 @@ func TestExchange_JWTBearerFailsClosed(t *testing.T) {
 		t.Fatalf("FromConfig: %v", err)
 	}
 
-	const attempts = 20
-	for i := range attempts {
-		tok, err := e.Exchange(context.Background(), validInput())
-		if tok != nil {
-			t.Fatalf("call %d: tok = %v, want nil", i, tok)
-		}
-		if !errors.Is(err, ErrExchangeRequestBuild) {
-			t.Fatalf("call %d: errors.Is(err, ErrExchangeRequestBuild) = false; err = %v", i, err)
-		}
-		if !strings.Contains(err.Error(), "jwt-bearer grant type is not implemented") {
-			t.Fatalf("call %d: err = %q, want the jwt-bearer not-implemented message", i, err.Error())
-		}
+	tok, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
 	}
-	if n := calls.Load(); n != 0 {
-		t.Errorf("IdP received %d requests, want 0", n)
+	if tok == nil || tok.Value != "obo-tok" {
+		t.Fatalf("tok = %v, want Value = %q", tok, "obo-tok")
 	}
-
-	// Assert the counts, not only that the breaker stayed closed: a
-	// request-build error carries FailureClassNone, so without the exclusion
-	// each call would count as a breaker success and the breaker would still
-	// never open.
-	c := e.breaker.Counts()
-	if c.TotalExclusions != attempts || c.TotalSuccesses != 0 || c.TotalFailures != 0 {
-		t.Errorf("breaker counts = %+v, want %d exclusions and no successes or failures", c, attempts)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("IdP received %d requests, want 1", n)
 	}
 }
 
@@ -3654,4 +3645,142 @@ func TestExchange_NoWaitLineOnCacheHitOrAbandonment(t *testing.T) {
 				msgWaitedForConcurrentExchange, n)
 		}
 	})
+}
+
+// ---------- SOL-154400: Entra On-Behalf-Of (jwt-bearer) end-to-end ----------
+
+// newJWTBearerTestExchanger mirrors newTestExchanger but for the
+// GrantTypeJWTBearer grant (jwtBearerParams, defined in request_test.go).
+func newJWTBearerTestExchanger(t *testing.T, serverURL string) *Exchanger {
+	t.Helper()
+	p := jwtBearerParams(t)
+	p.TokenURL = serverURL
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return e
+}
+
+// TestExchange_JWTBearer_HappyPath proves the full path — cache miss,
+// singleflight, HTTP POST, response parse — mints a token from an Entra-shaped
+// 200 that omits issued_token_type (RFC 7523 has no such field; Entra's real
+// OBO response does not send it — see SOL-153245 KA prototype notes). Same
+// mint fields as token-exchange (access_token, Bearer, expires_in) — this is
+// the "one 200 mint, jwt-bearer only skips issued_token_type" AC, proven
+// through Exchange(), not just parseSuccessBody in isolation.
+func TestExchange_JWTBearer_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	var gotForm url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForm = readFormBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		// Deliberately no issued_token_type — Entra's OBO success body omits it.
+		fmt.Fprint(w, `{"access_token":"obo-tok","token_type":"Bearer","expires_in":3600}`)
+	}))
+	defer srv.Close()
+
+	e := newJWTBearerTestExchanger(t, srv.URL)
+	now := pinnedNow()
+	e.nowFunc = func() time.Time { return now }
+
+	tok, err := e.Exchange(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		BrokerAlias:  "prod",
+		Target:       "api://broker-app/.default",
+	})
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if tok == nil || tok.Value != "obo-tok" {
+		t.Fatalf("tok = %v, want Value = %q", tok, "obo-tok")
+	}
+	wantExpiresAt := now.Add(3600*time.Second - defaults.DefaultTokenExpirySkew)
+	if !tok.ExpiresAt.Equal(wantExpiresAt) {
+		t.Errorf("tok.ExpiresAt = %v, want %v", tok.ExpiresAt, wantExpiresAt)
+	}
+
+	if got := gotForm.Get("grant_type"); got != URNGrantTypeJWTBearer {
+		t.Errorf("grant_type = %q, want %q", got, URNGrantTypeJWTBearer)
+	}
+	if got := gotForm.Get("assertion"); got != "user-jwt-abc" {
+		t.Errorf("assertion = %q, want %q", got, "user-jwt-abc")
+	}
+	if got := gotForm.Get("requested_token_use"); got != "on_behalf_of" {
+		t.Errorf("requested_token_use = %q, want %q", got, "on_behalf_of")
+	}
+	if got := gotForm.Get("scope"); got != "api://broker-app/.default" {
+		t.Errorf("scope = %q, want %q", got, "api://broker-app/.default")
+	}
+}
+
+// TestExchange_JWTBearer_MissingScopeNoHTTPCall proves the AC end to end:
+// a missing target fails before any network call (the httptest handler
+// itself fails the test if the IdP is ever hit — same idiom as
+// TestExchange_UnknownGrantTypeReturnsRequestBuildError), and the error
+// Exchange() returns is ErrExchangeRequestBuild carrying the exact AC
+// message, not a transport-class error that would trigger retries.
+func TestExchange_JWTBearer_MissingScopeNoHTTPCall(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("IdP should not be called when the jwt-bearer target is missing")
+	}))
+	defer srv.Close()
+
+	e := newJWTBearerTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		BrokerAlias:  "prod",
+		Target:       "", // missing target
+	})
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrExchangeRequestBuild) {
+		t.Errorf("errors.Is(err, ErrExchangeRequestBuild) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "jwt-bearer request missing scope") {
+		t.Errorf("err = %q, want it to contain %q", err.Error(), "jwt-bearer request missing scope")
+	}
+}
+
+// TestExchange_JWTBearer_RejectedByIdP proves Entra's error shape
+// (invalid_resource, not Keycloak's invalid_grant) rides the exact same
+// ErrExchangeRejected path — no second error stack, no retry storm on a
+// 4xx reject.
+func TestExchange_JWTBearer_RejectedByIdP(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_resource"}`)
+	}))
+	defer srv.Close()
+
+	e := newJWTBearerTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		BrokerAlias:  "prod",
+		Target:       "api://broker-app/.default",
+	})
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrExchangeRejected) {
+		t.Errorf("errors.Is(err, ErrExchangeRejected) = false, want true; err = %v", err)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("callCount = %d, want 1 — a 4xx reject must not retry", got)
+	}
 }
