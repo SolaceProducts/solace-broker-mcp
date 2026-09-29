@@ -187,6 +187,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `limits.memory` drift apart or if the value stops being one the Go runtime accepts. Tracked
   under SOL-154328, measured under SOL-154158.
 
+### Security
+
+- Environment-variable substitution (`${VAR}` in the YAML config) now happens only after the
+  config is parsed, substituting inside an already-decoded scalar's value instead of splicing
+  into the raw document text. A resolved value can no longer close the current YAML scalar or
+  inject sibling keys such as `enable_write_tools: true`, regardless of embedded quotes, Unicode
+  line breaks, or flow-style braces. A single trailing line break is now trimmed for file-sourced
+  secrets; the value is otherwise inserted verbatim, with no backslash/quote interpretation or
+  truncation at `#`. Compatibility note: an unquoted `${VAR}` inside a flow collection
+  (`[...]`/`{...}`) must now be quoted. Tracked under SOL-154441.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added

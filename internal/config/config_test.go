@@ -439,6 +439,345 @@ brokers:
 	}
 }
 
+// A single trailing newline is a common artifact of secrets sourced from a
+// file or mounted Secret (e.g. `cat /run/secrets/pw`). It must be trimmed
+// silently rather than rejected, in both unquoted and quoted scalar forms.
+func TestLoadConfig_EnvVarTrailingNewlineTrimmed(t *testing.T) {
+	t.Setenv("BROKER_PASS_UNQUOTED", "secret\n")
+	t.Setenv("BROKER_PASS_QUOTED", "secret\r\n")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: ${BROKER_PASS_UNQUOTED}
+      password: "${BROKER_PASS_QUOTED}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("trailing newline in env var value must not fail load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "secret" {
+		t.Errorf("expected trailing newline trimmed from unquoted value, got %q", got)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "secret" {
+		t.Errorf("expected trailing \\r\\n trimmed from quoted value, got %q", got)
+	}
+}
+
+// An env var value containing an embedded (non-trailing) line break —
+// including one of yaml.v3's Unicode breaks, NEL (U+0085), LS (U+2028), or
+// PS (U+2029), swapped in for \n — used to close the current YAML scalar
+// early and inject arbitrary sibling keys (e.g. enabling write tools) under
+// the OLD raw-text substitution (SOL-154441, PR #420 and #452 review). Since
+// substitution now happens only after parsing, into an already-decoded
+// scalar's value, none of that is possible any more regardless of content:
+// the value loads as literal text, byte for byte, in both quoted and
+// unquoted form.
+func TestLoadConfig_EnvVarLineBreaksSubstituteSafely(t *testing.T) {
+	breaks := []struct {
+		name   string
+		break_ string
+	}{
+		{"CR", "\r"},
+		{"LF", "\n"},
+		{"NEL", "\u0085"},
+		{"LS", "\u2028"},
+		{"PS", "\u2029"},
+	}
+
+	for _, b := range breaks {
+		for _, quoted := range []bool{true, false} {
+			name := b.name
+			if quoted {
+				name += "/quoted"
+			} else {
+				name += "/unquoted"
+			}
+			t.Run(name, func(t *testing.T) {
+				varName := "EVIL_" + b.name
+				value := "x\"" + b.break_ + "enable_write_tools: true #"
+				var passwordField string
+				if quoted {
+					passwordField = fmt.Sprintf(`"${%s}"`, varName)
+				} else {
+					passwordField = fmt.Sprintf("${%s}", varName)
+				}
+				t.Setenv(varName, value)
+
+				yaml := fmt.Sprintf(`
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: %s
+`, passwordField)
+				cfg, err := LoadConfig(writeTemp(t, yaml))
+				if err != nil {
+					t.Fatalf("embedded %s in env var value must load, not fail: %v", b.name, err)
+				}
+				if cfg.EnableWriteTools {
+					t.Fatalf("embedded %s must not inject enable_write_tools", b.name)
+				}
+				if got := cfg.brokers["prod"].Auth.Password; got != value {
+					t.Errorf("password: got %q, want the literal value %q", got, value)
+				}
+			})
+		}
+	}
+}
+
+// The flow-style equivalent of the same attack: closing the flow mapping
+// instead of the block scalar. Confirmed exploitable against the OLD
+// raw-text substitution (PR #452 review, bczoma) and deliberately left as a
+// follow-up rather than fixed by the line-break character set, since the
+// parse-first fix closes this shape too, for free.
+func TestLoadConfig_EnvVarFlowStyleBreakoutSubstitutesSafely(t *testing.T) {
+	t.Setenv("EVIL_FLOW", `x" }, insecure_skip_verify: true } #`)
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod: { url: "https://broker.example.com:1943", auth: { mode: basic, username: admin, password: "${EVIL_FLOW}" } }
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("flow-style breakout payload must load, not fail: %v", err)
+	}
+	broker := cfg.brokers["prod"]
+	if broker.InsecureSkipVerify {
+		t.Fatal("flow-style breakout must not inject insecure_skip_verify")
+	}
+	want := `x" }, insecure_skip_verify: true } #`
+	if broker.Auth.Password != want {
+		t.Errorf("password: got %q, want the literal value %q", broker.Auth.Password, want)
+	}
+}
+
+// Compatibility break from the parse-first fix (PR #452 review, bczoma): an
+// unquoted ${VAR} inside a flow collection ([...] or {...}) fails to parse,
+// because it is now parsed as a plain scalar *before* substitution, and { }
+// are flow indicators a plain scalar cannot contain. On main, the old
+// raw-text substitution replaced ${VAR} — braces and all — before the YAML
+// was ever parsed, so this loaded. Quoting the reference, as
+// docs/configuration.md now documents, avoids the ambiguity entirely.
+func TestLoadConfig_UnquotedEnvVarInFlowCollectionFailsToParse(t *testing.T) {
+	t.Setenv("FLOW_HOST", "broker.example.com")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod: { url: "https://broker.example.com:1943", auth: { mode: basic, username: ${FLOW_HOST}, password: secret } }
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err == nil {
+		t.Fatal("expected an unquoted ${VAR} inside a flow collection to fail to parse")
+	}
+}
+
+// The quoted form of the same reference parses and substitutes normally.
+func TestLoadConfig_QuotedEnvVarInFlowCollectionSubstitutes(t *testing.T) {
+	t.Setenv("FLOW_HOST", "broker.example.com")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod: { url: "https://placeholder:1943", auth: { mode: basic, username: "${FLOW_HOST}", password: secret } }
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("quoted ${VAR} inside a flow collection must load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "broker.example.com" {
+		t.Errorf("username: got %q, want %q", got, "broker.example.com")
+	}
+}
+
+// A single trailing break is trimmed, but only one — a value with two
+// trailing breaks after real content loses just the last one, not both.
+func TestLoadConfig_EnvVarOnlyOneTrailingBreakTrimmed(t *testing.T) {
+	t.Setenv("TWO_TRAILING_BREAKS", "secret\n\n")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: "${TWO_TRAILING_BREAKS}"
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := cfg.brokers["prod"].Auth.Username, "secret\n"; got != want {
+		t.Errorf("username: got %q, want %q (only the last of two trailing breaks trimmed)", got, want)
+	}
+}
+
+// A value that is nothing but line breaks (e.g. a broken mount resolving to
+// "\n\n") loses only its last break to the trim, leaving a single embedded
+// newline — not silently reduced to "". That remaining value is
+// whitespace-only, which the existing basic-auth credential check
+// (SOL-154727: empty/whitespace-only values count as unset) correctly
+// refuses as an unset password — not as an embedded-line-break error, since
+// that mechanism no longer exists.
+func TestLoadConfig_EnvVarAllBreaksBecomesWhitespaceOnlyPassword(t *testing.T) {
+	t.Setenv("ALL_BREAKS", "\n\n")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${ALL_BREAKS}"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected whitespace-only password (after trimming one of two trailing breaks) to fail validation")
+	}
+	if !strings.Contains(err.Error(), "password is required for basic auth") {
+		t.Errorf("expected the whitespace-only-password error, got: %v", err)
+	}
+}
+
+// A lone trailing CR (not paired with LF) is trimmed the same as a lone
+// trailing LF or a CRLF pair — TestLoadConfig_EnvVarTrailingNewlineTrimmed
+// only pinned those two.
+func TestLoadConfig_EnvVarLoneTrailingCRTrimmed(t *testing.T) {
+	t.Setenv("BROKER_PASS_CR", "secret\r")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${BROKER_PASS_CR}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("trailing CR in env var value must not fail load: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "secret" {
+		t.Errorf("expected trailing \\r trimmed, got %q", got)
+	}
+}
+
+// A quoted "${VAR}" must decode with its literal text preserved even when
+// that text looks like a bool or an int — unlike the unquoted case
+// (TestObservability_NumericFromYAML), quoting keeps the scalar's original
+// !!str tag (see substituteEnvVars's Style/Tag handling), so it is never a
+// candidate for re-resolving into another type.
+func TestLoadConfig_QuotedEnvVarNumericLikeValueStaysString(t *testing.T) {
+	t.Setenv("LOOKS_LIKE_BOOL", "true")
+	t.Setenv("LOOKS_LIKE_INT", "123")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: "${LOOKS_LIKE_BOOL}"
+      password: "${LOOKS_LIKE_INT}"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "true" {
+		t.Errorf("username: got %q, want the literal string %q", got, "true")
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "123" {
+		t.Errorf("password: got %q, want the literal string %q", got, "123")
+	}
+}
+
+// An anchored scalar (&cred) and its alias (*cred) share one underlying
+// yaml.Node, so a single substitution reaches both — walk() visits the
+// anchored node once at its own position and never descends into the
+// AliasNode itself (see that branch's comment in substituteEnvVars).
+func TestLoadConfig_EnvVarAliasSharesSubstitutedValue(t *testing.T) {
+	t.Setenv("SHARED_SECRET", "shared-value")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: &cred "${SHARED_SECRET}"
+      password: *cred
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Username; got != "shared-value" {
+		t.Errorf("username: got %q, want %q", got, "shared-value")
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "shared-value" {
+		t.Errorf("password (via alias): got %q, want %q", got, "shared-value")
+	}
+}
+
+// ${VAR} appearing only in a map KEY, never in a value, must not be
+// substituted, must not require the var to be set, and — since no scalar
+// value changed — must not trigger the parse/remarshal round-trip at all:
+// the bytes come back byte-for-byte identical (see substituteEnvVars's
+// "changed" tracking, added after PR #452 review flagged that a comment- or
+// key-only match still re-marshaled the whole document, shifting later
+// decode-error line numbers away from the original file for no reason).
+func TestSubstituteEnvVars_KeyOnlyMatchLeavesDataUnchanged(t *testing.T) {
+	data := []byte("\"${UNSET_ONLY_IN_KEY}\": value\n")
+
+	got, remarshaled, err := substituteEnvVars(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if remarshaled {
+		t.Error("expected remarshaled = false when ${VAR} matched only in a key")
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want the input returned unchanged: %q", got, data)
+	}
+}
+
 // ${VAR} references inside YAML comments must NOT trigger env var lookups —
 // the line is inert at parse time and has no effect on the loaded config.
 func TestLoadConfig_EnvVarInWholeLineComment(t *testing.T) {
@@ -545,9 +884,10 @@ brokers:
 	}
 }
 
-// YAML escapes a literal ' inside a single-quoted scalar as ''. A # between
-// the doubled quote and the real closing quote must still be treated as part
-// of the string, not a comment marker.
+// YAML represents an escaped apostrophe inside a single-quoted scalar as two
+// consecutive single quotes. A # between the escaped quote and the real
+// closing quote must still be treated as part of the string, not a comment
+// marker.
 func TestLoadConfig_DoubledSingleQuoteEscapeInsideQuotedValue(t *testing.T) {
 	t.Setenv("ESCAPED_PWD", "live")
 
@@ -646,169 +986,6 @@ brokers:
 	if got := cfg.brokers["prod"].Auth.Password; got != "foo 'bar" {
 		t.Errorf("expected password %q, got %q", "foo 'bar", got)
 	}
-}
-
-func TestSplitYAMLComment(t *testing.T) {
-	tests := []struct {
-		name    string
-		line    string
-		active  string
-		comment string
-	}{
-		{"no comment", "key: value", "key: value", ""},
-		{"whole-line comment", "# a comment", "", "# a comment"},
-		{"indented whole-line comment", "  # a comment", "  ", "# a comment"},
-		{"inline comment", "key: value # trailing", "key: value ", "# trailing"},
-		{"hash inside double quotes is not a comment", `key: "a#b"`, `key: "a#b"`, ""},
-		{"hash inside single quotes is not a comment", "key: 'a#b'", "key: 'a#b'", ""},
-		{"contraction before inline comment", "key: John's admin # comment", "key: John's admin ", "# comment"},
-		{"contraction before inline comment, double quote", `key: 6" pipe # comment`, `key: 6" pipe `, "# comment"},
-		{"apostrophe after word-separating space", "key: it is 'ere # comment", "key: it is 'ere ", "# comment"},
-		{"real single-quoted value containing hash", "key: 'a#b' # comment", "key: 'a#b' ", "# comment"},
-		// The internal " #" (space then hash, inside the quotes) is what makes
-		// this discriminate a working '' escape from a broken one — with no
-		// whitespace before an internal #, nothing here could split either way
-		// (PR #420 review, solace-awaheed). If the '' handling breaks, the
-		// second '/third ' pair mis-toggles and the internal " #not-really"
-		// gets read as a real comment instead of string content.
-		{"doubled single-quote escape then hash", "key: 'it''s #not-a-comment'", "key: 'it''s #not-a-comment'", ""},
-		// Same reasoning: the internal " #" is inside the intended quotes, so
-		// this only passes if the leading quote actually opened because of the
-		// '-'/multi-space delimiter check, not merely because there was nothing
-		// after it to protect either way.
-		{"sequence item with quoted value", "- 'val #ue' # comment", "- 'val #ue' ", "# comment"},
-		{"quoted value with multiple leading spaces", "key:   'val #ue' # comment", "key:   'val #ue' ", "# comment"},
-		// A quote of the OTHER type, embedded inside an already-open string,
-		// must not be reinterpreted as its own delimiter (PR #420 review,
-		// good:perspective QA lens) — the !inSingle/!inDouble mutual-exclusion
-		// guards are what this checks.
-		{"double quote embedded inside an open single-quoted string", `key: 'a: "b' # comment`, `key: 'a: "b' `, "# comment"},
-		{"single quote embedded inside an open double-quoted string", `key: "a: 'b" # comment`, `key: "a: 'b" `, "# comment"},
-		// An escaped \" inside a double-quoted string, refactored by this
-		// commit into its own switch arm; previously zero test coverage
-		// (PR #420 review, solace-awaheed and good:perspective QA lens).
-		{"escaped double-quote inside a double-quoted string", `key: "a\"b #not-a-comment" # comment`, `key: "a\"b #not-a-comment" `, "# comment"},
-		// solace-awaheed's regression cases (PR #420 review): a second quote
-		// of the same type, immediately following a real delimiter, must open
-		// for real — the naive pre-fix toggle happened to cancel these out by
-		// accident; isScalarStart must not repeat that by accident either.
-		{"second same-type quote after a comma", "password: it's, 'foo # was ${OLD}", "password: it's, 'foo ", "# was ${OLD}"},
-		{"second same-type quote after a dash", "username: don't use pre-'prod # was ${OLD}", "username: don't use pre-'prod ", "# was ${OLD}"},
-		{"second same-type quote after a bare dash (no space)", "dev_token: it's-'temp # was ${OLD}", "dev_token: it's-'temp ", "# was ${OLD}"},
-		{"second same-type quote after a colon", "password: a'b:'c # was ${OLD}", "password: a'b:'c ", "# was ${OLD}"},
-		// solace-awaheed's silent-failure cases: a real quoted scalar prefixed
-		// by a YAML anchor or tag must still open — getting this wrong doesn't
-		// error, it just leaves ${VAR} unsubstituted with no error at all.
-		{"quoted scalar prefixed by an anchor", `password: &pw "pre # ${PW}"`, `password: &pw "pre # ${PW}"`, ""},
-		{"quoted scalar prefixed by a tag", `password: !!str "pre # ${PW}"`, `password: !!str "pre # ${PW}"`, ""},
-		// ':'/'-'/'?' are only real YAML indicators when followed by
-		// whitespace or end of line; a bare colon/dash inside a plain value
-		// (no following space) must not be mistaken for one.
-		{"colon with no following space is not an indicator", "key: a:'b # comment", "key: a:'b ", "# comment"},
-		{"dash with no following space is not an indicator", "key: a-'b # comment", "key: a-'b ", "# comment"},
-		// A comma outside any flow collection is just punctuation in plain
-		// text and must not open a string.
-		{"comma outside a flow collection is not a delimiter", "username: John, Jr. 'test # comment", "username: John, Jr. 'test ", "# comment"},
-		// Flow collections: a comma *inside* one is a real delimiter, and a
-		// flow collection can itself close correctly around a quoted entry.
-		{"quoted entry inside a flow sequence", "key: [a, 'b#c'] # x", "key: [a, 'b#c'] ", "# x"},
-		{"quoted entry inside a flow mapping", "key: {a: 'b#c'} # x", "key: {a: 'b#c'} ", "# x"},
-		// YAML's explicit-key indicator ('?' followed by whitespace) permits a
-		// scalar to start right after it, same as ':'/'-'.
-		{"explicit key indicator before a quoted scalar", `? "a # b ${V}"`, `? "a # b ${V}"`, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			active, comment := splitYAMLComment([]byte(tt.line))
-			if string(active) != tt.active {
-				t.Errorf("active: got %q, want %q", active, tt.active)
-			}
-			if string(comment) != tt.comment {
-				t.Errorf("comment: got %q, want %q", comment, tt.comment)
-			}
-		})
-	}
-}
-
-func TestIsScalarStart(t *testing.T) {
-	tests := []struct {
-		name      string
-		line      string
-		i         int
-		flowDepth int
-		want      bool
-	}{
-		{"start of line", "'value'", 0, 0, true},
-		{"after colon-space", "key: 'value'", 5, 0, true},
-		{"after colon and multiple spaces", "key:   'value'", 7, 0, true},
-		{"after dash-space (sequence item)", "- 'value'", 2, 0, true},
-		{"after comma, in a flow collection", "[a, 'b']", 4, 1, true},
-		{"after comma, NOT in a flow collection", "a, 'b", 3, 0, false},
-		{"after open bracket (flow, no space)", "['b']", 1, 0, true},
-		{"mid-word contraction", "John's", 4, 0, false},
-		{"after word-separating space, not a delimiter", "it is 'ere", 6, 0, false},
-		// The quote is at index 2; skipping back over the two leading spaces
-		// must land on index 0 to return true — calling this with i already 0
-		// (as the original test did) never exercises the skip-back at all.
-		{"indented start of line, quote after leading whitespace", "  'value'", 2, 0, true},
-		{"colon not followed by whitespace is not an indicator", "a:'b", 2, 0, false},
-		{"dash not followed by whitespace is not an indicator", "a-'b", 2, 0, false},
-		{"anchor token before a quote", `&pw "v`, 4, 0, true},
-		{"tag token before a quote", `!!str "v`, 6, 0, true},
-		{"alias token before a quote", `*ref 'v`, 5, 0, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isScalarStart([]byte(tt.line), tt.i, tt.flowDepth); got != tt.want {
-				t.Errorf("isScalarStart(%q, %d, %d) = %v, want %v", tt.line, tt.i, tt.flowDepth, got, tt.want)
-			}
-		})
-	}
-}
-
-// FuzzSplitYAMLComment explores the input space beyond the hand-picked cases
-// above, seeded from them (good:perspective architecture lens, PR #420
-// review): a hand-written character scanner over a context-free grammar
-// tends to accumulate exactly one more edge case per reviewer example, and a
-// fixed table alone can't tell us there isn't another one waiting. The only
-// invariant checked is that splitYAMLComment never panics and always returns
-// active+comment reassembling the original line — full correctness needs a
-// YAML oracle this fuzz target doesn't have, but a crash or a dropped/
-// duplicated byte is still a real bug this catches for free. Run with:
-//
-//	go test ./internal/config/ -fuzz=FuzzSplitYAMLComment -fuzztime=30s
-func FuzzSplitYAMLComment(f *testing.F) {
-	seeds := []string{
-		"key: value",
-		"# a comment",
-		"key: value # trailing",
-		`key: "a#b"`,
-		"key: 'a#b'",
-		"key: John's admin # comment",
-		`key: 6" pipe # comment`,
-		"key: it is 'ere # comment",
-		"key: 'it''s #not-a-comment'",
-		"- 'val #ue' # comment",
-		`key: 'a: "b' # comment`,
-		`key: "a\"b #not-a-comment" # comment`,
-		"password: it's, 'foo # was ${OLD}",
-		"username: don't use pre-'prod # was ${OLD}",
-		`password: &pw "pre # ${PW}"`,
-		`password: !!str "pre # ${PW}"`,
-		"key: [a, 'b#c'] # x",
-		"key: {a: 'b#c'} # x",
-		`? "a # b ${V}"`,
-	}
-	for _, s := range seeds {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, line string) {
-		active, comment := splitYAMLComment([]byte(line))
-		if got := string(active) + string(comment); got != line {
-			t.Errorf("splitYAMLComment(%q) = active %q + comment %q = %q, want back %q",
-				line, active, comment, got, line)
-		}
-	})
 }
 
 func TestLoadConfig_PortOutOfRange(t *testing.T) {
@@ -4170,7 +4347,7 @@ func TestReadResolvedConfigFile_SubstitutesEnvVars(t *testing.T) {
 	}
 	t.Setenv("TEST_CERT_PATH", "/etc/certs/server.pem")
 
-	got, err := ReadResolvedConfigFile(path)
+	got, _, err := ReadResolvedConfigFile(path)
 	if err != nil {
 		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
 	}
@@ -4183,7 +4360,7 @@ func TestReadResolvedConfigFile_SubstitutesEnvVars(t *testing.T) {
 }
 
 func TestReadResolvedConfigFile_ErrorsOnMissingFile(t *testing.T) {
-	if _, err := ReadResolvedConfigFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
+	if _, _, err := ReadResolvedConfigFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
 		t.Fatal("ReadResolvedConfigFile(missing file) = nil error, want an error")
 	}
 }
@@ -4197,7 +4374,7 @@ func TestReadResolvedConfigFile_ErrorsOnUnsetEnvVar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ReadResolvedConfigFile(path); err == nil {
+	if _, _, err := ReadResolvedConfigFile(path); err == nil {
 		t.Fatal("ReadResolvedConfigFile(unset var) = nil error, want an error")
 	}
 }
@@ -4257,7 +4434,7 @@ func TestReadResolvedConfigFile_ResolvesVarsFromEnvFile(t *testing.T) {
 	os.Unsetenv("TEST_ENVFILE_ONLY_CERT")                       //nolint:errcheck // only the .env file may supply it
 	t.Cleanup(func() { os.Unsetenv("TEST_ENVFILE_ONLY_CERT") }) //nolint:errcheck // loadEnvFile sets it process-wide
 
-	got, err := ReadResolvedConfigFile(cfgPath)
+	got, _, err := ReadResolvedConfigFile(cfgPath)
 	if err != nil {
 		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
 	}

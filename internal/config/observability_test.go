@@ -331,8 +331,10 @@ func TestObservability_NumericDefaults(t *testing.T) {
 
 // TestObservability_NumericFromYAML proves the numeric tunables parse from the
 // YAML observability block (overriding the defaults) and that ${VAR}
-// substitution reaches them — the substitution runs over raw bytes before
-// decode, so an int field gets it for free.
+// substitution reaches them — substituteEnvVars clears an unquoted scalar's
+// tag after substituting into it, so the field's declared type re-resolves
+// against the new content on decode, same as it would for a plain int
+// written directly in the source.
 func TestObservability_NumericFromYAML(t *testing.T) {
 	t.Setenv("OTEL_INTERVAL", "120")
 	t.Setenv("METRICS_ADDR", "0.0.0.0:9099")

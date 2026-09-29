@@ -567,8 +567,11 @@ var yamlNodeValuePattern = regexp.MustCompile("`[^`]*`")
 // a mismatched target type — most plausibly a credential pulled into a
 // non-string field by a wrong ${VAR} reference, since env substitution runs
 // before decode. The secret would ride inside the error string where the
-// slog ReplaceAttr redaction net cannot reach it. Line numbers and type
-// diagnostics are preserved.
+// slog ReplaceAttr redaction net cannot reach it. Type diagnostics are
+// preserved, and so are line numbers — but only relative to the document
+// dec.Decode actually saw, which after a substitution that changed a scalar
+// is the re-marshaled one, not the original file (LoadConfig appends a note
+// in that case).
 func sanitizeYAMLError(err error) error {
 	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
 }
@@ -609,19 +612,23 @@ func withRetiredKeyHints(err error) error {
 // resolved `tls_cert_file: "${TLS_CERT_PATH}"` differently from the server would
 // report a correctly-serving container as unhealthy. Prefer LoadConfig for
 // anything that needs a validated ServerConfig.
-func ReadResolvedConfigFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
+//
+// The second return value reports whether ${VAR_NAME} substitution actually
+// re-marshaled the document (see substituteEnvVars); LoadConfig uses it to
+// annotate a subsequent decode error's line numbers.
+func ReadResolvedConfigFile(path string) (data []byte, remarshaled bool, err error) {
+	data, err = os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
 	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+		return nil, false, fmt.Errorf("reading config file: %w", err)
 	}
 
 	loadEnvFile(path)
 
-	data, err = substituteEnvVars(data)
+	data, remarshaled, err = substituteEnvVars(data)
 	if err != nil {
-		return nil, fmt.Errorf("substituting env vars: %w", err)
+		return nil, false, fmt.Errorf("substituting env vars: %w", err)
 	}
-	return data, nil
+	return data, remarshaled, nil
 }
 
 // LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
@@ -629,9 +636,9 @@ func ReadResolvedConfigFile(path string) ([]byte, error) {
 // ServerConfig ready for use.
 //
 // Processing order:
-//  1. Read YAML file (raw bytes)          ┐
-//  2. Load .env file (so env vars are available for substitution)
-//  3. Substitute ${VAR_NAME} in raw bytes ┘ ReadResolvedConfigFile
+//  1. Read YAML file (raw bytes)                                        ┐
+//  2. Load .env file (so env vars are available for substitution)       │ ReadResolvedConfigFile
+//  3. Substitute ${VAR_NAME} (see substituteEnvVars's own doc comment)   ┘
 //  4. Parse YAML
 //  5. Apply defaults (fill missing optional fields)
 //  6. Apply env var overrides (MCP_SERVER_PORT — runtime override)
@@ -641,7 +648,7 @@ func ReadResolvedConfigFile(path string) ([]byte, error) {
 // --health probe — share this preprocessing rather than reimplementing it. A
 // change to the order or semantics here therefore reaches them too.
 func LoadConfig(path string) (*ServerConfig, error) {
-	data, err := ReadResolvedConfigFile(path)
+	data, remarshaled, err := ReadResolvedConfigFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +657,14 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parsing config YAML: %w", withRetiredKeyHints(sanitizeYAMLError(err)))
+		decodeErr := fmt.Errorf("parsing config YAML: %w", withRetiredKeyHints(sanitizeYAMLError(err)))
+		if remarshaled {
+			// data was re-marshaled from the parsed node tree by
+			// substituteEnvVars, so the line numbers above refer to that
+			// re-encoded document, not the original file.
+			decodeErr = fmt.Errorf("%w (line numbers refer to the config after ${VAR_NAME} substitution)", decodeErr)
+		}
+		return nil, decodeErr
 	}
 
 	if raw.DevelopmentMode != nil {
@@ -823,8 +837,10 @@ func stripMatchedQuotes(s string) string {
 	return s
 }
 
-// envVarPattern matches ${VAR_NAME} in raw YAML bytes. VAR_NAME must be
-// uppercase letters, numbers, and underscores.
+// envVarPattern matches ${VAR_NAME} in raw config bytes (a quick pre-check in
+// substituteEnvVars) and inside a decoded scalar's .Value (the actual
+// substitution). VAR_NAME must be uppercase letters, numbers, and
+// underscores.
 var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
 
 // brokerAliasPattern enforces the broker alias contract: 1–63 chars, only
@@ -919,183 +935,139 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 	return canonical, errs
 }
 
-// substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
-// the corresponding environment variable values. YAML comments are skipped —
-// a ${VAR} reference inside a # comment has no effect on the parsed config and
-// must not cause loading to fail (SOL-149904). Returns an error listing any
-// referenced env vars that are not set (comments excluded). This runs before
-// YAML parsing so any field can reference env vars.
-func substituteEnvVars(data []byte) ([]byte, error) {
-	var missing []string
-	var result bytes.Buffer
-	result.Grow(len(data))
+// substituteEnvVars replaces ${VAR_NAME} references with the corresponding
+// environment variable values. It parses data into a YAML node tree first,
+// then substitutes only inside already-decoded scalar values — never into
+// the raw document text — so a substituted value can never add a sibling
+// key, close a mapping, or otherwise change the document's shape: the
+// document's structure was already fixed by this first, unsubstituted parse,
+// and editing a Go string in memory afterward cannot reopen it. A value like
+// `x"\nenable_write_tools: true #` — or the same shape using one of yaml.v3's
+// other line breaks (NEL U+0085, LS U+2028, PS U+2029), or a flow-style
+// closing brace instead of a newline — ends up as exactly that literal text
+// in the target field: an unusual-looking password, but inert. All of these
+// shapes were confirmed exploitable against the OLD raw-text substitution in
+// PR #420 and #452 review (SOL-154441).
+//
+// A resolved value's single trailing line break is still trimmed before
+// substitution, unconditionally — secrets sourced from a file or mounted
+// Secret commonly end in exactly one newline, and folding that in would
+// otherwise get swallowed into insignificant whitespace. Nothing else about
+// a substituted value is rejected or altered: with structural injection no
+// longer possible, there is no remaining reason to refuse any other content.
+//
+// The result is re-marshaled back to YAML bytes rather than decoded directly
+// into the typed config, so LoadConfig's existing dec.KnownFields(true)
+// decode still runs against it unchanged — a yaml.Node decode has no
+// equivalent strictness knob.
+//
+// ${VAR} references inside comments are never touched: comments are parsed
+// into Node.*Comment fields, never into a scalar's .Value, so no special-case
+// comment scanner is needed here (previously SOL-153079's
+// splitYAMLComment/isScalarStart, and the fragility that came with hand-
+// rolling a quote/comment scanner over YAML's grammar).
+//
+// Returns an error listing any referenced env vars that are not set.
+//
+// The second return value reports whether the output was actually
+// re-marshaled from the parsed node tree. It is false both on the fast path
+// above and when ${VAR} matched somewhere in the raw bytes — a comment or a
+// map key — but substituteScalar never touched a value: in that case data is
+// returned unchanged rather than round-tripped through yaml.Marshal, so a
+// later decode error's line numbers still refer to the original file (PR
+// #452 review).
+func substituteEnvVars(data []byte) (result []byte, remarshaled bool, err error) {
+	if !envVarPattern.Match(data) {
+		return data, false, nil // nothing to substitute; skip the parse/remarshal round-trip entirely
+	}
 
-	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-		active, comment := splitYAMLComment(line)
-		substituted := envVarPattern.ReplaceAllFunc(active, func(match []byte) []byte {
-			varName := string(envVarPattern.FindSubmatch(match)[1])
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, false, fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
+	}
+
+	var missing []string
+	var changed bool
+	substituteScalar := func(n *yaml.Node) {
+		if !envVarPattern.MatchString(n.Value) {
+			return
+		}
+		changed = true
+		n.Value = envVarPattern.ReplaceAllStringFunc(n.Value, func(match string) string {
+			varName := envVarPattern.FindStringSubmatch(match)[1]
 			value, exists := os.LookupEnv(varName)
 			if !exists {
 				missing = append(missing, varName)
 				return match // leave as-is, error reported after
 			}
-			return []byte(value)
+			return trimOneTrailingLineBreak(value)
 		})
-		result.Write(substituted)
-		result.Write(comment)
+		if n.Style == 0 {
+			// Originally an unquoted plain scalar. Its Tag was resolved from
+			// the placeholder text itself (always !!str, since "${VAR}"
+			// never looks like a bool/int/null) — clear it so the final
+			// decode re-resolves the tag from the substituted content
+			// instead. This is what lets an unquoted ${PORT} substituted
+			// with "8080" still decode into an int field, exactly as the
+			// raw-text substitution it replaces did (see
+			// TestObservability_NumericFromYAML). A quoted "${VAR}" keeps
+			// its original (already !!str) tag and style, so it continues to
+			// always decode as a string.
+			n.Tag = ""
+		}
 	}
+	var walk func(n *yaml.Node, isValue bool)
+	walk = func(n *yaml.Node, isValue bool) {
+		if n.Kind == yaml.ScalarNode && isValue {
+			substituteScalar(n)
+			return
+		}
+		switch n.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			for _, child := range n.Content {
+				walk(child, true)
+			}
+		case yaml.MappingNode:
+			// Content alternates key, value, key, value... — substitute only
+			// into value positions, never a map key.
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], true)
+			}
+			// AliasNode and anything else: not descended into. An
+			// AliasNode's .Value holds the anchor name, not content — the
+			// anchored node itself is visited once at its own position, and
+			// the alias picks up its substituted value by reference.
+		}
+	}
+	walk(&doc, false)
 
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+		return nil, false, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
 	}
 
-	return result.Bytes(), nil
+	if !changed {
+		return data, false, nil
+	}
+
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, false, fmt.Errorf("re-encoding config after env var substitution: %w", err)
+	}
+	return out, true, nil
 }
 
-// splitYAMLComment returns (active, comment) where active is the portion of
-// line before any unquoted YAML comment marker (#) and comment is the rest
-// (including the # itself). A # starts a comment when it is at the start of
-// the line OR preceded by whitespace, AND not inside a single- or
-// double-quoted string on the same line.
-//
-// A quote (' or ") only opens a string at a position where YAML actually
-// permits a scalar to start — see isScalarStart. Earlier, either quote
-// character anywhere on the line (including a contraction in plain unquoted
-// text, e.g. "John's" or "don't", or a bare " inside an unquoted word) flipped
-// the in-string flag. With no matching close, the flag stayed true for the
-// rest of the line, so a real # later on the same line was read as "inside a
-// string" and never recognized as a comment marker — silently pulling ${VAR}
-// the author believed was commented out into substitution (SOL-153079).
-//
-// A prior version of isScalarStart gated on the single preceding delimiter
-// character but did not require ':'/'-' to be followed by whitespace, did not
-// track flow-collection depth for ',', and did not skip back over a YAML
-// anchor/alias/tag token. That version regressed two ways a plain per-byte
-// toggle happened to get right by accident (found in review, PR #420):
-// a *second* quote following a real delimiter — e.g. `it's, 'foo # x` — was
-// wrongly treated as a genuine opener (the naive toggle's two flips had
-// cancelled out; this version's smarter-but-still-wrong gate did not), and a
-// quote preceded by an anchor/tag — e.g. `&pw "pre # ${PW}"` — was wrongly
-// treated as NOT an opener, so the real string's own # was misread as a
-// comment and ${PW} was left unsubstituted with no error at all. flowDepth
-// (tracked here, in splitYAMLComment, across unquoted [/{ and ]/}) and the
-// anchor/tag skip-back in isScalarStart close both directions.
-//
-// Limitations: block scalars (|, >) treat # as literal text — this helper
-// does not track block-scalar context. The broker MCP config schema uses only
-// scalar values and nested structs, never block scalars, so this is
-// acceptable. If a block-scalar field is ever added, extend this helper
-// accordingly. A quote that sits at a scalar-start position (isScalarStart)
-// but is not actually meant to start a quoted string — a value that itself
-// begins with a quote character, like "'twas" or a bare " prefix — is still
-// misread as an opening delimiter; this is structurally undecidable from
-// position alone (it looks identical to a real quoted scalar) and is accepted
-// as a limitation. A value prefixed by both an anchor and a tag together
-// (e.g. `&pw !!str "v"`) skips back over only the nearer one; this is rare
-// enough in practice (this repo's schema uses neither anchors nor tags) that
-// it is accepted rather than chased with a skip-back loop. A literal `{` or
-// `[` inside plain unquoted text — e.g. `a{'b` or `a['b` — is indistinguishable
-// at this seam from a real flow-collection opener, so a quote right after one
-// still wrongly opens; this repo's config schema has no field whose value
-// contains a brace or bracket, so it is accepted as a residual.
-func splitYAMLComment(line []byte) (active, comment []byte) {
-	inSingle := false
-	inDouble := false
-	flowDepth := 0
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case c == '"' && !inSingle:
-			switch {
-			case inDouble && i > 0 && line[i-1] == '\\':
-				// Escaped quote (\") inside the string; stays inside. Not a
-				// full YAML lexer — double-backslash isn't unescaped here.
-			case inDouble:
-				// The real closing quote.
-				inDouble = false
-			case isScalarStart(line, i, flowDepth):
-				inDouble = true
-			}
-		case c == '\'' && !inDouble:
-			switch {
-			case inSingle && i+1 < len(line) && line[i+1] == '\'':
-				// YAML's '' escape for a literal ' inside a single-quoted
-				// string. Consume both characters and stay inside the string.
-				i++
-			case inSingle:
-				// The real closing quote.
-				inSingle = false
-			case isScalarStart(line, i, flowDepth):
-				inSingle = true
-			}
-		case (c == '[' || c == '{') && !inSingle && !inDouble:
-			flowDepth++
-		case (c == ']' || c == '}') && !inSingle && !inDouble:
-			if flowDepth > 0 {
-				flowDepth--
-			}
-		case c == '#' && !inSingle && !inDouble && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
-			return line[:i], line[i:]
-		}
+// trimOneTrailingLineBreak removes exactly one trailing "\r\n" pair, or a
+// single trailing "\n" or "\r", from value. It does not loop to remove more
+// than one: a value that is nothing but line breaks (e.g. a broken mount)
+// still has one left over rather than being silently reduced to "".
+func trimOneTrailingLineBreak(value string) string {
+	if strings.HasSuffix(value, "\r\n") {
+		return value[:len(value)-2]
 	}
-	return line, nil
-}
-
-// isScalarStart reports whether position i in line is a place YAML permits a
-// scalar value to begin, given flowDepth (the number of unclosed unquoted
-// [/{ seen so far on the line, tracked by splitYAMLComment): the start of the
-// line, or — after skipping back over any run of spaces/tabs and then, once,
-// over a single YAML anchor/alias/tag token (&name, *name, or !tag) —
-// one of:
-//   - ':', '-', or '?' immediately followed by whitespace or end of line,
-//     matching YAML's own requirement that these only act as indicators in
-//     that position (so "a:'b" and "a-'b" are correctly NOT scalar starts,
-//     while "key: 'v'" and "- 'v'" are);
-//   - '[' or '{' (a flow collection can open a scalar as its first entry
-//     immediately, with no separating whitespace required); or
-//   - ',' but only when flowDepth > 0 (a bare comma outside any flow
-//     collection is just punctuation in plain text, e.g. "John, Jr. 'test").
-//
-// Skipping back over whitespace (rather than checking only line[i-1]) means a
-// run of spaces after a real delimiter still counts (e.g. "key:   'value'"),
-// while a quote preceded by a word-separating space *inside* an
-// already-started plain scalar (e.g. "it is 'ere") does not: skipping back
-// from that space lands on a letter, not a delimiter, so it is correctly not
-// mistaken for scalar start. A quote anywhere else is text (most commonly a
-// contraction, e.g. "John's") and must not be mistaken for a string
-// delimiter.
-func isScalarStart(line []byte, i, flowDepth int) bool {
-	skipWS := func(j int) int {
-		for j > 0 && (line[j-1] == ' ' || line[j-1] == '\t') {
-			j--
-		}
-		return j
+	if strings.HasSuffix(value, "\n") || strings.HasSuffix(value, "\r") {
+		return value[:len(value)-1]
 	}
-	j := skipWS(i)
-	if j == 0 {
-		return true
-	}
-	// Skip back over one anchor/alias/tag token (&name, *name, !tag) so the
-	// delimiter check below sees what precedes *that*, not the token itself.
-	k := j
-	for k > 0 && line[k-1] != ' ' && line[k-1] != '\t' {
-		k--
-	}
-	if k < j && (line[k] == '&' || line[k] == '*' || line[k] == '!') {
-		if j = skipWS(k); j == 0 {
-			return true
-		}
-	}
-	switch line[j-1] {
-	case ':', '-', '?':
-		return j == len(line) || line[j] == ' ' || line[j] == '\t'
-	case '[', '{':
-		return true
-	case ',':
-		return flowDepth > 0
-	default:
-		return false
-	}
+	return value
 }
 
 // validate checks that the config has all required fields and that values are
