@@ -136,6 +136,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-vpns`'s `zeroConnectionCount` no longer reports nearly every enabled+up VPN as idle (its one-object real-client scan was consumed by a reserved `#*` client; distrust historical readings). The probe is now exhaustive (`forceFullPage`); a VPN it cannot verify lands in the new `indeterminateConnectionCount` instead. A broker that rejects `forceFullPage` (it is a Solace-internal SEMP parameter) gets that one probe retried without it rather than failing the whole call. Tracked under SOL-153071.
 
 ### Changed
+- **BREAKING**: Minimum Go toolchain raised to 1.26.0 (`go.mod`'s `go` directive), and the
+  Dockerfile's builder stage now uses `golang:1.26-alpine`. A local build or CI job on Go
+  1.25.x fails at `go mod download` with `go.mod requires go >= 1.26.0`. Migration: upgrade
+  the build toolchain to Go 1.26.0 or later.
 - **BREAKING**: Per-broker Hop 2 `auth.audience` is renamed `auth.target` (one string; token exchange still sends it as the `audience` form parameter), and `broker_oauth.audience_parameter_name` is removed. A config that still sets either key fails to load; the error names the rename or removal. Older releases reject `target`, so rolling back needs the config reverted too. Tracked under SOL-154654.
 
   | Old config | New config |
