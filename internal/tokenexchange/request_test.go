@@ -320,6 +320,48 @@ func TestSetTarget_UnknownGrantType(t *testing.T) {
 	}
 }
 
+// TestSetSubjectTokenType_UnknownGrantType calls setSubjectTokenType
+// directly: buildIdPRequest can't reach its default branch because
+// setGrantFields rejects an unknown grant type first. A grant type added to
+// setGrantFields without a matching case here must still fail closed
+// instead of silently omitting subject_token_type from the IdP request.
+func TestSetSubjectTokenType_UnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	e := &Exchanger{grantType: 0}
+	form := url.Values{}
+	err := e.setSubjectTokenType(form)
+	if err == nil {
+		t.Fatal("expected error for unknown GrantType, got nil")
+	}
+	if !strings.Contains(err.Error(), "GrantType") {
+		t.Errorf("error = %q, want mention of GrantType", err.Error())
+	}
+	if len(form) != 0 {
+		t.Errorf("form = %v, want empty — an unknown grant type must not place subject_token_type", form)
+	}
+}
+
+// TestSetRequestedTokenUse_UnknownGrantType is the setRequestedTokenUse
+// counterpart to TestSetSubjectTokenType_UnknownGrantType above — same
+// reasoning, same shape.
+func TestSetRequestedTokenUse_UnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	e := &Exchanger{grantType: 0}
+	form := url.Values{}
+	err := e.setRequestedTokenUse(form)
+	if err == nil {
+		t.Fatal("expected error for unknown GrantType, got nil")
+	}
+	if !strings.Contains(err.Error(), "GrantType") {
+		t.Errorf("error = %q, want mention of GrantType", err.Error())
+	}
+	if len(form) != 0 {
+		t.Errorf("form = %v, want empty — an unknown grant type must not place requested_token_use", form)
+	}
+}
+
 // TestBuildIdPRequest_TargetConditional verifies that token exchange carries
 // ExchangeInput.Target in the RFC 8693 "audience" form field when it is
 // non-empty, and omits the field when it is empty.

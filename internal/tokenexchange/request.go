@@ -53,8 +53,12 @@ func (e *Exchanger) buildIdPRequest(ctx context.Context, input ExchangeInput) (*
 	if err := e.setSubjectToken(form, input); err != nil {
 		return nil, err
 	}
-	e.setSubjectTokenType(form)
-	e.setRequestedTokenUse(form)
+	if err := e.setSubjectTokenType(form); err != nil {
+		return nil, err
+	}
+	if err := e.setRequestedTokenUse(form); err != nil {
+		return nil, err
+	}
 	if err := e.setClientAuth(form, req); err != nil {
 		return nil, err
 	}
@@ -115,21 +119,37 @@ func (e *Exchanger) setSubjectToken(form url.Values, input ExchangeInput) error 
 //
 // RFC 7523 jwt-bearer has no subject_token_type parameter at all — the
 // assertion's type is implicit in the grant itself — so this is a no-op
-// for GrantTypeJWTBearer.
-func (e *Exchanger) setSubjectTokenType(form url.Values) {
-	if e.grantType == GrantTypeTokenExchange {
+// for GrantTypeJWTBearer. Switches on grant type, matching the other
+// setters in this file, rather than a bare if: a third grant added here
+// without a case fails loudly at this switch instead of silently omitting
+// the field and surfacing only as a vague IdP-side rejection.
+func (e *Exchanger) setSubjectTokenType(form url.Values) error {
+	switch e.grantType {
+	case GrantTypeTokenExchange:
 		form.Set("subject_token_type", URNTokenTypeAccessToken)
+	case GrantTypeJWTBearer:
+		// No-op: RFC 7523 has no subject_token_type parameter.
+	default:
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for subject token type placement", e.grantType)
 	}
+	return nil
 }
 
 // setRequestedTokenUse sets the fixed requested_token_use=on_behalf_of
 // field Entra's On-Behalf-Of flow requires on the wire (not a YAML key —
 // SOL-153245 FD lock). RFC 8693 token-exchange has no such field, so this
-// is a no-op for GrantTypeTokenExchange.
-func (e *Exchanger) setRequestedTokenUse(form url.Values) {
-	if e.grantType == GrantTypeJWTBearer {
+// is a no-op for GrantTypeTokenExchange. Switches on grant type for the
+// same reason setSubjectTokenType does — see its doc comment.
+func (e *Exchanger) setRequestedTokenUse(form url.Values) error {
+	switch e.grantType {
+	case GrantTypeTokenExchange:
+		// No-op: RFC 8693 token exchange has no requested_token_use parameter.
+	case GrantTypeJWTBearer:
 		form.Set("requested_token_use", requestedTokenUseOnBehalfOf)
+	default:
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for requested_token_use placement", e.grantType)
 	}
+	return nil
 }
 
 // setClientAuth places client credentials in exactly one location:

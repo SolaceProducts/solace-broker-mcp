@@ -3715,6 +3715,46 @@ func TestExchange_JWTBearer_HappyPath(t *testing.T) {
 	}
 }
 
+// TestExchange_JWTBearer_NoAudienceMismatchWarning proves warnIfAudienceMismatch
+// is actually skipped for jwt-bearer, not merely untriggered by coincidence.
+// The token here IS JWT-shaped (fakeJWT), with an aud that deliberately does
+// NOT match the requested target — the exact shape a real Entra On-Behalf-Of
+// response has, per the KA prototype notes (target sent as scope; Entra's aud
+// echoes back the resource, not that scope string). Without the grant-type
+// gate in doExchange, this would log a false-positive WARN on every such
+// call. Not t.Parallel(): captureWarn swaps the process-wide slog default.
+func TestExchange_JWTBearer_NoAudienceMismatchWarning(t *testing.T) {
+	entraTok := fakeJWT(t, map[string]any{"aud": "00000000-0000-0000-0000-000000000000"})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":%q,"token_type":"Bearer","expires_in":3600}`, entraTok)
+	}))
+	defer srv.Close()
+
+	e := newJWTBearerTestExchanger(t, srv.URL)
+
+	var tok *Token
+	out := captureWarn(t, func() {
+		var err error
+		tok, err = e.Exchange(context.Background(), ExchangeInput{
+			SubjectToken: "user-jwt-abc",
+			BrokerAlias:  "prod",
+			Target:       "api://broker-app/.default",
+		})
+		if err != nil {
+			t.Fatalf("Exchange: %v", err)
+		}
+	})
+
+	if tok == nil || tok.Value != entraTok {
+		t.Fatalf("Exchange returned tok = %v, want the IdP's token unchanged", tok)
+	}
+	if strings.Contains(out, "aud claim does not include the requested audience") {
+		t.Errorf("jwt-bearer exchange logged an audience-mismatch WARN, want none: %q", out)
+	}
+}
+
 // TestExchange_JWTBearer_MissingScopeNoHTTPCall proves the AC end to end:
 // a missing target fails before any network call (the httptest handler
 // itself fails the test if the IdP is ever hit — same idiom as

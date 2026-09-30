@@ -309,7 +309,7 @@ brokers:
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant Type](#grant-type). |
 | `broker_oauth.token_expiry_fallback` | Optional positive duration used only when the IdP omits `expires_in`, returns `null`, or returns `0`. Omit it to preserve fail-closed behavior. Any positive duration passes configuration validation, but `30s` or less returns an immediately stale token that is not cached, while cache residency is capped at 24 hours. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this event broker. |
-| `brokers.<alias>.auth.target` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. One string naming this event broker's API at the IdP, forwarded during exchange in the request parameter the grant type selects (token exchange: `audience`) — see [Target](#target); when omitted, the exchange request carries no audience parameter at all. Omit if the event broker's OAuth profile does not validate audience; set it only if it does. A whitespace-only value fails configuration load; an empty value (for example a `${VAR}` that resolves to `""`) is treated as omitted. |
+| `brokers.<alias>.auth.target` | Optional at configuration load for every grant type, even under `auth.mode: oauth` — omitting it does not fail startup. One string naming this event broker's API at the IdP, forwarded during exchange in the request parameter the grant type selects (token exchange: `audience`; jwt-bearer: `scope`) — see [Target](#target). Omission behaves differently per grant: token exchange's request simply carries no audience parameter, safe to omit if the event broker's OAuth profile does not validate audience; jwt-bearer's request instead fails before any HTTP call (`jwt-bearer request missing scope`), since Entra's On-Behalf-Of marks scope required — jwt-bearer brokers must set it. A whitespace-only value fails configuration load regardless of grant type; an empty value (for example a `${VAR}` that resolves to `""`) is treated as omitted. |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target event broker's audience).
 
@@ -327,17 +327,22 @@ The jwt-bearer grant is gated behind the env var `HOP2_JWT_BEARER_ENABLED` while
 
 #### Target
 
-`brokers.<alias>.auth.target` names this event broker's API at the IdP — one string per event broker, whatever the grant type. The grant type decides which request parameter carries it on the wire; with token exchange, the only grant type this version implements, the runtime sends it as the RFC 8693 `audience` parameter:
+`brokers.<alias>.auth.target` names this event broker's API at the IdP — one string per event broker. The grant type decides which request parameter carries it on the wire, and whether it's actually required:
 
 ```yaml
 brokers:
   prod:
     auth:
       mode: oauth
-      target: "solace-broker-prod"
+      target: "solace-broker-prod"        # token exchange: sent as RFC 8693 "audience"
+      # target: "api://<APP_ID>/.default" # jwt-bearer: sent as Entra "scope" — required
 ```
 
-Set it to the audience value your IdP expects for this event broker. It is a single string: to reach a second event broker, configure a second alias with its own `target`, not a list. There is no separate parameter-name setting — `broker_oauth.audience_parameter_name` was removed and now fails configuration load, as does the old `brokers.<alias>.auth.audience` key.
+**Token exchange** sends it as the RFC 8693 `audience` parameter and treats it as optional: set it to the audience value your IdP expects, or omit it if the event broker's OAuth profile does not validate audience.
+
+**jwt-bearer** (Entra On-Behalf-Of) sends it as Entra's `scope` parameter, which Microsoft marks required — an omitted or whitespace-only target loads at configuration time but fails every exchange with `jwt-bearer request missing scope`, before the request reaches Entra. Typically set to `{App ID URI}/.default`.
+
+Either way it is a single string: to reach a second event broker, configure a second alias with its own `target`, not a list. There is no separate parameter-name setting — `broker_oauth.audience_parameter_name` was removed and now fails configuration load, as does the old `brokers.<alias>.auth.audience` key.
 
 One optional field controls handling of IdPs that omit token lifetime, and two optional sub-blocks tune runtime resilience — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
