@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-29; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-30; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -175,13 +175,13 @@ note spells out.
 | `actions/setup-go` | `b7ad1da` | v7.0.0 | MIT | [license](https://github.com/actions/setup-go/blob/v7.0.0/LICENSE) |
 | `actions/setup-node` | `8207627` | v7.0.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.0.0/LICENSE) |
 | `actions/upload-artifact` | `043fb46` | v7.0.1 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.1/LICENSE) |
-| `docker/build-push-action` | `53b7df9` | v7.3.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.3.0/LICENSE) |
+| `docker/build-push-action` | `c3c9e26` | v7.4.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.4.0/LICENSE) |
 | `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
-| `docker/setup-buildx-action` | `37fe631` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.3.0/LICENSE) |
-| `docker/setup-qemu-action` | `1f40c72` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.3.0/LICENSE) |
-| `github/codeql-action/analyze` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
-| `github/codeql-action/init` | `cdf488f` | v4.37.9 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.9/LICENSE) |
+| `docker/setup-buildx-action` | `f87e599` | v4.4.1 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.4.1/LICENSE) |
+| `docker/setup-qemu-action` | `9901266` | v4.4.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.4.0/LICENSE) |
+| `github/codeql-action/analyze` | `b96794f` | v4.38.0 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.0/LICENSE) |
+| `github/codeql-action/init` | `b96794f` | v4.38.0 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.0/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
 
