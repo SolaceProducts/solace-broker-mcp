@@ -137,6 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-vpns`'s `zeroConnectionCount` no longer reports nearly every enabled+up VPN as idle (its one-object real-client scan was consumed by a reserved `#*` client; distrust historical readings). The probe is now exhaustive (`forceFullPage`); a VPN it cannot verify lands in the new `indeterminateConnectionCount` instead. A broker that rejects `forceFullPage` (it is a Solace-internal SEMP parameter) gets that one probe retried without it rather than failing the whole call. Tracked under SOL-153071.
 
 ### Changed
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.7 rolling release (`10.26.7.12655`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.7.json` and continue to be sourced from the private-extended variant.
 - **BREAKING**: Minimum Go toolchain raised to 1.26.0 (`go.mod`'s `go` directive), and the
   Dockerfile's builder stage now uses `golang:1.26-alpine`. A local build or CI job on Go
   1.25.x fails at `go mod download` with `go.mod requires go >= 1.26.0`. Migration: upgrade
