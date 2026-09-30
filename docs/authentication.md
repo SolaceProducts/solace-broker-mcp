@@ -272,7 +272,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 ### Step 2b: Configure Broker OAuth (Hop 2)
 
-This step is only needed if one or more event brokers use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each event broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
+This step is only needed if one or more event brokers use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each event broker's token by exchanging the calling agent's Hop 1 token against the identity provider, via RFC 8693 token exchange or RFC 7523 jwt-bearer (Entra On-Behalf-Of) — see [Grant Type](#grant-type). `mcp_client_auth.mode: oauth` (Hop 1) is required first — either grant consumes the agent's Hop 1 JWT as the exchange request's subject (token exchange: `subject_token`; jwt-bearer: `assertion`), so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
 
 > **Note:** Configuring `auth.mode: oauth` on an event broker while Hop 1 is `static`/`disabled` is rejected at startup with:
 > ```
