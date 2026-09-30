@@ -53,7 +53,12 @@ func (e *Exchanger) buildIdPRequest(ctx context.Context, input ExchangeInput) (*
 	if err := e.setSubjectToken(form, input); err != nil {
 		return nil, err
 	}
-	e.setSubjectTokenType(form)
+	if err := e.setSubjectTokenType(form); err != nil {
+		return nil, err
+	}
+	if err := e.setRequestedTokenUse(form); err != nil {
+		return nil, err
+	}
 	if err := e.setClientAuth(form, req); err != nil {
 		return nil, err
 	}
@@ -77,12 +82,7 @@ func (e *Exchanger) setGrantFields(form url.Values) error {
 	case GrantTypeTokenExchange:
 		form.Set("grant_type", URNGrantTypeTokenExchange)
 	case GrantTypeJWTBearer:
-		// Fail closed until the On-Behalf-Of POST lands (SOL-154400): never
-		// fall back to an RFC 8693 request for a jwt-bearer deployment.
-		// doExchange reports this as ErrExchangeRequestBuild, so no HTTP call
-		// is made, and the breaker excludes it as it does every request-build
-		// failure (isBreakerExcluded), not just this one.
-		return errors.New("tokenexchange: jwt-bearer grant type is not implemented in this version; no token request sent")
+		form.Set("grant_type", URNGrantTypeJWTBearer)
 	default:
 		return fmt.Errorf("tokenexchange: unknown GrantType %d (programming error — Params built outside FromConfig)", e.grantType)
 	}
@@ -100,6 +100,9 @@ func (e *Exchanger) setSubjectToken(form url.Values, input ExchangeInput) error 
 	switch e.grantType {
 	case GrantTypeTokenExchange:
 		form.Set("subject_token", input.SubjectToken)
+	case GrantTypeJWTBearer:
+		// RFC 7523 §2.1: the user's JWT is the "assertion", not "subject_token".
+		form.Set("assertion", input.SubjectToken)
 	default:
 		return fmt.Errorf("tokenexchange: unknown GrantType %d for subject token placement", e.grantType)
 	}
@@ -113,8 +116,40 @@ func (e *Exchanger) setSubjectToken(form url.Values, input ExchangeInput) error 
 // definition an access token. The MCP server never receives an ID
 // token in the Authorization header, so subject_token_type is always
 // access_token regardless of IdP.
-func (e *Exchanger) setSubjectTokenType(form url.Values) {
-	form.Set("subject_token_type", URNTokenTypeAccessToken)
+//
+// RFC 7523 jwt-bearer has no subject_token_type parameter at all — the
+// assertion's type is implicit in the grant itself — so this is a no-op
+// for GrantTypeJWTBearer. Switches on grant type, matching the other
+// setters in this file, rather than a bare if: a third grant added here
+// without a case fails loudly at this switch instead of silently omitting
+// the field and surfacing only as a vague IdP-side rejection.
+func (e *Exchanger) setSubjectTokenType(form url.Values) error {
+	switch e.grantType {
+	case GrantTypeTokenExchange:
+		form.Set("subject_token_type", URNTokenTypeAccessToken)
+	case GrantTypeJWTBearer:
+		// No-op: RFC 7523 has no subject_token_type parameter.
+	default:
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for subject token type placement", e.grantType)
+	}
+	return nil
+}
+
+// setRequestedTokenUse sets the fixed requested_token_use=on_behalf_of
+// field Entra's On-Behalf-Of flow requires on the wire (not a YAML key —
+// SOL-153245 FD lock). RFC 8693 token-exchange has no such field, so this
+// is a no-op for GrantTypeTokenExchange. Switches on grant type for the
+// same reason setSubjectTokenType does — see its doc comment.
+func (e *Exchanger) setRequestedTokenUse(form url.Values) error {
+	switch e.grantType {
+	case GrantTypeTokenExchange:
+		// No-op: RFC 8693 token exchange has no requested_token_use parameter.
+	case GrantTypeJWTBearer:
+		form.Set("requested_token_use", requestedTokenUseOnBehalfOf)
+	default:
+		return fmt.Errorf("tokenexchange: unknown GrantType %d for requested_token_use placement", e.grantType)
+	}
+	return nil
 }
 
 // setClientAuth places client credentials in exactly one location:
@@ -137,13 +172,22 @@ func (e *Exchanger) setClientAuth(form url.Values, req *http.Request) error {
 // setTarget places the per-broker target (brokers.<alias>.auth.target) into
 // the form field the grant type defines — the operator names one downstream
 // API, and the protocol decides how it is spelled on the wire. RFC 8693
-// token exchange carries it as "audience". An empty target omits the field.
+// token exchange carries it as "audience", optional (omitted when unset).
+// RFC 7523 jwt-bearer carries it as "scope", required — Microsoft marks
+// On-Behalf-Of's scope Required, so an empty or whitespace-only target
+// fails here, before any HTTP call, rather than at the IdP with a less
+// actionable error.
 func (e *Exchanger) setTarget(form url.Values, input ExchangeInput) error {
 	switch e.grantType {
 	case GrantTypeTokenExchange:
 		if input.Target != "" {
 			form.Set("audience", input.Target)
 		}
+	case GrantTypeJWTBearer:
+		if strings.TrimSpace(input.Target) == "" {
+			return errors.New("jwt-bearer request missing scope")
+		}
+		form.Set("scope", input.Target)
 	default:
 		return fmt.Errorf("tokenexchange: unknown GrantType %d for target placement (programming error — Params built outside FromConfig)", e.grantType)
 	}

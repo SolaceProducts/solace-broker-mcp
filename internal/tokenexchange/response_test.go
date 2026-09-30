@@ -580,6 +580,36 @@ func TestParseSuccessBody_IssuedTokenTypeSkippedForNonTokenExchangeGrant(t *test
 	}
 }
 
+// TestParseSuccessBody_IssuedTokenTypeSkippedForJWTBearer is the
+// SOL-154400 AC pinned literally: GrantTypeJWTBearer, not just any
+// non-TokenExchange placeholder, does not require issued_token_type.
+// The test above proves the mechanism; this proves the actual value the
+// real jwt-bearer grant uses.
+func TestParseSuccessBody_IssuedTokenTypeSkippedForJWTBearer(t *testing.T) {
+	t.Parallel()
+
+	e := &Exchanger{
+		tokenURL:         "https://idp.example.com/token",
+		clientID:         "cid",
+		clientAuthMethod: ClientSecretPost,
+		clientSecret:     "sec",
+		grantType:        GrantTypeJWTBearer,
+		httpClient:       &http.Client{},
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Entra's real On-Behalf-Of success body — no issued_token_type field.
+	body := `{"access_token":"obo-tok","token_type":"Bearer","expires_in":3600}`
+
+	tok, err := e.parseSuccessBody([]byte(body), now)
+
+	if err != nil {
+		t.Fatalf("unexpected error — issued_token_type must not be required for GrantTypeJWTBearer: %v", err)
+	}
+	if tok == nil || tok.Value != "obo-tok" {
+		t.Errorf("tok = %v, want Value = %q", tok, "obo-tok")
+	}
+}
+
 // T14: An absent, null, or zero expires_in remains fail-closed when the
 // operator did not configure a fallback.
 func TestParseSuccessBody_ExpiresInMissingWithoutFallbackReturnsInvalidResponse(t *testing.T) {

@@ -320,6 +320,48 @@ func TestSetTarget_UnknownGrantType(t *testing.T) {
 	}
 }
 
+// TestSetSubjectTokenType_UnknownGrantType calls setSubjectTokenType
+// directly: buildIdPRequest can't reach its default branch because
+// setGrantFields rejects an unknown grant type first. A grant type added to
+// setGrantFields without a matching case here must still fail closed
+// instead of silently omitting subject_token_type from the IdP request.
+func TestSetSubjectTokenType_UnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	e := &Exchanger{grantType: 0}
+	form := url.Values{}
+	err := e.setSubjectTokenType(form)
+	if err == nil {
+		t.Fatal("expected error for unknown GrantType, got nil")
+	}
+	if !strings.Contains(err.Error(), "GrantType") {
+		t.Errorf("error = %q, want mention of GrantType", err.Error())
+	}
+	if len(form) != 0 {
+		t.Errorf("form = %v, want empty — an unknown grant type must not place subject_token_type", form)
+	}
+}
+
+// TestSetRequestedTokenUse_UnknownGrantType is the setRequestedTokenUse
+// counterpart to TestSetSubjectTokenType_UnknownGrantType above — same
+// reasoning, same shape.
+func TestSetRequestedTokenUse_UnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	e := &Exchanger{grantType: 0}
+	form := url.Values{}
+	err := e.setRequestedTokenUse(form)
+	if err == nil {
+		t.Fatal("expected error for unknown GrantType, got nil")
+	}
+	if !strings.Contains(err.Error(), "GrantType") {
+		t.Errorf("error = %q, want mention of GrantType", err.Error())
+	}
+	if len(form) != 0 {
+		t.Errorf("form = %v, want empty — an unknown grant type must not place requested_token_use", form)
+	}
+}
+
 // TestBuildIdPRequest_TargetConditional verifies that token exchange carries
 // ExchangeInput.Target in the RFC 8693 "audience" form field when it is
 // non-empty, and omits the field when it is empty.
@@ -605,5 +647,153 @@ func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 	}
 	if got := form.Get("subject_token"); got != "" {
 		t.Errorf("subject_token = %q, want empty string", got)
+	}
+}
+
+// ---------- SOL-154400: jwt-bearer (Entra On-Behalf-Of) request shape ----------
+
+// jwtBearerParams returns Params for a jwt-bearer exchanger.
+func jwtBearerParams(t *testing.T) Params {
+	t.Helper()
+	p := validParams(t)
+	p.GrantType = GrantTypeJWTBearer
+	return p
+}
+
+// TestBuildIdPRequest_JWTBearer_MandatoryFields pins the RFC 7523 /
+// Entra On-Behalf-Of wire shape: grant_type is the jwt-bearer URN, the
+// user's JWT is the "assertion" (not "subject_token"), requested_token_use
+// is fixed to on_behalf_of, and the target lands in "scope". None of the
+// RFC 8693 token-exchange fields may appear on this request.
+func TestBuildIdPRequest_JWTBearer_MandatoryFields(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(jwtBearerParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		Target:       "api://broker-app/.default",
+	})
+	if err != nil {
+		t.Fatalf("buildIdPRequest: %v", err)
+	}
+
+	form := readFormBody(t, req)
+
+	if got := form.Get("grant_type"); got != URNGrantTypeJWTBearer {
+		t.Errorf("grant_type = %q, want %q", got, URNGrantTypeJWTBearer)
+	}
+	if got := form.Get("assertion"); got != "user-jwt-abc" {
+		t.Errorf("assertion = %q, want %q", got, "user-jwt-abc")
+	}
+	if got := form.Get("requested_token_use"); got != "on_behalf_of" {
+		t.Errorf("requested_token_use = %q, want %q", got, "on_behalf_of")
+	}
+	if got := form.Get("scope"); got != "api://broker-app/.default" {
+		t.Errorf("scope = %q, want %q", got, "api://broker-app/.default")
+	}
+
+	for _, key := range []string{"subject_token", "subject_token_type", "audience"} {
+		if _, present := form[key]; present {
+			t.Errorf("form field %q present with value %q — must not appear on a jwt-bearer request", key, form.Get(key))
+		}
+	}
+}
+
+// TestBuildIdPRequest_JWTBearer_MissingScopeFailsBeforeHTTP pins the AC:
+// an empty target fails request construction with an actionable message,
+// and no *http.Request is produced (so doExchange in exchange.go never
+// reaches the HTTP client — see TestExchange_JWTBearer_MissingScopeNoHTTPCall
+// for the end-to-end proof of that).
+func TestBuildIdPRequest_JWTBearer_MissingScopeFailsBeforeHTTP(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(jwtBearerParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		Target:       "", // empty target
+	})
+
+	if req != nil {
+		t.Errorf("req = %v, want nil when target is missing", req)
+	}
+	if err == nil {
+		t.Fatal("expected an error for missing target, got nil")
+	}
+	if !strings.Contains(err.Error(), "jwt-bearer request missing scope") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "jwt-bearer request missing scope")
+	}
+}
+
+// TestBuildIdPRequest_JWTBearer_WhitespaceScopeFails proves the same
+// refusal for a whitespace-only target — an operator misconfiguration
+// that would otherwise silently send a blank scope to Entra.
+func TestBuildIdPRequest_JWTBearer_WhitespaceScopeFails(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(jwtBearerParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
+		SubjectToken: "user-jwt-abc",
+		Target:       "   ",
+	})
+
+	if req != nil {
+		t.Errorf("req = %v, want nil when target is whitespace-only", req)
+	}
+	if err == nil || !strings.Contains(err.Error(), "jwt-bearer request missing scope") {
+		t.Errorf("error = %v, want it to contain %q", err, "jwt-bearer request missing scope")
+	}
+}
+
+// TestBuildIdPRequest_TokenExchange_UnaffectedByJWTBearerAdditions is the
+// regression companion to the jwt-bearer tests above: adding the
+// GrantTypeJWTBearer branches (and making setSubjectTokenType conditional)
+// must not change a single byte of the existing RFC 8693 wire shape.
+func TestBuildIdPRequest_TokenExchange_UnaffectedByJWTBearerAdditions(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
+		SubjectToken: "tok-abc",
+		Target:       "https://broker.example.com",
+	})
+	if err != nil {
+		t.Fatalf("buildIdPRequest: %v", err)
+	}
+
+	form := readFormBody(t, req)
+
+	if got := form.Get("grant_type"); got != URNGrantTypeTokenExchange {
+		t.Errorf("grant_type = %q, want %q", got, URNGrantTypeTokenExchange)
+	}
+	if got := form.Get("subject_token"); got != "tok-abc" {
+		t.Errorf("subject_token = %q, want %q", got, "tok-abc")
+	}
+	if got := form.Get("subject_token_type"); got != URNTokenTypeAccessToken {
+		t.Errorf("subject_token_type = %q, want %q", got, URNTokenTypeAccessToken)
+	}
+	if got := form.Get("audience"); got != "https://broker.example.com" {
+		t.Errorf("audience = %q, want %q", got, "https://broker.example.com")
+	}
+
+	for _, key := range []string{"assertion", "scope", "requested_token_use"} {
+		if _, present := form[key]; present {
+			t.Errorf("form field %q present with value %q — must not appear on a token-exchange request", key, form.Get(key))
+		}
 	}
 }

@@ -754,9 +754,19 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981). Comparing Target to aud assumes the grant type sends the
-	// target as the RFC 8693 audience (see setTarget); a grant type that
-	// places it elsewhere, such as jwt-bearer's scope, must skip this check.
-	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
+	// target as the RFC 8693 audience (see setTarget). An explicit switch,
+	// no default, mirrors the request-building setters in this file: a
+	// grant type added here without a case is a visible omission to fix,
+	// not a silent allow-list miss.
+	switch e.grantType {
+	case GrantTypeTokenExchange:
+		warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
+	case GrantTypeJWTBearer:
+		// No-op: jwt-bearer sends target as Entra's scope, and Entra's
+		// returned aud is typically just the resource identifier, not that
+		// scope string — so this check would false-positive on almost every
+		// successful jwt-bearer exchange.
+	}
 	return parsed.Token, nil
 }
 
