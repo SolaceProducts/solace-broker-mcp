@@ -77,6 +77,12 @@ Capability switches are environment variables. They are deliberately not accepte
 `OBS_METRICS_ENABLED` is retired and ignored. If it is present, the server warns and tells you
 to replace it with `OBS_METRICS_SCRAPE_ENABLED`.
 
+This rename shipped in SOL-154607 and is not in every published release. A release built
+before that change does not know `OBS_METRICS_SCRAPE_ENABLED` at all; it still requires
+`OBS_METRICS_ENABLED` for either metrics egress and fails to start with
+`OBS_METRICS_OTLP_ENABLED=true requires OBS_METRICS_ENABLED=true` if only the new flag is
+set. Check your image's version against the CHANGELOG before assuming the new name applies.
+
 ### Common combinations
 
 | Configuration | Result |
