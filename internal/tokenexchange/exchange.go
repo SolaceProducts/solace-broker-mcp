@@ -752,21 +752,13 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		e.logExpiryFallbackOnce()
 	}
 	// Defense-in-depth visibility only — never fails the exchange. See
-	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
-	// (SOL-152981). Comparing Target to aud assumes the grant type sends the
-	// target as the RFC 8693 audience (see setTarget). An explicit switch,
-	// no default, mirrors the request-building setters in this file: a
-	// grant type added here without a case is a visible omission to fix,
-	// not a silent allow-list miss.
-	switch e.grantType {
-	case GrantTypeTokenExchange:
-		warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
-	case GrantTypeJWTBearer:
-		// No-op: jwt-bearer sends target as Entra's scope, and Entra's
-		// returned aud is typically just the resource identifier, not that
-		// scope string — so this check would false-positive on almost every
-		// successful jwt-bearer exchange.
-	}
+	// warnIfAudienceMismatch's doc for the full rationale (SOL-152981) and
+	// for why this call is unconditional across grant types (SOL-155161):
+	// the per-mismatch-shape throttle inside it, not a grant-type carve-out
+	// here, is what keeps a canonicalizing IdP (Entra sends target as scope,
+	// not audience, and echoes back a canonicalized aud either way) from
+	// spamming a WARN on every call.
+	e.warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
 	return parsed.Token, nil
 }
 

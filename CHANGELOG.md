@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The token-exchange audience-mismatch diagnostic (SOL-152981) no longer logs a `WARN` on every successful exchange against an IdP that canonicalizes the requested audience (Entra's `api://` resource-URI prefixing is the reported case) — it now logs `WARN` once per distinct (broker, requested audience, returned `aud`) combination and `DEBUG` for every later occurrence of that same combination, so the signal stays inspectable without training operators to ignore it. A different broker, a different requested audience, or a different returned `aud` each independently get their own first `WARN` — including a later, genuinely different mismatch on a broker whose earlier, expected canonicalization mismatch was already throttled — so a known-noisy IdP response can never mask an unrelated, genuine one. The jwt-bearer-specific carve-out added in SOL-154400 (which skipped this check entirely for that grant type) is removed: jwt-bearer now gets the identical throttled treatment as token-exchange, with no grant-type-specific behavior. Tracked under SOL-155161.
+
 ## [0.10.0] - 2026-09-30
 
 ### Added

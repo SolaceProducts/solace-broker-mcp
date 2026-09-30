@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 )
 
@@ -87,8 +88,8 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 	return claims, true
 }
 
-// warnIfAudienceMismatch logs a WARN when accessToken is a JWT whose "aud"
-// claim does not include requestedAudience. This is a diagnostic, not a
+// warnIfAudienceMismatch logs when accessToken is a JWT whose "aud" claim
+// does not include requestedAudience. This is a diagnostic, not a
 // security control: RFC 6750 treats a bearer token as opaque to the party
 // relaying it, and this process is that party — the broker is the resource
 // server, and its own resource-server audience validation is the actual
@@ -97,19 +98,45 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // IdP for. If an IdP canonicalizes or ignores the requested audience (e.g.
 // Entra's "api://" resource-URI prefixing) and happens to issue a value the
 // broker still accepts, nothing else in this call chain would ever surface
-// that the per-broker audience config is inert. This WARN is that surfacing
-// — "did the IdP give us what we asked for", not "is this token valid" — and
+// that the per-broker audience config is inert. This is that surfacing —
+// "did the IdP give us what we asked for", not "is this token valid" — and
 // it changes no outcome: the token is returned unconditionally either way
 // (SOL-152981).
 //
-// Deliberately WARN, never a failure, for the same canonicalization reason:
+// Deliberately never a hard failure, for the same canonicalization reason:
 // a strict equality check would risk failing a legitimately-configured IdP
 // integration this project hasn't tested against, trading a diagnostic gap
 // for an availability regression. If a deployment wants a hard failure on
 // mismatch, that belongs behind a new per-broker config flag, not
 // unconditional behavior here.
 //
-// Silently no-ops (no WARN either way) when:
+// Throttled per distinct (broker, requested, returned) mismatch, not fired
+// at WARN on every call (SOL-155161): some real IdPs — Entra's "api://"
+// prefixing above is the documented example, not a hypothetical —
+// canonicalize the requested value on every single exchange, so an
+// unconditional per-call WARN fires on literally every successful call
+// against those IdPs, forever, which trains an operator to ignore WARNs
+// from this process rather than surfacing anything actionable. The first
+// occurrence of a given mismatch shape on this Exchanger still logs at
+// WARN, so the signal is never fully silent. Every later occurrence of that
+// exact shape logs the identical line at DEBUG instead — still inspectable,
+// no longer noise.
+//
+// Deliberately keyed on the full tuple, not on broker alias alone: alias
+// alone would let an expected, already-throttled canonicalization mismatch
+// (Entra's shape, above) silently swallow a later, genuinely different
+// mismatch on that same alias — the two "look the same" to the throttle
+// even though only one of them is actionable, which is exactly the failure
+// mode this fix exists to avoid (SOL-155161 AC "must not silence real
+// problems"). requestedAudience is included even though a given broker
+// alias's configured target does not change without a process restart
+// (which starts audienceMismatchLogged fresh) — this function has no
+// package-level guarantee of that, since requestedAudience arrives as a
+// plain per-call parameter, not something this package owns or validates.
+// A different broker alias, a different requested audience, or a different
+// returned aud claim all independently get their own first WARN.
+//
+// Silently no-ops (no log line at all, either level) when:
 //   - requestedAudience is empty: V1 makes the audience parameter optional,
 //     and without a request there is nothing to check the token against.
 //   - accessToken is not JWT-shaped or its payload doesn't decode: RFC 8693
@@ -125,7 +152,7 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // substrings including "token", which "aud_claim" doesn't. ("audience" isn't
 // in that redaction list; requested_audience two lines below is already
 // logged unredacted.)
-func warnIfAudienceMismatch(ctx context.Context, brokerAlias, requestedAudience, accessToken string) {
+func (e *Exchanger) warnIfAudienceMismatch(ctx context.Context, brokerAlias, requestedAudience, accessToken string) {
 	if requestedAudience == "" {
 		return
 	}
@@ -138,10 +165,31 @@ func warnIfAudienceMismatch(ctx context.Context, brokerAlias, requestedAudience,
 			return
 		}
 	}
-	slog.WarnContext(ctx, "token exchange: issued access token's aud claim does not include the requested audience",
+
+	level := slog.LevelWarn
+	key := audienceMismatchKey(brokerAlias, requestedAudience, claims.Audience)
+	if _, alreadyLogged := e.audienceMismatchLogged.LoadOrStore(key, struct{}{}); alreadyLogged {
+		level = slog.LevelDebug
+	}
+	slog.Log(ctx, level, "token exchange: issued access token's aud claim does not include the requested audience",
 		slog.String("broker", brokerAlias),
 		slog.String("requested_audience", requestedAudience),
 		slog.Any("aud_claim", boundedAudienceList(claims.Audience)))
+}
+
+// audienceMismatchKey identifies one distinct (broker, requested, returned)
+// mismatch shape for the audienceMismatchLogged throttle. Built from the
+// full, untruncated aud claim — never boundedAudienceList's display copy —
+// so two different long aud values that happen to share a truncation
+// prefix are never folded into the same key. Sorted so multi-value aud
+// claims compare equal regardless of any incidental reordering by the IdP
+// between otherwise-identical issuances, which would otherwise reintroduce
+// the exact per-call WARN spam this fix removes.
+func audienceMismatchKey(brokerAlias, requestedAudience string, aud jwtAudience) string {
+	sorted := make([]string, len(aud))
+	copy(sorted, aud)
+	sort.Strings(sorted)
+	return brokerAlias + "\x1f" + requestedAudience + "\x1f" + strings.Join(sorted, "\x1f")
 }
 
 // boundedAudienceList caps both the number of audience values and the
