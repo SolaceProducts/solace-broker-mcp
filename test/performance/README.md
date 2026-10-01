@@ -69,6 +69,9 @@ run-loadgen.sh    split-host — Box A: mock + loadgen + samplers
 regen-golden.sh   capture both fixture sets from the real broker, in one pass
 fixtures-manifest.sh  records/verifies the capture (hashes, time, provenance)
 
+obs-stack/        Prometheus x2 + OTel collector + Tempo for all-flags-on soaks
+                  (the rig's Box C); see obs-stack/README.md
+
 mock-semp/canned/     replayed SEMP responses  ─┐ gitignored: lab captures.
 fidelity/golden/      expected tool output     ─┘ regen-golden.sh writes both.
 fixtures.manifest     what the last capture produced (gitignored)
@@ -81,7 +84,8 @@ sampled process: `mem.csv` for the MCP server from `run.sh` and `run-mcp.sh`
 `run-loadgen.sh` only — `mem-loadgen.csv` for the load generator itself, with
 `memsampler-loadgen.log` beside it. The generator was the one process in the rig
 nobody measured, and that is how its `O(rate x duration)` sample retention went
-unnoticed. `run.sh` runs the generator in the foreground, so a single-host run
+unnoticed. loadgen keeps a fixed-size latency histogram per client, so its
+memory does not grow with the run. `run.sh` runs the generator in the foreground, so a single-host run
 has no generator series; use the split-host runner when that is what you are
 measuring.
 
@@ -192,7 +196,7 @@ there: Box B is the rig whose CPU and RSS a campaign actually compares.
 
 None of these needs a broker, a server or fixtures. The first three run in a
 `mktemp` dir in a couple of seconds; the fourth stubs a server and takes about
-thirty-five:
+thirty-five; the fifth needs no containers and takes a second:
 
 ```
 ./lib.test.sh              # lib.sh: run record, _source labels, port wait,
@@ -206,7 +210,16 @@ go test ./memsampler/      # the /proc parse and the descriptor count
                            # peaks, once, marked partial), the log-volume
                            # refusal and its override, GODEBUG filtering, and
                            # the provenance fields the runner wires up
+obs-stack/up.test.sh       # obs-stack's up.sh against a stub compose: the
+                           # files it borrows from deploy/ and e2e-dashboard/
+                           # still exist and render to the shape the stack
+                           # needs, SCRAPE_TARGET validation, and which
+                           # services a re-run restarts
 ```
+
+These run by hand, except `obs-stack/up.test.sh`, which CI also runs on every
+pull request: the files it checks live outside this directory and change in
+pull requests that never touch it.
 
 `run-mcp.test.sh` binds :9090 and :18081 with stubs, the ports a real run uses,
 and exits without running if either is already held — it will not interrupt a

@@ -48,7 +48,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -225,13 +224,35 @@ func buildCallSpecs(tools []string, broker string, argValues map[string]string) 
 	return out
 }
 
-// sample is one recorded tool call. Zero-value err means success. Kept as a
-// value type (not pointer) so per-client slices stay in one contiguous
-// allocation — with tens of thousands of samples that meaningfully cuts GC
-// pressure on the fast path.
-type sample struct {
-	latency time.Duration
-	err     string // "" on success; short tag on failure (see classifyErr)
+// clientTally is everything one client records over its steady-state
+// window. Its size is fixed by the histogram's bucket count and the handful
+// of classifyErr tags, not by how many calls the run makes, so a multi-day
+// soak holds the same memory as a one-minute run.
+type clientTally struct {
+	lat      *latencyHist   // successful calls only
+	total    int            // every recorded call, success or failure
+	errBreak map[string]int // failures by classifyErr tag
+}
+
+func newClientTally() clientTally {
+	return clientTally{lat: newLatencyHist(), errBreak: make(map[string]int)}
+}
+
+func (t *clientTally) record(latency time.Duration, err error) {
+	t.total++
+	if tag := classifyErr(err); tag != "" {
+		t.errBreak[tag]++
+		return
+	}
+	t.lat.record(latency)
+}
+
+func (t *clientTally) merge(o clientTally) {
+	t.lat.merge(o.lat)
+	t.total += o.total
+	for k, v := range o.errBreak {
+		t.errBreak[k] += v
+	}
 }
 
 func run(ctx context.Context, cfg runConfig) error {
@@ -261,14 +282,14 @@ func run(ctx context.Context, cfg runConfig) error {
 	fmt.Printf("connected %d sessions.\n", len(sessions))
 
 	// Phase 2: fan out clients. Each pins to one broker (round-robin) and
-	// rotates through the tool list on each call. Steady-state samples are
-	// merged at the end; warmup samples are discarded per --warmup.
+	// rotates through the tool list on each call. Steady-state tallies are
+	// merged at the end; warmup calls are discarded per --warmup.
 	var (
 		totalCalls atomic.Int64
 		totalErrs  atomic.Int64
 	)
 	startBarrier := make(chan struct{})
-	perClient := make([][]sample, cfg.clients)
+	perClient := make([]clientTally, cfg.clients)
 	var wg sync.WaitGroup
 
 	for i := 0; i < cfg.clients; i++ {
@@ -277,8 +298,14 @@ func run(ctx context.Context, cfg runConfig) error {
 		// specs because "broker" differs per client; nothing mutates them
 		// afterwards.
 		specs := buildCallSpecs(cfg.tools, broker, cfg.argValues)
+		// The tally too, and here rather than inside the goroutine: this
+		// loop finishes before the barrier opens, so every client's ~14 KB
+		// (~29 MB at -clients 2000) is allocated and zeroed off the clock.
+		// Inside clientLoop, a goroutine the scheduler had not reached yet
+		// would still be zeroing it after runStart.
+		tally := newClientTally()
 		wg.Go(func() {
-			perClient[i] = clientLoop(ctx, sessions[i], clientJob{
+			perClient[i] = clientLoop(ctx, sessions[i], tally, clientJob{
 				id:       i,
 				specs:    specs,
 				warmup:   cfg.warmup,
@@ -302,13 +329,13 @@ func run(ctx context.Context, cfg runConfig) error {
 	wg.Wait()
 	close(tickerDone)
 
-	// Phase 4: aggregate. Discard nils from any client that failed to record
-	// samples (shouldn't happen but let's not panic on it).
-	var all []sample
-	for _, s := range perClient {
-		all = append(all, s...)
+	// Phase 4: aggregate. Every clientLoop returns a tally from
+	// newClientTally, even one that recorded nothing, so none is nil.
+	all := newClientTally()
+	for _, t := range perClient {
+		all.merge(t)
 	}
-	if len(all) == 0 {
+	if all.total == 0 {
 		return errors.New("no samples recorded — did the run terminate before warmup ended?")
 	}
 	summary := summarize(all, cfg.duration)
@@ -340,23 +367,11 @@ type clientJob struct {
 // clientLoop fires tool calls back-to-back for warmup+duration, recording
 // steady-state samples only. Each call gets its own short context tied to
 // the parent so a global cancel unblocks even an in-flight tool call.
-func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []sample {
+func clientLoop(ctx context.Context, session *mcp.ClientSession, out clientTally, j clientJob) clientTally {
 	<-j.start
 	loopStart := time.Now()
 	warmupEnd := loopStart.Add(j.warmup)
 	deadline := warmupEnd.Add(j.duration)
-
-	// Pre-size the sample slice so the steady state isn't punctuated by
-	// reallocs. Assume ~1ms per call as an optimistic upper bound on
-	// cardinality, then cap it: the estimate scales with -duration but the
-	// allocation is paid per client, so an uncapped 60s run at the -clients
-	// 2000 this suite advertises would reserve ~2.9 GB before the first call
-	// fires. Past the cap, append's doubling costs a handful of copies —
-	// cheaper than an OOM in the process that is supposed to be measuring
-	// someone else's memory.
-	const maxPrealloc = 4096
-	estimate := min(int(j.duration.Seconds()*1000)+64, maxPrealloc)
-	out := make([]sample, 0, estimate)
 
 	var (
 		gap      time.Duration
@@ -428,7 +443,7 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 			}
 			continue
 		}
-		out = append(out, sample{latency: latency, err: classifyErr(err)})
+		out.record(latency, err)
 		j.calls.Add(1)
 		if err != nil {
 			j.errs.Add(1)
@@ -564,40 +579,32 @@ type summaryStats struct {
 	errBreak  map[string]int
 }
 
-func summarize(samples []sample, duration time.Duration) summaryStats {
+func summarize(t clientTally, duration time.Duration) summaryStats {
 	// Errors don't contribute to latency percentiles — a fast failure would
 	// otherwise pull p50 down and paint an optimistic picture. Still counted
-	// in the reported error rate so the operator can see them; just kept out
-	// of the latency histogram.
-	lat := make([]time.Duration, 0, len(samples))
+	// in the reported error rate so the operator can see them; clientTally
+	// just keeps them out of the latency histogram.
 	errs := 0
-	errBreak := make(map[string]int)
-	for _, s := range samples {
-		if s.err != "" {
-			errs++
-			errBreak[s.err]++
-			continue
-		}
-		lat = append(lat, s.latency)
+	for _, n := range t.errBreak {
+		errs += n
 	}
-	slices.Sort(lat)
 
 	s := summaryStats{
-		total:    len(samples),
+		total:    t.total,
 		errs:     errs,
-		errBreak: errBreak,
+		errBreak: t.errBreak,
 	}
-	if len(samples) > 0 {
-		s.errorRate = float64(errs) / float64(len(samples))
+	if t.total > 0 {
+		s.errorRate = float64(errs) / float64(t.total)
 	}
 	if duration > 0 {
-		s.rps = float64(len(samples)) / duration.Seconds()
+		s.rps = float64(t.total) / duration.Seconds()
 	}
-	if n := len(lat); n > 0 {
-		s.p50 = lat[pctIdx(n, 0.50)]
-		s.p95 = lat[pctIdx(n, 0.95)]
-		s.p99 = lat[pctIdx(n, 0.99)]
-		s.pMax = lat[n-1]
+	if t.lat.n > 0 {
+		s.p50 = t.lat.quantile(0.50)
+		s.p95 = t.lat.quantile(0.95)
+		s.p99 = t.lat.quantile(0.99)
+		s.pMax = t.lat.max
 	}
 	return s
 }

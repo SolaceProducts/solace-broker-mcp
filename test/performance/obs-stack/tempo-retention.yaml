@@ -1,0 +1,8 @@
+# Appended by up.sh to the committed deploy/otel-collector/docker/tempo.yaml,
+# which is otherwise what runs (bin/tempo.yaml). Tempo's default
+# block_retention is 336h — exactly the 14-day soak — so day-1 traces would
+# expire around collect time; 21 days leaves room to collect. Tempo has no
+# size limit; the trace sampling ratio is what bounds its disk (README.md).
+compactor:
+  compaction:
+    block_retention: 504h

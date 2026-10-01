@@ -1,0 +1,11 @@
+# Rendered to bin/prometheus-scrape.yml by up.sh, which substitutes
+# SCRAPE_TARGET (host:port of the server's metrics listener). Prometheus
+# does not expand environment variables here itself.
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: solace-broker-mcp
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["${SCRAPE_TARGET}"]
