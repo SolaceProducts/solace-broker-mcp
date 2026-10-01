@@ -71,6 +71,18 @@ the pinned 0.111.0. The counters the soak reads:
 curl -s 127.0.0.1:8888/metrics | grep -E '^otelcol_(receiver_(accepted|refused)|exporter_send_failed)_(spans|metric_points)'
 ```
 
+**Snapshots.** Both Prometheus instances run with `--web.enable-admin-api`, so
+the soak's collect step can take a consistent copy of each TSDB while it
+runs:
+
+```
+curl -s -X POST 127.0.0.1:9092/api/v1/admin/tsdb/snapshot   # {"data":{"name":"<snapshot>"}}
+# lands in ${DATA_DIR}/prometheus-scrape/snapshots/<snapshot>; 9093 → prometheus-otlp
+```
+
+The admin endpoints also include deletes, which is why both ports stay on
+`127.0.0.1`.
+
 ## Retention and disk
 
 Sized for Box C's 200 GB volume, with about 20 GB left for images, container

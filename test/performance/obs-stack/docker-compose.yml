@@ -29,6 +29,10 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --enable-feature=exemplar-storage
+      # For collect: POST /api/v1/admin/tsdb/snapshot takes a consistent copy
+      # of the TSDB while the soak runs. Admin endpoints include delete, but
+      # the port is bound to 127.0.0.1, so only someone on Box C reaches them.
+      - --web.enable-admin-api
       # Time is set explicitly: with only a size limit, Prometheus drops its
       # 15d time default. Sizing is in README.md.
       - --storage.tsdb.retention.time=30d
@@ -53,6 +57,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --web.enable-otlp-receiver
+      - --web.enable-admin-api # snapshot for collect, as above
       - --storage.tsdb.retention.time=30d
       - --storage.tsdb.retention.size=25GB
     volumes:
