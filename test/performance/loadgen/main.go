@@ -298,8 +298,14 @@ func run(ctx context.Context, cfg runConfig) error {
 		// specs because "broker" differs per client; nothing mutates them
 		// afterwards.
 		specs := buildCallSpecs(cfg.tools, broker, cfg.argValues)
+		// The tally too, and here rather than inside the goroutine: this
+		// loop finishes before the barrier opens, so every client's ~14 KB
+		// (~29 MB at -clients 2000) is allocated and zeroed off the clock.
+		// Inside clientLoop, a goroutine the scheduler had not reached yet
+		// would still be zeroing it after runStart.
+		tally := newClientTally()
 		wg.Go(func() {
-			perClient[i] = clientLoop(ctx, sessions[i], clientJob{
+			perClient[i] = clientLoop(ctx, sessions[i], tally, clientJob{
 				id:       i,
 				specs:    specs,
 				warmup:   cfg.warmup,
@@ -361,11 +367,7 @@ type clientJob struct {
 // clientLoop fires tool calls back-to-back for warmup+duration, recording
 // steady-state samples only. Each call gets its own short context tied to
 // the parent so a global cancel unblocks even an in-flight tool call.
-func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) clientTally {
-	// Allocated before the barrier: at -clients 2000 that is ~29 MB zeroed at
-	// once, which belongs off the clock, not in the first instant of it.
-	out := newClientTally()
-
+func clientLoop(ctx context.Context, session *mcp.ClientSession, out clientTally, j clientJob) clientTally {
 	<-j.start
 	loopStart := time.Now()
 	warmupEnd := loopStart.Add(j.warmup)

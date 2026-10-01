@@ -48,8 +48,9 @@ services:
       - "127.0.0.1:9092:9090"
 
   # Path B: never scraped. Fed only by the collector's otlphttp/prometheus
-  # exporter, through --web.enable-otlp-receiver. Mounts e2e-dashboard's
-  # config, which that suite's E2E validates, rather than a copy.
+  # exporter, through --web.enable-otlp-receiver. Its config is
+  # e2e-dashboard's (validated by that suite's E2E), copied into bin/ by
+  # up.sh so a change to it restarts this service like the others.
   prometheus-otlp:
     image: prom/prometheus:v3.0.1
     restart: unless-stopped
@@ -61,7 +62,7 @@ services:
       - --storage.tsdb.retention.time=30d
       - --storage.tsdb.retention.size=25GB
     volumes:
-      - ../../e2e-dashboard/prometheus-otlp.yml:/etc/prometheus/prometheus.yml:ro
+      - ./bin/prometheus-otlp.yml:/etc/prometheus/prometheus.yml:ro
       - ${DATA_DIR:-./data}/prometheus-otlp:/prometheus
     ports:
       - "127.0.0.1:9093:9090"
@@ -89,6 +90,9 @@ services:
       - "${OTLP_BIND_ADDR:-127.0.0.1}:4317:4317"
       - "127.0.0.1:13133:13133" # health_check extension
       - "127.0.0.1:8888:8888"   # collector self-metrics
+    # Start order only, not readiness: on a cold start the collector can come
+    # up before its sinks. That is safe: its exporters retry with a queue,
+    # and the soak's health gate waits for every service before the load.
     depends_on:
       - prometheus-otlp
       - tempo

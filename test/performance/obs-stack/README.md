@@ -26,7 +26,7 @@ and uses the originals:
 |---|---|
 | collector | `deploy/otel-collector/docker/otelcol.yaml`, metrics pipeline uncommented by `../../e2e-dashboard/uncomment-metrics-pipeline.sh` |
 | Tempo | `deploy/otel-collector/docker/tempo.yaml` plus `tempo-retention.yaml` |
-| OTLP Prometheus | `../../e2e-dashboard/prometheus-otlp.yml`, mounted as is |
+| OTLP Prometheus | `../../e2e-dashboard/prometheus-otlp.yml`, copied as is |
 | scrape Prometheus | `prometheus-scrape.yml.tmpl`, with `SCRAPE_TARGET` filled in |
 
 ## Starting it
@@ -42,9 +42,11 @@ SCRAPE_TARGET=<server host>:9091 ./up.sh
 | `DATA_DIR` | no | `./data` | `/srv/obs` |
 | `COMPOSE` | no | `docker compose` | (default) |
 
-`up.sh` is the only entry point. It writes the three generated configs into
+`up.sh` is the only entry point. It writes all four configs into
 `bin/`: the scrape config (Prometheus does not expand environment variables in
-`static_configs`), the collector config and the Tempo config. It then runs
+`static_configs`), the collector config, the Tempo config, and a copy of the
+OTLP Prometheus config. Every service mounts its config from `bin/`, so a
+change to any of them is caught on re-run. It then runs
 `compose up -d`. It refuses to start if the committed Tempo config ever grows
 its own `compactor:` block, since appending the retention block would then
 duplicate the key. Re-running it is safe: a service whose rendered config
@@ -52,6 +54,19 @@ changed (a new `SCRAPE_TARGET`, say) is restarted to pick it up.
 
 No rig address is committed here: the addresses come in through the
 environment.
+
+**The OTLP port has no auth.** The collector's receiver on 4317 accepts any
+client that can reach it, as in the committed config. That is acceptable
+because of where it is bound: loopback by default, and on the rig only Box C's
+private address. The rig's security group admits SSH from the lab NAT range and
+all traffic between the group's own instances, and nothing else, so 4317 is
+reachable from Boxes A and B only. Do not set `OTLP_BIND_ADDR` to a public
+address or `0.0.0.0` on a host without an equivalent rule.
+
+**Start order.** `compose` starts the collector after Prometheus and Tempo but
+does not wait for them to be ready. On a cold start the collector can briefly
+fail to export; its exporters retry with a queue, so nothing is lost, and the
+soak's health gate waits for every service before the load begins.
 
 **Data directories.** `${DATA_DIR}/prometheus-scrape`, `prometheus-otlp` and
 `tempo`. Prometheus runs as `nobody` (65534) and Tempo as `10001`, so on a
@@ -82,6 +97,13 @@ curl -s -X POST 127.0.0.1:9092/api/v1/admin/tsdb/snapshot   # {"data":{"name":"<
 
 The admin endpoints also include deletes, which is why both ports stay on
 `127.0.0.1`.
+
+**Self-test.** `./up.test.sh` runs `up.sh` against a stub compose, in a copy of
+the tree, so it never touches a running stack. It fails if a file the stack
+borrows from `deploy/` or `test/e2e-dashboard/` moves or stops rendering to the
+shape the stack needs. It also checks `SCRAPE_TARGET` validation and that a
+re-run restarts only the services whose config changed. Run it after changing
+any of those files.
 
 ## Retention and disk
 

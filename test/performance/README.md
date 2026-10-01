@@ -196,7 +196,7 @@ there: Box B is the rig whose CPU and RSS a campaign actually compares.
 
 None of these needs a broker, a server or fixtures. The first three run in a
 `mktemp` dir in a couple of seconds; the fourth stubs a server and takes about
-thirty-five:
+thirty-five; the fifth needs no containers and takes a second:
 
 ```
 ./lib.test.sh              # lib.sh: run record, _source labels, port wait,
@@ -210,6 +210,11 @@ go test ./memsampler/      # the /proc parse and the descriptor count
                            # peaks, once, marked partial), the log-volume
                            # refusal and its override, GODEBUG filtering, and
                            # the provenance fields the runner wires up
+obs-stack/up.test.sh       # obs-stack's up.sh against a stub compose: the
+                           # files it borrows from deploy/ and e2e-dashboard/
+                           # still exist and render to the shape the stack
+                           # needs, SCRAPE_TARGET validation, and which
+                           # services a re-run restarts
 ```
 
 `run-mcp.test.sh` binds :9090 and :18081 with stubs, the ports a real run uses,

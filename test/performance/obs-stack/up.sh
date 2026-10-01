@@ -28,8 +28,9 @@ if [[ -z "${SCRAPE_TARGET:-}" ]]; then
   exit 1
 fi
 # The value lands inside YAML, so accept only the shape of an address.
-if [[ ! "$SCRAPE_TARGET" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):[0-9]+$ ]]; then
-  echo "!! SCRAPE_TARGET must be host:port, got: $SCRAPE_TARGET" >&2
+if [[ ! "$SCRAPE_TARGET" =~ ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})$ ]] ||
+  ((10#${BASH_REMATCH[2]} < 1 || 10#${BASH_REMATCH[2]} > 65535)); then
+  echo "!! SCRAPE_TARGET must be host:port with a port of 1-65535, got: $SCRAPE_TARGET" >&2
   exit 1
 fi
 read -r -a compose <<<"${COMPOSE:-docker compose}"
@@ -59,6 +60,10 @@ render prometheus-scrape prometheus-scrape.yml <<<"${tmpl//"$placeholder"/$SCRAP
 
 OUT="$tmp/otelcol.yaml" "$here/../../e2e-dashboard/uncomment-metrics-pipeline.sh" >/dev/null
 render otel-collector otelcol.yaml <"$tmp/otelcol.yaml"
+
+# Copied as is, but through render like the rest: mounted straight from
+# e2e-dashboard, a change there would never restart prometheus-otlp.
+render prometheus-otlp prometheus-otlp.yml <"$here/../../e2e-dashboard/prometheus-otlp.yml"
 
 # The committed Tempo config plus the soak's retention block, joined rather
 # than copied so a change to the committed file reaches the soak. Appending
