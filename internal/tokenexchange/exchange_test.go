@@ -109,14 +109,16 @@ func TestExchange_HappyPath(t *testing.T) {
 	}
 }
 
-// TestExchange_AudienceMismatchWarnsButSucceeds is the end-to-end regression
-// test for SOL-152981's warn-only decision: exercised through the real
-// Exchange path (not just warnIfAudienceMismatch in isolation), an IdP
-// response carrying a token scoped to the wrong audience must still succeed
-// — the exchange is never failed by this check — while logging a WARN an
-// operator can act on. Not t.Parallel(): captures the process-wide slog
-// default.
-func TestExchange_AudienceMismatchWarnsButSucceeds(t *testing.T) {
+// TestExchange_AudienceMismatchLogsInfoButSucceeds is the end-to-end
+// regression test for SOL-152981's never-fail decision: exercised through
+// the real Exchange path (not just warnIfAudienceMismatch in isolation), an
+// IdP response carrying a token scoped to a different audience must still
+// succeed — the exchange is never failed by this check — while logging an
+// INFO line an operator can discover (SOL-155161, round 2 of review: not
+// WARN, since this process cannot tell a canonicalizing IdP's expected
+// behavior apart from a genuine problem — see warnIfAudienceMismatch's
+// doc). Not t.Parallel(): captures the process-wide slog default.
+func TestExchange_AudienceMismatchLogsInfoButSucceeds(t *testing.T) {
 	mismatchedTok := fakeJWT(t, map[string]any{"aud": "https://wrong-audience.example.com"})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -132,18 +134,18 @@ func TestExchange_AudienceMismatchWarnsButSucceeds(t *testing.T) {
 		var err error
 		tok, err = e.Exchange(context.Background(), validInput())
 		if err != nil {
-			t.Fatalf("Exchange: %v (audience mismatch must warn, never fail)", err)
+			t.Fatalf("Exchange: %v (audience mismatch must log, never fail)", err)
 		}
 	})
 
 	if tok == nil || tok.Value != mismatchedTok {
 		t.Fatalf("Exchange returned tok = %v, want the IdP's token unchanged", tok)
 	}
-	if !strings.Contains(out, "WARN") {
-		t.Errorf("expected a WARN line for the audience mismatch, got: %q", out)
+	if !strings.Contains(out, "INFO") {
+		t.Errorf("expected an INFO line for the audience mismatch, got: %q", out)
 	}
 	if !strings.Contains(out, validInput().Target) {
-		t.Errorf("expected the requested audience in the WARN, got: %q", out)
+		t.Errorf("expected the requested audience in the INFO line, got: %q", out)
 	}
 }
 
@@ -3003,11 +3005,11 @@ func TestExchange_GateAndExhaustionLogsCarryCorrelationID(t *testing.T) {
 	}
 }
 
-// The audience-mismatch WARN, driven end to end through Exchange: the IdP
-// issues a JWT whose aud claim doesn't include the requested audience, and
-// the WARN must carry the caller's correlation ID. Going through Exchange
-// (not calling warnIfAudienceMismatch directly) pins that doExchange hands
-// the helper the seeded detached context.
+// The audience-mismatch diagnostic, driven end to end through Exchange: the
+// IdP issues a JWT whose aud claim differs from the requested audience, and
+// the resulting log line must carry the caller's correlation ID. Going
+// through Exchange (not calling warnIfAudienceMismatch directly) pins that
+// doExchange hands the helper the seeded detached context.
 func TestExchange_AudienceMismatchLogCarriesCorrelationID(t *testing.T) {
 	// NOT parallel: captureJSONLogs swaps the global logger.
 	logs := captureJSONLogs(t)
@@ -3025,11 +3027,10 @@ func TestExchange_AudienceMismatchLogCarriesCorrelationID(t *testing.T) {
 
 	ctx := correlation.With(context.Background(), "aud-corr-id")
 	if _, err := e.Exchange(ctx, input); err != nil {
-		t.Fatalf("Exchange: %v (audience mismatch must warn, not fail)", err)
+		t.Fatalf("Exchange: %v (audience mismatch must log, not fail)", err)
 	}
 
-	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias),
-		"token exchange: issued access token's aud claim does not include the requested audience")
+	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias), mismatchLogMessage)
 	if rec == nil {
 		t.Fatal("no audience-mismatch line captured")
 	}
@@ -3715,18 +3716,21 @@ func TestExchange_JWTBearer_HappyPath(t *testing.T) {
 	}
 }
 
-// TestExchange_JWTBearer_NoAudienceMismatchWarning proves warnIfAudienceMismatch
-// is actually skipped for jwt-bearer, not merely untriggered by coincidence.
-// The token here IS JWT-shaped (fakeJWT), with an aud that deliberately does
-// NOT match the requested target — the exact shape a real Entra On-Behalf-Of
-// response has, per the KA prototype notes (target sent as scope; Entra's aud
-// echoes back the resource, not that scope string). Without the grant-type
-// gate in doExchange, this would log a false-positive WARN on every such
-// call. Not t.Parallel(): captureWarn swaps the process-wide slog default.
-func TestExchange_JWTBearer_NoAudienceMismatchWarning(t *testing.T) {
+// TestExchange_JWTBearer_AudienceMismatchThrottledLikeTokenExchange proves
+// SOL-155161's AC directly for jwt-bearer: no grant-type carve-out remains,
+// so a canonicalizing IdP (Entra-shaped aud) gets the exact same
+// first-INFO-then-throttled-to-DEBUG treatment token-exchange gets. Two
+// distinct subject tokens (same broker alias, same target) force two real
+// IdP round trips rather than one cache hit — the fake server's call
+// counter confirms that — so this isolates the per-mismatch-shape throttle
+// from cache/singleflight behavior entirely. Not t.Parallel(): captureLogs
+// swaps the process-wide slog default.
+func TestExchange_JWTBearer_AudienceMismatchThrottledLikeTokenExchange(t *testing.T) {
 	entraTok := fakeJWT(t, map[string]any{"aud": "00000000-0000-0000-0000-000000000000"})
 
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"access_token":%q,"token_type":"Bearer","expires_in":3600}`, entraTok)
 	}))
@@ -3734,24 +3738,34 @@ func TestExchange_JWTBearer_NoAudienceMismatchWarning(t *testing.T) {
 
 	e := newJWTBearerTestExchanger(t, srv.URL)
 
-	var tok *Token
-	out := captureWarn(t, func() {
-		var err error
-		tok, err = e.Exchange(context.Background(), ExchangeInput{
-			SubjectToken: "user-jwt-abc",
+	records, restore := captureLogs(t)
+	defer restore()
+
+	for _, subj := range []string{"user-jwt-abc", "user-jwt-xyz"} {
+		tok, err := e.Exchange(context.Background(), ExchangeInput{
+			SubjectToken: subj,
 			BrokerAlias:  "prod",
 			Target:       "api://broker-app/.default",
 		})
 		if err != nil {
-			t.Fatalf("Exchange: %v", err)
+			t.Fatalf("Exchange(%q): %v", subj, err)
 		}
-	})
-
-	if tok == nil || tok.Value != entraTok {
-		t.Fatalf("Exchange returned tok = %v, want the IdP's token unchanged", tok)
+		if tok == nil || tok.Value != entraTok {
+			t.Fatalf("Exchange(%q) tok = %v, want the IdP's token unchanged", subj, tok)
+		}
 	}
-	if strings.Contains(out, "aud claim does not include the requested audience") {
-		t.Errorf("jwt-bearer exchange logged an audience-mismatch WARN, want none: %q", out)
+
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("IdP calls = %d, want 2 — two distinct subjects must both miss the cache", n)
+	}
+
+	recs := records()
+	infoCount, debugCount := mismatchLevelCounts(recs)
+	if infoCount != 1 {
+		t.Errorf("INFO mismatch lines = %d, want exactly 1 (first occurrence only); records = %+v", infoCount, recs)
+	}
+	if debugCount != 1 {
+		t.Errorf("DEBUG mismatch lines = %d, want exactly 1 (second occurrence, throttled); records = %+v", debugCount, recs)
 	}
 }
 

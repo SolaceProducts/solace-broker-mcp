@@ -17,6 +17,7 @@ package tokenexchange
 import (
 	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,12 +30,13 @@ import (
 // instance per process, shared by all per-request goroutines.
 //
 // INVARIANT: every field is written once in New() and never mutated
-// afterward, except group (concurrency-safe by type) and the gatedUntil,
-// breakerState, and expiryFallbackLogged atomics (safe by construction —
-// see raiseGate, BreakerStateSnapshot, and logExpiryFallbackOnce). Do not
-// assign to any OTHER field from any method; the race detector enforces
-// this at test time. Tests may replace nowFunc and afterSingleflightDispatch
-// before making calls.
+// afterward, except group and audienceMismatchLogged (both concurrency-safe
+// by type) and the gatedUntil, breakerState, expiryFallbackLogged, and
+// audienceMismatchLoggedCount atomics (safe by construction — see
+// raiseGate, BreakerStateSnapshot, logExpiryFallbackOnce, and
+// warnIfAudienceMismatch). Do not assign to any OTHER field from any
+// method; the race detector enforces this at test time. Tests may replace
+// nowFunc and afterSingleflightDispatch before making calls.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -70,6 +72,29 @@ type Exchanger struct {
 	// instance (SOL-154334); later fallback uses on this Exchanger stay on
 	// the Debug issued line. Production constructs one Exchanger per process.
 	expiryFallbackLogged atomic.Bool
+	// audienceMismatchLogged tracks, per distinct (broker, requested,
+	// returned) mismatch shape (see audienceMismatchKey), whether
+	// warnIfAudienceMismatch has already logged its INFO line once on this
+	// Exchanger for that shape. Keyed on the full tuple, not broker alias
+	// alone, so a broker's already-throttled mismatch shape can never
+	// silently swallow a later, differently-shaped mismatch on that same
+	// alias (SOL-155161).
+	//
+	// In steady state this map's size is bounded by configured broker
+	// count times the (typically one) stable aud shape each broker's IdP
+	// actually returns — small and fixed at startup. audienceMismatchLoggedCount
+	// caps it against the one scenario that isn't config-bounded: an IdP
+	// that returns a different aud on every call, which without a cap
+	// would grow this map once per call, forever, for the lifetime of the
+	// process.
+	audienceMismatchLogged sync.Map // map[string]struct{}, keyed by audienceMismatchKey
+	// audienceMismatchLoggedCount is the approximate number of entries in
+	// audienceMismatchLogged — sync.Map has no Len, and this only gates a
+	// soft cap, so a race between the Load-count-check and the Store in
+	// warnIfAudienceMismatch is acceptable: it can overshoot
+	// audienceMismatchLoggedCap by the number of concurrently racing
+	// callers, never meaningfully more.
+	audienceMismatchLoggedCount atomic.Int64
 	// gatedUntil (nowFunc().UnixNano(); 0 = not gated) is a shared,
 	// process-wide backoff set on an exhausted 429 chain (see
 	// classifyRetryOutcome) and checked in runProtectedExchange. Deliberately
