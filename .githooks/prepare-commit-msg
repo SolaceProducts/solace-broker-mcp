@@ -69,11 +69,13 @@ msg_file=$1
 
 ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
 # Git's ident sanitiser strips `\n`, `<` and `>` from the name and email, but not
-# `\r`. A CR from `git config user.name $'a\rb'` or from GIT_COMMITTER_NAME
-# therefore survives into $trailer, the line-2 comparison at the bottom never
-# matches, and the subject welds. Stripped here, once, rather than at each
-# comparison site — and on its own line, so the `|| exit 0` above still keys on
-# `git var` failing rather than on `tr`.
+# `\r`. A CR from `git config user.name $'a\rb'` or from GIT_COMMITTER_NAME could
+# in principle survive into $trailer and defeat the line-2 comparison at the
+# bottom. This strip is DEFENSIVE: the weld was not reproduced on git 2.54.0, and
+# the suite does not cover it (deleting the line leaves it green). Kept because it
+# is cheap and correct. Stripped here, once, rather than at each comparison site —
+# and on its own line, so the `|| exit 0` above still keys on `git var` failing
+# rather than on `tr`.
 ident=$(printf '%s' "$ident" | tr -d '\r')
 # "Name <email> 1750000000 +0200" -> "Name <email>"
 signoff=$(printf '%s\n' "$ident" | sed -e 's/> [0-9]* [+-][0-9]*$/>/')

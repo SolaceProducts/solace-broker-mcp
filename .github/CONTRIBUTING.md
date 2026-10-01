@@ -316,7 +316,7 @@ make hooks
 ```
 
 That installs `.githooks/prepare-commit-msg` into the repository's hooks directory
-(`.git/hooks/`), where it adds the `Signed-off-by` trailer to every commit
+(normally `.git/hooks/`), where it adds the `Signed-off-by` trailer to every commit
 message, including ones made by tools and editors that never pass `-s`. The copy
 is read out of `origin/main`, **not** out of your working tree, so `git fetch`
 before your first `make hooks` on a fresh clone. It signs off with the identity
@@ -356,7 +356,7 @@ HOOKS_REF=HEAD make hooks
 `HEAD` is a commit, not your working tree, so an uncommitted edit installs nothing
 new. That is the one case where you are opting into running your own branch; the
 default `origin/main` is what keeps a branch you have checked out (a fork's pull
-request, say) from installing itself into `.git/hooks/`, where it would outlive
+request, say) from installing itself into your hooks directory, where it would outlive
 the branch. Any ref works: `HOOKS_REF=upstream/main make hooks` if your remote is
 not called `origin`.
 
@@ -370,7 +370,8 @@ checked-out branch should decide what code runs on your machine during an ordina
 `git commit`. Activating the tracked directory with `core.hooksPath .githooks`, or
 symlinking into it, would make git run the hook from whatever branch is checked out,
 so reviewing a fork's pull request would execute that fork's hook. The full
-reasoning is in the header of `.githooks/prepare-commit-msg`.
+reasoning is in the header of `.githooks/prepare-commit-msg`. What may be added to
+`.githooks/` at all is governed by [`.githooks/README.md`](../.githooks/README.md).
 
 **All commits in a PR must be signed off.** If you forget, you can amend:
 
