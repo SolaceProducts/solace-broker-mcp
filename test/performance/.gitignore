@@ -23,3 +23,7 @@ broker-config.run*.yaml
 # nobody should commit a 200-broker broker list — regenerate it instead. The
 # generator refuses to write over the committed broker-config.mock.yaml.
 broker-config.gen*.yaml
+
+# obs-stack's default DATA_DIR for local runs: Prometheus TSDB and Tempo blocks.
+# (Its rendered configs go in obs-stack/bin/, already covered by the root bin/ rule.)
+obs-stack/data/

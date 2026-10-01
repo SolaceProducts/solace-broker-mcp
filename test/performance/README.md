@@ -69,6 +69,9 @@ run-loadgen.sh    split-host — Box A: mock + loadgen + samplers
 regen-golden.sh   capture both fixture sets from the real broker, in one pass
 fixtures-manifest.sh  records/verifies the capture (hashes, time, provenance)
 
+obs-stack/        Prometheus x2 + OTel collector + Tempo for all-flags-on soaks
+                  (the rig's Box C); see obs-stack/README.md
+
 mock-semp/canned/     replayed SEMP responses  ─┐ gitignored: lab captures.
 fidelity/golden/      expected tool output     ─┘ regen-golden.sh writes both.
 fixtures.manifest     what the last capture produced (gitignored)
@@ -81,7 +84,8 @@ sampled process: `mem.csv` for the MCP server from `run.sh` and `run-mcp.sh`
 `run-loadgen.sh` only — `mem-loadgen.csv` for the load generator itself, with
 `memsampler-loadgen.log` beside it. The generator was the one process in the rig
 nobody measured, and that is how its `O(rate x duration)` sample retention went
-unnoticed. `run.sh` runs the generator in the foreground, so a single-host run
+unnoticed. loadgen keeps a fixed-size latency histogram per client, so its
+memory does not grow with the run. `run.sh` runs the generator in the foreground, so a single-host run
 has no generator series; use the split-host runner when that is what you are
 measuring.
 

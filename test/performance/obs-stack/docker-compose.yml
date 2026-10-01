@@ -1,0 +1,101 @@
+# Observability backends for the all-flags-on soaks (SOL-154041, SOL-155021):
+# the third box ("Box C") that receives the server's OTLP metrics and traces
+# and scrapes its /metrics, so Box A's load-generator measurements and disk
+# guard stay clean. The two Prometheus instances and the collector are wired
+# as in test/e2e-dashboard/docker-compose.yml (without its broker, server and
+# Grafana); Tempo, which that suite does not run, is the one from
+# deploy/otel-collector/docker/. Hardened for a multi-day unattended run:
+# every service restarts on its own, and every store has a retention bound.
+#
+# Start it with ./up.sh, not `docker compose up` directly: up.sh renders the
+# configs under bin/ that this file mounts. See README.md for the environment
+# it takes. Runs from a repo checkout: it mounts and builds from committed
+# files elsewhere in the tree rather than keeping copies of them.
+#
+# Only the collector's OTLP port is published beyond loopback, and only on
+# ${OTLP_BIND_ADDR} (Box C's private address on the rig). Everything else
+# binds to 127.0.0.1; reach it through an SSH tunnel.
+name: obs-stack
+
+services:
+  # Path A: scrapes the server's /metrics directly (${SCRAPE_TARGET}, baked
+  # into bin/prometheus-scrape.yml by up.sh — Prometheus does not expand
+  # environment variables in static_configs). exemplar-storage as in
+  # e2e-dashboard, so the latency histograms keep their trace exemplars.
+  prometheus-scrape:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --enable-feature=exemplar-storage
+      # Time is set explicitly: with only a size limit, Prometheus drops its
+      # 15d time default. Sizing is in README.md.
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=25GB
+    volumes:
+      - ./bin/prometheus-scrape.yml:/etc/prometheus/prometheus.yml:ro
+      - ${DATA_DIR:-./data}/prometheus-scrape:/prometheus
+    # Lets a local run scrape a server on the host (host.docker.internal:9091)
+    # on Linux as well as Mac. Unused on the rig, where the target is Box B.
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "127.0.0.1:9092:9090"
+
+  # Path B: never scraped. Fed only by the collector's otlphttp/prometheus
+  # exporter, through --web.enable-otlp-receiver. Mounts e2e-dashboard's
+  # config, which that suite's E2E validates, rather than a copy.
+  prometheus-otlp:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-otlp-receiver
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=25GB
+    volumes:
+      - ../../e2e-dashboard/prometheus-otlp.yml:/etc/prometheus/prometheus.yml:ro
+      - ${DATA_DIR:-./data}/prometheus-otlp:/prometheus
+    ports:
+      - "127.0.0.1:9093:9090"
+
+  # Runs the committed deploy/otel-collector/docker/otelcol.yaml with only its
+  # metrics pipeline uncommented (bin/otelcol.yaml, written by up.sh through
+  # e2e-dashboard's uncomment-metrics-pipeline.sh) — the published config,
+  # not a copy of it.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    restart: unless-stopped
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      # The committed config has no service.telemetry block, and the image
+      # has no shell to query the collector from inside. Publishing its own
+      # metrics is how the soak sees accepted/refused spans and data points
+      # (SOL-155016). An override, so the committed file stays as it is.
+      - --set=service.telemetry.metrics.address=0.0.0.0:8888
+    environment:
+      - OTEL_BACKEND_ENDPOINT=tempo:4317
+      - PROMETHEUS_OTLP_ENDPOINT=http://prometheus-otlp:9090/api/v1/otlp
+    volumes:
+      - ./bin/otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${OTLP_BIND_ADDR:-127.0.0.1}:4317:4317"
+      - "127.0.0.1:13133:13133" # health_check extension
+      - "127.0.0.1:8888:8888"   # collector self-metrics
+    depends_on:
+      - prometheus-otlp
+      - tempo
+
+  # bin/tempo.yaml is the committed deploy/otel-collector/docker/tempo.yaml
+  # plus tempo-retention.yaml, joined by up.sh.
+  tempo:
+    image: grafana/tempo:2.6.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./bin/tempo.yaml:/etc/tempo.yaml:ro
+      - ${DATA_DIR:-./data}/tempo:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
