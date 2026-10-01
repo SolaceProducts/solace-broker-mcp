@@ -2,7 +2,8 @@
 
 * @SolaceProducts/dax-developers
 
-# Already covered by the catch-all above; listed explicitly because these files
-# are installed into .git/hooks/ and run on a contributor's machine, so a diff
-# here is a code-execution surface and warrants reading as one.
+# Already covered by the catch-all above; listed explicitly because the hooks here
+# are installed into the hooks directory and run on a contributor's machine, so a
+# diff here is a code-execution surface and warrants reading as one. The bar for
+# what may live here is in .githooks/README.md.
 /.githooks/ @SolaceProducts/dax-developers
