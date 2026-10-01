@@ -102,8 +102,9 @@ The admin endpoints also include deletes, which is why both ports stay on
 the tree, so it never touches a running stack. It fails if a file the stack
 borrows from `deploy/` or `test/e2e-dashboard/` moves or stops rendering to the
 shape the stack needs. It also checks `SCRAPE_TARGET` validation and that a
-re-run restarts only the services whose config changed. Run it after changing
-any of those files.
+re-run restarts only the services whose config changed. CI runs it on every
+pull request (`ci-pr.yaml`, "Observability stack script self-test"), since the
+files it guards change in pull requests that never touch this directory.
 
 ## Retention and disk
 

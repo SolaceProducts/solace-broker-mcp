@@ -217,6 +217,10 @@ obs-stack/up.test.sh       # obs-stack's up.sh against a stub compose: the
                            # services a re-run restarts
 ```
 
+These run by hand, except `obs-stack/up.test.sh`, which CI also runs on every
+pull request: the files it checks live outside this directory and change in
+pull requests that never touch it.
+
 `run-mcp.test.sh` binds :9090 and :18081 with stubs, the ports a real run uses,
 and exits without running if either is already held — it will not interrupt a
 campaign to make its point.

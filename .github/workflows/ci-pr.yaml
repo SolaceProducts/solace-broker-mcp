@@ -299,6 +299,31 @@ jobs:
       - name: Verify every Go file carries the Apache-2.0 header
         run: .github/scripts/license-header-check.sh
 
+  # test/performance/obs-stack/up.sh builds the soak observability stack's
+  # configs from files it does not own — deploy/otel-collector/docker/ and
+  # test/e2e-dashboard/ — and those change in pull requests that never touch
+  # test/performance. Its self-test renders the real files and fails on a move
+  # or a reshape, so it runs here, on every pull request, rather than by hand
+  # before a soak, where a break would surface on the rig (SOL-155015). It
+  # stubs compose, so it needs no containers and takes a second. The shape
+  # check needs PyYAML and falls back to grep without it; the runner image
+  # ships it, and the first step makes that an assertion rather than an
+  # assumption.
+  obs-stack-selftest:
+    name: Observability stack script self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check PyYAML is available for the full shape check
+        run: python3 -c 'import yaml'
+      - name: Self-test obs-stack/up.sh against the files it borrows
+        run: test/performance/obs-stack/up.test.sh
+
   # smoke-test-binary.sh only ever runs against release.yml's real archives, so
   # there's nothing of its own to verify on a pull request — but its self-test
   # is pure fixture-based logic with no such dependency, and running it here

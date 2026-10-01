@@ -11,8 +11,10 @@
 # only on the rig, mid-soak. This runs up.sh against the real files and checks
 # the shape of what it renders, so that break fails here instead.
 #
-# It runs in a copy of the three trees under mktemp, at their real relative
+# It runs in copies of the three trees under mktemp, at their real relative
 # paths, so it never touches the bin/ of a stack running from this checkout.
+# A case that edits a borrowed file gets a copy of its own, so no case sees
+# another's edit.
 #
 # Usage: ./up.test.sh
 
@@ -64,15 +66,23 @@ if ((missing)); then
 fi
 ok "all ${#borrowed[@]} borrowed files exist"
 
-for f in "${borrowed[@]}"; do
-  mkdir -p "$tmp/$(dirname "$f")"
-  cp -p "$repo/$f" "$tmp/$f"
-done
-stack="$tmp/test/performance/obs-stack"
-mkdir -p "$stack"
-for f in up.sh docker-compose.yml prometheus-scrape.yml.tmpl tempo-retention.yaml; do
-  cp -p "$here/$f" "$stack/"
-done
+# tree <dir> — make <dir> the copy the cases below run in: $root is its top,
+# $stack its obs-stack/. The copy is made on first use; naming an existing
+# one switches back to it, with its bin/ and data as the last run left them.
+tree() {
+  root=$1
+  stack="$root/test/performance/obs-stack"
+  [[ -d "$stack" ]] && return 0
+  for f in "${borrowed[@]}"; do
+    mkdir -p "$root/$(dirname "$f")"
+    cp -p "$repo/$f" "$root/$f"
+  done
+  mkdir -p "$stack"
+  for f in up.sh docker-compose.yml prometheus-scrape.yml.tmpl tempo-retention.yaml; do
+    cp -p "$here/$f" "$stack/"
+  done
+}
+tree "$tmp/main"
 
 log="$tmp/compose.log"
 cat >"$tmp/compose" <<'EOF'
@@ -88,7 +98,7 @@ up() {
   local -a target=()
   [[ -n "$1" ]] && target=(SCRAPE_TARGET="$1")
   (cd "$stack" && env -u SCRAPE_TARGET COMPOSE="$tmp/compose" COMPOSE_LOG="$log" \
-    DATA_DIR="$tmp/data" ${target[@]+"${target[@]}"} ./up.sh) >"$tmp/out" 2>&1
+    DATA_DIR="$root/data" ${target[@]+"${target[@]}"} ./up.sh) >"$tmp/out" 2>&1
 }
 
 # ---- SCRAPE_TARGET is checked before anything is written or started ---------
@@ -145,9 +155,9 @@ done < <(sed -nE 's/^[[:space:]]*- (\.\.?\/[^:]+):.*/\1/p' "$stack/docker-compos
 ((mounts_ok)) && ok "every relative path the compose file mounts exists"
 
 for d in prometheus-scrape prometheus-otlp tempo; do
-  [[ -d "$tmp/data/$d" ]] || bad "data directory $d not created"
+  [[ -d "$root/data/$d" ]] || bad "data directory $d not created"
 done
-[[ -d "$tmp/data/tempo" ]] && ok "data directories created under DATA_DIR"
+[[ -d "$root/data/tempo" ]] && ok "data directories created under DATA_DIR"
 
 # Shape of the two configs built from deploy/: what the stack relies on.
 if command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null; then
@@ -197,7 +207,11 @@ else
   indent "$log"
 fi
 
-echo "# changed upstream" >>"$tmp/test/e2e-dashboard/prometheus-otlp.yml"
+# Its own copy: a first run renders the baseline, then the upstream file
+# changes under it.
+tree "$tmp/otlp-edit"
+up host.docker.internal:9292
+echo "# changed upstream" >>"$root/test/e2e-dashboard/prometheus-otlp.yml"
 up host.docker.internal:9292
 if grep -qx 'restart prometheus-otlp' "$log"; then
   ok "a change to e2e-dashboard's OTLP config restarts prometheus-otlp only"
@@ -205,6 +219,7 @@ else
   bad "a change to e2e-dashboard's OTLP config did not restart prometheus-otlp alone"
   indent "$log"
 fi
+tree "$tmp/main"
 
 for t in host.docker.internal:65535 '[fd00::12]:9091'; do
   if up "$t"; then ok "accepts SCRAPE_TARGET='$t'"; else bad "refused SCRAPE_TARGET='$t'"; indent "$tmp/out"; fi
@@ -212,7 +227,8 @@ done
 
 # ---- the compactor guard -----------------------------------------------------
 
-printf 'compactor:\n  compaction:\n    block_retention: 1h\n' >>"$tmp/deploy/otel-collector/docker/tempo.yaml"
+tree "$tmp/compactor"
+printf 'compactor:\n  compaction:\n    block_retention: 1h\n' >>"$root/deploy/otel-collector/docker/tempo.yaml"
 if ! up host.docker.internal:9091 && grep -q 'own compactor: block' "$tmp/out" && [[ ! -s "$log" ]]; then
   ok "refuses to append retention to a Tempo config that has its own compactor block"
 else
