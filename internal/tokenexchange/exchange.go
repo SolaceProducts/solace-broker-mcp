@@ -757,7 +757,7 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	// the per-mismatch-shape throttle inside it, not a grant-type carve-out
 	// here, is what keeps a canonicalizing IdP (Entra sends target as scope,
 	// not audience, and echoes back a canonicalized aud either way) from
-	// spamming a WARN on every call.
+	// spamming a log line on every call.
 	e.warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Target, parsed.Value)
 	return parsed.Token, nil
 }

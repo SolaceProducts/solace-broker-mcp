@@ -34,6 +34,15 @@ const (
 	auditLogAudienceMaxLen = 200
 )
 
+// audienceMismatchLoggedCap bounds audienceMismatchLogged (SOL-155161). A
+// real deployment's distinct (broker, requested, returned) shapes number in
+// the tens at most — one entry per configured broker alias, since a real
+// IdP returns a stable canonicalization for the same request every time.
+// 10,000 is far above that, so it is never reached in ordinary operation;
+// it exists only to stop an IdP that never settles into a stable aud shape
+// from growing this map once per call for the life of the process.
+const audienceMismatchLoggedCap = 10_000
+
 // jwtAudience accepts the JWT "aud" claim in either of its two valid shapes
 // per RFC 7519 §4.1.3: a single string, or an array of strings.
 type jwtAudience []string
@@ -88,8 +97,9 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 	return claims, true
 }
 
-// warnIfAudienceMismatch logs when accessToken is a JWT whose "aud" claim
-// does not include requestedAudience. This is a diagnostic, not a
+// warnIfAudienceMismatch logs (INFO the first time for a given shape, DEBUG
+// after — see the throttle paragraph below) when accessToken is a JWT whose
+// "aud" claim differs from requestedAudience. This is a diagnostic, not a
 // security control: RFC 6750 treats a bearer token as opaque to the party
 // relaying it, and this process is that party — the broker is the resource
 // server, and its own resource-server audience validation is the actual
@@ -110,31 +120,44 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // mismatch, that belongs behind a new per-broker config flag, not
 // unconditional behavior here.
 //
+// Logged at INFO, not WARN, even on first occurrence (SOL-155161, round 2 of
+// review — raised by amitmorade, resolved per bczoma's proposal): this
+// process is an OAuth client, and RFC 9068 and Microsoft's own Entra docs
+// agree a client should not interpret access-token content at all, since
+// only the resource server owns the aud claim's meaning. Asserting a
+// mismatch is wrong presumes a judgment this process cannot actually make —
+// canonicalization rules are IdP-specific and undocumented to the party
+// requesting the token, so a "mismatch" here is at least as likely to be
+// the IdP behaving exactly as designed (Entra's case, confirmed live) as it
+// is to be a real problem, and WARN asserts the latter either way. INFO
+// keeps the line visible at the default log level — still the first,
+// discoverable signal if a broker's audience config turns out to be inert —
+// without implying an incident the process has no basis to claim.
+//
 // Throttled per distinct (broker, requested, returned) mismatch, not fired
-// at WARN on every call (SOL-155161): some real IdPs — Entra's "api://"
-// prefixing above is the documented example, not a hypothetical —
-// canonicalize the requested value on every single exchange, so an
-// unconditional per-call WARN fires on literally every successful call
-// against those IdPs, forever, which trains an operator to ignore WARNs
-// from this process rather than surfacing anything actionable. The first
-// occurrence of a given mismatch shape on this Exchanger still logs at
-// WARN, so the signal is never fully silent. Every later occurrence of that
-// exact shape logs the identical line at DEBUG instead — still inspectable,
-// no longer noise.
+// on every call (SOL-155161): some real IdPs — Entra's "api://" prefixing
+// above is the documented example, not a hypothetical — canonicalize the
+// requested value on every single exchange, so an unconditional per-call
+// log line fires on literally every successful call against those IdPs,
+// forever, which trains an operator to ignore this process's output rather
+// than surfacing anything actionable. The first occurrence of a given
+// mismatch shape on this Exchanger still logs at INFO, so the signal is
+// never fully silent. Every later occurrence of that exact shape logs the
+// identical line at DEBUG instead — still inspectable, no longer noise.
 //
 // Deliberately keyed on the full tuple, not on broker alias alone: alias
-// alone would let an expected, already-throttled canonicalization mismatch
-// (Entra's shape, above) silently swallow a later, genuinely different
-// mismatch on that same alias — the two "look the same" to the throttle
-// even though only one of them is actionable, which is exactly the failure
-// mode this fix exists to avoid (SOL-155161 AC "must not silence real
-// problems"). requestedAudience is included even though a given broker
-// alias's configured target does not change without a process restart
-// (which starts audienceMismatchLogged fresh) — this function has no
-// package-level guarantee of that, since requestedAudience arrives as a
+// alone would let an already-throttled mismatch shape silently swallow a
+// later, differently-shaped mismatch on that same alias — the two "look the
+// same" to the throttle even though an operator comparing the logged values
+// by hand might reach a different conclusion about each, which is exactly
+// the failure mode this fix exists to avoid (SOL-155161 AC "must not
+// silence real problems"). requestedAudience is included even though a
+// given broker alias's configured target does not change without a process
+// restart (which starts audienceMismatchLogged fresh) — this function has
+// no package-level guarantee of that, since requestedAudience arrives as a
 // plain per-call parameter, not something this package owns or validates.
 // A different broker alias, a different requested audience, or a different
-// returned aud claim all independently get their own first WARN.
+// returned aud claim all independently get their own first INFO line.
 //
 // Silently no-ops (no log line at all, either level) when:
 //   - requestedAudience is empty: V1 makes the audience parameter optional,
@@ -166,12 +189,25 @@ func (e *Exchanger) warnIfAudienceMismatch(ctx context.Context, brokerAlias, req
 		}
 	}
 
-	level := slog.LevelWarn
+	level := slog.LevelInfo
 	key := audienceMismatchKey(brokerAlias, requestedAudience, claims.Audience)
-	if _, alreadyLogged := e.audienceMismatchLogged.LoadOrStore(key, struct{}{}); alreadyLogged {
+	switch _, alreadyLogged := e.audienceMismatchLogged.Load(key); {
+	case alreadyLogged:
 		level = slog.LevelDebug
+	case e.audienceMismatchLoggedCount.Load() >= audienceMismatchLoggedCap:
+		// Cap reached: stop remembering new shapes rather than grow
+		// audienceMismatchLogged without bound. level stays INFO — an
+		// occasional repeated INFO line from an IdP that never settles
+		// into a stable set of shapes is the safe failure mode here, not
+		// unbounded process-lifetime memory growth.
+	default:
+		if _, loaded := e.audienceMismatchLogged.LoadOrStore(key, struct{}{}); loaded {
+			level = slog.LevelDebug
+		} else {
+			e.audienceMismatchLoggedCount.Add(1)
+		}
 	}
-	slog.Log(ctx, level, "token exchange: issued access token's aud claim does not include the requested audience",
+	slog.Log(ctx, level, "token exchange: issued access token's aud claim differs from the requested audience (may reflect expected IdP canonicalization behavior, not necessarily an error)",
 		slog.String("broker", brokerAlias),
 		slog.String("requested_audience", requestedAudience),
 		slog.Any("aud_claim", boundedAudienceList(claims.Audience)))
@@ -184,12 +220,27 @@ func (e *Exchanger) warnIfAudienceMismatch(ctx context.Context, brokerAlias, req
 // prefix are never folded into the same key. Sorted so multi-value aud
 // claims compare equal regardless of any incidental reordering by the IdP
 // between otherwise-identical issuances, which would otherwise reintroduce
-// the exact per-call WARN spam this fix removes.
+// the exact per-call log spam this fix removes.
+//
+// JSON-encoded rather than delimiter-joined: a raw separator byte between
+// fields is not injective — joining brokerAlias, requestedAudience, and the
+// sorted aud with a fixed separator folds aud ["tenant-a\x1ftenant-b"] and
+// aud ["tenant-a", "tenant-b"] into the identical string, which would
+// silently demote a later, genuinely different mismatch to DEBUG — exactly
+// the failure mode this throttle exists to avoid. json.Marshal of a
+// fixed-shape struct escapes any embedded separator, so distinct inputs
+// always encode to distinct keys; the error return is always nil for a
+// struct built only from strings and a string slice.
 func audienceMismatchKey(brokerAlias, requestedAudience string, aud jwtAudience) string {
 	sorted := make([]string, len(aud))
 	copy(sorted, aud)
 	sort.Strings(sorted)
-	return brokerAlias + "\x1f" + requestedAudience + "\x1f" + strings.Join(sorted, "\x1f")
+	encoded, _ := json.Marshal(struct {
+		BrokerAlias       string   `json:"broker_alias"`
+		RequestedAudience string   `json:"requested_audience"`
+		Audience          []string `json:"audience"`
+	}{brokerAlias, requestedAudience, sorted})
+	return string(encoded)
 }
 
 // boundedAudienceList caps both the number of audience values and the
