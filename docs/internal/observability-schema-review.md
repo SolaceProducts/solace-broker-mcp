@@ -2145,7 +2145,7 @@ metric, audit, and trace schemas.
 **Shared broker-token exchanges log under the initiating request's ID.** When several
 concurrent requests need the same broker token, the server performs one exchange on behalf of
 all of them, and the lines describing that work — the identity-provider request/response, the
-cache write, retry exhaustion, the Retry-After gate, the audience-mismatch WARN, and the
+cache write, retry exhaustion, the Retry-After gate, the audience-mismatch diagnostic, and the
 recovered-panic ERROR — carry the correlation ID of the request that initiated it. Every request still logs its own `broker token exchange completed` line
 under its own ID.
 

@@ -292,6 +292,25 @@ func TestAudienceMismatchKey_NoDelimiterCollision(t *testing.T) {
 	}
 }
 
+// TestAudienceMismatchKey_FixedSizeRegardlessOfAudLength proves
+// audienceMismatchLoggedCap's entry-count cap isn't undermined by
+// unbounded per-entry size: a pathological or compromised IdP returning a
+// very large aud array must not inflate audienceMismatchLogged's memory
+// footprint, since the aud claim's length is not otherwise bounded before
+// it reaches this key (SOL-155161, round 3 of review — bczoma).
+func TestAudienceMismatchKey_FixedSizeRegardlessOfAudLength(t *testing.T) {
+	const sha256Size = 32
+	small := audienceMismatchKey("broker", "req", jwtAudience{"tiny"})
+	huge := audienceMismatchKey("broker", "req", jwtAudience{strings.Repeat("x", 1_000_000)})
+
+	if len(small) != sha256Size {
+		t.Errorf("len(key) for a small aud = %d, want %d", len(small), sha256Size)
+	}
+	if len(huge) != sha256Size {
+		t.Errorf("len(key) for a 1MB aud = %d, want %d (unbounded would defeat audienceMismatchLoggedCap's memory bound)", len(huge), sha256Size)
+	}
+}
+
 // TestWarnIfAudienceMismatch_SecondCallOnSameBrokerLogsDebugNotInfo is the
 // direct-unit proof of the throttle itself (the end-to-end
 // TestExchange_JWTBearer_AudienceMismatchThrottledLikeTokenExchange in

@@ -16,6 +16,7 @@ package tokenexchange
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -100,64 +101,45 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // warnIfAudienceMismatch logs (INFO the first time for a given shape, DEBUG
 // after — see the throttle paragraph below) when accessToken is a JWT whose
 // "aud" claim differs from requestedAudience. This is a diagnostic, not a
-// security control: RFC 6750 treats a bearer token as opaque to the party
-// relaying it, and this process is that party — the broker is the resource
-// server, and its own resource-server audience validation is the actual
-// enforcement point. But the broker checks the token against its own
-// configured required-audience; it never sees what this process asked the
-// IdP for. If an IdP canonicalizes or ignores the requested audience (e.g.
-// Entra's "api://" resource-URI prefixing) and happens to issue a value the
-// broker still accepts, nothing else in this call chain would ever surface
-// that the per-broker audience config is inert. This is that surfacing —
-// "did the IdP give us what we asked for", not "is this token valid" — and
-// it changes no outcome: the token is returned unconditionally either way
+// security control: the broker is the resource server and its own audience
+// validation is the actual enforcement point, but it only checks its own
+// configured value — it never sees what this process asked the IdP for. If
+// an IdP canonicalizes or ignores the requested audience (e.g. Entra's
+// "api://" resource-URI prefixing) and happens to issue a value the broker
+// still accepts, nothing else in this call chain would ever surface that
+// the per-broker audience config is inert. This is that surfacing, and it
+// changes no outcome: the token is returned unconditionally either way
 // (SOL-152981).
 //
-// Deliberately never a hard failure, for the same canonicalization reason:
-// a strict equality check would risk failing a legitimately-configured IdP
-// integration this project hasn't tested against, trading a diagnostic gap
-// for an availability regression. If a deployment wants a hard failure on
-// mismatch, that belongs behind a new per-broker config flag, not
-// unconditional behavior here.
+// Deliberately never a hard failure: a strict equality check would risk
+// failing a legitimately-configured IdP integration this project hasn't
+// tested against, trading a diagnostic gap for an availability regression.
 //
-// Logged at INFO, not WARN, even on first occurrence (SOL-155161, round 2 of
-// review — raised by amitmorade, resolved per bczoma's proposal): this
-// process is an OAuth client, and RFC 9068 and Microsoft's own Entra docs
-// agree a client should not interpret access-token content at all, since
-// only the resource server owns the aud claim's meaning. Asserting a
-// mismatch is wrong presumes a judgment this process cannot actually make —
-// canonicalization rules are IdP-specific and undocumented to the party
-// requesting the token, so a "mismatch" here is at least as likely to be
-// the IdP behaving exactly as designed (Entra's case, confirmed live) as it
-// is to be a real problem, and WARN asserts the latter either way. INFO
-// keeps the line visible at the default log level — still the first,
-// discoverable signal if a broker's audience config turns out to be inert —
-// without implying an incident the process has no basis to claim.
+// Logged at INFO, not WARN, even on first occurrence: this process is an
+// OAuth client, and per RFC 9068 and Microsoft's own Entra docs, a client
+// has no basis to judge access-token content — only the resource server
+// owns the aud claim's meaning. Canonicalization rules are IdP-specific and
+// undocumented to the party requesting the token, so a mismatch here is at
+// least as likely to be the IdP behaving exactly as designed (Entra's case)
+// as it is a real problem, and WARN would assert the latter either way.
+// INFO keeps the line visible at the default log level without implying an
+// incident this process has no basis to claim (SOL-155161).
 //
 // Throttled per distinct (broker, requested, returned) mismatch, not fired
-// on every call (SOL-155161): some real IdPs — Entra's "api://" prefixing
-// above is the documented example, not a hypothetical — canonicalize the
-// requested value on every single exchange, so an unconditional per-call
-// log line fires on literally every successful call against those IdPs,
-// forever, which trains an operator to ignore this process's output rather
-// than surfacing anything actionable. The first occurrence of a given
-// mismatch shape on this Exchanger still logs at INFO, so the signal is
-// never fully silent. Every later occurrence of that exact shape logs the
-// identical line at DEBUG instead — still inspectable, no longer noise.
+// on every call: some real IdPs canonicalize the requested value on every
+// exchange, so an unconditional per-call line would fire on literally every
+// successful call against those IdPs, forever — training an operator to
+// ignore this process's output. The first occurrence of a given mismatch
+// shape still logs at INFO; every later occurrence of that exact shape logs
+// at DEBUG instead.
 //
-// Deliberately keyed on the full tuple, not on broker alias alone: alias
-// alone would let an already-throttled mismatch shape silently swallow a
-// later, differently-shaped mismatch on that same alias — the two "look the
-// same" to the throttle even though an operator comparing the logged values
-// by hand might reach a different conclusion about each, which is exactly
-// the failure mode this fix exists to avoid (SOL-155161 AC "must not
-// silence real problems"). requestedAudience is included even though a
-// given broker alias's configured target does not change without a process
-// restart (which starts audienceMismatchLogged fresh) — this function has
-// no package-level guarantee of that, since requestedAudience arrives as a
-// plain per-call parameter, not something this package owns or validates.
-// A different broker alias, a different requested audience, or a different
-// returned aud claim all independently get their own first INFO line.
+// Keyed on the full tuple, not broker alias alone: alias alone would let an
+// already-throttled mismatch shape silently swallow a later,
+// differently-shaped mismatch on that same alias — exactly the failure mode
+// this throttle exists to avoid ("must not silence real problems").
+// requestedAudience is included because this function has no package-level
+// guarantee it stays constant per alias — it arrives as a plain per-call
+// parameter, not something this package validates.
 //
 // Silently no-ops (no log line at all, either level) when:
 //   - requestedAudience is empty: V1 makes the audience parameter optional,
@@ -172,9 +154,7 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // The token itself is never logged. The claimed audiences are logged bounded
 // (auditLogAudienceCap values, auditLogAudienceMaxLen chars each) under the
 // key "aud_claim" — cmd/server's ReplaceAttr redaction net matches on key
-// substrings including "token", which "aud_claim" doesn't. ("audience" isn't
-// in that redaction list; requested_audience two lines below is already
-// logged unredacted.)
+// substrings including "token", which "aud_claim" doesn't.
 func (e *Exchanger) warnIfAudienceMismatch(ctx context.Context, brokerAlias, requestedAudience, accessToken string) {
 	if requestedAudience == "" {
 		return
@@ -214,23 +194,27 @@ func (e *Exchanger) warnIfAudienceMismatch(ctx context.Context, brokerAlias, req
 }
 
 // audienceMismatchKey identifies one distinct (broker, requested, returned)
-// mismatch shape for the audienceMismatchLogged throttle. Built from the
-// full, untruncated aud claim — never boundedAudienceList's display copy —
-// so two different long aud values that happen to share a truncation
-// prefix are never folded into the same key. Sorted so multi-value aud
-// claims compare equal regardless of any incidental reordering by the IdP
-// between otherwise-identical issuances, which would otherwise reintroduce
-// the exact per-call log spam this fix removes.
+// mismatch shape for the audienceMismatchLogged throttle, built from the
+// full, untruncated aud claim (never boundedAudienceList's truncated display
+// copy, to avoid folding two different long values onto the same key) and
+// sorted so multi-value aud claims compare equal regardless of incidental
+// IdP reordering between otherwise-identical issuances.
 //
 // JSON-encoded rather than delimiter-joined: a raw separator byte between
-// fields is not injective — joining brokerAlias, requestedAudience, and the
-// sorted aud with a fixed separator folds aud ["tenant-a\x1ftenant-b"] and
-// aud ["tenant-a", "tenant-b"] into the identical string, which would
-// silently demote a later, genuinely different mismatch to DEBUG — exactly
-// the failure mode this throttle exists to avoid. json.Marshal of a
-// fixed-shape struct escapes any embedded separator, so distinct inputs
-// always encode to distinct keys; the error return is always nil for a
-// struct built only from strings and a string slice.
+// fields is not injective — e.g. aud ["tenant-a\x1ftenant-b"] and aud
+// ["tenant-a", "tenant-b"] would join to the same string under a fixed
+// separator, silently demoting a later, different mismatch to DEBUG.
+// json.Marshal of a fixed-shape struct escapes any embedded separator, so
+// distinct inputs always encode to distinct keys.
+//
+// SHA-256'd rather than returned as the raw JSON: the aud claim is
+// IdP-controlled and unbounded in length before it reaches this function,
+// so a pathological or compromised IdP returning a very large aud array
+// would otherwise inflate map memory — audienceMismatchLoggedCap bounds
+// entry count, not entry size. Hashing fixes every entry at 32 bytes; a
+// collision would at most demote one mismatch's log line to DEBUG, never
+// alter the token returned, and isn't a practical concern at SHA-256's
+// collision resistance for a non-adversarial dedup key.
 func audienceMismatchKey(brokerAlias, requestedAudience string, aud jwtAudience) string {
 	sorted := make([]string, len(aud))
 	copy(sorted, aud)
@@ -240,7 +224,8 @@ func audienceMismatchKey(brokerAlias, requestedAudience string, aud jwtAudience)
 		RequestedAudience string   `json:"requested_audience"`
 		Audience          []string `json:"audience"`
 	}{brokerAlias, requestedAudience, sorted})
-	return string(encoded)
+	sum := sha256.Sum256(encoded)
+	return string(sum[:])
 }
 
 // boundedAudienceList caps both the number of audience values and the
