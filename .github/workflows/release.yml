@@ -345,15 +345,17 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           BIN="solace-broker-mcp"
           if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
-          ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE (Apache-2.0
-          # section 4(d)), per SOL-152414.
-          tar czf "${ARCHIVE}" \
-            "${BIN}" \
-            broker-config.example.yaml \
-            LICENSE \
-            NOTICE \
-            THIRD_PARTY_LICENSES.md
+          # section 4(d)), per SOL-152414. Windows ships a .zip, the format its
+          # users expect; every other leg stays .tar.gz.
+          FILES=("${BIN}" broker-config.example.yaml LICENSE NOTICE THIRD_PARTY_LICENSES.md)
+          if [ "${GOOS}" = "windows" ]; then
+            ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+            zip -q "${ARCHIVE}" "${FILES[@]}"
+          else
+            ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+            tar czf "${ARCHIVE}" "${FILES[@]}"
+          fi
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
       # Attested per matrix leg so the digest is bound before the archive
@@ -422,7 +424,7 @@ jobs:
             qemu: false
           # Native Windows runner. The default shell there is PowerShell, so
           # the smoke-test step below pins `shell: bash` (Git Bash ships on
-          # windows-latest, with the tar the archive needs).
+          # windows-latest, with the unzip or 7z the archive needs).
           - goos: windows
             goarch: amd64
             runs-on: windows-latest
@@ -460,7 +462,9 @@ jobs:
       - name: Smoke-test the archived binary
         shell: bash
         run: |
-          ARCHIVE="solace-broker-mcp-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          EXT="tar.gz"
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT="zip"; fi
+          ARCHIVE="solace-broker-mcp-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.${EXT}"
           .github/scripts/smoke-test-binary.sh "$ARCHIVE" "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}"
 
   # Multi-arch build + push + provenance attestation, inline here because these
@@ -583,7 +587,7 @@ jobs:
         working-directory: dist
         run: |
           shopt -s nullglob
-          sha256sum -- *.tar.gz *.cdx.json > checksums-sha256.txt
+          sha256sum -- *.tar.gz *.zip *.cdx.json > checksums-sha256.txt
 
       # A single artifact downloaded by name extracts flat into the working dir
       # (no name-subdirectory), so body_path: release-notes.md below resolves.
@@ -607,5 +611,6 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.cdx.json
             dist/checksums-sha256.txt

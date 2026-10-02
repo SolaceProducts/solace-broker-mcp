@@ -164,6 +164,25 @@ EOF
     echo "$archive"
 }
 
+# The same fixture as a .zip, the format the windows leg actually ships.
+build_good_exe_zip() { # <version>
+    local tmp archive
+    tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
+    cat >"$tmp/$BIN_NAME.exe" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "--version" ]; then
+    echo "$1"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$tmp/$BIN_NAME.exe"
+    archive="$tmp/archive.zip"
+    (cd "$tmp" && zip -q "$archive" "$BIN_NAME.exe")
+    echo "$archive"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> <archive> <expected-version> [goos]
@@ -212,6 +231,9 @@ assert_check "correct stdout with noisy stderr still passes — stderr must not 
 
 assert_check "a windows archive carrying solace-broker-mcp.exe passes" 0 \
     "$(build_good_exe_archive "$VERSION")" "$VERSION" windows
+
+assert_check "a windows .zip archive carrying solace-broker-mcp.exe passes" 0 \
+    "$(build_good_exe_zip "$VERSION")" "$VERSION" windows
 
 assert_check "a windows archive carrying an extensionless binary fails" 1 \
     "$good_archive" "$VERSION" windows

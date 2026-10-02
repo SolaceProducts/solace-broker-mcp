@@ -59,7 +59,20 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 # The archived artifact, not a freshly built binary — packaging bugs (wrong
 # file bundled, tar built from a different GOOS/GOARCH leg) are in scope.
-if ! tar xzf "$ARCHIVE" -C "$TMPDIR"; then
+extract() {
+    case "$ARCHIVE" in
+        *.zip)
+            # windows-latest's Git Bash has no unzip; 7z is preinstalled there.
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -q "$ARCHIVE" -d "$TMPDIR"
+            else
+                7z x -y -bso0 -o"$TMPDIR" "$ARCHIVE"
+            fi
+            ;;
+        *) tar xzf "$ARCHIVE" -C "$TMPDIR" ;;
+    esac
+}
+if ! extract; then
     echo "::error::[$PLATFORM] archive did not extract: $ARCHIVE" >&2
     exit 1
 fi
