@@ -62,7 +62,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 extract() {
     case "$ARCHIVE" in
         *.zip)
-            # windows-latest's Git Bash has no unzip; 7z is preinstalled there.
+            # Prefer unzip; fall back to 7z (preinstalled on windows-latest) if it is absent.
             if command -v unzip >/dev/null 2>&1; then
                 unzip -q "$ARCHIVE" -d "$TMPDIR"
             else
