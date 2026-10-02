@@ -141,9 +141,9 @@ func TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite(t *testing
 	pool := semp.NewBrokerPool(cfg, nil)
 	t.Cleanup(pool.Close)
 	mgr := tools.NewToolManager(pool)
+	tools.RegisterListBrokers(mgr, pool)
 	server := newTestServer()
 	tools.RegisterWithServer(mgr, server, pool, true, policyFrom(t, cfg), "groups")
-	tools.RegisterListBrokers(server, pool, nil)
 
 	// The production wiring function itself, not a copy of its body — the same
 	// reason TestPrincipalReachesListFiltering calls it.

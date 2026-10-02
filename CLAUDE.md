@@ -26,8 +26,16 @@ Two mechanisms — prefer the first:
 
 Never declare a `broker` parameter — it is auto-injected at registration into
 the schema of every tool defined through either mechanism (`injectBrokerParam`
-in `internal/tools/register.go`). `list-brokers` and `describe-semp-schema` are the
-exceptions: registered separately, no `broker` parameter.
+in `internal/tools/register.go`). A tool that genuinely takes no broker
+parameter and resolves no SEMP client — `list-brokers` and
+`describe-semp-schema` are the two today — sets `Metadata.NoBroker: true`
+instead of declaring one: `ToolManager.CallTool` skips broker resolution for
+it but still runs full input-schema validation, exactly as it does for every
+other tool. Both are registered into the `ToolManager` like any other handler
+(`RegisterListBrokers`/`RegisterDescribeSempSchema` in `internal/tools/`),
+not against the MCP server directly — `server.AddTool` is reachable from
+exactly one place, `RegisterWithServer`, and `TestServerAddToolHasOneCallSite`
+enforces that a new tool cannot bypass it the way these two used to.
 
 ## Tool naming
 

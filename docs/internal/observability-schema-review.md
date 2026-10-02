@@ -468,10 +468,10 @@ refused by tool authorization never reaches one, so it is absent here and counte
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
 **Cardinality:** all label domains are finite. `error_type` is non-empty only on the error
-path and is drawn from the closed set of thirteen values above; `outcome` is one of three; and
+path and is drawn from the closed set of twelve values above; `outcome` is one of three; and
 `broker` is bounded to the configured aliases plus the `none`/`unknown` sentinels. The series
 count is not a clean product of these domains, because several error types only ever occur
-before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, and
+before a broker is resolved — `bad_request`, `missing_broker`, and
 `unknown_broker` appear only with `broker=none` or `broker=unknown`, never against a configured
 alias — so the real total is well under the naive product. CI enforcement of the closed sets is
 planned for GA.
@@ -1776,14 +1776,16 @@ Span names, and span kinds, remain open items in this review (see
 [Open Items for This Review](#open-items-for-this-review), item 4) — including the four above.
 They are what ships today, not a commitment frozen ahead of your feedback.
 
-**Every tool dispatch produces a `tools.CallTool` span, including the tools that do not run
-through the tool manager.** `list-brokers` and `describe-semp-schema` are registered directly
-against the MCP server, and an unparseable `arguments` payload is rejected before dispatch —
-all three bypass the tool manager and so emit their own audit record, metric, and span. They
-carry the same `tool` / `outcome` / `error_type` / `broker` attributes as any other dispatch,
-which is what keeps the metric-to-trace pivot total: without it `list-brokers` would appear in
-every dashboard and in no trace, and `bad_request` and `not_found` would be metric-only values
-of a vocabulary this document describes as shared by all three signals.
+**Every tool dispatch produces a `tools.CallTool` span, including the one dispatch path that
+does not run through the tool manager.** An unparseable `arguments` payload is rejected before
+dispatch, in `register.go`'s own instrumented closure, and so emits its own audit record,
+metric, and span rather than the tool manager's. It carries the same `tool` / `outcome` /
+`error_type` / `broker` attributes as any other dispatch, which is what keeps the metric-to-trace
+pivot total: without it, `bad_request` would be a metric-only value of a vocabulary this document
+describes as shared by all three signals. (`list-brokers` and `describe-semp-schema` used to be
+two further bypass cases here, each with its own hand-rolled audit record, metric, and span; as
+of SOL-153693 both are ordinary tool-manager-routed tools — `Metadata.NoBroker`, not a bypass —
+and their spans come from `tools.CallTool` like any other tool's.)
 
 **A hop-1 denial produces only the entry span.** When this server's own authorization refuses a
 call, it short-circuits before dispatch — authorization is composed outside the tool-dispatch
@@ -1803,7 +1805,7 @@ distinction is the point, since they have different causes and different remedie
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary — the whole set, including the values raised by the dispatch paths that do not run through the tool manager (`bad_request`, `not_found`) | Solace |
+| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary — the whole set, including `bad_request`, raised by the one dispatch path that does not run through the tool manager | Solace |
 | `tool` | The tool name, on `tools.CallTool` and `composite.Execute`; same value as the `tool` metric label | Solace |
 | `broker` | The broker, on `tools.CallTool`; the **same canonical label the `broker` metric label uses** — the configured alias in its configured casing, or the `none`/`unknown` sentinel when no broker was named or the named one is not configured. Deliberately not the raw value the caller sent, which would be unbounded, untrusted input and would break the metric-to-trace join on casing alone | Solace |
 | `semp.version` | `v1` or `v2`, on `semp.request` | Solace |
@@ -2253,7 +2255,7 @@ small enough to group by on a dashboard while still carrying the detail an inves
 
 ### `error_type`
 
-Present only on `outcome: error`, drawn from a closed set of thirteen values:
+Present only on `outcome: error`, drawn from a closed set of twelve values:
 
 | Value | Meaning |
 |---|---|
@@ -2262,23 +2264,22 @@ Present only on `outcome: error`, drawn from a closed set of thirteen values:
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
 | `broker_init_error` | The broker is configured but could not be initialized. |
-| `bad_request` | The request itself was malformed — unparseable `arguments`, or a missing or invalid parameter on a tool that validates its own input. |
+| `bad_request` | The request itself was malformed — unparseable `arguments`, rejected before dispatch for every tool. |
 | `validation_error` | The arguments failed input validation. |
-| `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to `describe-semp-schema`). |
-| `execution_error` | The tool ran and failed. |
+| `execution_error` | The tool ran and failed (for example, an unknown SEMP operation passed to `describe-semp-schema`). |
 | `nil_result` | The tool returned no result. |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
 | `broker_permission_denied` | The broker refused the exchanged identity for the SEMP operation behind this tool (a hop-2 denial, SOL-153332, Story 49) — paired with the `broker_authz_denied` audit event. |
 
-**Only six of these reach an audit record.** The thirteen values above are the full vocabulary
+**Only six of these reach an audit record.** The twelve values above are the full vocabulary
 for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
 record is written only for a call that actually reached the tool, so only the failures that
 can happen at or after dispatch appear on one:
 
 | Reaches an `operation` audit record | Never appears on an audit record |
 |---|---|
-| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic`, `broker_permission_denied` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
+| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic`, `broker_permission_denied` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request` |
 
 The right-hand column is every way a call is rejected **before** anything is attempted
 against a broker: an unregistered tool, an absent or unresolvable broker, arguments that
@@ -2290,11 +2291,13 @@ operational stream for those.
 
 Notes:
 
-- **If you saw an earlier draft listing ten values, this supersedes it.** `bad_request` and
-  `not_found` are emitted by the two tools that handle their own dispatch — `list-brokers` and
-  `describe-semp-schema` — plus the argument-parsing guard ahead of every tool. They were
-  omitted from earlier drafts that enumerated only the main tool-dispatch path. Nothing about
-  the emitted records changed; the list was incomplete.
+- **If you saw an earlier draft listing ten or thirteen values, this supersedes it.**
+  `bad_request` is emitted by the argument-parsing guard ahead of every tool; it was omitted
+  from earlier drafts that enumerated only the main tool-dispatch path. `not_found` was emitted
+  only by `describe-semp-schema`'s own hand-rolled dispatch, back when it and `list-brokers`
+  bypassed the tool manager entirely; SOL-153693 retired that bypass, and `not_found` with it —
+  the tool's "unknown operation" case is `execution_error` now, the same classification every
+  other tool's handler error gets.
 
 - The metric label is `outcome`, not `status`, precisely so metrics, audit, and spans share
   one join key. `error_type` follows the OTel semantic-convention pattern of pairing a small

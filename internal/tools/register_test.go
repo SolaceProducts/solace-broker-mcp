@@ -178,9 +178,9 @@ func TestRegisterWithServer_WriteGated(t *testing.T) {
 
 func TestRegisterListBrokers(t *testing.T) {
 	pool := newRegTestPool(t)
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	mgr := NewToolManager(pool)
 
-	RegisterListBrokers(server, pool, nil)
+	RegisterListBrokers(mgr, pool)
 	// No panic = registered successfully.
 }
 
@@ -400,9 +400,11 @@ func TestPanicIncrementsPanicCounter(t *testing.T) {
 	}
 }
 
-// TestListBrokersEmitsAuditLog covers the audit gap on the standalone
-// list-brokers tool: its handler does not flow through CallTool, so before
-// the fix a successful invocation produced zero audit output. Every tool
+// TestListBrokersEmitsAuditLog covers the audit surface on list-brokers.
+// Before SOL-153693 its handler was registered directly on the server and
+// never flowed through CallTool, so a successful invocation produced zero
+// audit output; now it is an ordinary CallTool-routed tool (Metadata.NoBroker,
+// not a bypass) and gets the same audit line every tool does. Every tool
 // invocation must emit exactly one "tool invoked" audit line.
 func TestListBrokersEmitsAuditLog(t *testing.T) {
 	var logBuf bytes.Buffer
@@ -411,8 +413,10 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	defer slog.SetDefault(oldLogger)
 
 	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	RegisterListBrokers(mgr, pool)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -669,8 +673,10 @@ func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
 	pool := semp.NewBrokerPool(cfg, nil)
 	defer pool.Close()
 
+	mgr := NewToolManager(pool)
+	RegisterListBrokers(mgr, pool)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -1059,8 +1065,14 @@ func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 	}
 }
 
-// list-brokers is structurally exempt. Even under a policy that grants it
-// nothing, the call succeeds and no "tool authorization" audit line fires.
+// list-brokers is exempt from RBAC (IsExemptFromToolAuthorization). Before
+// SOL-153693 that was structural — it registered outside RegisterWithServer's
+// loop entirely, so the policy wrapper never touched it. Now it is an
+// ordinary regs entry in that same loop (Metadata.NoBroker, not a bypass), so
+// the exemption is an explicit check inside the loop instead — this test
+// pins that the observable behavior survived the refactor: even under a
+// policy that grants it nothing, the call succeeds and no "tool
+// authorization" audit line fires.
 func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
@@ -1070,6 +1082,7 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	pool := newRegTestPool(t)
 	mgr := NewToolManager(pool)
 	mgr.Register(newStubHandler("test-tool"))
+	RegisterListBrokers(mgr, pool)
 
 	// If the wrapper were accidentally composed on list-brokers, this
 	// policy (which grants nothing to it) would deny the call.
@@ -1077,7 +1090,6 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	RegisterWithServer(mgr, server, pool, true, policy, "groups")
-	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

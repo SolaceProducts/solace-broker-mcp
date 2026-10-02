@@ -39,13 +39,16 @@ const dispatchSpanName = "tools.CallTool"
 
 // endDispatchSpan writes the dispatch-span attributes and closes span.
 //
-// Shared by FOUR dispatch sites: ToolManager.CallTool, and three that bypass it
-// — list-brokers and describe-semp-schema, both registered directly against the
-// MCP server, and the argument-parse failure in the instrumented closure in
-// register.go. Every one owes a span, for the same reason each already emits
-// its own audit line and metric: the metric series carries a `tool` and an
-// `error_type`, an operator carries those values into the trace backend
-// unchanged, and a missing span means they find nothing.
+// Shared by TWO dispatch sites: ToolManager.CallTool — which covers every
+// registered tool, including a no-broker one like list-brokers or
+// describe-semp-schema (Metadata.NoBroker) — and the one site that still
+// bypasses it, the argument-parse failure in the instrumented closure in
+// register.go. (Before SOL-153693 list-brokers and describe-semp-schema were
+// two further bypass sites here, each with its own hand-rolled span; both are
+// ordinary CallTool-routed tools now.) Every site owes a span, for the same
+// reason each already emits its own audit line and metric: the metric series
+// carries a `tool` and an `error_type`, an operator carries those values into
+// the trace backend unchanged, and a missing span means they find nothing.
 //
 // **Each site must register its deferred call to this BEFORE the defer that
 // emits the log line, the metric and the audit record**, so LIFO runs the span

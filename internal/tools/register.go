@@ -253,8 +253,8 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			// stamping site and that is provable: ToolManager.CallTool is the
 			// only production caller of BrokerPool.GetSEMPv1/GetSEMPv2, and
 			// this is the only production caller of CallTool. list-brokers and
-			// describe-semp-schema are registered separately and never resolve
-			// a broker, so they need no key.
+			// describe-semp-schema never resolve
+			// a broker (Metadata.NoBroker), so they need no key.
 			//
 			// Carried on the context rather than threaded as a parameter: the
 			// only consumer is the Sender, and threading it would touch every
@@ -291,13 +291,14 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// wrapped decode error.
 					//
 					// The span comes FIRST and its context is threaded into
-					// the audit and metric calls below, exactly as at the other
-					// three dispatch sites. Ordered the other way round, the
-					// log line and the metric are emitted while the request
-					// context still carries only the entry span, so a Story 47
-					// exemplar on this failure links to `POST /mcp` rather than
-					// to the dispatch span whose tool/outcome/error_type it is
-					// describing (SOL-152421).
+					// the audit and metric calls below, exactly as at
+					// ToolManager.CallTool, the other dispatch site. Ordered
+					// the other way round, the log line and the metric are
+					// emitted while the request context still carries only
+					// the entry span, so a Story 47 exemplar on this failure
+					// links to `POST /mcp` rather than to the dispatch span
+					// whose tool/outcome/error_type it is describing
+					// (SOL-152421).
 					//
 					// Started with the request's own start time so the span
 					// covers the dispatch rather than reading as instantaneous,
@@ -324,7 +325,17 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		// Compose withAuthorization INSIDE withRecovery so denials inherit
 		// correlation-ID stamping and panic containment. Nil policy skips
 		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
-		if policy != nil {
+		//
+		// list-brokers and describe-semp-schema are structurally exempt from
+		// RBAC (IsExemptFromToolAuthorization, authorization.go) — they are
+		// spec/discovery content with no broker state. Before SOL-153693
+		// that exemption was implicit: both were registered outside this
+		// loop entirely. Now that they are ordinary regs entries (routed
+		// through ToolManager for input validation like everything else),
+		// the exemption has to be checked explicitly here instead, or they
+		// would start getting policy-wrapped as a side effect of closing the
+		// validation gap — a change nobody asked for.
+		if policy != nil && !IsExemptFromToolAuthorization(reg.name) {
 			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, mgr.auditLog, mgr.securityMetrics, callToolHandler)
 		}
 
@@ -345,10 +356,16 @@ func isWriteTool(a Annotations) bool {
 // parameter into the input schema. This is the only place in the codebase
 // where our types and SDK types meet.
 func toMCPTool(m Metadata, pool *semp.BrokerPool) *mcp.Tool {
+	inputSchema := m.InputSchema
+	// A no-broker tool declares its complete input schema itself — there is
+	// no broker parameter to inject (SOL-153693).
+	if !m.NoBroker {
+		inputSchema = injectBrokerParam(m.InputSchema, pool)
+	}
 	return &mcp.Tool{
 		Name:         m.Name,
 		Description:  m.Description,
-		InputSchema:  injectBrokerParam(m.InputSchema, pool),
+		InputSchema:  inputSchema,
 		OutputSchema: m.OutputSchema,
 		Annotations:  toMCPAnnotations(m.Annotations),
 	}
@@ -364,82 +381,59 @@ func toMCPAnnotations(a Annotations) *mcp.ToolAnnotations {
 	}
 }
 
-// RegisterListBrokers registers a list-brokers discovery tool that returns all
-// configured broker aliases. This is a standalone tool, not a ToolHandler
-// implementation — it does not call SEMP or require broker resolution.
-func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.ToolMetrics) {
-	server.AddTool(
-		&mcp.Tool{
-			Name:        "list-brokers",
-			Description: "List all configured broker aliases. Use one of these as the 'broker' parameter on any other tool.",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-			OutputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"brokers": map[string]any{
-						"type":  "array",
-						"items": map[string]any{"type": "string"},
-					},
-				},
-				"required": []string{"brokers"},
-			},
-			Annotations: &mcp.ToolAnnotations{
-				ReadOnlyHint: true,
-			},
+// listBrokersHandler implements the list-brokers discovery tool: it returns
+// all configured broker aliases. It takes no broker parameter and resolves
+// no SEMP client (Metadata().NoBroker), so ToolManager.CallTool dispatches to
+// it with a nil *ToolContext — Handle must not dereference tc.
+type listBrokersHandler struct {
+	pool *semp.BrokerPool
+}
+
+// newListBrokersHandler returns a list-brokers handler ready to register
+// with a ToolManager via RegisterListBrokers.
+func newListBrokersHandler(pool *semp.BrokerPool) *listBrokersHandler {
+	return &listBrokersHandler{pool: pool}
+}
+
+func (h *listBrokersHandler) Metadata() Metadata {
+	return Metadata{
+		Name:        "list-brokers",
+		Description: "List all configured broker aliases. Use one of these as the 'broker' parameter on any other tool.",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+			// This tool takes no arguments at all, so any argument is a
+			// violation — closing the schema is what makes that a real,
+			// enforceable constraint rather than vacuously true (SOL-153693).
+			"additionalProperties": false,
 		},
-		withRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
-			// This handler does not flow through ToolManager.CallTool, so it
-			// emits the "tool invoked" audit line itself — every tool
-			// invocation must reach the audit surface (no broker attr: this
-			// tool resolves none). Same panic-detection contract as
-			// CallTool's defer: error returns set toolErr, the success
-			// return sets result, both nil means a panic is unwinding.
-			start := time.Now()
-			var brokerAlias string
-			var errorType metrics.ErrorType
-			var toolErr error
-			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
+		OutputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"brokers": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+				},
+			},
+			"required": []string{"brokers"},
+		},
+		Annotations: Annotations{ReadOnly: true},
+		NoBroker:    true,
+	}
+}
 
-			// ...and its own dispatch span, for the same reason: this tool
-			// would otherwise appear in every dashboard and in no trace
-			// (SOL-152421).
-			ctx, span := tracer.Start(ctx, dispatchSpanName)
+func (h *listBrokersHandler) Handle(_ context.Context, _ *ToolContext, _ map[string]any) (*ToolResult, error) {
+	return &ToolResult{StructuredContent: map[string]any{"brokers": h.pool.Aliases()}}, nil
+}
 
-			// Registered BEFORE the emission defer below, so LIFO runs it
-			// AFTER that one — once a recovered panic has been reclassified,
-			// so the span reports the same cause the log line and the metric
-			// do. Reversed, the span reports nothing while both of them say
-			// `panic`. See endDispatchSpan for the full rationale.
-			defer func() {
-				endDispatchSpan(ctx, span, "list-brokers", brokerLabelNone, errorType, toolErr)
-			}()
-
-			defer func() {
-				if toolErr == nil && result == nil {
-					errorType = metrics.ErrorTypePanic
-					toolErr = panicError{}
-				}
-				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, nil, id)
-				recordToolInvocation(ctx, tm, "list-brokers", brokerLabelNone, start, errorType, toolErr)
-			}()
-
-			aliases := pool.Aliases()
-			structured := map[string]any{"brokers": aliases}
-			resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
-			if mErr != nil {
-				errorType = metrics.ErrorTypeMarshalError
-				toolErr = fmt.Errorf("marshalling broker list: %w", mErr)
-				return nil, toolErr
-			}
-			return &mcp.CallToolResult{
-				StructuredContent: structured,
-				Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
-			}, nil
-		}),
-	)
+// RegisterListBrokers registers the list-brokers discovery tool with mgr.
+// Call this — and RegisterDescribeSempSchema — before RegisterWithServer, so
+// both are already in mgr.Handlers() when that function builds the server's
+// tool set (SOL-153693): "no broker parameter" is a first-class case of the
+// same registration path every other tool goes through, not a reason to
+// bypass it.
+func RegisterListBrokers(mgr *ToolManager, pool *semp.BrokerPool) {
+	mgr.Register(newListBrokersHandler(pool))
 }
 
 // injectBrokerParam clones the given input schema and adds the required broker

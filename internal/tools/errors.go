@@ -527,6 +527,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var exchErr *tokenexchange.ExchangeError
 	var ownerErr *ownerNotFoundError
 	var ownerCheckErr *ownerCheckFailedError
+	var describeErr *describeOperationError
 
 	var message string
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
@@ -607,6 +608,15 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 
 	case errors.As(err, &exchErr):
 		return exchErr.AgentMessage(brokerAlias), nil
+
+	// describe-semp-schema's own "unknown operation" / "spec inconsistency"
+	// text (describe_semp_schema.go) — package-authored, never broker- or
+	// handler-arbitrary, so it is safe to show verbatim rather than falling
+	// to the default case below and being replaced with the generic
+	// "broker reported an internal error" message, which would be actively
+	// wrong here: no broker was ever contacted (SOL-153693).
+	case errors.As(err, &describeErr):
+		return describeErr.Error(), nil
 
 	case errors.As(err, &ownerErr):
 		omitGuidance := fmt.Sprintf("omit \"owner\" to create the %s without an owner binding", ownerErr.objectKind)

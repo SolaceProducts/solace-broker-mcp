@@ -117,7 +117,6 @@ func TestAllErrorTypes_CoversEveryDeclaredConst(t *testing.T) {
 		"ErrorTypeValidationError":       ErrorTypeValidationError,
 		"ErrorTypeExecutionError":        ErrorTypeExecutionError,
 		"ErrorTypeNilResult":             ErrorTypeNilResult,
-		"ErrorTypeNotFound":              ErrorTypeNotFound,
 		"ErrorTypeOutputValidationError": ErrorTypeOutputValidationError,
 		"ErrorTypeMarshalError":           ErrorTypeMarshalError,
 		"ErrorTypeBrokerPermissionDenied": ErrorTypeBrokerPermissionDenied,

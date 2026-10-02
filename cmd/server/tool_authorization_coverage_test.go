@@ -69,13 +69,14 @@ func gatedAndExposedTools(t *testing.T) (gated []string, exposed []*mcp.Tool) {
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 
+	tools.RegisterListBrokers(mgr, pool)
+	if err := tools.RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
+		t.Fatalf("RegisterDescribeSempSchema: %v", err)
+	}
+
 	// Policy nil: whether a tool gets wrapped depends on where it was registered,
 	// not on any grant, so a compiled policy would change nothing here.
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
-	tools.RegisterListBrokers(server, pool, nil)
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
-		t.Fatalf("RegisterDescribeSempSchema: %v", err)
-	}
 
 	for _, h := range mgr.Handlers() {
 		gated = append(gated, h.Metadata().Name)

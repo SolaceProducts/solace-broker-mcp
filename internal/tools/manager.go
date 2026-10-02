@@ -101,6 +101,9 @@ type registeredTool struct {
 	input       *gojsonschema.Schema
 	output      *gojsonschema.Schema
 	annotations Annotations
+	// noBroker mirrors Metadata.NoBroker, cached at Register() time like
+	// annotations above — see CallTool's brokerless branch.
+	noBroker bool
 }
 
 // NewToolManager creates a ToolManager that resolves broker clients from the
@@ -214,6 +217,7 @@ func (m *ToolManager) Register(handler ToolHandler) {
 		input:       inputSchema,
 		output:      outputSchema,
 		annotations: meta.Annotations,
+		noBroker:    meta.NoBroker,
 	}
 }
 
@@ -349,6 +353,50 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return nil, err
 	}
 	handler := rt.handler
+
+	// A no-broker tool (list-brokers, describe-semp-schema) resolves no SEMP
+	// client and never had "broker" injected into its schema, so there is
+	// nothing to strip and nothing to resolve. This is the first-class case
+	// SOL-153693 added: validate params as-is against the tool's own input
+	// schema, dispatch with a nil *ToolContext, and reuse the same
+	// result-assembly tail (buildValidatedResult) every other tool goes
+	// through — brokerAlias stays "" throughout, which is exactly the
+	// sentinel canonicalBrokerLabel/logToolResult already render as "none".
+	// Destructive-audit gating, hop-2 broker-authz classification, and
+	// desired-state-noop classification are all SEMP-specific concepts that
+	// cannot arise here, so this branch skips them rather than reusing the
+	// broker-resolving tail below.
+	if rt.noBroker {
+		if _, err := validateAgainstCompiledSchema(params, rt.input, "parameter validation failed"); err != nil {
+			errorType = metrics.ErrorTypeValidationError
+			toolErr = err
+			return buildLocalErrorResult(toolErr), nil
+		}
+
+		toolResult, handleErr := handler.Handle(ctx, nil, params)
+		if handleErr != nil {
+			toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
+			errorType = metrics.ErrorTypeExecutionError
+			return m.buildErrorResult(toolErr, ""), nil
+		}
+
+		if toolResult == nil || toolResult.StructuredContent == nil {
+			errorType = metrics.ErrorTypeNilResult
+			toolErr = fmt.Errorf("tool %q returned nil result", name)
+			return buildLocalErrorResult(toolErr), nil
+		}
+
+		result, valErr := m.buildValidatedResult(rt, name, toolResult.StructuredContent, toolResult.IsError)
+		if valErr != nil {
+			toolErr = valErr
+			if errors.Is(valErr, errOutputSchemaInvalid) {
+				errorType = metrics.ErrorTypeOutputValidationError
+			} else {
+				errorType = metrics.ErrorTypeMarshalError
+			}
+		}
+		return result, nil
+	}
 
 	// Extract and resolve broker.
 	brokerAlias, _ = params["broker"].(string)
@@ -750,11 +798,15 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // parameter instead of toolErr.
 //
 // A free function rather than a ToolManager method so every tool emits the
-// same audit line, including standalone tools registered outside the manager
-// (list-brokers in register.go, describe-semp-schema) — neither ever
-// produces a desiredStateOutcome, so both pass nil for outcome. Brokerless
-// tools and pre-resolution failures log broker=none, matching the metric
-// label, rather than omitting the field.
+// same audit line, including the one dispatch site that still bypasses
+// CallTool — the argument-parse failure in register.go's instrumented
+// closure — which never produces a desiredStateOutcome, so it passes nil for
+// outcome. A no-broker tool (list-brokers, describe-semp-schema,
+// Metadata.NoBroker) goes through this same call from CallTool's own defer,
+// like every other tool; it never produces a desiredStateOutcome either, for
+// the same reason — that concept is SEMP-specific and neither tool resolves
+// a broker. Brokerless tools and pre-resolution failures log broker=none,
+// matching the metric label, rather than omitting the field.
 //
 // The id argument carries per-invocation audit identity (SOL-149606). It is
 // passed through slog.Any so Identity.LogValue is invoked once at emit time
