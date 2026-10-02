@@ -15,11 +15,21 @@
 // Coverage for every site that projects auth.Principal onto an audit record
 // (SOL-152087).
 //
-// There are five, and before this file only one of them — withAuthorization —
-// had a test: replacing auth.PrincipalFrom(ctx) with auth.Principal{} at the
-// other four left the whole suite green, including at the "tool invoked"
-// chokepoint every registered tool flows through. Total loss of caller
-// identity from the primary audit line was a passing build.
+// There were originally five, and before this file only one of them —
+// withAuthorization — had a test: replacing auth.PrincipalFrom(ctx) with
+// auth.Principal{} at the other four left the whole suite green, including at
+// the "tool invoked" chokepoint every registered tool flows through. Total
+// loss of caller identity from the primary audit line was a passing build.
+//
+// Down to three as of SOL-153693: list-brokers and describe-semp-schema used
+// to each emit their own audit line from a standalone dispatch closure that
+// bypassed ToolManager.CallTool, so each needed its own identity assertion
+// here. Both are now ordinary CallTool-routed tools (Metadata.NoBroker, not a
+// bypass) and reach the audit surface through the same "tool invoked"
+// chokepoint every other tool does — already covered by
+// TestEmitSite_toolInvoked_carriesPrincipal — so their dedicated tests were
+// deleted as redundant rather than updated to re-describe a bypass that no
+// longer exists.
 //
 // Each test below asserts the field VALUES, not merely that the keys exist.
 // The failure this guards against is a record with the right shape naming the
@@ -34,7 +44,6 @@ import (
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -156,48 +165,6 @@ func TestEmitSite_toolInvoked_badArguments_carriesPrincipal(t *testing.T) {
 		t.Fatalf("want the bad_request branch, got error_type=%v", lines[0]["error_type"])
 	}
 	assertIdentityValues(t, lines[0], "tool invoked (bad-arguments branch)")
-}
-
-// TestEmitSite_listBrokers_carriesPrincipal covers RegisterListBrokers, which
-// emits its own audit line because it bypasses ToolManager.CallTool.
-func TestEmitSite_listBrokers_carriesPrincipal(t *testing.T) {
-	session, buf := sessionWithPrincipal(t, func(s *mcp.Server, _ *ToolManager) {
-		RegisterListBrokers(s, newRegTestPool(t), nil)
-	})
-
-	if _, err := session.CallTool(context.Background(),
-		&mcp.CallToolParams{Name: "list-brokers"}); err != nil {
-		t.Fatalf("CallTool: %v", err)
-	}
-
-	lines := auditLines(t, buf, "list-brokers")
-	if len(lines) != 1 {
-		t.Fatalf("want 1 audit line, got %d: %s", len(lines), buf.String())
-	}
-	assertIdentityValues(t, lines[0], "tool invoked (list-brokers)")
-}
-
-// TestEmitSite_describeSempSchema_carriesPrincipal covers the third handler
-// that emits its own audit line.
-func TestEmitSite_describeSempSchema_carriesPrincipal(t *testing.T) {
-	session, buf := sessionWithPrincipal(t, func(s *mcp.Server, _ *ToolManager) {
-		if err := RegisterDescribeSempSchema(s, specs.FS, nil); err != nil {
-			t.Fatalf("RegisterDescribeSempSchema: %v", err)
-		}
-	})
-
-	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      describeSempSchemaToolName,
-		Arguments: map[string]any{"operation": "config/createMsgVpnQueue"},
-	}); err != nil {
-		t.Fatalf("CallTool: %v", err)
-	}
-
-	lines := auditLines(t, buf, describeSempSchemaToolName)
-	if len(lines) != 1 {
-		t.Fatalf("want 1 audit line, got %d: %s", len(lines), buf.String())
-	}
-	assertIdentityValues(t, lines[0], "tool invoked (describe-semp-schema)")
 }
 
 // TestEmitSite_listFilter_carriesPrincipal covers the tools/list filter's

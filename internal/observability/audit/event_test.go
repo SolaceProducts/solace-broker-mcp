@@ -168,14 +168,17 @@ func TestEventTypes_everyTypeHasALevel(t *testing.T) {
 // loudly. Ticket text has claimed ten, then eleven; the shipped code computed
 // twelve, across four logToolResult call sites, until SOL-153332 (Story 49)
 // added broker_permission_denied for a hop-2 authorization denial, making
-// thirteen. See internal/tools/audit_error_type_drift_test.go, which walks
-// those sites' AST and fails if the two sets ever diverge again.
+// thirteen — then SOL-153693 routed describe-semp-schema through
+// ToolManager.CallTool and retired its hand-rolled dispatch, the only site
+// that ever computed not_found, back down to twelve. See
+// internal/tools/audit_error_type_drift_test.go, which walks those sites' AST
+// and fails if the two sets ever diverge again.
 func TestErrorTypes_closedVocabulary(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"bad_request", "broker_init_error", "broker_permission_denied",
 		"execution_error", "marshal_error",
-		"missing_broker", "nil_result", "not_found", "output_validation_error",
+		"missing_broker", "nil_result", "output_validation_error",
 		"panic", "unknown_broker", "unknown_tool", "validation_error",
 	}
 	got := ErrorTypes()

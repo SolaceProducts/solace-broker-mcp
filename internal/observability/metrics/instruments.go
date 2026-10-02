@@ -53,7 +53,6 @@ const (
 	ErrorTypeValidationError       ErrorType = "validation_error"
 	ErrorTypeExecutionError        ErrorType = "execution_error"
 	ErrorTypeNilResult             ErrorType = "nil_result"
-	ErrorTypeNotFound              ErrorType = "not_found"
 	ErrorTypeOutputValidationError ErrorType = "output_validation_error"
 	ErrorTypeMarshalError          ErrorType = "marshal_error"
 	// ErrorTypeBrokerPermissionDenied marks a hop-2 (broker-side) authorization
@@ -89,7 +88,6 @@ var allErrorTypes = []ErrorType{
 	ErrorTypeValidationError,
 	ErrorTypeExecutionError,
 	ErrorTypeNilResult,
-	ErrorTypeNotFound,
 	ErrorTypeOutputValidationError,
 	ErrorTypeMarshalError,
 	ErrorTypeBrokerPermissionDenied,

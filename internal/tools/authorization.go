@@ -52,15 +52,19 @@ const (
 // IsExemptFromToolAuthorization for the full set and why.
 const listBrokersToolName = "list-brokers"
 
-// IsExemptFromToolAuthorization reports whether a tool is registered without a
+// IsExemptFromToolAuthorization reports whether a tool is excluded from the
 // policy wrapper and is therefore always available to an authenticated caller.
 //
-// Exemption is structural: these tools are registered outside the manager
-// (RegisterListBrokers and RegisterDescribeSempSchema take no policy argument),
-// so no wrapper ever gates them and Policy.Authorize has no entry for them —
-// asking it returns a zero-value deny. Any code that reasons about the tool set
-// must go through this predicate rather than comparing against one name, or it
-// will silently disagree with what tools/call actually permits.
+// Before SOL-153693 the exemption was structural: RegisterListBrokers and
+// RegisterDescribeSempSchema registered straight against the MCP server,
+// outside the manager entirely, so no wrapper ever gated them. Both are now
+// ordinary ToolManager.Register entries (Metadata.NoBroker, not a bypass) —
+// the exemption is an explicit check in RegisterWithServer's loop instead,
+// which skips composing withAuthorization for a tool this predicate names.
+// Policy.Authorize still has no entry for either (asking it returns a
+// zero-value deny), so any code that reasons about the tool set must go
+// through this predicate rather than comparing against one name, or it will
+// silently disagree with what tools/call actually permits.
 //
 // The names are enumerated rather than derived from registration, so nothing at
 // compile time forces a new unpoliced registration to appear here. Exported so

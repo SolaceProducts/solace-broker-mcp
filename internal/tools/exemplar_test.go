@@ -21,13 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
 // scrapeExemplarBearing returns the bucket lines of one histogram family that
@@ -130,102 +126,12 @@ func TestCallTool_LatencyBucketCarriesTheDispatchSpansTraceID(t *testing.T) {
 }
 
 // TestBrokerlessDispatchSites_LatencyBucketCarriesTheDispatchSpansTraceID
-// covers the two tool dispatch sites that never reach ToolManager.CallTool.
-//
-// They are the weakest link in this story rather than an afterthought: each
-// duplicates the whole start-span-then-defer-the-emission mechanism instead of
-// sharing CallTool's, so the ctx threading is a separate, independently
-// breakable copy at each — and both tools appear on every dashboard, so an
-// operator carrying a `tool` label into a trace backend is exactly who a
-// missing exemplar strands.
-//
-// The fourth site, the argument-parse failure in register.go's instrumented
-// closure, is pinned by TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext:
-// it asserts the audit line was emitted with the dispatch span in context, and
-// the metric is recorded from that same ctx on the line below it.
-func TestBrokerlessDispatchSites_LatencyBucketCarriesTheDispatchSpansTraceID(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		register func(t *testing.T, server *mcp.Server, tm *metrics.ToolMetrics)
-		params   *mcp.CallToolParams
-	}{
-		{
-			name: "list-brokers",
-			register: func(t *testing.T, server *mcp.Server, tm *metrics.ToolMetrics) {
-				RegisterListBrokers(server, newTestPool(t), tm)
-			},
-			params: &mcp.CallToolParams{Name: "list-brokers"},
-		},
-		{
-			name: "describe-semp-schema",
-			register: func(t *testing.T, server *mcp.Server, tm *metrics.ToolMetrics) {
-				if err := RegisterDescribeSempSchema(server, specs.FS, tm); err != nil {
-					t.Fatalf("RegisterDescribeSempSchema: %v", err)
-				}
-			},
-			params: &mcp.CallToolParams{
-				Name:      describeSempSchemaToolName,
-				Arguments: map[string]any{"operation": "config/createMsgVpnQueue"},
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			sr := recordSpans(t)
-
-			p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			tm, err := p.ToolMetrics()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-			tc.register(t, server, tm)
-
-			ctx := context.Background()
-			serverTransport, clientTransport := mcp.NewInMemoryTransports()
-			go func() { _ = server.Run(ctx, serverTransport) }()
-
-			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
-			session, err := client.Connect(ctx, clientTransport, nil)
-			if err != nil {
-				t.Fatalf("client connect: %v", err)
-			}
-			defer func() { _ = session.Close() }()
-
-			if _, err := session.CallTool(ctx, tc.params); err != nil {
-				t.Fatalf("CallTool returned a protocol error: %v", err)
-			}
-
-			var dispatch sdktrace.ReadOnlySpan
-			for _, s := range sr.Ended() {
-				if s.Name() == dispatchSpanName {
-					dispatch = s
-				}
-			}
-			if dispatch == nil {
-				t.Fatalf("no %q span recorded: this handler bypasses CallTool, so it must "+
-					"start its own or there is no trace for an exemplar to point at", dispatchSpanName)
-			}
-			if !dispatch.SpanContext().IsSampled() {
-				t.Fatal("dispatch span not sampled: an exemplar can only reference a sampled " +
-					"trace, so this test would assert an absence and pass for the wrong reason")
-			}
-			wantTraceID := dispatch.SpanContext().TraceID().String()
-
-			withExemplar, all := scrapeExemplarBearing(t, p, "mcp_tool_invocation_duration_seconds")
-			if len(withExemplar) == 0 {
-				t.Fatalf("no bucket carries an exemplar, want one with trace_id %q — this "+
-					"dispatch site is not threading its own span's context into the "+
-					"observation call:\n%s", wantTraceID, strings.Join(all, "\n"))
-			}
-			for _, line := range withExemplar {
-				if !strings.Contains(line, `trace_id="`+wantTraceID+`"`) {
-					t.Errorf("exemplar does not carry the dispatch span's trace_id %q:\n%s", wantTraceID, line)
-				}
-			}
-		})
-	}
-}
+// formerly covered list-brokers and describe-semp-schema as the two tool
+// dispatch sites that never reached ToolManager.CallTool, each duplicating
+// the whole start-span-then-defer-the-emission mechanism instead of sharing
+// CallTool's. SOL-153693 retired both duplicates: the two tools are now
+// ordinary CallTool-routed tools (Metadata.NoBroker, not a bypass), so their
+// span-exemplar linkage is the same plumbing TestCallTool_LatencyBucketCarriesTheDispatchSpansTraceID
+// above already covers, and the dedicated copy of this test was deleted as
+// redundant rather than updated to re-describe tools that are no longer
+// special-cased.

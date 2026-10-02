@@ -244,10 +244,6 @@ func tracedSessionWith(t *testing.T, h tools.ToolHandler, brokerURL string, trac
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
-	// Registered separately in production too (it takes no broker parameter),
-	// and separately here because it is one of the dispatch sites that bypass
-	// ToolManager.CallTool — see TestRequestPathSpans_BypassDispatchSitesSpan.
-	tools.RegisterListBrokers(server, pool, tm)
 
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server }, nil)
@@ -783,19 +779,27 @@ func TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall(t *testing.T) {
 	}
 }
 
-// TestRequestPathSpans_BypassDispatchSitesSpan covers the dispatch paths that
-// never reach ToolManager.CallTool, and so do not get their span from it:
-// `list-brokers`, which is registered straight against the MCP server, and the
-// argument-parse failure in register.go's instrumented closure, which returns
-// before dispatching.
+// TestRequestPathSpans_BypassDispatchSitesSpan covers the one remaining
+// dispatch path that never reaches ToolManager.CallTool and so does not get
+// its span from it: the argument-parse failure in register.go's instrumented
+// closure, which returns before dispatching.
 //
-// Both already emit their own audit line and their own metric, each with a
-// comment saying they must because they bypass CallTool. The span is the third
-// signal and needs the same treatment: without it `list-brokers` appears in
-// every dashboard and in no trace, and `bad_request` is a metric-only value of
-// a vocabulary docs/observability.md documents as shared by all three. The
-// operator-visible failure is silent — the filter carried over from the metric
-// simply matches nothing.
+// list-brokers used to be a second case here — registered straight against
+// the MCP server, with its own hand-rolled span, audit line, and metric,
+// because it bypassed CallTool entirely. SOL-153693 retired that bypass: it
+// is now an ordinary CallTool-routed tool (Metadata.NoBroker, not a bypass),
+// so its span-metric agreement is the same plumbing
+// TestRequestPathSpans_SpanMetricAndLogAgreeOnTheSameCall already covers for
+// any tool on that path, and the dedicated case was removed as redundant
+// rather than kept under a now-inaccurate name.
+//
+// The argument-parse case already emits its own audit line and its own
+// metric, with a comment saying it must because it bypasses CallTool. The
+// span is the third signal and needs the same treatment: without it
+// `bad_request` would be a metric-only value of a vocabulary
+// docs/observability.md documents as shared by all three. The operator-visible
+// failure is silent — the filter carried over from the metric simply matches
+// nothing.
 func TestRequestPathSpans_BypassDispatchSitesSpan(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
@@ -804,12 +808,6 @@ func TestRequestPathSpans_BypassDispatchSitesSpan(t *testing.T) {
 		wantOutcome   string
 		wantErrorType string
 	}{
-		{
-			name:        "list-brokers is registered outside the manager",
-			call:        &mcp.CallToolParams{Name: "list-brokers"},
-			wantTool:    "list-brokers",
-			wantOutcome: "success",
-		},
 		{
 			// Arguments that are valid JSON but not an object: the closure's
 			// json.Unmarshal into map[string]any fails and it returns without

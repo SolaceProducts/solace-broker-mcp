@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -30,7 +29,6 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
@@ -169,10 +167,13 @@ func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	defer slog.SetDefault(oldLogger)
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	if err := RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	if err := RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -235,10 +236,17 @@ func newDescribeSempSchemaSession(t *testing.T, logBuf *bytes.Buffer, clientMidd
 		t.Fatal(err)
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	if err := RegisterDescribeSempSchema(server, specs.FS, tm); err != nil {
+	// Metrics are wired onto mgr, not passed to RegisterDescribeSempSchema
+	// directly (SOL-153693): once the tool is routed through ToolManager,
+	// CallTool's own defer is what records every invocation, the same single
+	// site every other tool uses.
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool, WithToolMetrics(tm))
+	if err := RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -261,10 +269,16 @@ func newDescribeSempSchemaSession(t *testing.T, logBuf *bytes.Buffer, clientMidd
 // wrong-typed JSON literal (a bare string) immediately before the request is
 // marshaled and sent. Unlike forceOmitArguments (register_test.go), which
 // reproduces a request with no "arguments" field at all, this reproduces a
-// request whose "arguments" field is present but is not a JSON object — the
-// only way to make json.Unmarshal(req.Params.Arguments, &args) itself fail
-// inside describe_semp_schema.go's handler, since a normal client call
-// always sends a well-formed JSON object for Arguments.
+// request whose "arguments" field is present but is not a JSON object.
+//
+// Before SOL-153693 this was the only way to make
+// json.Unmarshal(req.Params.Arguments, &args) fail inside
+// describe_semp_schema.go's own handler, since a normal client call always
+// sends a well-formed JSON object. Now that the tool is routed through
+// ToolManager, that unmarshal happens once, generically, in
+// RegisterWithServer's dispatch closure (register.go) — the same guard every
+// tool shares — so this middleware exercises the shared path, not a
+// describe-semp-schema special case.
 func forceMalformedArguments(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if method == "tools/call" {
@@ -280,7 +294,9 @@ func forceMalformedArguments(next mcp.MethodHandler) mcp.MethodHandler {
 // line and the mcp_tool_invocation_total counter both carry
 // error_type=wantErrorType for a single invocation — the two independent
 // surfaces logToolResult and recordToolInvocation each write to from the same
-// deferred call site in describe_semp_schema.go.
+// deferred call site. Before SOL-153693 that site was a bespoke defer in
+// describe_semp_schema.go; now it is ToolManager.CallTool's (manager.go),
+// the same one every other tool goes through.
 func assertDescribeSempSchemaErrorType(t *testing.T, logBuf *bytes.Buffer, p *metrics.Provider, wantErrorType metrics.ErrorType) {
 	t.Helper()
 
@@ -304,35 +320,45 @@ func assertDescribeSempSchemaErrorType(t *testing.T, logBuf *bytes.Buffer, p *me
 	}
 }
 
-// assertInvalidParams checks that a describe-semp-schema bad-input call came
-// back as a JSON-RPC error carrying -32602 with the tool's own wording intact.
-// Before SOL-153692 the code was 0, which the SDK emits for any bare Go error
-// and which no JSON-RPC revision defines. The in-memory client hands back the
-// wire error itself as a *jsonrpc.Error, so both fields are read directly.
-func assertInvalidParams(t *testing.T, err error, wantSubstr string) {
+// assertDescribeSempSchemaIsError checks that a describe-semp-schema bad-input
+// call came back as an isError tool result — never a JSON-RPC protocol error —
+// whose message contains every wantSubstrs entry. Before SOL-153693 these four
+// cases were protocol errors (code -32602 after SOL-153692, still the wrong
+// KIND of error under the MCP spec, which puts a schema-invalid or
+// business-logic tool failure in the isError bucket so the model can read it
+// and self-correct). Routing the tool through ToolManager closes that gap for
+// all four at once.
+func assertDescribeSempSchemaIsError(t *testing.T, res *mcp.CallToolResult, err error, wantSubstrs ...string) {
 	t.Helper()
-	if err == nil {
-		t.Fatalf("expected a protocol-level error containing %q, got nil", wantSubstr)
+	if err != nil {
+		t.Fatalf("CallTool returned a protocol-level error instead of a tool result: %v", err)
 	}
-	var wire *jsonrpc.Error
-	if !errors.As(err, &wire) {
-		t.Fatalf("error is %T, want *jsonrpc.Error: %v", err, err)
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an isError tool result, got success: %#v", res)
 	}
-	if wire.Code != jsonrpc.CodeInvalidParams {
-		t.Errorf("error.code = %d, want %d (Invalid Params)", wire.Code, jsonrpc.CodeInvalidParams)
+	if len(res.Content) == 0 {
+		t.Fatal("isError result carries no content; the model has nothing to read")
 	}
-	if !strings.Contains(wire.Message, wantSubstr) {
-		t.Errorf("error.message = %q, want it to contain %q", wire.Message, wantSubstr)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("result.Content[0] = %#v, want *mcp.TextContent", res.Content[0])
+	}
+	for _, want := range wantSubstrs {
+		if !strings.Contains(text.Text, want) {
+			t.Errorf("result content = %q, want it to contain %q", text.Text, want)
+		}
 	}
 }
 
 // TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric
-// covers describe_semp_schema.go's json.Unmarshal-failure branch: the
-// "arguments" field is present on the wire but is not a JSON object, so
-// json.Unmarshal(req.Params.Arguments, &args) itself fails. This is a
-// behavioral check — it drives the branch through a real dispatch and reads
-// back the audit/metric surfaces it actually writes — distinct from a static
-// scan of error_type literals in the source.
+// covers the "arguments" field being present on the wire but not a JSON
+// object. Before SOL-153693 this was describe_semp_schema.go's own
+// json.Unmarshal-failure branch, reported as a protocol error with its own
+// "parsing tool arguments" wording. Now the tool is routed through
+// ToolManager like every other tool, so this trips the one shared guard every
+// tool shares (RegisterWithServer's dispatch closure, register.go) — hence
+// the generic message and error_type, not a describe-semp-schema special
+// case, which is the point of this ticket.
 func TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric(t *testing.T) {
 	var logBuf bytes.Buffer
 	session, p := newDescribeSempSchemaSession(t, &logBuf, forceMalformedArguments)
@@ -340,68 +366,87 @@ func TestDescribeSempSchema_UnparseableArguments_ErrorTypeReachesAuditAndMetric(
 	ctx := context.Background()
 	// forceMalformedArguments overwrites Arguments right before send, so the
 	// value supplied here is irrelevant to what actually reaches the wire.
-	_, err := session.CallTool(ctx, &mcp.CallToolParams{Name: describeSempSchemaToolName})
-	assertInvalidParams(t, err, "parsing tool arguments")
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: describeSempSchemaToolName})
+	assertDescribeSempSchemaIsError(t, res, err, "tool arguments must be a JSON object")
 
 	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
 }
 
 // TestDescribeSempSchema_MissingOperation_ErrorTypeReachesAuditAndMetric
-// covers describe_semp_schema.go's missing-required-parameter branch: the
-// arguments object parses fine but carries no "operation" key.
+// covers the arguments object parsing fine but carrying no "operation" key.
+// ToolManager's input-schema validation catches this before Handle ever runs
+// (SOL-153693) — operation is a required property — so error_type is
+// validation_error, the same value every other tool's missing-required-
+// parameter case gets, and the message is gojsonschema's own wording behind
+// this package's "parameter validation failed" prefix, not describe-semp-
+// schema's retired hand-written text.
 func TestDescribeSempSchema_MissingOperation_ErrorTypeReachesAuditAndMetric(t *testing.T) {
 	var logBuf bytes.Buffer
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	_, err := session.CallTool(ctx, &mcp.CallToolParams{
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      describeSempSchemaToolName,
 		Arguments: map[string]any{},
 	})
-	assertInvalidParams(t, err, "missing required parameter 'operation'")
+	assertDescribeSempSchemaIsError(t, res, err, "parameter validation failed", "operation")
 
-	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeValidationError)
 }
 
 // TestDescribeSempSchema_InvalidView_ErrorTypeReachesAuditAndMetric covers
-// describe_semp_schema.go's invalid-"view"-value branch: operation is present
-// but view is neither "trimmed" nor "raw".
+// operation present but view neither "trimmed" nor "raw". ToolManager's input
+// schema declares view as an enum of exactly those two values, so this is
+// also caught by validation before Handle runs (SOL-153693), landing on the
+// same validation_error classification as the missing-operation case above.
 func TestDescribeSempSchema_InvalidView_ErrorTypeReachesAuditAndMetric(t *testing.T) {
 	var logBuf bytes.Buffer
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	_, err := session.CallTool(ctx, &mcp.CallToolParams{
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: describeSempSchemaToolName,
 		Arguments: map[string]any{
 			"operation": "config/createMsgVpnQueue",
 			"view":      "bogus",
 		},
 	})
-	assertInvalidParams(t, err, "invalid view")
+	assertDescribeSempSchemaIsError(t, res, err, "parameter validation failed", "view")
 
-	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeBadRequest)
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeValidationError)
 }
 
 // TestDescribeSempSchema_UnknownOperation_ErrorTypeReachesAuditAndMetric
-// covers describe_semp_schema.go's not-found branch: a well-formed operation
-// identifier that isn't in the embedded spec index (reg.describe's error
-// return), mirroring TestSempSchemaMap_UnknownOperation's input but through
-// the full dispatch path rather than a direct call to describe().
+// covers a well-formed operation identifier that isn't in the embedded spec
+// index (reg.describe's error return), mirroring
+// TestSempSchemaMap_UnknownOperation's input but through the full dispatch
+// path rather than a direct call to describe().
+//
+// Unlike the three cases above, this is a genuine tool-execution error, not
+// an input-schema violation — "config/thisDoesNotExist" IS a valid string per
+// the schema — so it reaches Handle and flows through ToolManager's generic
+// handler-error path. That makes it the one case here that keeps its exact
+// pre-SOL-153693 message text: describeOperationError (errors.go) exists
+// specifically so buildErrorMessage shows this package's own "unknown
+// operation" wording verbatim instead of replacing it with the generic
+// broker-error message. error_type is execution_error, the same generic
+// classification every other tool's handler error gets — the previous
+// not_found value existed only because this tool bypassed ToolManager, and
+// retired with it (internal/observability/audit/event.go).
 func TestDescribeSempSchema_UnknownOperation_ErrorTypeReachesAuditAndMetric(t *testing.T) {
 	var logBuf bytes.Buffer
 	session, p := newDescribeSempSchemaSession(t, &logBuf)
 
 	ctx := context.Background()
-	_, err := session.CallTool(ctx, &mcp.CallToolParams{
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: describeSempSchemaToolName,
 		Arguments: map[string]any{
 			"operation": "config/thisDoesNotExist",
 		},
 	})
-	assertInvalidParams(t, err, "unknown operation")
+	assertDescribeSempSchemaIsError(t, res, err, "unknown operation")
 
-	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeNotFound)
+	assertDescribeSempSchemaErrorType(t, &logBuf, p, metrics.ErrorTypeExecutionError)
 }
 
 func TestSempSchemaMap_TrimmedView_UpdateReflectsMethod(t *testing.T) {
@@ -458,11 +503,13 @@ func TestSempSchemaMap_UnknownOperation(t *testing.T) {
 }
 
 // TestDescribeSempSchema_OutputMatchesDeclaredSchema is the gate behind the
-// declared output schema (SOL-153694). This tool registers directly on the
-// server rather than through ToolManager, so nothing validates its
-// structuredContent at runtime — without this test the declaration could drift
-// from what describe() actually returns and no one would find out until a
-// client rejected a result.
+// declared output schema (SOL-153694). Since SOL-153693, ToolManager validates
+// every real call's structuredContent against this schema too — but only for
+// whatever operation and view a given call happens to use. This test exists
+// for the breadth that runtime validation alone wouldn't give: every indexed
+// operation, in both views, so the declaration cannot drift from what
+// describe() actually returns for any of them without being caught here
+// first, rather than only for the ones a wire-level test happens to exercise.
 //
 // Every indexed operation is validated in both views, so the coverage tracks
 // the embedded specs rather than a hand-picked sample: an operation whose

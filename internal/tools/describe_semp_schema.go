@@ -21,17 +21,16 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Registered outside ToolManager like list-brokers — spec content only, no
-// broker state, so runtime authorization never wraps it.
+// Routed through ToolManager like every other tool (Metadata.NoBroker, not a
+// bypass — SOL-153693), but still RBAC-exempt: spec content only, no broker
+// state, so runtime authorization never wraps it. See
+// IsExemptFromToolAuthorization (authorization.go) for the exemption check
+// and why it is explicit now rather than falling out of a bypassed
+// registration.
 const describeSempSchemaToolName = "describe-semp-schema"
 
 type schemaOpInfo struct {
@@ -131,12 +130,26 @@ func resolveBodyDefinition(opDef, sharedParams map[string]any) string {
 	return ""
 }
 
+// describeOperationError wraps an error from sempSchemaMap.describe: text
+// this package authored itself about the caller's own "operation" argument
+// (never broker- or handler-derived), so it is safe to show the agent
+// verbatim. Without this marker, routing describe-semp-schema through
+// ToolManager (SOL-153693) would have this fall into buildErrorMessage's
+// default case and be replaced with the generic "broker reported an
+// internal error" message — wrong, since no broker was ever contacted.
+// Mirrors ownerNotFoundError's existing precedent in errors.go for exactly
+// this problem.
+type describeOperationError struct{ err error }
+
+func (e *describeOperationError) Error() string { return e.err.Error() }
+func (e *describeOperationError) Unwrap() error { return e.err }
+
 // describe returns the schema slice for an operation. view "raw" returns the
 // definition verbatim; "trimmed" returns an agent-friendly per-attribute list.
 func (r *sempSchemaMap) describe(operation, view string) (map[string]any, error) {
 	info, ok := r.ops[operation]
 	if !ok {
-		return nil, fmt.Errorf("unknown operation %q; expected form is \"<specType>/<operationId>\" (e.g., config/createMsgVpnQueue) — take the value from the description of the write tool you're planning to call", operation)
+		return nil, &describeOperationError{fmt.Errorf("unknown operation %q; expected form is \"<specType>/<operationId>\" (e.g., config/createMsgVpnQueue) — take the value from the description of the write tool you're planning to call", operation)}
 	}
 	resp := map[string]any{"operation": operation, "method": info.method}
 	if info.defName == "" {
@@ -147,7 +160,7 @@ func (r *sempSchemaMap) describe(operation, view string) (map[string]any, error)
 	defs, _ := r.specs[info.specType]["definitions"].(map[string]any)
 	def, _ := defs[info.defName].(map[string]any)
 	if def == nil {
-		return nil, fmt.Errorf("definition %q not found in %q spec (spec inconsistency)", info.defName, info.specType)
+		return nil, &describeOperationError{fmt.Errorf("definition %q not found in %q spec (spec inconsistency)", info.defName, info.specType)}
 	}
 	resp["definition"] = info.defName
 	if view == "raw" {
@@ -273,10 +286,10 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 }
 
 // describeSempSchemaOutputSchema declares the shape of this tool's
-// structuredContent (SOL-153694). Tools on the ToolManager registration path
-// inherit an output schema from it; this one registers directly on the server
-// (see RegisterDescribeSempSchema), as list-brokers does, so — like that one —
-// its schema is written out by hand here.
+// structuredContent (SOL-153694). Metadata() below returns it directly: unlike
+// a composite tool's output schema, which NewCompositeToolHandler derives from
+// the embedded SEMPv2 catalog, there is no derivation to reuse here, so it is
+// written out by hand regardless of registration path.
 //
 // Only operation and method are required, and which of the rest appear depends
 // on the view AND on whether the operation has a request body. describe()
@@ -292,21 +305,25 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 // recursion reuses that one definition, every depth is closed by it. describe()
 // and trimAttributes are the only producers of these documents, so a field
 // added there without a matching entry here should fail loudly rather than ship
-// undocumented. Two tests stand in for the runtime validation this tool does
-// not get, since it bypasses ToolManager:
-// TestDescribeSempSchema_OutputMatchesDeclaredSchema validates real output for
-// every indexed operation in both views, and
+// undocumented. Since SOL-153693 routed this tool through ToolManager, every
+// real call's success-path output is validated against this exact schema by
+// buildValidatedResult — the same runtime check every other tool gets. Two
+// tests give this schema exhaustive coverage no generic wire-level test would
+// reach on its own: TestDescribeSempSchema_OutputMatchesDeclaredSchema
+// validates real output for every indexed operation in both views, and
 // TestDescribeSempSchema_OutputSchemaRejectsUndeclaredFields proves the closure
 // is real at all three instance levels.
 //
 // This describes the SUCCESS shape only. A panic unwinding through
 // withRecovery (internal/tools/register.go) is answered with a
 // structuredContent of {error, retryable}, which this schema rejects — it
-// requires operation and method and is closed. That costs nothing today, since
-// nothing validates this tool's output at runtime, but a client that
-// validates would reject a panic result. Describing both shapes would mean a
-// oneOf whose error arm is the generic local-error envelope every tool shares,
-// which belongs with that envelope rather than here.
+// requires operation and method and is closed. withRecovery's recover() sits
+// above ToolManager.CallTool entirely, so a panic result never reaches
+// buildValidatedResult's check against this schema in the first place; a
+// client that validates would still reject a panic result for that reason.
+// Describing both shapes would mean a oneOf whose error arm is the generic
+// local-error envelope every tool shares, which belongs with that envelope
+// rather than here.
 //
 // "definitions"/"#/definitions/..." is the draft-04/07 spelling, chosen
 // deliberately: gojsonschema — the validator this repo compiles schemas with
@@ -391,14 +408,15 @@ func describeSempSchemaOutputSchema() map[string]any {
 	}
 }
 
-// RegisterDescribeSempSchema registers describe-semp-schema as a standalone tool —
-// same shape as RegisterListBrokers, no broker resolution, no policy wrapping.
-func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS, tm *metrics.ToolMetrics) error {
-	reg, err := buildSempSchemaMap(fsys)
-	if err != nil {
-		return fmt.Errorf("building semp schema map: %w", err)
-	}
+// describeSempSchemaHandler implements the describe-semp-schema discovery
+// tool. It takes no broker parameter and resolves no SEMP client
+// (Metadata().NoBroker), so ToolManager.CallTool dispatches to it with a nil
+// *ToolContext — Handle must not dereference tc.
+type describeSempSchemaHandler struct {
+	reg *sempSchemaMap
+}
 
+func (h *describeSempSchemaHandler) Metadata() Metadata {
 	description := strings.TrimSpace(`
 Return the SEMPv2 schema slice for a given operation's request-body definition,
 so the caller can enumerate every configurable attribute (with types, defaults,
@@ -420,7 +438,7 @@ object-typed attributes that are $ref-backed carry a nested properties list
 instead of writability flags) and 'raw' (the definition verbatim, larger).
 `)
 
-	tool := &mcp.Tool{
+	return Metadata{
 		Name:        describeSempSchemaToolName,
 		Description: description,
 		InputSchema: map[string]any{
@@ -440,92 +458,41 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 			"required": []string{"operation"},
 		},
 		OutputSchema: describeSempSchemaOutputSchema(),
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: true,
-		},
+		Annotations:  Annotations{ReadOnly: true},
+		NoBroker:     true,
+	}
+}
+
+// Handle executes describe-semp-schema. ToolManager.CallTool has already
+// validated params against Metadata().InputSchema before calling this
+// (SOL-153693) — operation is guaranteed present and a string, and view, when
+// present, is guaranteed to be "trimmed" or "raw". So the only things left to
+// do here are apply view's default and look the operation up; everything
+// upstream of that is the caller's own "wrong type reported as missing"
+// defect this ticket closes, now handled generically by
+// validateAgainstCompiledSchema instead of by hand.
+func (h *describeSempSchemaHandler) Handle(_ context.Context, _ *ToolContext, params map[string]any) (*ToolResult, error) {
+	operation, _ := params["operation"].(string)
+	view, _ := params["view"].(string)
+	if view == "" {
+		view = "trimmed"
 	}
 
-	server.AddTool(tool, withRecovery(describeSempSchemaToolName, func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
-		// This handler bypasses ToolManager.CallTool, so it emits its own
-		// audit line. Panic contract: both result and toolErr nil at defer
-		// time means a panic is unwinding.
-		start := time.Now()
-		var brokerAlias string
-		var errorType metrics.ErrorType
-		var toolErr error
-		id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
+	structured, err := h.reg.describe(operation, view)
+	if err != nil {
+		return nil, err
+	}
+	return &ToolResult{StructuredContent: structured}, nil
+}
 
-		// ...and its own dispatch span, for the same reason (SOL-152421):
-		// without it neither this tool nor the `not_found` error_type it
-		// raises ever appears in a trace, though both appear in the metrics.
-		ctx, span := tracer.Start(ctx, dispatchSpanName)
-
-		// Registered BEFORE the emission defer below, so LIFO runs it AFTER
-		// that one — once a recovered panic has been reclassified, so the span
-		// reports the same cause the log line and the metric do. Reversed, the
-		// span reports nothing while both of them say `panic`. See
-		// endDispatchSpan for the full rationale.
-		defer func() {
-			endDispatchSpan(ctx, span, describeSempSchemaToolName, brokerLabelNone, errorType, toolErr)
-		}()
-
-		defer func() {
-			if toolErr == nil && result == nil {
-				errorType = metrics.ErrorTypePanic
-				toolErr = panicError{}
-			}
-			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, nil, id)
-			recordToolInvocation(ctx, tm, describeSempSchemaToolName, brokerLabelNone, start, errorType, toolErr)
-		}()
-
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if uErr := json.Unmarshal(req.Params.Arguments, &args); uErr != nil {
-				errorType = metrics.ErrorTypeBadRequest
-				toolErr = fmt.Errorf("parsing tool arguments: %w", uErr)
-				// This and the next three returns are the caller's mistake, so
-				// they leave as -32602 (Invalid Params) rather than the -32603
-				// withRecovery would otherwise assign (SOL-153692). Only the
-				// returned value is coded: toolErr stays bare so the audit,
-				// metric, and span defers above see the error they always
-				// have. Still a JSON-RPC error rather than an isError result;
-				// that classification is SOL-153693's to change.
-				return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
-			}
-		}
-		operation, _ := args["operation"].(string)
-		if operation == "" {
-			errorType = metrics.ErrorTypeBadRequest
-			toolErr = fmt.Errorf("missing required parameter 'operation'")
-			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
-		}
-		view, _ := args["view"].(string)
-		if view == "" {
-			view = "trimmed"
-		}
-		if view != "trimmed" && view != "raw" {
-			errorType = metrics.ErrorTypeBadRequest
-			toolErr = fmt.Errorf("invalid view %q; expected 'trimmed' or 'raw'", view)
-			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
-		}
-
-		structured, dErr := reg.describe(operation, view)
-		if dErr != nil {
-			errorType = metrics.ErrorTypeNotFound
-			toolErr = dErr
-			return nil, withJSONRPCCode(toolErr, jsonrpc.CodeInvalidParams)
-		}
-		resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
-		if mErr != nil {
-			errorType = metrics.ErrorTypeMarshalError
-			toolErr = fmt.Errorf("marshalling schema slice: %w", mErr)
-			// Server-side failure: left to withRecovery's -32603 default.
-			return nil, toolErr
-		}
-		return &mcp.CallToolResult{
-			StructuredContent: structured,
-			Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
-		}, nil
-	}))
+// RegisterDescribeSempSchema registers the describe-semp-schema discovery
+// tool with mgr. Call this — and RegisterListBrokers — before
+// RegisterWithServer; see that function's doc comment (register.go).
+func RegisterDescribeSempSchema(mgr *ToolManager, fsys fs.FS) error {
+	reg, err := buildSempSchemaMap(fsys)
+	if err != nil {
+		return fmt.Errorf("building semp schema map: %w", err)
+	}
+	mgr.Register(&describeSempSchemaHandler{reg: reg})
 	return nil
 }

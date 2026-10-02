@@ -53,9 +53,9 @@ func budgetTestConfig(t *testing.T) *config.ServerConfig {
 
 // registeredServer builds the exact production tool-registration pipeline
 // (mirrors main()'s steps 5-8: load composite tools, parse SEMP operations,
-// build the executor and tool manager, register SEMPv1/mixed native tools,
-// then RegisterWithServer + RegisterListBrokers) so this test measures what
-// the server actually exposes, not a hand-maintained approximation of it.
+// build the executor and tool manager, register SEMPv1/mixed native tools and
+// the two no-broker tools, then RegisterWithServer) so this test measures
+// what the server actually exposes, not a hand-maintained approximation of it.
 // registerSEMPv1Tools/registerMixedTools are this package's own unexported
 // functions — calling them directly guarantees this test can never drift
 // from what main() registers, including any native tool added later.
@@ -74,15 +74,15 @@ func registeredServer(t *testing.T, enableWriteTools bool) *mcp.Server {
 	}
 	executor := composite.NewCompositeExecutor(operations)
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "solace-broker-mcp", Version: "test"}, nil)
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
-	tools.RegisterWithServer(mgr, server, pool, enableWriteTools, nil, "")
-	tools.RegisterListBrokers(server, pool, nil)
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
+	tools.RegisterListBrokers(mgr, pool)
+	if err := tools.RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "solace-broker-mcp", Version: "test"}, nil)
+	tools.RegisterWithServer(mgr, server, pool, enableWriteTools, nil, "")
 	return server
 }
 

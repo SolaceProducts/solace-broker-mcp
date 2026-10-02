@@ -16,17 +16,23 @@
 // closed vocabulary the audit constructor accepts (SOL-152090).
 //
 // Why this exists. The error_type vocabulary was documented as ten values, and
-// a later revision corrected it to eleven. Both were wrong: this package emits
-// TWELVE, because two of the four logToolResult call sites are standalone
-// tools that bypass ToolManager.CallTool and contribute bad_request and
-// not_found, and every count so far was taken by reading manager.go alone.
+// a later revision corrected it to eleven. Both were wrong: at the time this
+// guard was written, the package emitted TWELVE, because two of the four
+// logToolResult call sites were standalone tools that bypassed
+// ToolManager.CallTool and contributed bad_request and not_found, and every
+// count so far had been taken by reading manager.go alone. The set has moved
+// twice since: SOL-153332 grew it to thirteen (broker_permission_denied), and
+// SOL-153693 shrank it back to twelve by routing describe-semp-schema through
+// ToolManager and retiring its hand-rolled dispatch — the only site that ever
+// computed not_found.
 //
-// A prose count cannot hold this. So instead of counting, this test reads the
-// AST of every non-test file in the package, collects every string literal
-// that becomes an error_type, and compares the set against audit.ErrorTypes().
-// Adding a thirteenth value in this package without adding it to the audit
-// vocabulary fails here — at the point of the change — rather than shipping a
-// record the audit constructor silently rejects at runtime.
+// A prose count cannot hold this regardless of which direction it moves next.
+// So instead of counting, this test reads the AST of every non-test file in
+// the package, collects every string literal that becomes an error_type, and
+// compares the set against audit.ErrorTypes(). Adding a value in this package
+// without adding it to the audit vocabulary fails here — at the point of the
+// change — rather than shipping a record the audit constructor silently
+// rejects at runtime.
 
 package tools
 
@@ -131,16 +137,20 @@ func collectDeclaredErrorTypes(t *testing.T, fset *token.FileSet, file string, d
 // still contribute at least one value.
 //
 // Without this check, a file going dark to the scanner is invisible whenever
-// every value it produces is also produced elsewhere: register.go's three
-// values (bad_request, panic, marshal_error) are all duplicated in the other
-// two files, so losing sight of it entirely would leave the set unchanged and
-// the test green. Listing the files is not the guard against a NEW file —
-// scanErrorTypeLiterals reads the whole package directory for that — it is the
-// guard against silently losing an OLD one.
+// every value it produces is also produced elsewhere. Before SOL-153693,
+// register.go's three values (bad_request, panic, marshal_error) were all
+// duplicated in the other two files, so losing sight of it entirely would
+// have left the set unchanged and the test green; register.go now
+// contributes only bad_request (its panic and marshal_error paths were
+// list-brokers', which moved into manager.go's CallTool along with
+// describe-semp-schema — see that ticket for why describe_semp_schema.go
+// itself dropped off this list entirely: it no longer computes any
+// error_type of its own). Listing the files is not the guard against a NEW
+// file — scanErrorTypeLiterals reads the whole package directory for that —
+// it is the guard against silently losing an OLD one.
 var contributingFiles = []string{
 	"manager.go",
 	"register.go",
-	"describe_semp_schema.go",
 }
 
 // TestErrorTypeVocabularyMatchesAuditConstructor is the drift guard.

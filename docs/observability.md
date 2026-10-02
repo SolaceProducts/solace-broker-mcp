@@ -623,7 +623,7 @@ For tool-invocation metrics, logs, audit records, and spans:
 
 ### `error_type`
 
-Present only with `outcome=error`. The tool-invocation vocabulary has thirteen values:
+Present only with `outcome=error`. The tool-invocation vocabulary has twelve values:
 
 | Value | Meaning |
 |---|---|
@@ -634,7 +634,6 @@ Present only with `outcome=error`. The tool-invocation vocabulary has thirteen v
 | `broker_init_error` | Configured broker could not initialize |
 | `bad_request` | Malformed request or invalid parameter handled before normal validation |
 | `validation_error` | Input schema validation failed |
-| `not_found` | Requested item does not exist |
 | `execution_error` | Tool ran and failed |
 | `nil_result` | Tool returned no result |
 | `output_validation_error` | Tool output failed schema validation |
