@@ -191,6 +191,12 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
+The `windows/amd64` archive is a `.zip`, not a `.tar.gz`. In PowerShell:
+
+```powershell
+Expand-Archive solace-broker-mcp-v*-windows-amd64.zip -DestinationPath solace-broker-mcp
+```
+
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
 Run the MCP server with the configuration file:

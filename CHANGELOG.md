@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Release archives now include `windows/amd64`: `solace-broker-mcp-<version>-windows-amd64.zip` (a `.zip`, unlike the other four `.tar.gz` archives) ships `solace-broker-mcp.exe`, with a `checksums-sha256.txt` line and build provenance attestation like the other four platforms, and is smoke-tested on a native Windows runner before release. Tracked under SOL-153187.
+
 ### Fixed
 
 - The token-exchange audience-mismatch diagnostic (SOL-152981) no longer logs a `WARN` on every successful exchange against an IdP that canonicalizes the requested audience (Entra's `api://` resource-URI prefixing is the reported case). Two changes: first, the base severity drops from `WARN` to `INFO` — this process is an OAuth client and, per RFC 9068 and Microsoft's own Entra docs, has no basis to assert that an IdP-specific canonicalization is actually wrong, so the message is reworded to reflect that uncertainty instead of asserting a mismatch outright. Second, that first-occurrence `INFO` is now throttled per distinct (broker, requested audience, returned `aud`) combination, with `DEBUG` for every later occurrence of the same combination — still inspectable, no longer noise. A different broker, a different requested audience, or a different returned `aud` each independently get their own first `INFO` line — including a later, differently-shaped mismatch on a broker whose earlier mismatch was already throttled. The throttle's memory is bounded: a soft cap cuts off remembering new shapes past 10,000 distinct combinations process-wide, past which point every call logs at `INFO` again rather than growing further — a deliberate, narrow tradeoff (one broker behind an IdP whose `aud` never stabilizes) favoring a few extra `INFO` lines over unbounded memory growth. The jwt-bearer-specific carve-out added in SOL-154400 (which skipped this check entirely for that grant type) is removed: jwt-bearer now gets the identical treatment as token-exchange, with no grant-type-specific behavior. Tracked under SOL-155161.
