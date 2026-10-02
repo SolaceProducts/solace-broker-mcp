@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 #
-# release.yml builds four cross-compiled binaries and, before this script,
+# release.yml builds cross-compiled binaries and, before this script,
 # never ran any of them: the gate was compile-plus-attest. A binary that builds
 # but fails at startup — a bad cross-compile, a missing runtime dependency, a
 # packaging mistake that ships the wrong file — would reach a checksum and a
@@ -13,7 +13,8 @@
 #
 # WHAT IT CHECKS
 #
-#   1. The archive extracts and contains an executable named "solace-broker-mcp".
+#   1. The archive extracts and contains an executable named "solace-broker-mcp"
+#      ("solace-broker-mcp.exe" on windows).
 #   2. `./solace-broker-mcp --version` exits 0 — not merely that the process
 #      started, an exit code.
 #   3. Its stdout, trimmed, equals the expected version exactly — so a stale
@@ -22,7 +23,7 @@
 #
 # Every failure names the platform (goos/goarch), since this runs once per
 # matrix leg and a bare "smoke test failed" in the Actions log does not say
-# which of four archives is broken.
+# which archive is broken.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK
 #
@@ -43,6 +44,9 @@ GOOS="${3:?usage: smoke-test-binary.sh <archive-path> <expected-version> <goos> 
 GOARCH="${4:?usage: smoke-test-binary.sh <archive-path> <expected-version> <goos> <goarch>}"
 
 BIN_NAME="solace-broker-mcp"
+if [ "$GOOS" = "windows" ]; then
+    BIN_NAME="${BIN_NAME}.exe"
+fi
 PLATFORM="${GOOS}/${GOARCH}"
 
 if [ ! -f "$ARCHIVE" ]; then

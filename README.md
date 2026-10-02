@@ -179,7 +179,7 @@ the configuration above. For contributors running from source, see
 
 ### Binary Deployment
 
-Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
+Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64.
 
 Download the checksums file, verify the checksum, and extract:
 

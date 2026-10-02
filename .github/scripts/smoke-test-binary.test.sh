@@ -144,14 +144,35 @@ EOF
     echo "$archive"
 }
 
+# The same good fixture, but the file inside is named solace-broker-mcp.exe —
+# the shape the windows leg's archive has.
+build_good_exe_archive() { # <version>
+    local tmp archive
+    tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
+    cat >"$tmp/$BIN_NAME.exe" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "--version" ]; then
+    echo "$1"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$tmp/$BIN_NAME.exe"
+    archive="$tmp/archive.tar.gz"
+    tar czf "$archive" -C "$tmp" "$BIN_NAME.exe"
+    echo "$archive"
+}
+
 # --- harness ---------------------------------------------------------------
 
-# assert_check <description> <expected exit code> <archive> <expected-version>
+# assert_check <description> <expected exit code> <archive> <expected-version> [goos]
 assert_check() {
-    local desc="$1" want="$2" archive="$3" expected_version="$4"
+    local desc="$1" want="$2" archive="$3" expected_version="$4" goos="${5:-linux}"
+    local goarch=amd64
     local got=0
 
-    "$CHECK" "$archive" "$expected_version" linux amd64 >/dev/null 2>&1 || got=$?
+    "$CHECK" "$archive" "$expected_version" "$goos" "$goarch" >/dev/null 2>&1 || got=$?
 
     if [ "$got" -eq "$want" ]; then
         echo "  ok       $desc (exit $got)"
@@ -188,6 +209,15 @@ assert_check "a nonexistent archive path fails" 1 \
 
 assert_check "correct stdout with noisy stderr still passes — stderr must not be compared" 0 \
     "$(build_noisy_stderr_archive "$VERSION")" "$VERSION"
+
+assert_check "a windows archive carrying solace-broker-mcp.exe passes" 0 \
+    "$(build_good_exe_archive "$VERSION")" "$VERSION" windows
+
+assert_check "a windows archive carrying an extensionless binary fails" 1 \
+    "$good_archive" "$VERSION" windows
+
+assert_check "a linux archive carrying a .exe binary fails" 1 \
+    "$(build_good_exe_archive "$VERSION")" "$VERSION" linux
 
 echo
 echo "$pass passed, $fail failed"

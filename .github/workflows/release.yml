@@ -308,6 +308,8 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -329,19 +331,25 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          BIN="solace-broker-mcp"
+          if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
           go build \
             -ldflags "-s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=${VERSION}" \
-            -o solace-broker-mcp \
+            -o "${BIN}" \
             ./cmd/server
 
       - name: Package archive
+        env:
+          GOOS: ${{ matrix.goos }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          BIN="solace-broker-mcp"
+          if [ "${GOOS}" = "windows" ]; then BIN="${BIN}.exe"; fi
           ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE (Apache-2.0
           # section 4(d)), per SOL-152414.
           tar czf "${ARCHIVE}" \
-            solace-broker-mcp \
+            "${BIN}" \
             broker-config.example.yaml \
             LICENSE \
             NOTICE \
@@ -368,7 +376,7 @@ jobs:
   # attestation, neither of which attests that it runs.
   #
   # This is a separate job, not a step appended to build-binaries, because
-  # build-binaries runs entirely on ubuntu-latest (all four legs are built
+  # build-binaries runs entirely on ubuntu-latest (all five legs are built
   # there, two of them cross-compiled) and the darwin archives cannot execute
   # on ubuntu-latest at all. Each leg below runs on the runner OS that can
   # actually execute its binary.
@@ -379,7 +387,7 @@ jobs:
       contents: read
     strategy:
       # Unlike build-binaries (default fail-fast), a mid-run cancellation here
-      # would hide which of four platforms is actually broken — the opposite of
+      # would hide which of five platforms is actually broken — the opposite of
       # "the failure names the platform." Let every leg finish and report.
       fail-fast: false
       matrix:
@@ -412,6 +420,13 @@ jobs:
             goarch: arm64
             runs-on: macos-latest
             qemu: false
+          # Native Windows runner. The default shell there is PowerShell, so
+          # the smoke-test step below pins `shell: bash` (Git Bash ships on
+          # windows-latest, with the tar the archive needs).
+          - goos: windows
+            goarch: amd64
+            runs-on: windows-latest
+            qemu: false
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -434,7 +449,7 @@ jobs:
       # leg names at all, so it can't go quiet just because a leg is renamed.
       # What that PR-time run can't cover is BSD userland — it runs on
       # ubuntu-latest — so this one macOS leg keeps that coverage without
-      # paying 10x-billed macOS minutes on all four legs for a sub-second
+      # paying 10x-billed macOS minutes on all five legs for a sub-second
       # fixture test that gives identical signal on every leg it runs on.
       - name: Self-test the smoke-test script
         if: matrix.goos == 'darwin' && matrix.goarch == 'arm64'
@@ -443,6 +458,7 @@ jobs:
       # The archived artifact downloaded above, not a binary freshly built in
       # this job's workspace — packaging bugs are in scope.
       - name: Smoke-test the archived binary
+        shell: bash
         run: |
           ARCHIVE="solace-broker-mcp-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           .github/scripts/smoke-test-binary.sh "$ARCHIVE" "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}"
