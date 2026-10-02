@@ -215,7 +215,7 @@ These tools create, update, and delete event broker configuration objects via th
 | `create-queue` | No | Create a queue in a VPN. |
 | `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-queue` | **Yes** | Delete a queue, discard any messages still spooled on it, and remove any topic subscriptions attached to it. |
-| `create-queue-subscription` | No | Add a topic subscription to a queue (Solace wildcards `>`/`*` accepted — pass the literal characters, not an HTML-escaped form such as `&gt;`). A queue with none attracts no messages. |
+| `create-queue-subscription` | No | Add a topic subscription to a queue (Solace wildcards `>`/`*` accepted — pass the literal characters, not an HTML-escaped form such as `&gt;`; an HTML-escaped topic is rejected with an error). A queue with none attracts no messages. |
 | `delete-queue-subscription` | **Yes** | Remove a topic subscription from a queue. A successful removal is silent (no error, matching messages simply stop arriving); the call itself still fails normally if the subscription doesn't exist. |
 | `create-topic-endpoint` | No | Create a topic endpoint in a VPN. |
 | `update-topic-endpoint` | **Yes** | Partially update a topic endpoint's attributes. Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
@@ -268,11 +268,15 @@ Tool errors include structured fields to help diagnose the problem:
 | `kind` | SEMPv1 error classification: `http`, `execute-fail`, `parse`, `permission`, `limit`, or `unknown`. | SEMPv1 |
 | `reasonCode` | SEMPv1 reason code from the event broker response. | SEMPv1 `execute-fail` responses |
 | `attempts` | Number of attempts made before retries were exhausted. | Retries exhausted |
-| `error_source` | Origin tag for an error not carrying a SEMP status/code of its own: `load_shed`, `token_exchange`, or `owner_validation` (the requested `owner` doesn't exist). Not set when the owner-existence check itself could not complete — see `error_stage` below, which can coexist with `load_shed`/`token_exchange` since that failure may itself be a shed request or a token-exchange error. | When applicable |
+| `error_source` | Origin tag for an error not carrying a SEMP status/code of its own: `load_shed`, `token_exchange`, `owner_validation` (the requested `owner` doesn't exist), or `input_validation` (a caller-supplied argument failed a local check before any SEMP call — today: an HTML-escaped `subscriptionTopic` on `create-queue-subscription`). Not set when the owner-existence check itself could not complete — see `error_stage` below, which can coexist with `load_shed`/`token_exchange` since that failure may itself be a shed request or a token-exchange error. | When applicable |
 | `error_stage` | Set to `owner_validation_check` when the pre-flight owner-existence check itself failed to complete (a transient error, distinct from the check completing and reporting the owner absent). Coexists with, and never overwrites, `error_source`. | `error_stage: owner_validation_check` |
 | `owner` | The client username involved in an owner-existence check. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
 | `msgVpnName` | The Message VPN the owner check ran against. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
 | `objectKind` | The object type being created/updated (`queue` or `topic endpoint`) when an `owner` check failed or could not complete. | `error_source: owner_validation` or `error_stage: owner_validation_check` |
+| `parameter` | Name of the rejected argument (for example, `subscriptionTopic`). | `error_source: input_validation` |
+| `value` | The rejected value exactly as sent. | `error_source: input_validation` |
+| `matchedEntity` | The HTML entity found in `value` (for example, `&gt;`). | `error_source: input_validation` |
+| `fullyDecodedValue` | `value` with every layer of HTML escaping undone — the value to resend. May differ from a single substitution of `matchedEntity` if `value` was escaped more than once. | `error_source: input_validation` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:
