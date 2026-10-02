@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS
 #
-# release.yml builds four cross-compiled binaries and, before this script,
+# release.yml builds cross-compiled binaries and, before this script,
 # never ran any of them: the gate was compile-plus-attest. A binary that builds
 # but fails at startup — a bad cross-compile, a missing runtime dependency, a
 # packaging mistake that ships the wrong file — would reach a checksum and a
@@ -13,7 +13,8 @@
 #
 # WHAT IT CHECKS
 #
-#   1. The archive extracts and contains an executable named "solace-broker-mcp".
+#   1. The archive extracts and contains an executable named "solace-broker-mcp"
+#      ("solace-broker-mcp.exe" on windows).
 #   2. `./solace-broker-mcp --version` exits 0 — not merely that the process
 #      started, an exit code.
 #   3. Its stdout, trimmed, equals the expected version exactly — so a stale
@@ -22,7 +23,7 @@
 #
 # Every failure names the platform (goos/goarch), since this runs once per
 # matrix leg and a bare "smoke test failed" in the Actions log does not say
-# which of four archives is broken.
+# which archive is broken.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK
 #
@@ -43,6 +44,9 @@ GOOS="${3:?usage: smoke-test-binary.sh <archive-path> <expected-version> <goos> 
 GOARCH="${4:?usage: smoke-test-binary.sh <archive-path> <expected-version> <goos> <goarch>}"
 
 BIN_NAME="solace-broker-mcp"
+if [ "$GOOS" = "windows" ]; then
+    BIN_NAME="${BIN_NAME}.exe"
+fi
 PLATFORM="${GOOS}/${GOARCH}"
 
 if [ ! -f "$ARCHIVE" ]; then
@@ -55,7 +59,20 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 # The archived artifact, not a freshly built binary — packaging bugs (wrong
 # file bundled, tar built from a different GOOS/GOARCH leg) are in scope.
-if ! tar xzf "$ARCHIVE" -C "$TMPDIR"; then
+extract() {
+    case "$ARCHIVE" in
+        *.zip)
+            # Prefer unzip; fall back to 7z (preinstalled on windows-latest) if it is absent.
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -q "$ARCHIVE" -d "$TMPDIR"
+            else
+                7z x -y -bso0 -o"$TMPDIR" "$ARCHIVE"
+            fi
+            ;;
+        *) tar xzf "$ARCHIVE" -C "$TMPDIR" ;;
+    esac
+}
+if ! extract; then
     echo "::error::[$PLATFORM] archive did not extract: $ARCHIVE" >&2
     exit 1
 fi

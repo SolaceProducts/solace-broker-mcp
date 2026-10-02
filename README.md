@@ -179,7 +179,7 @@ the configuration above. For contributors running from source, see
 
 ### Binary Deployment
 
-Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
+Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64.
 
 Download the checksums file, verify the checksum, and extract:
 
@@ -189,6 +189,12 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 
 # Extract
 tar xzf solace-broker-mcp-v*.tar.gz
+```
+
+The `windows/amd64` archive is a `.zip`, not a `.tar.gz`. In PowerShell:
+
+```powershell
+Expand-Archive solace-broker-mcp-v*-windows-amd64.zip -DestinationPath solace-broker-mcp
 ```
 
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
