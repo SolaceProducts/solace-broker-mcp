@@ -453,6 +453,68 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	}
 }
 
+// TestListBrokers_OmittedOrNullArguments_Succeeds covers a regression a code
+// review caught before merge: omitted arguments and an explicit JSON null are
+// both legal (CallToolParams.Arguments carries omitempty, and the SDK places
+// no server-side default), and both were silently accepted before SOL-153693
+// since list-brokers validated nothing at all. Once CallTool.noBroker started
+// validating, both arrived as a nil params map, and
+// json.Marshal(map[string]any(nil)) — what validateAgainstCompiledSchema does
+// internally — produces the JSON literal null rather than {}, which fails
+// list-brokers's own "type":"object" schema. A broker-resolving tool never
+// hits this: indexing params["broker"] on a nil map is safe and already fails
+// it with "broker parameter is required" before validation ever runs, so the
+// nil-params question never reached a no-broker tool's input schema until
+// this one started checking it.
+func TestListBrokers_OmittedOrNullArguments_Succeeds(t *testing.T) {
+	newSession := func(t *testing.T, clientMiddleware ...mcp.Middleware) *mcp.ClientSession {
+		t.Helper()
+		pool := newRegTestPool(t)
+		mgr := NewToolManager(pool)
+		RegisterListBrokers(mgr, pool)
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+		RegisterWithServer(mgr, server, pool, true, nil, "")
+
+		ctx := context.Background()
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		go func() { _ = server.Run(ctx, serverTransport) }()
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+		if len(clientMiddleware) > 0 {
+			client.AddSendingMiddleware(clientMiddleware...)
+		}
+		session, err := client.Connect(ctx, clientTransport, nil)
+		if err != nil {
+			t.Fatalf("client connect: %v", err)
+		}
+		t.Cleanup(func() { session.Close() })
+		return session
+	}
+
+	t.Run("omitted entirely", func(t *testing.T) {
+		session := newSession(t, forceOmitArguments)
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list-brokers"})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("list-brokers with omitted arguments returned IsError: %v", res.Content)
+		}
+	})
+
+	t.Run("explicit JSON null", func(t *testing.T) {
+		session := newSession(t)
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "list-brokers", Arguments: json.RawMessage("null")})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("list-brokers with null arguments returned IsError: %v", res.Content)
+		}
+	})
+}
+
 // callToolTestHarness spins up a real MCP server+client session over an
 // in-memory transport with a single stub tool registered, mirroring
 // TestPanicAuditedAsError / TestListBrokersEmitsAuditLog. The SOL-153765

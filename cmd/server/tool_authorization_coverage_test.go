@@ -146,3 +146,44 @@ func TestExemptToolsAreActuallyRegistered(t *testing.T) {
 		t.Errorf("exempt tool(s) not registered on the server: %v", exemptButAbsent)
 	}
 }
+
+// TestOnlyTheTwoNoBrokerToolsAreExempt closes a gap the two tests above cannot.
+//
+// TestEveryRegisteredToolIsGatedOrExempt checks `isGated || exempt`, which
+// short-circuits on isGated for any ordinary, policy-wrapped tool — so a third
+// tool added to IsExemptFromToolAuthorization's name list by mistake would
+// still read as "gated" there and the suite would stay green, even though
+// RegisterWithServer's `!IsExemptFromToolAuthorization(reg.name)` guard would
+// then silently skip wrapping it with withAuthorization at runtime.
+// TestExemptToolsAreActuallyRegistered only ever asks about the two known-good
+// names, so it cannot see an extra one either. This test checks the predicate
+// against every exposed tool name directly, independent of gating.
+func TestOnlyTheTwoNoBrokerToolsAreExempt(t *testing.T) {
+	_, exposed := gatedAndExposedTools(t)
+	if len(exposed) == 0 {
+		t.Fatal("server exposed no tools; the registration pipeline did not run")
+	}
+
+	wantExempt := map[string]bool{"list-brokers": true, "describe-semp-schema": true}
+
+	var unexpectedlyExempt []string
+	for _, tool := range exposed {
+		isExempt := tools.IsExemptFromToolAuthorization(tool.Name)
+		if isExempt && !wantExempt[tool.Name] {
+			unexpectedlyExempt = append(unexpectedlyExempt, tool.Name)
+		}
+		if !isExempt && wantExempt[tool.Name] {
+			t.Errorf("%q is expected to be exempt but the predicate disagrees; "+
+				"update this test if the exemption was removed deliberately", tool.Name)
+		}
+	}
+
+	if len(unexpectedlyExempt) > 0 {
+		sort.Strings(unexpectedlyExempt)
+		t.Errorf("tool(s) unexpectedly exempt from tool authorization: %v — "+
+			"IsExemptFromToolAuthorization must name only list-brokers and "+
+			"describe-semp-schema. A third entry silently stops RegisterWithServer "+
+			"from policy-wrapping that tool, and nothing else in this suite would "+
+			"catch it.", unexpectedlyExempt)
+	}
+}

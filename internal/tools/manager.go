@@ -367,6 +367,21 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// cannot arise here, so this branch skips them rather than reusing the
 	// broker-resolving tail below.
 	if rt.noBroker {
+		// Omitted arguments or an explicit JSON null both arrive here as a nil
+		// params map (RegisterWithServer's dispatch closure only populates it
+		// when it decodes a non-empty object) — legal per the MCP spec,
+		// equivalent to {}. A broker-resolving tool never reaches this
+		// question: indexing params["broker"] on a nil map is safe and
+		// already fails it with "broker parameter is required" before
+		// validation runs. A no-broker tool has no such earlier gate, and
+		// json.Marshal(map[string]any(nil)) — what validateAgainstCompiledSchema
+		// does internally — produces the JSON literal null, not {}, which
+		// fails every tool's "type":"object" schema. Normalizing here is what
+		// keeps that pre-existing legal shape legal now that this branch
+		// actually validates.
+		if params == nil {
+			params = map[string]any{}
+		}
 		if _, err := validateAgainstCompiledSchema(params, rt.input, "parameter validation failed"); err != nil {
 			errorType = metrics.ErrorTypeValidationError
 			toolErr = err

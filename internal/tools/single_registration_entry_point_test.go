@@ -29,9 +29,10 @@ import (
 // package, so a future tool that does not fit the standard shape cannot
 // bypass ToolManager's input validation by adding a second, unpoliced call
 // site — which is exactly how list-brokers and describe-semp-schema ended up
-// with no input validation at all before this ticket (CallTool.Register's
-// Metadata.NoBroker field is the supported way to add a no-broker tool now;
-// see manager.go and register.go's RegisterWithServer).
+// with no input validation at all before this ticket. Metadata.NoBroker
+// (types.go) is the supported way to add a no-broker tool now; see
+// ToolHandler.Metadata, ToolManager.Register, and register.go's
+// RegisterWithServer.
 //
 // A grep for ".AddTool(" would almost work, but would also match a mention
 // inside a comment or string literal; this walks the AST instead, the same

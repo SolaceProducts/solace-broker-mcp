@@ -463,7 +463,7 @@ refused by tool authorization never reaches one, so it is absent here and counte
   call) and `unknown` (an alias that is not configured). The log line keeps the raw alias the
   caller typed; only the metric label is canonicalized, so a typo cannot mint a new series.
 - `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
-- `error_type`: the failure cause, from the thirteen values in
+- `error_type`: the failure cause, from the twelve values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
@@ -1172,7 +1172,7 @@ records means your log level, not your flag.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
-| `error_type` | Why an operation failed; present on `outcome: error` only. Six of the thirteen values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
+| `error_type` | Why an operation failed; present on `outcome: error` only. Six of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
 | `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
@@ -1858,7 +1858,7 @@ below), none of which reach the tool dispatcher. Select those on
 `http.response.status_code` instead, and **not** on the span status: following the OTel server
 convention, `otelhttp` sets the status to `Error` only for 5xx, so a 403 or 413 entry span has
 status `Unset`. Only
-`tools.CallTool` carries `error_type`: the thirteen-value set is scoped to tool-invocation outcomes,
+`tools.CallTool` carries `error_type`: the twelve-value set is scoped to tool-invocation outcomes,
 and the executor and SEMP layers have no value in it that describes an orchestration or
 transport failure — the same reasoning that exempts `tokenexchange.Exchange` below. Those spans
 report `outcome: error` and an `Error` span status, and the classification for the call as a
@@ -1884,7 +1884,7 @@ in the audit record, inside your own log pipeline. (`tokenexchange.Exchange` is 
 does record its exception verbatim — see the warning at the end of this section.)
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
-thirteen-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
 describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
 transport, request-build). The span still carries the actual cause via the span's recorded
 exception event and its status (`codes.Error`), just not through this shared field. A future
@@ -2722,8 +2722,8 @@ the review.
    inside it (Story 27, now shipped), matches how you would query retries, and whether you
    expect `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
-   cause in a separate `error_type` of thirteen values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the thirteen
+   cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the twelve
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**
