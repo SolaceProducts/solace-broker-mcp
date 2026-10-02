@@ -375,7 +375,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml@28c83e5b0e326469a061ec77f52807ec090c0b02
+    uses: SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml@main
     with:
       table_name: solace-cloud-manifest
       manifest_aws_role: arn:aws:iam::868978040651:role/github-solace-cloud-manifest-rw
