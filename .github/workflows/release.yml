@@ -379,7 +379,7 @@ jobs:
   #
   # This is a separate job, not a step appended to build-binaries, because
   # build-binaries runs entirely on ubuntu-latest (all five legs are built
-  # there, two of them cross-compiled) and the darwin archives cannot execute
+  # there, four of them cross-compiled) and the darwin archives cannot execute
   # on ubuntu-latest at all. Each leg below runs on the runner OS that can
   # actually execute its binary.
   smoke-test:

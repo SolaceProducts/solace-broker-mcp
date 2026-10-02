@@ -183,6 +183,32 @@ EOF
     echo "$archive"
 }
 
+# A PATH holding only what smoke-test-binary.sh needs, with no unzip, plus
+# (when asked) a `7z` shim. This forces the zip fallback, taken when unzip is
+# absent. The shim mimics the one invocation the script makes,
+# `7z x -y -bso0 -o<dir> <archive>`, by delegating to the real unzip, or exits
+# non-zero like a failed extraction when SHIM_7Z_FAIL=1.
+REAL_UNZIP=$(command -v unzip)
+build_no_unzip_path() { # <with7z|none>; prints the PATH
+    local bin tool
+    bin=$(mktemp -d)
+    ALL_TMP_DIRS+=("$bin")
+    for tool in bash env mktemp rm tar cat; do
+        ln -s "$(command -v "$tool")" "$bin/$tool"
+    done
+    if [ "$1" = "with7z" ]; then
+        cat >"$bin/7z" <<EOF
+#!/usr/bin/env bash
+[ "\${SHIM_7Z_FAIL:-}" = "1" ] && exit 2
+shift 3 # x -y -bso0
+out="\${1#-o}"
+exec "$REAL_UNZIP" -q "\$2" -d "\$out"
+EOF
+        chmod +x "$bin/7z"
+    fi
+    echo "$bin"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> <archive> <expected-version> [goos]
@@ -191,7 +217,7 @@ assert_check() {
     local goarch=amd64
     local got=0
 
-    "$CHECK" "$archive" "$expected_version" "$goos" "$goarch" >/dev/null 2>&1 || got=$?
+    PATH="${CHECK_PATH:-$PATH}" "$CHECK" "$archive" "$expected_version" "$goos" "$goarch" >/dev/null 2>&1 || got=$?
 
     if [ "$got" -eq "$want" ]; then
         echo "  ok       $desc (exit $got)"
@@ -240,6 +266,19 @@ assert_check "a windows archive carrying an extensionless binary fails" 1 \
 
 assert_check "a linux archive carrying a .exe binary fails" 1 \
     "$(build_good_exe_archive "$VERSION")" "$VERSION" linux
+
+# unzip hidden: the script must take the 7z branch.
+CHECK_PATH=$(build_no_unzip_path with7z)
+assert_check "a .zip extracts through the 7z fallback when unzip is absent" 0 \
+    "$(build_good_exe_zip "$VERSION")" "$VERSION" windows
+
+SHIM_7Z_FAIL=1 assert_check "a failing 7z extraction fails the check" 1 \
+    "$(build_good_exe_zip "$VERSION")" "$VERSION" windows
+
+CHECK_PATH=$(build_no_unzip_path none)
+assert_check "a .zip with neither unzip nor 7z available fails" 1 \
+    "$(build_good_exe_zip "$VERSION")" "$VERSION" windows
+unset CHECK_PATH
 
 echo
 echo "$pass passed, $fail failed"
