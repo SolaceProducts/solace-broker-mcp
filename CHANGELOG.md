@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- The `HOP2_JWT_BEARER_ENABLED` environment variable is gone. `broker_oauth.grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"` now loads without an opt-in, where it previously failed config load unless that variable was `true`. The variable is no longer read, so setting it has no effect. Token-exchange configs are unchanged. Tracked under SOL-155349.
+- **BREAKING**: `HOP2_JWT_BEARER_ENABLED` is removed. `broker_oauth.grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"` previously failed config load unless that variable was `true`; it now loads unconditionally. The variable is no longer read and setting it has no effect. Migration: delete it from your deployment configuration. Token-exchange configs are unchanged. Tracked under SOL-155349.
 
 ### Fixed
 
