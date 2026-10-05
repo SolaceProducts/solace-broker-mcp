@@ -191,6 +191,8 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
+macOS: if Gatekeeper blocks the binary after a browser download, see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary).
+
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
 Run the MCP server with the configuration file:

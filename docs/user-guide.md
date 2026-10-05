@@ -367,7 +367,7 @@ If the health check fails, the probe prints the reason to stderr — Docker keep
 
 Opening `solace-broker-mcp` from Finder on macOS shows:
 
-> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac or compromise your privacy.
+> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac.
 
 The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and open normally.
 

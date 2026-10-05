@@ -75,7 +75,7 @@ Each was tried on a separate `ditto` copy of the quarantined extract.
 |---|---|---|
 | 1 | `xattr -d com.apple.quarantine solace-broker-mcp` | Works. Finder opens the binary with no dialog. `spctl` still reports `rejected`. |
 | 2 | Right-click → Open | Fails. Same "Not Opened" dialog, no Open button. |
-| 3 | System Settings → Privacy & Security → Open Anyway | Works. A second "Open "solace-broker-mcp"?" dialog offers **Open Anyway**; a password or Touch ID prompt follows and the binary runs. The quarantine attribute stays, its flags field changing from `0081` to `00c1`. |
+| 3 | System Settings → Privacy & Security → Open Anyway | Works. A second **Open “solace-broker-mcp”?** dialog offers **Open Anyway**; a password or Touch ID prompt follows and the binary runs. The quarantine attribute stays, its flags field changing from `0081` to `00c1`. |
 
 ## Reasoning
 
