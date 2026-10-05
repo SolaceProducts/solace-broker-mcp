@@ -181,8 +181,8 @@ note spells out.
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `f87e599` | v4.4.1 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.4.1/LICENSE) |
 | `docker/setup-qemu-action` | `9901266` | v4.4.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.4.0/LICENSE) |
-| `github/codeql-action/analyze` | `b96794f` | v4.38.0 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.0/LICENSE) |
-| `github/codeql-action/init` | `b96794f` | v4.38.0 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.0/LICENSE) |
+| `github/codeql-action/analyze` | `1c5b675` | v4.38.1 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.1/LICENSE) |
+| `github/codeql-action/init` | `1c5b675` | v4.38.1 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.1/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
 
