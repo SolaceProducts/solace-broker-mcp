@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-05
+
 ### Added
 
 - Release archives now include `windows/amd64`: `solace-broker-mcp-<version>-windows-amd64.zip` (a `.zip`, unlike the other four `.tar.gz` archives) ships `solace-broker-mcp.exe`, with a `checksums-sha256.txt` line and build provenance attestation like the other four platforms, and is smoke-tested on a native Windows runner before release. Tracked under SOL-153187.
@@ -695,7 +697,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.10.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.11.0...HEAD
+- [0.11.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.10.0...v0.11.0
 - [0.10.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.9.0...v0.10.0
 - [0.9.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.8.0...v0.9.0
 - [0.8.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.1...v0.8.0
