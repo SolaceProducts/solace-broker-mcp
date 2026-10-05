@@ -105,6 +105,7 @@ Each tagged release produces the following artifacts:
 | `solace-broker-mcp-v0.1.0-linux-arm64.tar.gz` | GitHub Release |
 | `solace-broker-mcp-v0.1.0-darwin-amd64.tar.gz` | GitHub Release |
 | `solace-broker-mcp-v0.1.0-darwin-arm64.tar.gz` | GitHub Release |
+| `solace-broker-mcp-v0.1.0-windows-amd64.zip` | GitHub Release |
 | `checksums-sha256.txt` | GitHub Release |
 | Docker image | `ghcr.io/solaceproducts/solace-broker-mcp` |
 | Example K8s manifests | In-repo at `deploy/kubernetes/` |
@@ -117,10 +118,10 @@ promise — are defined in
 
 ### Archive contents
 
-Each `.tar.gz` contains:
+Each archive (`.tar.gz`, or `.zip` for `windows-amd64`) contains:
 
 ```
-solace-broker-mcp          # binary
+solace-broker-mcp          # binary (solace-broker-mcp.exe in the Windows .zip)
 broker-config.example.yaml # example configuration
 LICENSE                    # Apache 2.0
 ```

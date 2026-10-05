@@ -115,7 +115,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 ## Prerequisites
 
 - Access to one or more Solace event brokers with SEMP management enabled
-- [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
+- [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
 - **For Development / Building from Source:**
   - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
   - Not needed if using pre-built binaries or Docker images
@@ -197,12 +197,24 @@ The `windows/amd64` archive is a `.zip`, not a `.tar.gz`. In PowerShell:
 Expand-Archive solace-broker-mcp-v*-windows-amd64.zip -DestinationPath solace-broker-mcp
 ```
 
+To verify the checksum on Windows, compare the hash against the matching line in `checksums-sha256.txt`:
+
+```powershell
+Get-FileHash solace-broker-mcp-v*-windows-amd64.zip -Algorithm SHA256
+```
+
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
 Run the MCP server with the configuration file:
 
 ```bash
 CONFIG_FILE=./broker-config.yaml ./solace-broker-mcp
+```
+
+On Windows (PowerShell), run the extracted binary:
+
+```powershell
+$env:CONFIG_FILE = ".\broker-config.yaml"; .\solace-broker-mcp\solace-broker-mcp.exe
 ```
 
 If the configuration file is named `broker-config.yaml` in the current directory, the server does not require `CONFIG_FILE`.
@@ -212,6 +224,12 @@ Verify:
 ```bash
 curl http://localhost:9090/livez
 # {"status":"alive"}
+```
+
+In PowerShell, use `curl.exe` (plain `curl` is an alias for `Invoke-WebRequest`):
+
+```powershell
+curl.exe http://localhost:9090/livez
 ```
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
