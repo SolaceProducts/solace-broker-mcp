@@ -1411,23 +1411,27 @@ func main() {
 	if policy != nil {
 		groupsClaimName = *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
 	}
-	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy, groupsClaimName)
-	slog.Info("tool registration complete",
-		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
-	// list-brokers is registered directly (no broker resolution needed) and
-	// takes no policy — the RBAC exemption is expressed structurally at this
-	// API surface.
-	tools.RegisterListBrokers(server, pool, toolMetrics)
-
-	// describe-semp-schema is a discovery tool over the embedded SEMPv2 OpenAPI
-	// spec. Registered outside mgr like list-brokers — no broker resolution,
-	// no policy wrapping.
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS, toolMetrics); err != nil {
+	// list-brokers and describe-semp-schema take no broker parameter and
+	// resolve no SEMP client (Metadata.NoBroker), so they register into mgr
+	// — not directly on server — like every other tool (SOL-153693): "no
+	// broker parameter" is a first-class case of the one registration path,
+	// not a reason to bypass ToolManager and its input validation. Both run
+	// BEFORE RegisterWithServer so they are already in mgr.Handlers() when
+	// that single pass builds the server's tool set. RBAC exemption for both
+	// (IsExemptFromToolAuthorization) is still honoured — RegisterWithServer
+	// skips the policy wrapper for them explicitly now, rather than that
+	// exemption falling out of being registered outside its loop.
+	tools.RegisterListBrokers(mgr, pool)
+	if err := tools.RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
 		slog.Error("failed to register describe-semp-schema tool",
 			slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy, groupsClaimName)
+	slog.Info("tool registration complete",
+		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
 	// Validate every configured tool name now that both registrations have
 	// populated mgr. An admin typo would silently produce a grant that never

@@ -96,6 +96,15 @@ type Metadata struct {
 
 	// Annotations are the behavioral hints (read-only, destructive, etc.).
 	Annotations Annotations
+
+	// NoBroker marks a tool that takes no broker parameter and resolves no
+	// SEMP client — e.g. list-brokers, describe-semp-schema. The
+	// registration path skips injecting the broker parameter into its input
+	// schema, and ToolManager.CallTool skips broker resolution and calls
+	// Handle with a nil *ToolContext (such a handler must never dereference
+	// tc). Zero value (false) preserves today's behavior for every other
+	// tool, which still gets the broker parameter injected and resolved.
+	NoBroker bool
 }
 
 // ToolHandler is the interface every tool implementation satisfies. Composite

@@ -1101,6 +1101,74 @@ func TestLogToolResult_UnknownErrorLogsTypeNotMessage(t *testing.T) {
 	}
 }
 
+// TestLogToolResult_HTMLEntityTopicError_DoesNotLogCallerTopic pins a
+// regression found in review (PR #446): htmlEntityTopicError is deliberately
+// NOT in logToolResult's audited-broker-error-type allowlist (manager.go,
+// `isV1 || isV2 || ... `), unlike BrokerBusyError/ExchangeError/etc. — it's a
+// local, schema-validation-shaped rejection, not a broker outcome, so
+// "detail" for it is just the bare Go type, exactly like any other
+// unaudited local error (TestLogToolResult_UnknownErrorLogsTypeNotMessage
+// above). The caller's own argument (the rejected topic, e.g.
+// "ABC/&gt;") must never appear in it. Without this test, re-adding the
+// type to that allowlist — which would also start logging the caller's raw
+// topic verbatim — would not fail anything: TestCallTool_HTMLEntityTopic_
+// RejectsBeforeHandle only checks the returned result, never the server-side
+// log.
+func TestLogToolResult_HTMLEntityTopicError_DoesNotLogCallerTopic(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		t.Fatal("Handle must not be called when the topic is rejected in local validation")
+		return nil, nil
+	}
+	handler.schema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"msgVpnName":        map[string]any{"type": "string"},
+			"queueName":         map[string]any{"type": "string"},
+			"subscriptionTopic": map[string]any{"type": "string"},
+		},
+		"required": []string{"msgVpnName", "queueName", "subscriptionTopic"},
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":            "dev",
+		"msgVpnName":        "default",
+		"queueName":         "q1",
+		"subscriptionTopic": "ABC/&gt;",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true")
+	}
+
+	var logFields map[string]any
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &logFields); jsonErr != nil {
+		t.Fatalf("failed to parse log output as JSON: %v\nlog: %s", jsonErr, buf.String())
+	}
+
+	detail, _ := logFields["detail"].(string)
+	if strings.Contains(detail, "ABC/&gt;") || strings.Contains(detail, "&gt;") {
+		t.Errorf("detail leaked the caller's topic: %q — htmlEntityTopicError must not be in logToolResult's audited allowlist", detail)
+	}
+	if detail == "" {
+		t.Error("detail is empty; expected the bare Go type of htmlEntityTopicError")
+	}
+	if got := logFields["error_type"]; got != "validation_error" {
+		t.Errorf("error_type = %v, want %q", got, "validation_error")
+	}
+}
+
 // TestLogToolResult_V1ErrorEmitsStructuredFields verifies that when a handler
 // returns a *sempv1.Error, the manager's logToolResult emits the v1-specific
 // structured log fields (kind, http_status, reason_code) and does not emit the

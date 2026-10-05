@@ -203,6 +203,8 @@ To verify the checksum on Windows, compare the hash against the matching line in
 Get-FileHash solace-broker-mcp-v*-windows-amd64.zip -Algorithm SHA256
 ```
 
+macOS: if Gatekeeper blocks the binary after a browser download, see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary).
+
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
 Run the MCP server with the configuration file:
@@ -406,7 +408,7 @@ go mod download
 make hooks
 ```
 
-Run this once per clone. This installs `.githooks/prepare-commit-msg` into `.git/hooks/`, read out of `origin/main` rather than out of your working tree, so run `git fetch` first on a fresh clone. It adds the Developer Certificate of Origin (DCO) `Signed-off-by` trailer that the required `DCO` check looks for, so you do not have to remember `git commit -s`. Use `HOOKS_REF=HEAD make hooks` when you are editing the hook itself. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied from a trusted ref rather than activated with `core.hooksPath`.
+Run this once per clone. This installs `.githooks/prepare-commit-msg` into your repository's hooks directory (normally `.git/hooks/`), read out of `origin/main` rather than out of your working tree, so run `git fetch` first on a fresh clone. It adds the Developer Certificate of Origin (DCO) `Signed-off-by` trailer that the required `DCO` check looks for, so you do not have to remember `git commit -s`. Use `HOOKS_REF=HEAD make hooks` when you are editing the hook itself. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied from a trusted ref rather than activated with `core.hooksPath`.
 
 ### 3. Create Event Broker Configuration and Credentials
 

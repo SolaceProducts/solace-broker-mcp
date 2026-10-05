@@ -178,9 +178,9 @@ func TestRegisterWithServer_WriteGated(t *testing.T) {
 
 func TestRegisterListBrokers(t *testing.T) {
 	pool := newRegTestPool(t)
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	mgr := NewToolManager(pool)
 
-	RegisterListBrokers(server, pool, nil)
+	RegisterListBrokers(mgr, pool)
 	// No panic = registered successfully.
 }
 
@@ -400,9 +400,11 @@ func TestPanicIncrementsPanicCounter(t *testing.T) {
 	}
 }
 
-// TestListBrokersEmitsAuditLog covers the audit gap on the standalone
-// list-brokers tool: its handler does not flow through CallTool, so before
-// the fix a successful invocation produced zero audit output. Every tool
+// TestListBrokersEmitsAuditLog covers the audit surface on list-brokers.
+// Before SOL-153693 its handler was registered directly on the server and
+// never flowed through CallTool, so a successful invocation produced zero
+// audit output; now it is an ordinary CallTool-routed tool (Metadata.NoBroker,
+// not a bypass) and gets the same audit line every tool does. Every tool
 // invocation must emit exactly one "tool invoked" audit line.
 func TestListBrokersEmitsAuditLog(t *testing.T) {
 	var logBuf bytes.Buffer
@@ -411,8 +413,10 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	defer slog.SetDefault(oldLogger)
 
 	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	RegisterListBrokers(mgr, pool)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -447,6 +451,68 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	if got := audits[0]["broker"]; got != "none" {
 		t.Errorf("audit broker = %v, want %q", got, "none")
 	}
+}
+
+// TestListBrokers_OmittedOrNullArguments_Succeeds covers a regression a code
+// review caught before merge: omitted arguments and an explicit JSON null are
+// both legal (CallToolParams.Arguments carries omitempty, and the SDK places
+// no server-side default), and both were silently accepted before SOL-153693
+// since list-brokers validated nothing at all. Once CallTool.noBroker started
+// validating, both arrived as a nil params map, and
+// json.Marshal(map[string]any(nil)) — what validateAgainstCompiledSchema does
+// internally — produces the JSON literal null rather than {}, which fails
+// list-brokers's own "type":"object" schema. A broker-resolving tool never
+// hits this: indexing params["broker"] on a nil map is safe and already fails
+// it with "broker parameter is required" before validation ever runs, so the
+// nil-params question never reached a no-broker tool's input schema until
+// this one started checking it.
+func TestListBrokers_OmittedOrNullArguments_Succeeds(t *testing.T) {
+	newSession := func(t *testing.T, clientMiddleware ...mcp.Middleware) *mcp.ClientSession {
+		t.Helper()
+		pool := newRegTestPool(t)
+		mgr := NewToolManager(pool)
+		RegisterListBrokers(mgr, pool)
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+		RegisterWithServer(mgr, server, pool, true, nil, "")
+
+		ctx := context.Background()
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		go func() { _ = server.Run(ctx, serverTransport) }()
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+		if len(clientMiddleware) > 0 {
+			client.AddSendingMiddleware(clientMiddleware...)
+		}
+		session, err := client.Connect(ctx, clientTransport, nil)
+		if err != nil {
+			t.Fatalf("client connect: %v", err)
+		}
+		t.Cleanup(func() { session.Close() })
+		return session
+	}
+
+	t.Run("omitted entirely", func(t *testing.T) {
+		session := newSession(t, forceOmitArguments)
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list-brokers"})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("list-brokers with omitted arguments returned IsError: %v", res.Content)
+		}
+	})
+
+	t.Run("explicit JSON null", func(t *testing.T) {
+		session := newSession(t)
+		res, err := session.CallTool(context.Background(),
+			&mcp.CallToolParams{Name: "list-brokers", Arguments: json.RawMessage("null")})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("list-brokers with null arguments returned IsError: %v", res.Content)
+		}
+	})
 }
 
 // callToolTestHarness spins up a real MCP server+client session over an
@@ -669,8 +735,10 @@ func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
 	pool := semp.NewBrokerPool(cfg, nil)
 	defer pool.Close()
 
+	mgr := NewToolManager(pool)
+	RegisterListBrokers(mgr, pool)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -1059,8 +1127,14 @@ func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 	}
 }
 
-// list-brokers is structurally exempt. Even under a policy that grants it
-// nothing, the call succeeds and no "tool authorization" audit line fires.
+// list-brokers is exempt from RBAC (IsExemptFromToolAuthorization). Before
+// SOL-153693 that was structural — it registered outside RegisterWithServer's
+// loop entirely, so the policy wrapper never touched it. Now it is an
+// ordinary regs entry in that same loop (Metadata.NoBroker, not a bypass), so
+// the exemption is an explicit check inside the loop instead — this test
+// pins that the observable behavior survived the refactor: even under a
+// policy that grants it nothing, the call succeeds and no "tool
+// authorization" audit line fires.
 func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
@@ -1070,6 +1144,7 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	pool := newRegTestPool(t)
 	mgr := NewToolManager(pool)
 	mgr.Register(newStubHandler("test-tool"))
+	RegisterListBrokers(mgr, pool)
 
 	// If the wrapper were accidentally composed on list-brokers, this
 	// policy (which grants nothing to it) would deny the call.
@@ -1077,7 +1152,6 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	RegisterWithServer(mgr, server, pool, true, policy, "groups")
-	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

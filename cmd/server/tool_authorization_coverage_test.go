@@ -69,13 +69,14 @@ func gatedAndExposedTools(t *testing.T) (gated []string, exposed []*mcp.Tool) {
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 
+	tools.RegisterListBrokers(mgr, pool)
+	if err := tools.RegisterDescribeSempSchema(mgr, specs.FS); err != nil {
+		t.Fatalf("RegisterDescribeSempSchema: %v", err)
+	}
+
 	// Policy nil: whether a tool gets wrapped depends on where it was registered,
 	// not on any grant, so a compiled policy would change nothing here.
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
-	tools.RegisterListBrokers(server, pool, nil)
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
-		t.Fatalf("RegisterDescribeSempSchema: %v", err)
-	}
 
 	for _, h := range mgr.Handlers() {
 		gated = append(gated, h.Metadata().Name)
@@ -143,5 +144,46 @@ func TestExemptToolsAreActuallyRegistered(t *testing.T) {
 	if len(exemptButAbsent) > 0 {
 		sort.Strings(exemptButAbsent)
 		t.Errorf("exempt tool(s) not registered on the server: %v", exemptButAbsent)
+	}
+}
+
+// TestOnlyTheTwoNoBrokerToolsAreExempt closes a gap the two tests above cannot.
+//
+// TestEveryRegisteredToolIsGatedOrExempt checks `isGated || exempt`, which
+// short-circuits on isGated for any ordinary, policy-wrapped tool — so a third
+// tool added to IsExemptFromToolAuthorization's name list by mistake would
+// still read as "gated" there and the suite would stay green, even though
+// RegisterWithServer's `!IsExemptFromToolAuthorization(reg.name)` guard would
+// then silently skip wrapping it with withAuthorization at runtime.
+// TestExemptToolsAreActuallyRegistered only ever asks about the two known-good
+// names, so it cannot see an extra one either. This test checks the predicate
+// against every exposed tool name directly, independent of gating.
+func TestOnlyTheTwoNoBrokerToolsAreExempt(t *testing.T) {
+	_, exposed := gatedAndExposedTools(t)
+	if len(exposed) == 0 {
+		t.Fatal("server exposed no tools; the registration pipeline did not run")
+	}
+
+	wantExempt := map[string]bool{"list-brokers": true, "describe-semp-schema": true}
+
+	var unexpectedlyExempt []string
+	for _, tool := range exposed {
+		isExempt := tools.IsExemptFromToolAuthorization(tool.Name)
+		if isExempt && !wantExempt[tool.Name] {
+			unexpectedlyExempt = append(unexpectedlyExempt, tool.Name)
+		}
+		if !isExempt && wantExempt[tool.Name] {
+			t.Errorf("%q is expected to be exempt but the predicate disagrees; "+
+				"update this test if the exemption was removed deliberately", tool.Name)
+		}
+	}
+
+	if len(unexpectedlyExempt) > 0 {
+		sort.Strings(unexpectedlyExempt)
+		t.Errorf("tool(s) unexpectedly exempt from tool authorization: %v — "+
+			"IsExemptFromToolAuthorization must name only list-brokers and "+
+			"describe-semp-schema. A third entry silently stops RegisterWithServer "+
+			"from policy-wrapping that tool, and nothing else in this suite would "+
+			"catch it.", unexpectedlyExempt)
 	}
 }
