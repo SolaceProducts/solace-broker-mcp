@@ -24,7 +24,7 @@ unconfirmed.
 2. `tar xzf` the archive. The extracted binary inherits the same quarantine
    value.
 3. Double-click `solace-broker-mcp` in Finder. The dialog reads
-   **"solace-broker-mcp" Not Opened**, with the reporter's wording, and offers
+   **“solace-broker-mcp” Not Opened**, with the reporter's wording, and offers
    only **Move to Trash** and **Done**.
 
 ### Download paths tried
