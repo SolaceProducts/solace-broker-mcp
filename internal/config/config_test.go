@@ -3740,53 +3740,17 @@ brokers:
 ` + brokerAuth
 }
 
-// TestLoadConfig_JWTBearerFlag pins the HOP2_JWT_BEARER_ENABLED ship door: the
-// jwt-bearer grant type refuses to load unless the flag parses as true, and
-// the flag changes nothing else about grant_type validation.
-func TestLoadConfig_JWTBearerFlag(t *testing.T) {
+// TestLoadConfig_JWTBearerGrantType pins broker_oauth.grant_type validation
+// across both supported URNs: each loads on its own, with no environment
+// opt-in, and every rejection hint offers the full set of supported URNs.
+func TestLoadConfig_JWTBearerGrantType(t *testing.T) {
 	const target = "      target: \"api://broker-app/.default\"\n"
 	jwtBearer := hop2OAuthYAML(GrantTypeJWTBearer, target)
 
-	refused := []struct {
-		name  string
-		value *string // nil = unset
-		warns bool    // envBool WARNs on a set but unparseable value
-	}{
-		{"unset", nil, false},
-		{"false", ptr("false"), false},
-		{"unparseable", ptr("yes-please"), true},
-	}
-	for _, tc := range refused {
-		t.Run("flag "+tc.name+" refuses jwt-bearer", func(t *testing.T) {
-			t.Setenv(envHop2JWTBearerEnabled, "")
-			if tc.value == nil {
-				os.Unsetenv(envHop2JWTBearerEnabled) //nolint:errcheck // t.Setenv above restores it
-			} else {
-				t.Setenv(envHop2JWTBearerEnabled, *tc.value)
-			}
-			buf := captureSlog(t)
-			_, err := LoadConfig(writeTemp(t, jwtBearer))
-			if err == nil {
-				t.Fatal("LoadConfig = nil error, want the flag-off refusal")
-			}
-			want := `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("error %q does not contain %q", err.Error(), want)
-			}
-			if tc.warns && !strings.Contains(buf.String(), envHop2JWTBearerEnabled) {
-				t.Errorf("expected a WARN naming %s; log was: %s", envHop2JWTBearerEnabled, buf.String())
-			}
-		})
-	}
-
-	t.Run("flag on loads, with the Hop 1 openid default", func(t *testing.T) {
-		t.Setenv(envHop2JWTBearerEnabled, "true")
+	t.Run("jwt-bearer loads, with the Hop 1 openid default", func(t *testing.T) {
 		cfg, err := LoadConfig(writeTemp(t, jwtBearer))
 		if err != nil {
 			t.Fatalf("LoadConfig: %v", err)
-		}
-		if !cfg.Hop2JWTBearerEnabled {
-			t.Error("Hop2JWTBearerEnabled = false, want true")
 		}
 		if cfg.BrokerOAuth.GrantType != GrantTypeJWTBearer {
 			t.Errorf("GrantType = %q, want %q", cfg.BrokerOAuth.GrantType, GrantTypeJWTBearer)
@@ -3800,24 +3764,13 @@ func TestLoadConfig_JWTBearerFlag(t *testing.T) {
 		}
 	})
 
-	// Any strconv.ParseBool spelling of true opens the door, not only "true".
-	for _, v := range []string{"1", "TRUE"} {
-		t.Run("flag "+v+" loads jwt-bearer", func(t *testing.T) {
-			t.Setenv(envHop2JWTBearerEnabled, v)
-			if _, err := LoadConfig(writeTemp(t, jwtBearer)); err != nil {
-				t.Fatalf("LoadConfig: %v", err)
-			}
-		})
-	}
-
 	// Omitted scopes_supported is covered above. Empty and openid-only lists
 	// must load with the same ["openid"] default.
 	for _, tc := range []struct{ name, scopes string }{
 		{"empty", `[]`},
 		{"openid-only", `["openid"]`},
 	} {
-		t.Run("flag on loads with "+tc.name+" scopes_supported", func(t *testing.T) {
-			t.Setenv(envHop2JWTBearerEnabled, "true")
+		t.Run("jwt-bearer loads with "+tc.name+" scopes_supported", func(t *testing.T) {
 			yaml := strings.Replace(jwtBearer,
 				"  tool_authorization:", "  scopes_supported: "+tc.scopes+"\n  tool_authorization:", 1)
 			if yaml == jwtBearer {
@@ -3833,43 +3786,38 @@ func TestLoadConfig_JWTBearerFlag(t *testing.T) {
 		})
 	}
 
-	t.Run("flag on loads without auth.target", func(t *testing.T) {
-		t.Setenv(envHop2JWTBearerEnabled, "true")
+	t.Run("jwt-bearer loads without auth.target", func(t *testing.T) {
 		if _, err := LoadConfig(writeTemp(t, hop2OAuthYAML(GrantTypeJWTBearer, ""))); err != nil {
 			t.Fatalf("LoadConfig: %v", err)
 		}
 	})
 
-	// token-exchange loads, and nicknames stay rejected, whatever the flag
-	// says. The "must be one of" hint lists the jwt-bearer URN only while the
-	// flag would accept it.
-	for _, on := range []bool{false, true} {
-		state := "off"
-		if on {
-			state = "on"
+	t.Run("token-exchange loads", func(t *testing.T) {
+		if _, err := LoadConfig(writeTemp(t, hop2OAuthYAML(GrantTypeTokenExchange, target))); err != nil {
+			t.Fatalf("LoadConfig: %v", err)
 		}
-		// Off means unset, the default deployment state.
-		setFlag := func(t *testing.T) {
-			t.Helper()
-			t.Setenv(envHop2JWTBearerEnabled, "true")
-			if !on {
-				os.Unsetenv(envHop2JWTBearerEnabled) //nolint:errcheck // t.Setenv above restores it
+	})
+
+	// Only the full URNs are accepted, and every refusal hint names all of
+	// them so an operator can correct the value from the error alone.
+	hintCases := []struct {
+		name, grantType, wantErr string
+	}{
+		{"nickname", "jwt-bearer", `broker_oauth.grant_type "jwt-bearer" is not supported`},
+		// Renders `grant_type: ""`. An absent key produces the same
+		// empty GrantType, so this covers both shapes.
+		{"empty", "", "broker_oauth.grant_type is required"},
+	}
+	for _, tc := range hintCases {
+		t.Run("refuses "+tc.name+" and lists every supported URN", func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, hop2OAuthYAML(tc.grantType, target)))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("LoadConfig error = %v, want %q", err, tc.wantErr)
 			}
-		}
-		t.Run("flag "+state+" loads token-exchange", func(t *testing.T) {
-			setFlag(t)
-			if _, err := LoadConfig(writeTemp(t, hop2OAuthYAML(GrantTypeTokenExchange, target))); err != nil {
-				t.Fatalf("LoadConfig: %v", err)
-			}
-		})
-		t.Run("flag "+state+" rejects the jwt-bearer nickname", func(t *testing.T) {
-			setFlag(t)
-			_, err := LoadConfig(writeTemp(t, hop2OAuthYAML("jwt-bearer", target)))
-			if err == nil || !strings.Contains(err.Error(), `broker_oauth.grant_type "jwt-bearer" is not supported`) {
-				t.Fatalf("LoadConfig error = %v, want the nickname rejected", err)
-			}
-			if listed := strings.Contains(err.Error(), GrantTypeJWTBearer); listed != on {
-				t.Errorf("hint lists %s = %v, want %v; error: %v", GrantTypeJWTBearer, listed, on, err)
+			for _, urn := range ValidGrantTypes() {
+				if !strings.Contains(err.Error(), urn) {
+					t.Errorf("hint does not list %s; error: %v", urn, err)
+				}
 			}
 		})
 	}
@@ -3878,8 +3826,7 @@ func TestLoadConfig_JWTBearerFlag(t *testing.T) {
 		{"scope", "api://broker-app/.default"},
 		{"requested_token_use", "on_behalf_of"},
 	} {
-		t.Run("flag on rejects broker_oauth."+kv.key, func(t *testing.T) {
-			t.Setenv(envHop2JWTBearerEnabled, "true")
+		t.Run("rejects broker_oauth."+kv.key, func(t *testing.T) {
 			yaml := strings.Replace(jwtBearer,
 				"  grant_type:", "  "+kv.key+": "+kv.value+"\n  grant_type:", 1)
 			_, err := LoadConfig(writeTemp(t, yaml))

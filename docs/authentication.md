@@ -11,7 +11,9 @@ The Solace Broker MCP Server supports three authentication modes for MCP client-
   - [Step 1: Set Up the Identity Provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP Server](#step-2-configure-the-mcp-server)
   - [Step 2b: Configure Broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2)
+  - [Step 2c: Configure the Event Broker's OAuth Profile](#step-2c-configure-the-event-brokers-oauth-profile)
   - [TLS for the MCP Server's Own Listener](#tls-for-the-mcp-servers-own-listener)
+  - [Session Routing at the Ingress (Required Above One Replica)](#session-routing-at-the-ingress-required-above-one-replica)
   - [Tool Authorization (Claim-Based RBAC)](#tool-authorization-claim-based-rbac)
   - [Step 3: Start the MCP Server](#step-3-start-the-mcp-server)
   - [Step 4: Add the Server to Claude Code](#step-4-add-the-server-to-claude-code)
@@ -184,6 +186,10 @@ Most IdPs organize clients and users into an isolated namespace — called a rea
 >
 > **Reference:** [`test/e2e-oauth/realm-export.json`](../test/e2e-oauth/realm-export.json) is a concrete, working example of this shape (realm, audience mappers, OAuth clients, test users) — test-only, not a production template, but useful to see the pieces fit together.
 
+> **Microsoft Entra ID:** the tenant is your existing Entra tenant; there is nothing to create. You register applications in it — see [Quickstart: Register an application](https://learn.microsoft.com/entra/identity-platform/quickstart-register-app). This server needs two application registrations: one for the MCP server itself (the API that MCP clients authenticate against), and one representing the event broker API. One Entra application can serve several brokers; see [Target](#target).
+>
+> You configure your own tenant. This guide states what this server requires of it, and links to Microsoft for how to do each piece.
+
 #### 1.2 Configure an Audience Mapper
 
 The MCP server validates the `aud` claim in every access token. Configure the IdP to include the chosen audience value in issued tokens.
@@ -197,6 +203,12 @@ The mapper must apply globally to all clients — not just specific pre-register
 > - **Add to access token:** ON
 >
 > Use **Included Custom Audience** for a free-form string. **Included Client Audience** is only for referencing an existing Keycloak client by its Client ID.
+
+> **Microsoft Entra ID:** no mapper is needed — Entra sets `aud` to the application the token was requested for. Set `audience` below to the MCP server application's Application (client) ID.
+>
+> Two things to get right on the MCP server's registration:
+> - **Expose an API,** so clients can request a delegated scope against it. The resulting Application ID URI is what `scopes_supported` advertises — see [Step 2](#step-2-configure-the-mcp-server).
+> - **Pin the access-token version to 2.** New registrations may issue v1 tokens by default, whose `iss` is `https://sts.windows.net/{tenant-id}/` rather than `https://login.microsoftonline.com/{tenant-id}/v2.0`. A v1 token fails issuer validation against the v2 issuer. In our testing this had to be set explicitly on the application manifest (`requestedAccessTokenVersion: 2`). Decode a token and check `iss` before assuming which you are getting.
 
 #### 1.3 Register an OAuth Client (Option A Only)
 
@@ -215,11 +227,15 @@ Create a client in the IdP with the following settings:
 >
 > Enable **Standard flow** and disable all other flows. Enable **Require PKCE** and set the **PKCE Method** to `S256` → click **Next**. Under **Login settings**, set **Valid redirect URIs** to `http://localhost:*` → **Save**.
 
+> **Microsoft Entra ID:** use Option A. Microsoft documents that Dynamic Client Registration is not available for an MCP server protected by Entra, so plan on pre-registering the MCP client. Register it as a public client with the redirect URI above, grant it the delegated scope you exposed on the MCP server application, and hand the Application (client) ID to whoever configures the MCP client.
+
 #### 1.4 Create Users
 
 Create user accounts in the IdP. These users log in via the browser window that opens during the OAuth flow.
 
 > **Keycloak:** **Users** → **Create new user** → enter a username → **Create**. Go to the **Credentials** tab → **Set password**, enter a password, and turn **Temporary** off.
+
+> **Microsoft Entra ID:** use your existing tenant users. If you plan to use tool authorization below, decide now which claim will carry a caller's entitlements — app roles assigned on the MCP server application, or security group membership — and configure the application to emit it. That claim name goes in `tool_authorization.groups_claim_name`; see [Tool Authorization](#tool-authorization-claim-based-rbac).
 
 ### Step 2: Configure the MCP Server
 
@@ -233,9 +249,9 @@ mcp_client_auth:
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-That YAML is a valid load: `scopes_supported` is omitted, so RFC 9728 Protected Resource Metadata advertises `["openid"]`. That default is the Keycloak path. It is also what hides this field: the process starts, PRM is served, and an Entra app that needs this API’s delegated scope still sees only `openid`.
+That YAML is a valid load. `scopes_supported` is omitted, so the server advertises `["openid"]` in its [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html) Protected Resource Metadata — the document MCP clients fetch from `/.well-known/oauth-protected-resource` to discover how to authenticate. Omitting the field, setting it to `null`, and setting it to `[]` all produce the same `["openid"]`; the process starts in every case.
 
-Omit `scopes_supported` for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid` and add the Application ID URI scope registered on this MCP app:
+That default is enough for Keycloak. It is not enough for Entra, and the failure is easy to misread: the server starts normally, PRM is served, and the problem only appears when a client tries to log in. Keep the default for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid` and add the delegated scope you exposed on this MCP server's application registration:
 
 ```yaml
 mcp_client_auth:
@@ -248,7 +264,9 @@ mcp_client_auth:
     - "https://mcp.example.com/mcp/access_as_user"
 ```
 
-`openid` alone with RFC 8707 `resource` equal to the MCP URL may be refused by Entra (`AADSTS9010010`). Do not drop `openid` to avoid that; advertise both. This list is Hop 1 discovery. The server does not gate inbound tokens on it. It is not `brokers.*.auth.target` (Hop 2).
+In our testing, advertising `openid` alone while the client sent RFC 8707 `resource` equal to the MCP URL was refused by Entra with `AADSTS9010010`. Do not drop `openid` to avoid that — advertise both. This is an IdP refusal at login, not a configuration error on this server: nothing here rejects an `openid`-only list.
+
+This list is Hop 1 discovery, advertised to MCP clients. The server does not gate inbound tokens on it, and it is **not** `brokers.*.auth.target` (Hop 2) — see [Target](#target). The word "scope" appears on both hops and means different things: this list is what clients request at the IdP, while under the jwt-bearer grant `auth.target` is what travels to the IdP *as* the `scope` parameter.
 
 The `audience` value must exactly match the value configured in step 1.2. Set `resource_url` to the externally reachable URL of the MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
@@ -323,7 +341,23 @@ grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 
 Two grant types are implemented: RFC 8693 token exchange (above) and `"urn:ietf:params:oauth:grant-type:jwt-bearer"` (RFC 7523, for Entra On-Behalf-Of). Any other value — including a value your IdP itself recognizes for some other flow — is rejected at configuration load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
-The jwt-bearer grant is gated behind the env var `HOP2_JWT_BEARER_ENABLED` while it soaks: with the flag off, that value fails configuration load with `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`. With the flag on, this server obtains a token via Entra On-Behalf-Of for each call, the same role token exchange plays for Keycloak. Full Entra configuration guidance is tracked separately (SOL-154399).
+Under the jwt-bearer grant, this server obtains broker tokens via Entra On-Behalf-Of, the same role token exchange plays for Keycloak. Either way the result is cached per caller and event broker, so a tool call reuses a live token rather than contacting the IdP again — see the cache-hit flow in [How It Works](#how-it-works).
+
+> **Microsoft Entra ID — consent must already exist before the first tool call.** On-Behalf-Of
+> exchanges a user's token for one addressed to the event broker's API, and Entra requires
+> that the user has consented to the MCP server calling that downstream API on their behalf.
+> This is a **separate** grant from the user's own sign-in consent to the MCP server, and
+> nothing in the Hop 1 login flow requests it — the sign-in only covers the MCP server's own
+> scope, not its downstream permission.
+>
+> There is no consent prompt at tool-call time. The exchange simply fails, and in our testing
+> a user who had never consented saw `invalid_grant` from Entra on every Hop 2 attempt while
+> Hop 1 login continued to work normally. Grant admin consent for the MCP server
+> application's permission to the event broker API before onboarding users — or, where
+> tenant policy allows user consent, have each user complete it once.
+>
+> Because Hop 1 keeps working, this presents as "login succeeds, every tool call fails."
+> Check consent before looking at `auth.target` or the broker's OAuth profile.
 
 #### Target
 
@@ -351,6 +385,55 @@ One optional field controls handling of IdPs that omit token lifetime, and two o
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
 
 > **Configured vs. used vs. first-fire.** Creating the Hop 2 exchanger logs one INFO line, `token exchanger created for broker OAuth`, with `expiry_fallback_configured` (plus `expiry_fallback` when the setting is present) — that reports the fallback is armed, not that the IdP ever omitted `expires_in`. The first time a live exchange on that exchanger actually applies that duration, the server logs one INFO, `broker OAuth token expiry fallback supplied a lifetime`, again with `expiry_fallback`. Later fallback uses on the same exchanger do not repeat that INFO. Production constructs one Hop 2 exchanger per process, so operators normally see one first-fire line per server. Per-exchange `used_fallback` stays on the Debug line `identity provider issued broker token`; a cache hit produces none, and a fail-closed exchange returns an error instead. Absence of a later first-fire line does not mean the IdP started sending `expires_in`.
+
+### Step 2c: Configure the Event Broker's OAuth Profile
+
+Steps 2 and 2b configure the MCP server. The event broker independently validates
+every token it receives, using an OAuth profile configured **on the broker**.
+Until that profile exists and trusts your identity provider, Hop 2 fails even
+when the MCP server obtains a token successfully.
+
+Configure one profile per event broker that uses `auth.mode: oauth`. The profile
+must have the resource-server role — the broker validates tokens, it does not
+obtain them. See [Configuring OAuth Authentication](https://docs.solace.com/Configuring-and-Managing/Configuring-OAuth-for-Management-Access.htm)
+in the event broker documentation for how to create and configure one. What
+follows is only what this integration requires of it.
+
+**The broker's required audience is not the same value as `auth.target`.** Both
+identify the same application at the IdP, in different forms. Under jwt-bearer,
+`auth.target` is the scope form — `api://<app-id>/.default` — while the broker's
+required audience is the bare application ID. Copying one into the other rejects
+every token.
+
+**The broker's claim setting is separate from this server's.** The broker's
+access-level-groups claim name governs what a caller may do on the broker.
+`mcp_client_auth.tool_authorization.groups_claim_name` governs which MCP tools a
+caller may invoke. They may name the same claim or different ones — set each
+deliberately.
+
+**Access levels are mapped on the broker, not in this server's YAML.** Map each
+claim value to an access level in the profile's access-level groups. The value
+must match what appears in the token exactly.
+
+> **Microsoft Entra ID:** if the broker reads the `groups` claim, the values are
+> group object IDs, not display names — in our testing the display name did not
+> match. One Entra application can serve several event brokers; to give a caller
+> different access on different brokers, use per-broker claim values rather than
+> a second application.
+
+**Unmapped values get no access.** The profile's default access level applies to
+any caller whose claim value is not mapped. Leave it at none unless you intend
+otherwise.
+
+#### An MCP tool role is not event broker access
+
+| | Controls | Configured in |
+|---|---|---|
+| `tool_authorization.access_level_groups` | which MCP tools a caller may invoke | this server's YAML |
+| the OAuth profile's access-level groups | what the caller may do on the event broker | the event broker |
+
+These are parallel layers. A caller may pass tool authorization and still be
+refused by the broker, or the reverse. Configure both.
 
 ### TLS for the MCP Server's Own Listener
 
@@ -510,6 +593,30 @@ role memberships. In Keycloak this is a **Group Membership** (or **Realm Roles**
 mapper on the same scope you used for the audience mapper — mapping the claim
 name to whatever you choose to set as `groups_claim_name` (the default is
 `groups`, matching the event broker's own OAuth profile).
+
+**Exactly one claim is read.** `groups_claim_name` names a single claim; the
+server looks up that one key and does not fall back to another, merge two, or
+accept a nested path. Whichever claim you name must carry every value the policy
+below matches on.
+
+> **Microsoft Entra ID:** Entra can be configured to emit entitlements in more
+> than one way — app roles assigned on an application registration, or security
+> group membership — and which one carries the values this server should match
+> on is your choice to make deliberately. Configure the MCP server's application
+> registration to emit the claim you intend, and name that claim here.
+>
+> The values differ in shape depending on which you pick: app-role values are the
+> strings you define on the registration, while in our testing the `groups` claim
+> carried group **object IDs** (GUIDs), not display names. Decode a real token
+> and read the claim you chose rather than assuming its contents.
+>
+> `scp` is not a membership list — it carries the delegated scopes the client
+> requested, so do not point `groups_claim_name` at it.
+>
+> This setting is also independent of the event broker's own
+> `accessLevelGroupsClaimName`. The two may name the same claim or different
+> ones, and granting an MCP tool here grants nothing on the broker — see
+> [Step 2c](#step-2c-configure-the-event-brokers-oauth-profile).
 
 At the MCP server, add a `tool_authorization` block under `mcp_client_auth`. To
 turn the feature ON, set `enabled: true` and populate `access_level_groups`:
@@ -778,6 +885,22 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 ### Entra `AADSTS9010010` after Claude fetches PRM
 
 The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set both `openid` and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+
+### Entra: login works but every tool call fails
+
+Hop 1 succeeds and the MCP client connects, then every tool call against an event broker
+using `auth.mode: oauth` fails. Server logs carry `token exchange rejected by IdP`
+naming Entra's `invalid_grant`; the agent sees only a generic authentication failure.
+
+The usual cause is missing consent, not configuration. On-Behalf-Of requires the user to
+have consented to the MCP server calling the event broker's API on their behalf, which is a
+separate grant from their sign-in consent to the MCP server itself — Hop 1 login never
+requests it, and there is no prompt at tool-call time. Grant admin consent for that
+permission, or have the user complete it once where tenant policy allows user consent. See
+[Step 2b](#step-2b-configure-broker-oauth-hop-2).
+
+Check consent before `auth.target`: a missing or blank target fails differently, with
+`jwt-bearer request missing scope` logged locally before Entra is contacted at all.
 
 ### "403 Forbidden" with a Valid Token
 
