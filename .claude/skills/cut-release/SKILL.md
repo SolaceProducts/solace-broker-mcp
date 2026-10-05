@@ -278,7 +278,7 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   pushed and no GitHub Release exists. Re-run the failed jobs with `gh run rerun <run-id> --failed`. A missing or rotated `LLM_SERVICE_API_KEY`, or an empty endpoint or model variable, is fixed in repo settings and then that same rerun. A suite that is wrong,
   rather than a flake, is a fix on `main` and the next patch tag.
 - **On success**, print the `RELEASING.md` "After pushing the tag" checklist: verify
-  `gh release view vX.Y.Z` shows four archives + `checksums-sha256.txt` + the curated notes,
+  `gh release view vX.Y.Z` shows five archives + `checksums-sha256.txt` + the curated notes,
   spot-check a binary's `--version`, and announce once verified.
 - **Optional cleanup (offer, don't force).** After a successful release the local checkout is often
   still on the merged `release/vX.Y.Z` branch and the remote branch lingers. Offer to tidy up:

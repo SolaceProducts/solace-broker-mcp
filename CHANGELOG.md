@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Release archives now include `windows/amd64`: `solace-broker-mcp-<version>-windows-amd64.zip` (a `.zip`, unlike the other four `.tar.gz` archives) ships `solace-broker-mcp.exe`, with a `checksums-sha256.txt` line and build provenance attestation like the other four platforms, and is smoke-tested on a native Windows runner before release. Tracked under SOL-153187.
+
 ### Removed
 
 - `HOP2_JWT_BEARER_ENABLED`, the soak door gating the jwt-bearer grant type's config load, is removed. `broker_oauth.grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"` previously failed config load unless that variable was `true`; it now loads unconditionally. Every config that loaded before still loads, and setting the variable has no effect, so it can be deleted from your deployment. Rolling back to an earlier build needs it set to `true` again for any deployment that has adopted jwt-bearer. Tracked under SOL-155349.
