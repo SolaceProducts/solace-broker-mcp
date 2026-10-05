@@ -217,6 +217,8 @@ const (
 
 // validGrantTypes is the allowlist of grant types this version recognizes.
 // Every entry is accepted at load time (see validateBrokerOAuthConfig).
+// GrantTypeJWTBearer was gated behind a soak-door env var until SOL-155349
+// removed it; there is no longer any per-entry gating.
 var validGrantTypes = []string{
 	GrantTypeTokenExchange,
 	GrantTypeJWTBearer,

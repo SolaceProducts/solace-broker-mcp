@@ -3804,7 +3804,9 @@ func TestLoadConfig_JWTBearerGrantType(t *testing.T) {
 		name, grantType, wantErr string
 	}{
 		{"nickname", "jwt-bearer", `broker_oauth.grant_type "jwt-bearer" is not supported`},
-		{"omitted", "", "broker_oauth.grant_type is required"},
+		// Renders `grant_type: ""`. An absent key produces the same
+		// empty GrantType, so this covers both shapes.
+		{"empty", "", "broker_oauth.grant_type is required"},
 	}
 	for _, tc := range hintCases {
 		t.Run("refuses "+tc.name+" and lists every supported URN", func(t *testing.T) {
