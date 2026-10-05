@@ -92,13 +92,6 @@ type ServerConfig struct {
 	// this is explicitly true. Ignored in dev modes, where self-signed brokers
 	// are expected.
 	AllowInsecureBrokerTLS bool
-
-	// Hop2JWTBearerEnabled is the ship door for broker_oauth.grant_type
-	// GrantTypeJWTBearer. Loaded from HOP2_JWT_BEARER_ENABLED in
-	// applyEnvOverrides, never from YAML; unset or unparseable reads as off.
-	// validate() refuses the jwt-bearer grant type while it is off. It has no
-	// effect on the token-exchange grant type.
-	Hop2JWTBearerEnabled bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -214,8 +207,7 @@ func allowedClientAuthMethods() []string {
 }
 
 // OAuth grant-type strings sent to the IdP token endpoint (Hop 2). JWT bearer
-// (RFC 7523, used by Entra On-Behalf-Of) is accepted only while
-// HOP2_JWT_BEARER_ENABLED is on (see validateBrokerOAuthConfig).
+// is RFC 7523, used by Entra On-Behalf-Of.
 const (
 	// #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // RFC 8693
@@ -223,28 +215,13 @@ const (
 	GrantTypeJWTBearer = "urn:ietf:params:oauth:grant-type:jwt-bearer" // RFC 7523
 )
 
-// envHop2JWTBearerEnabled gates GrantTypeJWTBearer. See
-// ServerConfig.Hop2JWTBearerEnabled.
-const envHop2JWTBearerEnabled = "HOP2_JWT_BEARER_ENABLED" // #nosec G101 -- env var name, not a credential.
-
-// validGrantTypes is the allowlist of grant types this version recognizes. An
-// entry may also be gated at load time: GrantTypeJWTBearer additionally
-// requires HOP2_JWT_BEARER_ENABLED (see validateBrokerOAuthConfig).
+// validGrantTypes is the allowlist of grant types this version recognizes.
+// Every entry is accepted at load time (see validateBrokerOAuthConfig).
+// GrantTypeJWTBearer was gated behind a soak-door env var until SOL-155349
+// removed it; there is no longer any per-entry gating.
 var validGrantTypes = []string{
 	GrantTypeTokenExchange,
 	GrantTypeJWTBearer,
-}
-
-// acceptedGrantTypes is validGrantTypes minus any grant type whose flag is off,
-// for the grant_type error hints: they never offer the jwt-bearer URN while
-// the HOP2_JWT_BEARER_ENABLED check would refuse it.
-func acceptedGrantTypes(cfg *ServerConfig) []string {
-	if cfg.Hop2JWTBearerEnabled {
-		return validGrantTypes
-	}
-	return slices.DeleteFunc(slices.Clone(validGrantTypes), func(g string) bool {
-		return g == GrantTypeJWTBearer
-	})
 }
 
 // ValidGrantTypes returns a copy of validGrantTypes. It exists so
@@ -1564,14 +1541,11 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	// acknowledge the protocol choice — see the decisions doc for the
 	// rationale on removing defaults from discriminator fields.
 	if cfg.BrokerOAuth.GrantType == "" {
-		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", acceptedGrantTypes(cfg)))
+		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", validGrantTypes))
 	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
 		errs = append(errs, fmt.Errorf(
 			"broker_oauth.grant_type %q is not supported in this version (must be one of %v)",
-			cfg.BrokerOAuth.GrantType, acceptedGrantTypes(cfg)))
-	} else if cfg.BrokerOAuth.GrantType == GrantTypeJWTBearer && !cfg.Hop2JWTBearerEnabled {
-		errs = append(errs, fmt.Errorf(
-			"broker_oauth.grant_type %q requires %s=true", GrantTypeJWTBearer, envHop2JWTBearerEnabled))
+			cfg.BrokerOAuth.GrantType, validGrantTypes))
 	}
 
 	// mcp_server_client_auth is a discriminated union: exactly one sub-block populated.
@@ -1875,8 +1849,6 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 	// Observability capability flags are env-driven (OBS_*). Applied here so
 	// they load in the same phase as MCP_SERVER_PORT, before validate() runs.
 	applyObservabilityEnv(cfg)
-
-	cfg.Hop2JWTBearerEnabled = envBool(envHop2JWTBearerEnabled, false, "jwt-bearer grant type")
 
 	return nil
 }

@@ -323,7 +323,7 @@ grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 
 Two grant types are implemented: RFC 8693 token exchange (above) and `"urn:ietf:params:oauth:grant-type:jwt-bearer"` (RFC 7523, for Entra On-Behalf-Of). Any other value — including a value your IdP itself recognizes for some other flow — is rejected at configuration load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
-The jwt-bearer grant is gated behind the env var `HOP2_JWT_BEARER_ENABLED` while it soaks: with the flag off, that value fails configuration load with `broker_oauth.grant_type "urn:ietf:params:oauth:grant-type:jwt-bearer" requires HOP2_JWT_BEARER_ENABLED=true`. With the flag on, this server obtains a token via Entra On-Behalf-Of for each call, the same role token exchange plays for Keycloak. Full Entra configuration guidance is tracked separately (SOL-154399).
+Under the jwt-bearer grant, this server obtains broker tokens via Entra On-Behalf-Of, the same role token exchange plays for Keycloak. Either way the result is cached per caller and event broker, so a tool call reuses a live token rather than contacting the IdP again — see the cache-hit flow in [How It Works](#how-it-works). Full Entra configuration guidance is tracked separately (SOL-154399).
 
 #### Target
 
