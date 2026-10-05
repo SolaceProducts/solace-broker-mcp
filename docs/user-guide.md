@@ -366,3 +366,28 @@ If the health check fails, the probe prints the reason to stderr — Docker keep
   ```
 
 - **`x509: certificate signed by unknown authority`** — the certificate the server is serving is not the one at `tls_cert_file`. Most often the certificate was replaced on disk without restarting the server, which loads its keypair once at startup. Restart the container.
+
+### macOS Blocks the Downloaded Binary
+
+Opening `solace-broker-mcp` from Finder on macOS shows:
+
+> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac.
+
+The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and open normally.
+
+Before overriding the block, confirm the archive is genuine. Run both checks from the directory holding the archive and `checksums-sha256.txt`, using the exact archive filename (replace the version and architecture with yours):
+
+```bash
+shasum -a 256 -c checksums-sha256.txt --ignore-missing
+
+gh attestation verify solace-broker-mcp-v0.10.0-darwin-arm64.tar.gz \
+  --repo SolaceProducts/solace-broker-mcp \
+  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
+```
+
+Both must succeed. The attestation check needs the [GitHub CLI](https://cli.github.com/) signed in with `gh auth login`; [Binary Deployment](../README.md#binary-deployment) explains what each check proves. Then use either workaround:
+
+- **System Settings** — Double-click the binary and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to "solace-broker-mcp", click **Open Anyway** again in the confirmation, and authenticate with your password or Touch ID.
+- **Terminal** — Remove the quarantine attribute: `xattr -d com.apple.quarantine solace-broker-mcp`
+
+Right-click → **Open** does not work for this binary on macOS 26; it shows the same dialog.
