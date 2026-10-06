@@ -293,11 +293,13 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 
 	// SOL-155413: SEMP returns 200 with an empty list for a nonexistent
 	// parent, so these tools must GET the parent first; its NOT_FOUND then
-	// aborts the call before the list step runs.
+	// aborts the call before the list step runs. That only holds while the
+	// preflight is sequential: a parallel one would race the list step.
 	t.Run("spot/list-parent-preflight", func(t *testing.T) {
 		for name, op := range map[string]string{
 			"list-queues":               "monitor/getMsgVpn",
 			"list-client-subscriptions": "monitor/getMsgVpnClient",
+			"list-queue-subscriptions":  "monitor/getMsgVpnQueue",
 		} {
 			tool := findTool(tools, name)
 			if tool == nil || len(tool.Steps) < 2 {
@@ -306,6 +308,9 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 			}
 			if tool.Steps[0].Operation != op {
 				t.Errorf("%s: first step operation = %q, want %q", name, tool.Steps[0].Operation, op)
+			}
+			if tool.Steps[0].Parallel {
+				t.Errorf("%s: preflight step must not be parallel, or it no longer gates the list step", name)
 			}
 		}
 	})

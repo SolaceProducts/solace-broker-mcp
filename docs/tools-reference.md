@@ -374,7 +374,8 @@ empty list.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `queues` (array). Selected fields per queue:
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `queues`
+(array). Selected fields per queue:
 `queueName`, `accessType`, `spooledMsgCount`, `txUnackedMsgCount`, `bindCount`,
 `rxMsgRate`, `txMsgRate`, `msgSpoolUsage`, `maxMsgSpoolUsage`,
 `lowPriorityMsgCongestionState`, `ingressEnabled`, `egressEnabled`.
@@ -510,8 +511,9 @@ empty list.
 | `clientName` | string | yes | The client connection name. |
 | `maxResults` | integer | no | Max subscriptions to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `subscriptions` (array of subscription
-records as returned by the event broker).
+**Returns:** step-keyed envelope, steps `client` (existence check) and
+`subscriptions` (array of subscription records as returned by the event
+broker).
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
