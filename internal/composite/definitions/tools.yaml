@@ -1067,6 +1067,7 @@ tools:
     result:
       strategy: postProcess
       postProcess: listQueueDiscards
+      omitRawSteps: true
 
   - name: create-message-vpn
     description: >

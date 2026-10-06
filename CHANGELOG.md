@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `list-queue-discards` no longer overflows the calling MCP host's token budget at its own documented default (`maxResults: 100`) against a broker with enough queues to populate it — each per-queue discard record carries ~15 mostly-zero counters, far heavier per row than sibling list tools, and the `postProcess` result strategy always carried that full raw per-queue array alongside the lean summary it already computes from it. A new `ResultStrategy.omitRawSteps` YAML flag (default `false`; every other `postProcess` tool is unaffected) drops the raw step data for this tool only, leaving just its `summary` (`topOffenderQueues`, `discardingQueueCount`, `scanned`) — a ~98% smaller response with nothing lost, since the summary already folds in `truncated` and `skipped`. Tracked under SOL-155426.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added
