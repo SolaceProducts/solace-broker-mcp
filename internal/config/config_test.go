@@ -4507,6 +4507,38 @@ func TestServerConfig_StaticTokenExposedCleartext(t *testing.T) {
 	}
 }
 
+func TestServerConfig_MetricsListenerWiderThanMCP(t *testing.T) {
+	cases := []struct {
+		name               string
+		listenAddress      string
+		metricsScrapeOn    bool
+		metricsBindAddress string
+		want               bool
+	}{
+		{"disabled mode, metrics all-interfaces default -> exposed", "127.0.0.1", true, ":9091", true},
+		{"localhost spelling, metrics all-interfaces -> exposed", "localhost", true, ":9091", true},
+		{"disabled mode, metrics explicit wildcard host -> exposed", "127.0.0.1", true, "0.0.0.0:9091", true},
+		{"disabled mode, metrics locked to loopback -> safe", "127.0.0.1", true, "127.0.0.1:9091", false},
+		{"disabled mode, metrics scrape off -> no listener, safe", "127.0.0.1", false, ":9091", false},
+		{"oauth mode (non-loopback MCP) -> not an asymmetry, safe", "", true, ":9091", false},
+		{"malformed metrics_bind_address -> safe (left for the listener to reject)", "127.0.0.1", true, "not-a-host-port", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ServerConfig{
+				ListenAddress: tc.listenAddress,
+				Observability: ObservabilityConfig{
+					MetricsScrapeEnabled: tc.metricsScrapeOn,
+					MetricsBindAddress:   tc.metricsBindAddress,
+				},
+			}
+			if got := cfg.MetricsListenerWiderThanMCP(); got != tc.want {
+				t.Errorf("MetricsListenerWiderThanMCP() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestReadResolvedConfigFile_SubstitutesEnvVars pins the contract the --health
 // probe depends on: the resolved bytes must agree with what LoadConfig would
 // parse, ${VAR_NAME} references included.

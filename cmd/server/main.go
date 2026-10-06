@@ -1033,7 +1033,8 @@ func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, poli
 }
 
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
-// static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
+// static-cleartext exposure, OAuth plaintext-listener acknowledgement, and the
+// metrics-listener-wider-than-MCP exposure.
 func logStartupBanners(cfg *config.ServerConfig) {
 	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
 	if cfg.StaticTokenExposedCleartext() {
@@ -1041,6 +1042,9 @@ func logStartupBanners(cfg *config.ServerConfig) {
 	}
 	if cfg.OAuthPlaintextListenerAcknowledged() {
 		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+	}
+	if cfg.MetricsListenerWiderThanMCP() {
+		banner.LogMetricsAllInterfacesExposure(cfg.Observability.MetricsBindAddress, cfg.BindAddress())
 	}
 }
 

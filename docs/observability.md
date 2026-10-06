@@ -198,8 +198,14 @@ conditions.
 It therefore includes requests later rejected with 401, 403, or 413.
 
 The `/metrics` endpoint is unauthenticated and unencrypted. It binds to all interfaces by
-default. Restrict it with a NetworkPolicy, bind it to loopback for a sidecar, or place an
-equivalent network control around it.
+default — deliberately, even in the `disabled`/`static` dev modes where the MCP port itself
+defaults to loopback-only: a loopback default here would break Kubernetes ServiceMonitor
+scraping, which connects over the pod network rather than localhost (SOL-154042 Decision #5).
+Restrict it with a NetworkPolicy, bind it to loopback for a sidecar, or place an equivalent
+network control around it. When the MCP port is loopback-only and `metrics_bind_address` is
+left at its all-interfaces default, the server logs a startup WARN naming both addresses
+(SOL-155414) — it does not fire under `oauth` mode, where an all-interfaces MCP port is itself
+the expected, recommended shape behind a Service/ingress.
 
 ### Tool Invocations (RED)
 

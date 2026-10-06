@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A startup WARN now fires when the `/metrics` listener is reachable from a wider network scope than the MCP server's own listener — e.g. the disabled/static dev modes' loopback-only MCP port alongside `metrics_bind_address`'s all-interfaces default. `metrics_bind_address` stays all-interfaces by default deliberately (SOL-154042 Decision #5: a loopback default would break Kubernetes ServiceMonitor scraping), so this is a warning naming both addresses, not a changed default — the operator fix is a NetworkPolicy/equivalent network control, or setting `metrics_bind_address` to a loopback host for a sidecar-scrape deployment. No WARN fires when the scrape listener is off, when the MCP port itself isn't loopback-only (oauth mode's own all-interfaces default is the expected shape behind a Service/ingress), or when the operator already locked `metrics_bind_address` to a loopback host. Mirrors the existing `StaticTokenExposedCleartext`/`OAuthPlaintextListener` startup-banner pattern. Tracked under SOL-155414.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added

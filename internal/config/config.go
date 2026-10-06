@@ -1681,6 +1681,33 @@ func (c *ServerConfig) OAuthPlaintextListenerAcknowledged() bool {
 		c.TLSTerminatedUpstream
 }
 
+// MetricsListenerWiderThanMCP reports whether the /metrics listener, when the
+// scrape egress is actually enabled, is reachable from a wider network scope
+// than the MCP server's own listener — e.g. the MCP port is loopback-only (the
+// disabled/static dev-mode default) while metrics_bind_address is left at its
+// all-interfaces default (SOL-155414). metrics_bind_address stays
+// all-interfaces by default deliberately (SOL-154042 Decision #5: a loopback
+// default would break Kubernetes ServiceMonitor scraping), so this is a WARN
+// naming the exposed address, not a reason to change that default. False when
+// the scrape listener never starts, when the MCP port itself is not
+// loopback-only (oauth mode's own all-interfaces default is the expected,
+// recommended shape behind a Service/ingress — see
+// banner.LogOAuthPlaintextListener's identical reasoning), or when the
+// operator already locked metrics_bind_address to a loopback host themselves.
+func (c *ServerConfig) MetricsListenerWiderThanMCP() bool {
+	if !c.Observability.MetricsScrapeEnabled {
+		return false
+	}
+	if !isLoopbackHost(c.ListenAddress) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(c.Observability.MetricsBindAddress)
+	if err != nil {
+		return false
+	}
+	return !isLoopbackHost(host)
+}
+
 // isLoopbackHost reports whether host binds the loopback interface only.
 // "localhost" and any loopback IP (127.0.0.0/8, ::1) qualify; an empty host
 // means all interfaces and is NOT loopback. Used to keep the unauthenticated
