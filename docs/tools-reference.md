@@ -362,7 +362,9 @@ not live depth), unacked count, bind count, congestion state, and
 rates. Primary VPN-wide scan for slow guaranteed-message consumers (growing
 `spooledMsgCount`, high `txUnackedMsgCount`, `rxMsgRate > txMsgRate`,
 `bindCount > 0`). For authoritative current queue depth and per-queue
-discard/redelivery counters, use `get-queue-metrics`.
+discard/redelivery counters, use `get-queue-metrics`. Verifies the VPN exists
+before listing, so a nonexistent VPN is reported as an error rather than an
+empty list.
 
 **Parameters:**
 
@@ -372,7 +374,8 @@ discard/redelivery counters, use `get-queue-metrics`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `queues` (array). Selected fields per queue:
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `queues`
+(array). Selected fields per queue:
 `queueName`, `accessType`, `spooledMsgCount`, `txUnackedMsgCount`, `bindCount`,
 `rxMsgRate`, `txMsgRate`, `msgSpoolUsage`, `maxMsgSpoolUsage`,
 `lowPriorityMsgCongestionState`, `ingressEnabled`, `egressEnabled`.
@@ -495,7 +498,9 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 
 ### list-client-subscriptions
 
-List topic subscriptions for a specific client.
+List topic subscriptions for a specific client. Verifies the client exists
+before listing, so a nonexistent client is reported as an error rather than an
+empty list.
 
 **Parameters:**
 
@@ -506,8 +511,9 @@ List topic subscriptions for a specific client.
 | `clientName` | string | yes | The client connection name. |
 | `maxResults` | integer | no | Max subscriptions to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `subscriptions` (array of subscription
-records as returned by the event broker).
+**Returns:** step-keyed envelope, steps `client` (existence check) and
+`subscriptions` (array of subscription records as returned by the event
+broker).
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
