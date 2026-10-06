@@ -362,7 +362,9 @@ not live depth), unacked count, bind count, congestion state, and
 rates. Primary VPN-wide scan for slow guaranteed-message consumers (growing
 `spooledMsgCount`, high `txUnackedMsgCount`, `rxMsgRate > txMsgRate`,
 `bindCount > 0`). For authoritative current queue depth and per-queue
-discard/redelivery counters, use `get-queue-metrics`.
+discard/redelivery counters, use `get-queue-metrics`. Verifies the VPN exists
+before listing, so a nonexistent VPN is reported as an error rather than an
+empty list.
 
 **Parameters:**
 
@@ -495,7 +497,9 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 
 ### list-client-subscriptions
 
-List topic subscriptions for a specific client.
+List topic subscriptions for a specific client. Verifies the client exists
+before listing, so a nonexistent client is reported as an error rather than an
+empty list.
 
 **Parameters:**
 

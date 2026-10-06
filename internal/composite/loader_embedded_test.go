@@ -290,6 +290,25 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 			t.Error("subscriptionTopic must not be a step arg on create — it belongs in the request body")
 		}
 	})
+
+	// SOL-155413: SEMP returns 200 with an empty list for a nonexistent
+	// parent, so these tools must GET the parent first; its NOT_FOUND then
+	// aborts the call before the list step runs.
+	t.Run("spot/list-parent-preflight", func(t *testing.T) {
+		for name, op := range map[string]string{
+			"list-queues":               "monitor/getMsgVpn",
+			"list-client-subscriptions": "monitor/getMsgVpnClient",
+		} {
+			tool := findTool(tools, name)
+			if tool == nil || len(tool.Steps) < 2 {
+				t.Errorf("%s: want a preflight step before the list step", name)
+				continue
+			}
+			if tool.Steps[0].Operation != op {
+				t.Errorf("%s: first step operation = %q, want %q", name, tool.Steps[0].Operation, op)
+			}
+		}
+	})
 }
 
 // TestLoadTools_ListVPNs_RetainsDiscoveryFields pins the fields list-vpns must
