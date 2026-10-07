@@ -97,12 +97,16 @@ mcp_client_auth:
   # scopes_supported — RFC 9728 PRM list MCP clients request at the IdP.
   # Omit, null, or [] → advertised ["openid"], whatever the IdP. The process
   # still starts either way; there is no way to advertise an empty list.
-  # Entra: keep openid AND add this API's delegated scope — openid alone with
-  # resource = the MCP URL was refused with AADSTS9010010 in our testing.
+  # Entra: keep openid AND add offline_access AND this API's delegated scope.
+  # openid alone with resource = the MCP URL was refused with AADSTS9010010
+  # in our testing. Without offline_access Entra issues no refresh token, and
+  # the client sends the user through a browser login again at every
+  # access-token expiry. See docs/authentication.md step 2.
   # Blank or whitespace-in-entry is a load error. Not brokers.*.auth.target.
   #
   # scopes_supported:
   #   - "openid"
+  #   - "offline_access"
   #   - "https://mcp.example.com/mcp/access_as_user"
   #
   # Switching to oauth also requires, above: tls_terminated_upstream: true (or

@@ -251,7 +251,7 @@ mcp_client_auth:
 
 That YAML is a valid load. `scopes_supported` is omitted, so the server advertises `["openid"]` in its [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html) Protected Resource Metadata — the document MCP clients fetch from `/.well-known/oauth-protected-resource` to discover how to authenticate. Omitting the field, setting it to `null`, and setting it to `[]` all produce the same `["openid"]`; the process starts in every case.
 
-That default is enough for Keycloak. It is not enough for Entra, and the failure is easy to misread: the server starts normally, PRM is served, and the problem only appears when a client tries to log in. Keep the default for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid` and add the delegated scope you exposed on this MCP server's application registration:
+That default is enough for Keycloak. It is not enough for Entra, and the failure is easy to misread: the server starts normally, PRM is served, and the problem only appears when a client tries to log in. Keep the default for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid`, add `offline_access`, and add the delegated scope you exposed on this MCP server's application registration:
 
 ```yaml
 mcp_client_auth:
@@ -261,10 +261,15 @@ mcp_client_auth:
   resource_url: "https://mcp.example.com/mcp"
   scopes_supported:
     - "openid"
+    - "offline_access"
     - "https://mcp.example.com/mcp/access_as_user"
 ```
 
-In our testing, advertising `openid` alone while the client sent RFC 8707 `resource` equal to the MCP URL was refused by Entra with `AADSTS9010010`. Do not drop `openid` to avoid that — advertise both. This is an IdP refusal at login, not a configuration error on this server: nothing here rejects an `openid`-only list.
+In our testing, advertising `openid` alone while the client sent RFC 8707 `resource` equal to the MCP URL was refused by Entra with `AADSTS9010010`. Do not drop `openid` to avoid that — advertise all three. This is an IdP refusal at login, not a configuration error on this server: nothing here rejects an `openid`-only list.
+
+`offline_access` is in that list for a different reason, and leaving it out fails much later than `AADSTS9010010` does. Entra issues a refresh token only when the authorization request itself carries `offline_access`. Microsoft notes that the scope is implicitly *granted* once any delegated permission is granted, but that covers consent, not the request — the string still has to be in the request. MCP clients build that request from the `scopes_supported` list this server advertises, which is why the list is where it belongs. Without it, login succeeds and tools work, and then the client has no way to renew its access token: at every expiry the user is sent back through a browser login. Nothing fails on this server when that happens — it never sees a failing request — so there is nothing in these logs to find.
+
+Two things to expect once it is set. `offline_access` is an OpenID Connect scope rather than a scope of this API, so it is normal for it not to appear in the granted `scope` of the returned access token; whether a refresh token came back in the token response is the thing to check. And on a deployment that has already been consented, widening the list can surface the "Maintain access to data you have given it access to" item the next time users authenticate — in a tenant where user consent is disabled, that needs an administrator's consent before logins succeed again.
 
 This list is Hop 1 discovery, advertised to MCP clients. The server does not gate inbound tokens on it, and it is **not** `brokers.*.auth.target` (Hop 2) — see [Target](#target). The word "scope" appears on both hops and means different things: this list is what clients request at the IdP, while under the jwt-bearer grant `auth.target` is what travels to the IdP *as* the `scope` parameter.
 
@@ -275,7 +280,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 | `issuer` | The OIDC issuer URL of the IdP. The server fetches JWKS keys from here for token validation. |
 | `audience` | Must exactly match the audience value configured in the IdP in step 1.2. |
 | `resource_url` | The public URL of the MCP server endpoint, advertised to MCP clients for OAuth discovery. |
-| `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. Full field table: [Configuration](configuration.md#client-authentication-settings). |
+| `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. **Entra:** include `offline_access` — Entra issues a refresh token only when the authorization request carries it, and without one the client re-prompts for an interactive login at every access-token expiry. Hop 1 only; it does not belong in `brokers.*.auth.target`. Full field table: [Configuration](configuration.md#client-authentication-settings). |
 
 > **Keycloak:** The issuer URL follows the pattern `https://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8443 with TLS and a realm named `solace`:
 > ```yaml
