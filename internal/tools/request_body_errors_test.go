@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -124,6 +126,11 @@ func requireOwnMessage(t *testing.T, out requestBodyOutcome, want ...string) {
 	if strings.Contains(out.reply, genericInternalMessage) {
 		t.Errorf("agent got the generic broker-error text: %q", out.reply)
 	}
+	// The agent gets the executor's own sentence, not the chain of wrappers the
+	// error picks up on its way up.
+	if strings.Contains(out.reply, "executing tool") || strings.Contains(out.reply, "tool step") {
+		t.Errorf("reply carries the internal wrapper prefix: %q", out.reply)
+	}
 	for _, w := range want {
 		if !strings.Contains(out.reply, w) {
 			t.Errorf("reply = %q, want it to contain %q", out.reply, w)
@@ -171,6 +178,45 @@ func TestRequestBodyRejection_DuplicateField_AgentSeesOwnMessage(t *testing.T) {
 	requireOwnMessage(t, out,
 		"defined more than once",
 		`"queueName"`)
+}
+
+// The mapper returns exactly the executor's text for an error that arrives
+// wrapped the way CallTool wraps it, with nothing added in front or behind. The
+// error comes from the real executor, so this also fails if a site stops
+// returning the dedicated type.
+func TestBuildErrorMessage_RequestBodyRejection_IsTheExecutorsExactText(t *testing.T) {
+	handler, client := realOwnerValidationFixture(t, "update-queue")
+	_, err := handler.Handle(context.Background(), &ToolContext{SEMPv2Client: client}, map[string]any{
+		"msgVpnName":  "default",
+		"queueName":   "q1",
+		"queueConfig": map[string]any{"notARealAttr": 1},
+	})
+	if err == nil {
+		t.Fatal("expected the executor to reject the request body")
+	}
+
+	var bodyErr *composite.RequestBodyError
+	if !errors.As(err, &bodyErr) {
+		t.Fatalf("executor error = %T, want a *composite.RequestBodyError in the chain", err)
+	}
+	want := bodyErr.Error()
+	// The executor already adds "tool step <id>:" in front, so the full error text
+	// is longer than the sentence the agent should get.
+	if err.Error() == want {
+		t.Fatalf("expected the executor to wrap the rejection, but err.Error() = %q", err.Error())
+	}
+
+	wrapped := fmt.Errorf("executing tool %q: %w", "update-queue", err)
+	msg, suggestions := buildErrorMessage(wrapped, "dev")
+	if msg != want {
+		t.Errorf("message = %q, want exactly the executor's own text %q", msg, want)
+	}
+	if len(suggestions) != 0 {
+		t.Errorf("suggestions = %v, want none for a local rejection", suggestions)
+	}
+	if text, ok := requestBodyErrorText(wrapped); !ok || text != want {
+		t.Errorf("requestBodyErrorText = %q, %v; want %q, true", text, ok, want)
+	}
 }
 
 // A hostile key name is echoed back to the agent only in its quoted, escaped

@@ -46,6 +46,10 @@ func TestRequestBodyRejection_LogDetailCarriesMessage(t *testing.T) {
 	if strings.Contains(detail, "executing tool") || strings.Contains(detail, "tool step") {
 		t.Errorf("detail = %q, want the inner message only, without the wrapper prefixes", detail)
 	}
+	// The operator reads the same sentence the agent got, with nothing added.
+	if detail != out.reply {
+		t.Errorf("detail = %q, want exactly the reply the agent received, %q", detail, out.reply)
+	}
 	if got := out.log["error_type"]; got != "execution_error" {
 		t.Errorf("error_type = %v, want %q (reclassification is out of scope)", got, "execution_error")
 	}
