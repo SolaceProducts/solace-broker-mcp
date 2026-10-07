@@ -1,13 +1,13 @@
 # Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide shows how to connect this Model Context Protocol (MCP) server to the Solace Agent Mesh desktop
+This guide shows how to connect this Model Context Protocol (MCP) server to the Solace Agent Mesh Desktop
 app by registering it as an **MCP connector** and assigning it to an agent from
 the Agent Mesh UI.
 
-_Validated against Solace Agent Mesh v2.307.3 (macOS), 2026-08. UI navigation may
-differ in later versions._
+_The instructions are validated against Solace Agent Mesh v2.307.3 (macOS). The navigation in the user interface may
+vary in later versions._
 
-> **This example runs Agent Mesh locally.** The desktop app starts an in-process
+> **This example runs Solace Agent Mesh Desktop (or bundle).** The desktop app starts an in-process
 > dev event broker that Agent Mesh uses for its own internal agent-to-agent
 > messaging. That dev event broker is unrelated to the Solace event brokers this MCP server
 > monitors — the MCP server still connects to your real event broker(s) over SEMP per
@@ -24,7 +24,7 @@ differ in later versions._
 
 ## Steps
 
-**1. Configure client auth on the MCP server** — `broker-config.yaml`. This
+**1. Configure client auth on the MCP server** — Edit the `broker-config.yaml` file. This
 local example uses no client auth (the server binds to loopback only):
 
 ```yaml
@@ -36,14 +36,14 @@ For a shared or production deployment, use `mode: static` (a bearer token) or
 `mode: oauth`, and set the connector's **Authentication Type** in step 4 to
 match. See [authentication.md](authentication.md).
 
-**2. Start the MCP server** — in non-OAuth modes it binds loopback by default,
+**2. Start the MCP server** — In non-OAuth modes it binds loopback by default,
 serving the MCP endpoint at `http://127.0.0.1:9090/mcp`:
 
 ```bash
 go run ./cmd/server
 ```
 
-**3. Open the Agent Mesh desktop app** — the app auto-starts its in-process
+**3. Open the Agent Mesh Desktop app** — The app auto-starts its in-process
 event broker and runtime; no command to run. On first launch, connect an LLM provider —
 this becomes the `general` model alias your agent uses.
 
@@ -57,11 +57,10 @@ see your shell env, so set it for the login session:
 launchctl setenv SAM_PLATFORM_ALLOW_PRIVATE_MCP true
 ```
 
-Then fully quit the app (Cmd+Q — closing the window isn't enough) and relaunch it;
-an already-running app keeps its old environment and won't pick up the new value.
+You must fully quit the app (Cmd+Q (macOS)/Ctrl+Q (Windows) because closing the window is not enough) and relaunch it. An already-running app keeps its old environment and will not pick up the new values.
 
-This is needed whenever the MCP server's URL resolves to a loopback or private
-(RFC1918/RFC4193) address — local development, and also self-hosted deployments
+Exiting is required whenever the MCP server's URL resolves to a loopback or private
+address — local development, and also self-hosted deployments
 where Agent Mesh reaches the server over a cluster-internal or otherwise private
 address. It relaxes only private and loopback addresses; link-local (including
 cloud instance metadata) stays blocked.
@@ -103,6 +102,6 @@ tools; select the ones to expose (or all), then save.
   later by editing an existing agent.)
 - Select **Create and Deploy**.
 
-**6. Verify** — start a new chat and ask an event broker-related question. Select
-`SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
+**6. Start a new chat and ask an event broker-related question to verify. You can select
+`SolaceBrokerAgent` or ask the **Orchestrator**, which delegates to it.
 The agent calls the MCP tools, which query your configured event broker over SEMP.
