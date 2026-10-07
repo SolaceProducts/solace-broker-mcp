@@ -279,6 +279,12 @@ Tool errors include structured fields to help diagnose the problem:
 | `fullyDecodedValue` | `value` with every layer of HTML escaping undone — the value to resend. May differ from a single substitution of `matchedEntity` if `value` was escaped more than once. | `error_source: input_validation` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
+**A request your client built wrongly.** If a create or update call sets a field
+twice, puts a path or query name such as `msgVpnName` inside the configuration
+object, or uses an attribute the operation does not define, `error` says which field
+and what to change. These replies have `retryable: false`, and the rejected call was not
+sent. Fix the named field and call again.
+
 Common causes:
 - **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason. **Exception: on a `delete-*` tool, this is not an error result at all** — deleting an object that's already gone is treated as the caller's desired state already holding, so the call comes back `isError: false` instead; see [Desired State Already Held](#desired-state-already-held) below.
 - **404** — The request never reached the event broker's SEMP API at all: a misconfigured broker `url`, an incorrect SEMP base path, or a SEMP version mismatch. Check the broker's `url` and SEMP version compatibility; not retried.

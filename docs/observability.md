@@ -639,6 +639,18 @@ Notes:
   values.
 - A desired-state no-op is `outcome=success`; the operational `tool invoked` log carries
   `desired_state`. The operation audit record does not carry that field.
+- A create or update call whose request body the server rejects before sending a write
+  (a field set twice, a path or query name inside the configuration object, or an
+  attribute the operation does not define) is recorded as `execution_error`, like any
+  tool failure. The label does not tell a caller mistake from a server fault. Its
+  `detail` holds the same message the agent received. To find these, search the
+  `tool invoked` records for `is not a known attribute`, `must not appear in`, or
+  `defined more than once`. The line is logged at `ERROR`, so no debug level is needed.
+  Abridged record (other fields omitted):
+
+  ```json
+  {"level":"ERROR","msg":"tool invoked","tool":"update-topic-endpoint","outcome":"error","error_type":"execution_error","detail":"request body field \"maxMsgSpoolUsage\" is not a known attribute of operation \"updateMsgVpnTopicEndpoint\"; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server"}
+  ```
 
 ## Load and Saturation Visibility
 
