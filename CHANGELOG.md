@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `list-queues` and `list-client-subscriptions` now report a nonexistent VPN or client as an error instead of an empty list, so a mistyped name no longer reads as "this VPN has no queues" or "this client has no subscriptions". Each tool checks that the VPN or client exists before listing, which adds one SEMP call per invocation; a real VPN with no queues, or a real client with no subscriptions, still returns an empty success. Tracked under SOL-155413.
+- A create or update (`create-*`, `update-*`, `create-queue-subscription`) that times out or loses its connection after the request was sent is now reported as "the broker may have already applied it — check the current state before issuing it again", and as not retryable, instead of "Request failed after 1 attempts (HTTP 0). Internal retries exhausted; try again later." The old message was wrong whenever the broker applied the write but its response did not arrive in time: the agent reported a failure for a queue that now existed, and a retry then failed with "already exists". A write that never left the server (connection refused, DNS or TLS failure) is still reported as retryable, because nothing reached the broker. Tracked under SOL-155411.
 
 ## [0.11.0] - 2026-10-05
 

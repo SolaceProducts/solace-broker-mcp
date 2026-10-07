@@ -22,6 +22,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
@@ -66,10 +67,21 @@ type retryStateKey struct{}
 // in-flight attempt span. Each Do() call creates its own instance via context,
 // so concurrent requests to the same Sender are safe.
 //
-// Every field is written and read on the single goroutine driving
-// retryablehttp's Do loop for that request — the transport wrapper, checkRetry
-// and prepareRetry all run there, in sequence — so no field needs a lock.
+// Every field except requestWritten is written and read on the single goroutine
+// driving retryablehttp's Do loop for that request — the transport wrapper,
+// checkRetry and prepareRetry all run there, in sequence — so no other field
+// needs a lock.
 type retryState struct {
+	// requestWritten records that net/http began writing the request to the
+	// connection, so the broker may have received and acted on it. Set from
+	// the httptrace WroteHeaders hook, which fires just before the headers are
+	// flushed — deliberately conservative: it is always set before any byte
+	// can reach the broker. net/http calls it on its connection write
+	// goroutine, hence atomic. Never cleared: Do reads it only for POST/PATCH,
+	// which the method guard in checkRetry sends exactly once.
+	requestWritten atomic.Bool
+
+
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)
 	other5xxRetried  bool   // true after first non-429/503 5xx retry
