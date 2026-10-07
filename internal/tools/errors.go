@@ -534,8 +534,11 @@ func requestBodyErrorText(err error) (string, bool) {
 // (permission-denied) path so a multi-broker operator can tell which broker
 // denied the request from the agent's output alone.
 func buildErrorMessage(err error, brokerAlias string) (string, []string) {
-	// The executor's own text for a request body it rejected before sending
-	// anything (package-authored, no wrapped cause), so it is safe to show as is.
+	// The executor's own text for a request body it rejected before sending the
+	// step's write (package-authored, no wrapped cause), so it is safe to show as
+	// is. It may run ahead of the ownerCheckFailedError case below: that error
+	// wraps a broker read that failed before the executor ran, and
+	// RequestBodyError wraps nothing, so the two can never share an error chain.
 	if msg, ok := requestBodyErrorText(err); ok {
 		return msg, nil
 	}

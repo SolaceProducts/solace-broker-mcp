@@ -27,34 +27,76 @@ import (
 // holds for a request body the executor rejected locally. They share the helpers
 // in request_body_errors_test.go.
 
-// P4: the operator sees the real reason in the log's detail field, not the Go
-// type name. error_type stays execution_error: reclassifying it is out of scope.
+// P4: for each of the three rejections the operator sees the real reason in the
+// log's detail field, not the Go type name, and it is exactly the sentence the
+// agent received. error_type stays execution_error: reclassifying it is out of
+// scope.
 func TestRequestBodyRejection_LogDetailCarriesMessage(t *testing.T) {
-	out := callRealWriteTool(t, "update-topic-endpoint", map[string]any{
-		"msgVpnName":          "default",
-		"topicEndpointName":   "te1",
-		"topicEndpointConfig": map[string]any{"maxMsgSpoolUsage": 5},
-	})
+	cases := []struct {
+		name   string
+		tool   string
+		params map[string]any
+		want   []string
+	}{
+		{
+			name: "unknown attribute",
+			tool: "update-topic-endpoint",
+			params: map[string]any{
+				"msgVpnName":          "default",
+				"topicEndpointName":   "te1",
+				"topicEndpointConfig": map[string]any{"maxMsgSpoolUsage": 5},
+			},
+			want: []string{"is not a known attribute", `"maxMsgSpoolUsage"`},
+		},
+		{
+			name: "path name inside the config object",
+			tool: "update-queue",
+			params: map[string]any{
+				"msgVpnName":  "default",
+				"queueName":   "q1",
+				"queueConfig": map[string]any{"msgVpnName": "default"},
+			},
+			want: []string{"must not appear in", `"queueConfig"`},
+		},
+		{
+			name: "field defined twice",
+			tool: "create-queue",
+			params: map[string]any{
+				"msgVpnName":  "default",
+				"queueName":   "q1",
+				"queueConfig": map[string]any{"queueName": "q2"},
+			},
+			want: []string{"defined more than once", `"queueName"`},
+		},
+	}
 
-	detail, _ := out.log["detail"].(string)
-	if strings.HasPrefix(detail, "*") {
-		t.Errorf("detail = %q, want the message text and not a Go type name", detail)
-	}
-	if !strings.Contains(detail, "is not a known attribute") || !strings.Contains(detail, `"maxMsgSpoolUsage"`) {
-		t.Errorf("detail = %q, want it to carry the executor's message", detail)
-	}
-	if strings.Contains(detail, "executing tool") || strings.Contains(detail, "tool step") {
-		t.Errorf("detail = %q, want the inner message only, without the wrapper prefixes", detail)
-	}
-	// The operator reads the same sentence the agent got, with nothing added.
-	if detail != out.reply {
-		t.Errorf("detail = %q, want exactly the reply the agent received, %q", detail, out.reply)
-	}
-	if got := out.log["error_type"]; got != "execution_error" {
-		t.Errorf("error_type = %v, want %q (reclassification is out of scope)", got, "execution_error")
-	}
-	if got := out.log["tool"]; got != "update-topic-endpoint" {
-		t.Errorf("tool = %v, want %q", got, "update-topic-endpoint")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := callRealWriteTool(t, tc.tool, tc.params)
+
+			detail, _ := out.log["detail"].(string)
+			if strings.HasPrefix(detail, "*") {
+				t.Errorf("detail = %q, want the message text and not a Go type name", detail)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(detail, w) {
+					t.Errorf("detail = %q, want it to carry %q", detail, w)
+				}
+			}
+			if strings.Contains(detail, "executing tool") || strings.Contains(detail, "tool step") {
+				t.Errorf("detail = %q, want the inner message only, without the wrapper prefixes", detail)
+			}
+			// The operator reads the same sentence the agent got, with nothing added.
+			if detail != out.reply {
+				t.Errorf("detail = %q, want exactly the reply the agent received, %q", detail, out.reply)
+			}
+			if got := out.log["error_type"]; got != "execution_error" {
+				t.Errorf("error_type = %v, want %q (reclassification is out of scope)", got, "execution_error")
+			}
+			if got := out.log["tool"]; got != tc.tool {
+				t.Errorf("tool = %v, want %q", got, tc.tool)
+			}
+		})
 	}
 }
 

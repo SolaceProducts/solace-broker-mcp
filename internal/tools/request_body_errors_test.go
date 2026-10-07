@@ -234,6 +234,40 @@ func TestRequestBodyRejection_HostileKeyIsEscapedInReply(t *testing.T) {
 	if !strings.Contains(out.reply, `bad\nkey\"x`) {
 		t.Errorf("reply = %q, want the key in escaped form", out.reply)
 	}
+
+	// The log carries the same escaped sentence, so a hostile key cannot add a
+	// line or forge a field there either.
+	detail, _ := out.log["detail"].(string)
+	if detail != out.reply {
+		t.Errorf("detail = %q, want exactly the reply %q", detail, out.reply)
+	}
+	if strings.Contains(detail, "\n") {
+		t.Errorf("detail contains a raw newline from the caller's key: %q", detail)
+	}
+}
+
+// A very long key is repeated only up to a bound, in the reply and in the ERROR
+// log line, so one call cannot put kilobytes of caller text into default-level
+// logs. The two channels still say exactly the same thing.
+func TestRequestBodyRejection_VeryLongKeyIsBounded(t *testing.T) {
+	longKey := strings.Repeat("k", 500)
+	out := callRealWriteTool(t, "update-queue", map[string]any{
+		"msgVpnName":  "default",
+		"queueName":   "q1",
+		"queueConfig": map[string]any{longKey: 1},
+	})
+	requireOwnMessage(t, out, "is not a known attribute")
+
+	kept := strings.Repeat("k", 128) + "…"
+	if !strings.Contains(out.reply, kept) {
+		t.Errorf("reply = %q, want the key cut to 128 characters followed by an ellipsis", out.reply)
+	}
+	if strings.Contains(out.reply, strings.Repeat("k", 129)) {
+		t.Errorf("reply repeats more than 128 characters of the caller's key: %d bytes", len(out.reply))
+	}
+	if detail, _ := out.log["detail"].(string); detail != out.reply {
+		t.Errorf("detail = %d bytes, want exactly the reply (%d bytes)", len(detail), len(out.reply))
+	}
 }
 
 // P5 (danger), part i: only the dedicated type gets verbatim treatment. A plain

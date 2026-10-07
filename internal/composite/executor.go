@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 
@@ -791,15 +792,26 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 	return buf.String(), nil
 }
 
-// RequestBodyError is a request body rejected locally, before any write is sent,
-// because of how the caller shaped it. The text is written here, never taken from
-// the broker, so the tools package can show it to the agent and log it as is. It
-// wraps no cause, so a broker error can never travel inside it.
+// RequestBodyError is a request body rejected locally, before the write for that
+// step is sent, because of how the caller shaped it. The text is written here,
+// never taken from the broker, so the tools package can show it to the agent and
+// log it as is. It wraps no cause, so a broker error can never travel inside it.
 type RequestBodyError struct {
 	message string
 }
 
 func (e *RequestBodyError) Error() string { return e.message }
+
+// maxEchoedNameRunes bounds how much of a caller-chosen name an error repeats, so
+// a very long key cannot fill the reply or the ERROR log line.
+const maxEchoedNameRunes = 128
+
+func boundedName(name string) string {
+	if utf8.RuneCountInString(name) <= maxEchoedNameRunes {
+		return name
+	}
+	return string([]rune(name)[:maxEchoedNameRunes]) + "…"
+}
 
 func requestBodyErrorf(format string, args ...any) error {
 	return &RequestBodyError{message: fmt.Sprintf(format, args...)}
@@ -844,7 +856,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 	body := make(map[string]any)
 	set := func(field string, val any) error {
 		if _, defined := body[field]; defined {
-			return requestBodyErrorf("ambiguous request body: field %q is defined more than once; remove it from the config object", field)
+			return requestBodyErrorf("ambiguous request body: field %q is defined more than once; remove it from the config object", boundedName(field))
 		}
 		body[field] = val
 		return nil
@@ -856,7 +868,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		if obj, isObj := val.(map[string]any); isObj {
 			for k, v := range obj {
 				if nonBodyParams[k] {
-					return nil, requestBodyErrorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", k, name)
+					return nil, requestBodyErrorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", boundedName(k), boundedName(name))
 				}
 				if err := set(k, v); err != nil {
 					return nil, err
@@ -887,7 +899,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 					"field", field,
 					"operation", op.ID,
 					"schemaVersion", op.SchemaVersion)
-				return nil, requestBodyErrorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", field, op.ID)
+				return nil, requestBodyErrorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", boundedName(field), op.ID)
 			}
 		}
 	}
