@@ -251,7 +251,7 @@ mcp_client_auth:
 
 That YAML is a valid load. `scopes_supported` is omitted, so the server advertises `["openid"]` in its [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html) Protected Resource Metadata — the document MCP clients fetch from `/.well-known/oauth-protected-resource` to discover how to authenticate. Omitting the field, setting it to `null`, and setting it to `[]` all produce the same `["openid"]`; the process starts in every case.
 
-That default is enough for Keycloak. It is not enough for Entra, and the failure is easy to misread: the server starts normally, PRM is served, and the problem only appears when a client tries to log in. Keep the default for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid` and add the delegated scope you exposed on this MCP server's application registration:
+That default is enough for Keycloak. It is not enough for Entra, and the failure is easy to misread: the server starts normally, PRM is served, and the problem only appears when a client tries to log in. Keep the default for Keycloak (example issuer block below). For Microsoft Entra, set the list explicitly — keep `openid`, add `offline_access`, and add the delegated scope you exposed on this MCP server's application registration:
 
 ```yaml
 mcp_client_auth:
@@ -261,10 +261,15 @@ mcp_client_auth:
   resource_url: "https://mcp.example.com/mcp"
   scopes_supported:
     - "openid"
+    - "offline_access"
     - "https://mcp.example.com/mcp/access_as_user"
 ```
 
-In our testing, advertising `openid` alone while the client sent RFC 8707 `resource` equal to the MCP URL was refused by Entra with `AADSTS9010010`. Do not drop `openid` to avoid that — advertise both. This is an IdP refusal at login, not a configuration error on this server: nothing here rejects an `openid`-only list.
+In our testing, advertising `openid` alone while the client sent RFC 8707 `resource` equal to the MCP URL was refused by Entra with `AADSTS9010010`. Do not drop `openid` to avoid that — advertise all three. This is an IdP refusal at login, not a configuration error on this server: nothing here rejects an `openid`-only list.
+
+`offline_access` is in that list for a different reason, and leaving it out fails much later than `AADSTS9010010` does. Entra issues a refresh token only when the authorization request itself carries `offline_access`. Microsoft notes that the scope is implicitly *granted* once any delegated permission is granted, but that covers consent, not the request — the string still has to be in the request. A client that builds its authorization request from the `scopes_supported` list this server advertises asks for exactly what is in the list, which is why the list is where this belongs. Leave it out and, for such a client, login succeeds and tools work — and then it has no refresh token to renew its access token with, so each expiry sends the user back through a browser login. The renewal happens at the IdP, so these logs will not say why it failed — at most they carry the expiry itself, as a `reason="expired"` rejection from a client that sent the old token before renewing. A client that chooses its own scopes, or that can renew silently some other way, behaves differently; what this server controls is only what it advertises.
+
+Two things to expect once it is set. `offline_access` is an OpenID Connect scope rather than a scope of this API, so it is normal for it not to appear in the access token's `scp` claim, which carries the delegated scopes of this API; whether a refresh token came back in the token response is the thing to check. And `offline_access` is visible at consent: Microsoft documents it as appearing on the consent page as **Maintain access to data you have given it access to**, which is what we saw — on each app's consent screen, beside that app's own permissions, rather than as a separate item to approve. Nothing extra has to be granted for it: Microsoft states that `offline_access` is implicitly granted once any delegated permission is. On a deployment that has already been consented, widening the list can bring that screen back the next time users authenticate, so plan for whoever normally approves consent in your tenant to be available.
 
 This list is Hop 1 discovery, advertised to MCP clients. The server does not gate inbound tokens on it, and it is **not** `brokers.*.auth.target` (Hop 2) — see [Target](#target). The word "scope" appears on both hops and means different things: this list is what clients request at the IdP, while under the jwt-bearer grant `auth.target` is what travels to the IdP *as* the `scope` parameter.
 
@@ -275,7 +280,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 | `issuer` | The OIDC issuer URL of the IdP. The server fetches JWKS keys from here for token validation. |
 | `audience` | Must exactly match the audience value configured in the IdP in step 1.2. |
 | `resource_url` | The public URL of the MCP server endpoint, advertised to MCP clients for OAuth discovery. |
-| `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. Full field table: [Configuration](configuration.md#client-authentication-settings). |
+| `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. **Entra:** include `offline_access` — Entra issues a refresh token only when the authorization request carries it, so a client that requests the advertised list has none to renew with and falls back to an interactive login at each access-token expiry. Hop 1 only; it does not belong in `brokers.*.auth.target`. Full field table: [Configuration](configuration.md#client-authentication-settings). |
 
 > **Keycloak:** The issuer URL follows the pattern `https://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8443 with TLS and a realm named `solace`:
 > ```yaml
@@ -843,7 +848,7 @@ The numbered steps in detail:
    **Option B:** Claude Code performs Dynamic Client Registration (RFC 7591) to obtain a client ID at runtime
 4. A browser window opens for the user to log in with IdP credentials
 5. After login, Claude Code receives a JWT access token and includes it in all subsequent requests
-6. The MCP server validates each token's signature (via JWKS), issuer, audience, and expiry — tokens are automatically refreshed when they expire
+6. The MCP server validates each token's signature (via JWKS), issuer, audience, and expiry. It never refreshes a token: when one expires, the MCP client renews it against the IdP. A refresh token is the direct way to do that without the user; without one, renewal depends on the client and the IdP session, and commonly means an interactive login
 
 On success, the server logs: `"using JWT token for authentication — production mode"`
 
@@ -884,7 +889,17 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 ### Entra `AADSTS9010010` After Claude Fetches PRM
 
-The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set both `openid` and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set `openid`, `offline_access`, and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+
+### Entra: the browser login comes back after a while
+
+Everything works, and then the MCP client asks the user to sign in again — and keeps asking, every time the access token expires. The server logs are unlikely to show the cause. A client that notices the expiry itself renews against the IdP without ever calling us, so there is no failing request here to log; one that sends the expired token first gets a 401 recorded as `reason="expired"` (see [Caller Tokens Rejected](observability.md#caller-tokens-rejected)), which is the expiry itself, not the reason renewal failed. Either way the renewal happens at the IdP, and something there is sending the user back through an interactive login.
+
+Start with what this server advertises. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`, the same line Step 2 uses. If `offline_access` is missing from that array, a client that requests the advertised list never asked Entra for a refresh token, and that is the likely cause: add it as in Step 2 and restart. Existing clients keep their cached credentials, so remove and re-add the server at the client, or otherwise clear its stored credentials, to make it re-authenticate and pick up the new list.
+
+That log line proves only what this server published, not what the client sent. If the array already carries `offline_access`, or the symptom survives the change, read the client's own authorization request and logs: a client may choose its own scopes, and a refresh token that has expired, been revoked, or gone unused long enough to lapse produces the same repeated login.
+
+Being granted is not the same as being requested. Microsoft documents `offline_access` as implicitly granted once any delegated permission is granted, which is why consent can look complete while no refresh token is ever issued. Also expect `offline_access` to be absent from the access token's `scp` claim, which lists this API's delegated scopes — so look for a refresh token in the token response rather than among the granted scopes. `offline_access` belongs to Hop 1 only; it does not go in `brokers.*.auth.target`.
 
 ### Entra: login works but every tool call fails
 
@@ -923,7 +938,7 @@ Check consent before `auth.target`: a missing or blank target fails differently,
   ```
   Same message after the Entra YAML above (grep `scopes_supported`; the array is the proof the list left config):
   ```json
-  {"level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://mcp.example.com/mcp","issuers":["https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"],"scopes_supported":["openid","https://mcp.example.com/mcp/access_as_user"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
+  {"level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://mcp.example.com/mcp","issuers":["https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"],"scopes_supported":["openid","offline_access","https://mcp.example.com/mcp/access_as_user"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
   ```
 - That line is `INFO`. `log_level: warn` or `error` hides it. You do not need `debug` to see it at the shipped default.
 - If that line is missing at `info`, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
