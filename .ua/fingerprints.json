@@ -3783,8 +3783,8 @@
       "totalLines": 111,
       "hasStructuralAnalysis": true
     },
-    "docs/oauth/token-exchange-SOL-150070/architecture-plan.md": {
-      "filePath": "docs/oauth/token-exchange-SOL-150070/architecture-plan.md",
+    "docs/_oauth/token-exchange-SOL-150070/architecture-plan.md": {
+      "filePath": "docs/_oauth/token-exchange-SOL-150070/architecture-plan.md",
       "contentHash": "33b685887e3e9b879bc754b49ee329dca2399b067f035d729ae47b11389be5ff",
       "functions": [],
       "classes": [],

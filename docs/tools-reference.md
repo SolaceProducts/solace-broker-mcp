@@ -23,15 +23,14 @@ These apply to every tool unless noted otherwise.
 
 Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
 identifying which configured event broker to query. It is injected automatically into
-each tool's input schema at registration (`injectBrokerParam` in
-`internal/tools/register.go`), so it is not declared in any tool definition:
+each tool's input schema at registration and not declared in any tool definition:
 
 ```json
 { "type": "string", "description": "Target broker alias (required). Available brokers: <alias>, <alias>, ..." }
 ```
 
 The accepted values are the event broker aliases from your configuration. Call `list-brokers`
-to discover them. Alias matching is case-insensitive; original casing is
+to discover them. Alias matching is case-insensitive and original casing is
 preserved in output.
 
 ### The `msgVpnName` Parameter
@@ -62,7 +61,7 @@ proxy/gateway, 503 from an overloaded event broker) are retried automatically an
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
-### Output: the Step-Keyed Envelope
+### Step-Keyed Response Envelope
 
 Most read-only tools return their event broker data in a **step-keyed envelope** — a
 top-level JSON object whose keys are the tool's internal step IDs and whose values
@@ -203,11 +202,17 @@ call, that is the expected path. Direct invocation is supported but uncommon.
 
 ### get-broker-status
 
-Curated point-in-time status snapshot of an event broker: edition and version, uptime
-and restart reason, scaling limits and resource headroom, memory and
-message-spool utilization, and — on hardware appliances — chassis identity and
-physical-component inventory (CPU, memory, power, disks, and blades). Reports raw
-state, not a health verdict.
+Curated point-in-time status snapshot of an event broker that includes:
+- edition, version
+- uptime and restart reason 
+- scaling limits and resource headroom
+- memory and message-spool utilization
+
+For appliance event brokers (hardware), it also includes:
+-  chassis identity
+- physical-component inventory (CPU, memory, power, disks, and blades). 
+
+It's important to remember that these are status reports at a point in time regarding the state of the event broker and not its overall health.
 
 **Parameters:**
 
@@ -215,10 +220,9 @@ state, not a health verdict.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 
-**Returns:** step-keyed envelope (native SEMPv1). Inner fields cover version,
-uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles;
-appliances add a `hardwareDetails` section. Field shape is documented in
-`docs/internal/semp/get-broker-status-curated-fields.md`.
+**Returns:** step-keyed envelope (native SEMPv1). The inner fields cover version,
+uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles.
+For appliances, a `hardwareDetails` section is included.
 
 ```json
 { "broker": "prod-broker" }
@@ -357,7 +361,7 @@ equivalents.
 
 ### list-queues
 
-List queues in a VPN with cumulative spooled count (`spooledMsgCount` — lifetime,
+List queues in a Message VPN with cumulative spooled count (`spooledMsgCount` — lifetime,
 not live depth), unacked count, bind count, congestion state, and
 rates. Primary VPN-wide scan for slow guaranteed-message consumers (growing
 `spooledMsgCount`, high `txUnackedMsgCount`, `rxMsgRate > txMsgRate`,
@@ -554,7 +558,7 @@ These read the provisioned client-username and client-profile configuration
 objects — distinct from the connected-session tools above (`list-clients`,
 `get-client-details`), which read live connections. A configured (static)
 username or profile exists whether or not anyone is connected with it; a
-`dynamic=true` username is auto-provisioned by the broker and may be ephemeral.
+`dynamic=true` username is auto-provisioned by the event broker and may be ephemeral.
 Passwords are never returned.
 
 ### list-client-usernames
@@ -930,7 +934,7 @@ scope; `vpnName` echoes the requested VPN when scoped.
 
 ### list-queue-discards
 
-Per-queue message discard counts for a VPN: time-to-live (TTL)–expired, max-redelivery-exceeded,
+Per-queue message discard counts for a VPN: time-to-live (TTL)-expired, max-redelivery-exceeded,
 spool-quota-exceeded, and other categories. For event broker/VPN aggregates use
 `get-discard-stats`.
 
