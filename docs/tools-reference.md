@@ -62,6 +62,11 @@ proxy/gateway, 503 from an overloaded event broker) are retried automatically an
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
+`create-*` and `update-*` requests are never retried. If one times out or loses
+its connection after it was sent, the error says the event broker may have
+already applied it and is reported as `retryable: false`: check the current
+state before issuing the call again.
+
 ### Output: the Step-Keyed Envelope
 
 Most read-only tools return their event broker data in a **step-keyed envelope** — a
