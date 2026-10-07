@@ -71,7 +71,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 29 read + 18 write    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 29 read + 18 write    │                      │  Brokers         │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘  basic/bearer/oauth  └──────────────────┘

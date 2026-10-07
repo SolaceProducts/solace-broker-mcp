@@ -15,7 +15,7 @@
 // Identity is the repo-owned, log-only view of an authenticated caller.
 //
 // The audit-log schema lives on this type by design (SOL-149606, plan §4.1
-// at docs/superpowers/plans/2026-05-27-sol-149606-tool-invocation-identity-audit.md):
+// at docs/_superpowers/plans/2026-05-27-sol-149606-tool-invocation-identity-audit.md):
 //
 //   - sdkauth.TokenInfo is intentionally NOT logged directly. Its Extra map
 //     is map[string]any; a struct-level dump would leak whatever a future

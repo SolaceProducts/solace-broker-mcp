@@ -173,7 +173,7 @@ An OAuth 2.1 / OpenID Connect (OIDC) identity provider such as Keycloak, Auth0, 
 
 #### 1.1 Create a Realm or Tenant
 
-Most IdPs organize clients and users into an isolated namespace — called a realm, tenant, or organization depending on the provider. Create one dedicated to the MCP server deployment.
+Most identity providers (IdPs) organize clients and users into an isolated namespace — called a realm, tenant, or organization depending on the provider. Create one dedicated to the MCP server deployment.
 
 > **Keycloak:** Start a local instance with Docker:
 > ```bash
@@ -329,7 +329,7 @@ brokers:
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this event broker. |
 | `brokers.<alias>.auth.target` | Optional at configuration load for every grant type, even under `auth.mode: oauth` — omitting it does not fail startup. One string naming this event broker's API at the IdP, forwarded during exchange in the request parameter the grant type selects (token exchange: `audience`; jwt-bearer: `scope`) — see [Target](#target). Omission behaves differently per grant: token exchange's request simply carries no audience parameter, safe to omit if the event broker's OAuth profile does not validate audience; jwt-bearer's request instead fails before any HTTP call (`jwt-bearer request missing scope`), since Entra's On-Behalf-Of marks scope required — jwt-bearer brokers must set it. A whitespace-only value fails configuration load regardless of grant type; an empty value (for example a `${VAR}` that resolves to `""`) is treated as omitted. |
 
-The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target event broker's audience).
+The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, because the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target event broker's audience).
 
 #### Grant Type
 
@@ -492,7 +492,7 @@ front of the Service — which the pattern above tells you to do — **requires*
 configuring session routing at that layer. Skipping it breaks the deployment
 rather than degrading it.
 
-#### Why it breaks
+#### Why It Breaks
 
 `sessionAffinity: ClientIP` does not apply: kube-proxy enforces it on the
 ClusterIP path only, and an ingress load-balances straight to pod IPs.
@@ -507,7 +507,7 @@ probability `(1/2)^10` ≈ **0.1%**. In practice it is often worse: with a singl
 controller replica, nginx's round-robin cursor makes the very next call after
 initialize land on the other pod deterministically.
 
-#### What to configure
+#### What to Configure
 
 ```yaml
 metadata:
@@ -534,7 +534,7 @@ Three caveats:
 - Sessions still die with their pod. Affinity pins a live session; it cannot
   carry state across a rolling update.
 
-#### What does not work
+#### What Does Not Work
 
 All three of these apply cleanly and leave the 404s in place.
 
@@ -560,7 +560,7 @@ ignore unknown `nginx.ingress.kubernetes.io/*` keys silently, so changing
 `ingressClassName` and applying gives a resource that reconciles clean and 404s
 exactly as before. Use that controller's own affinity feature — see below.
 
-#### Gateway API and service meshes
+#### Gateway API and Service Meshes
 
 Gateway API's `sessionPersistence` (`BackendLBPolicy`) does not solve this — it
 is gateway-assigned persistence, where the gateway issues a token the client
@@ -784,7 +784,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > is emitted. This lets a caller always discover configured event broker aliases
 > before invoking any other tool.
 
-> **Two independent auth legs.** Client→server auth (steps 1-8, the JSON Web
+> **Two independent authentication legs.** Client→server auth (steps 1-8, the JSON Web
 > Token (JWT) shown in the preceding diagram) is distinct from server→event
 > broker auth (step 9 or 10 depending on whether tool authorization is
 > enabled), which uses each event broker's configured `auth.mode` (`basic`,
@@ -882,7 +882,7 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 - The MCP server connects to the issuer's `/.well-known/openid-configuration` at startup to fetch JWKS keys
 - If egress to a cloud IdP requires an HTTP proxy, set `HTTPS_PROXY` — see [Outbound HTTP proxy](configuration.md#outbound-http-proxy). The same variable also governs broker SEMP traffic, so use `NO_PROXY` to keep internal brokers direct
 
-### Entra `AADSTS9010010` after Claude fetches PRM
+### Entra `AADSTS9010010` After Claude Fetches PRM
 
 The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set both `openid` and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
 

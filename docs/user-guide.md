@@ -52,10 +52,10 @@ The server can be deployed several ways. See the [README](../README.md#quickstar
 
 | Environment | Notes |
 |---|---|
-| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick. |
-| **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check |
-| **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH` |
-| **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/` |
+| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Use deployment if you're not sure which to pick. |
+| **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check. |
+| **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`. |
+| **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/`.|
 
 Binary, Docker, and `go install` use the same YAML configuration file and `.env` credentials — configuration must be completed before starting the server. Kubernetes carries the equivalent settings in its own ConfigMap and Secret manifests instead. Contributors running from source instead of a tagged release should see [Development Setup](../README.md#development-setup).
 
@@ -141,7 +141,7 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 | `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Verifies the client exists first, so a nonexistent client reports an error rather than an empty list. Default 100 results, max 500. |
-| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does NOT flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
+| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does **not** flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
 
 ### Client Access
 
@@ -278,6 +278,12 @@ Tool errors include structured fields to help diagnose the problem:
 | `matchedEntity` | The HTML entity found in `value` (for example, `&gt;`). | `error_source: input_validation` |
 | `fullyDecodedValue` | `value` with every layer of HTML escaping undone — the value to resend. May differ from a single substitution of `matchedEntity` if `value` was escaped more than once. | `error_source: input_validation` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
+
+**A request your client built wrongly.** If a create or update call sets a field
+twice, puts a path or query name such as `msgVpnName` inside the configuration
+object, or uses an attribute the operation does not define, `error` says which field
+and what to change. These replies have `retryable: false`, and the rejected call was not
+sent. Fix the named field and call again.
 
 Common causes:
 - **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason. **Exception: on a `delete-*` tool, this is not an error result at all** — deleting an object that's already gone is treated as the caller's desired state already holding, so the call comes back `isError: false` instead; see [Desired State Already Held](#desired-state-already-held) below.

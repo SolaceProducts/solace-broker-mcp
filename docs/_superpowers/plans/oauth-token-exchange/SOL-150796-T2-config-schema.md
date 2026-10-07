@@ -3,7 +3,7 @@
 **Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
 **Parent epic:** [SOL-150070](https://sol-jira.atlassian.net/browse/SOL-150070) — OAuth Token Exchange (Hop 2)
 
-This file records decisions made *during implementation* of T2. It complements — and does not replace — the upstream architecture plan at [`docs/oauth/token-exchange-SOL-150070/architecture-plan.md`](../../../oauth/token-exchange-SOL-150070/architecture-plan.md).
+This file records decisions made *during implementation* of T2. It complements — and does not replace — the upstream architecture plan at [`docs/_oauth/token-exchange-SOL-150070/architecture-plan.md`](../../../_oauth/token-exchange-SOL-150070/architecture-plan.md).
 
 **Format:** one section per decision, added as the corresponding code lands. Each section names the choice and the *reason* — what makes the entry useful three months later.
 

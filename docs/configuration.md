@@ -107,7 +107,7 @@ brokers:
 
 Configured under the top-level `broker_oauth` key. Required when any event broker uses `auth.mode: oauth` — obtains the event-broker-bound token by exchanging the calling agent's Hop 1 token against an identity provider (IdP), via RFC 8693 token exchange or RFC 7523 jwt-bearer (Entra On-Behalf-Of) — see `grant_type` below.
 
-`mcp_client_auth.mode: oauth` (Hop 1) is required first: either grant consumes the agent's Hop 1 JSON Web Token (JWT) as the exchange request's subject (token exchange: form field `subject_token`; jwt-bearer: `assertion`), so an event broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at configuration load** with an `mcp_client_auth.mode must be oauth` error naming the affected event broker(s). The `broker_oauth:` block itself is likewise required once any event broker uses `auth.mode: oauth` — omitting it fails configuration load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table other than `token_expiry_fallback`, `circuit_breaker`, and `retry_after` is required; an empty or unsupported value fails configuration load naming that field.
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: either grant consumes the agent's Hop 1 JSON Web Token (JWT) as the exchange request's subject (token exchange: form field `subject_token`; jwt-bearer: `assertion`), so an event broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at configuration load** with an `mcp_client_auth.mode must be oauth` error naming the affected event brokers. The `broker_oauth:` block itself is likewise required once any event broker uses `auth.mode: oauth` — omitting it fails configuration load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table other than `token_expiry_fallback`, `circuit_breaker`, and `retry_after` is required; an empty or unsupported value fails configuration load naming that field.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -233,7 +233,7 @@ mcp_client_auth:
 | `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
 | `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, because there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist). |
 | `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (for example, `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. **Exactly one claim is read** — there is no fallback to a second claim, no union, and no merge, so the claim you name must carry every value the policy matches on. This is independent of the event broker's own access-level-groups claim name; the two may differ, and a tool granted here grants nothing on the broker. **Logging note:** the claim's values are recorded under the fixed key `groups` whatever you name here, so a log line naming `groups` does not mean the `groups` claim was read — the `expected_claim` field names the claim actually configured, but it appears only on the *missing-claim* denial — a denial for insufficient membership (`decision_reason: not_permitted`) does not carry it. |
-| `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group intended to grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
+| `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. Every caller is blocked from any tool that no group grants. **No wildcard** — a group intended to grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
 **`list-brokers` and `describe-semp-schema` are structurally exempt.** Every authenticated caller can invoke these tools regardless of their groups; neither is composed with the authorization wrapper. `list-brokers` lets callers discover which event broker aliases exist; `describe-semp-schema` lets callers inspect the SEMPv2 schema for any operation (spec content only, no event broker state). Listing either tool in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
 
@@ -334,7 +334,7 @@ Configured under the `semp` key. Controls how the server throttles and retries r
 | `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. |
 | `semp.fair_scheduling` | `true` | Share each broker's request pace fairly across callers instead of first-come-first-served. Kill switch, not a capacity control. |
 
-### Sharing a broker fairly between callers
+### Sharing a Broker Fairly Between Callers
 
 With `semp.fair_scheduling` on (the default), a broker's pace is shared
 round-robin across callers rather than served in arrival order. One caller's
@@ -411,7 +411,7 @@ incident, not as a way to shape capacity — it adds no throughput, and with one
 active caller fair scheduling already grants the entire configured rate and the
 entire in-flight cap.
 
-### When a broker is too busy
+### When a Broker Is Too Busy
 
 Every request is gated on two per-broker resources before it is sent: the
 pacing interval (`semp.request_min_interval`) and the in-flight limit
@@ -513,7 +513,7 @@ Terraform and most Go tooling uses. There is no YAML equivalent and no per-broke
 
 Either case works (`HTTPS_PROXY` or `https_proxy`). If both are set the upper-case form wins.
 
-### What the variables govern
+### What the Variables Govern
 
 | Outbound traffic | Proxied | Notes |
 |---|---|---|
@@ -526,7 +526,7 @@ Either case works (`HTTPS_PROXY` or `https_proxy`). If both are set the upper-ca
 All three proxied paths read the same process-wide environment. You cannot proxy one and not
 another by role.
 
-### Separating traffic by destination
+### Separating Traffic by Destination
 
 The only separation axis is the **destination**. `NO_PROXY` exempts destinations from the proxy;
 nothing selects by role, and the `HTTP_PROXY`/`HTTPS_PROXY` split is by URL **scheme**, not by
@@ -557,7 +557,7 @@ A single-label host like `otel-collector` needs its own entry; it matches no dot
 Kubernetes, prefer the form the endpoint actually uses — `otel-collector.monitoring` or
 `.svc.cluster.local` — since `NO_PROXY` matches the host as written, not after resolution.
 
-### How `NO_PROXY` entries match
+### How `NO_PROXY` Entries Match
 
 Comma-separated. Which entries can match a broker depends on **how that broker's `url:` is
 written**, and the two families are mutually exclusive:
@@ -580,11 +580,11 @@ converse also holds: a domain entry never matches an IP-literal host.
 
 `localhost` and any loopback address are never proxied, regardless of `NO_PROXY`.
 
-### Proxy authentication
+### Proxy Authentication
 
 Credentials go in the proxy URL: `HTTPS_PROXY=http://user:password@proxy.example.com:3128`.
-Supply it the same way as other secrets — via the environment or the `.env` file, not a YAML
-literal — since the value contains a password.
+Supply it the same way as other secrets (via the environment or the `.env` file, not a YAML
+literal), because the value contains a password.
 
 This server strips userinfo from every proxy URL it logs, so the `proxy` field described below
 carries a host and port but never a password. One caveat is outside its control: with **both**
@@ -594,7 +594,7 @@ detected proxy URL to stderr unredacted, password included. Neither variable is 
 Prefer an unauthenticated proxy, or an allow-list on the proxy side, if that debugging path is
 one your operators will use.
 
-### Limits of the environment-variable approach
+### Limits of the Environment-Variable Approach
 
 - **Restart-scoped.** Go resolves these variables once per process and caches the result, so
   changing them requires a server restart. They are not re-read on config reload.
@@ -605,7 +605,7 @@ one your operators will use.
   traffic simply goes through the proxy. Confirm what actually took effect from the `proxy`
   field below rather than from the variables you set.
 
-### Confirming which brokers are proxied
+### Confirming Which Brokers Are Proxied
 
 Each broker logs its effective proxy once, when its connection is first created:
 
