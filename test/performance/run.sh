@@ -525,7 +525,7 @@ fi
 # cost of those five calls — the factor that turns loadgen's tool calls/s into
 # SEMP requests/s. Bank that table, then zero the counters so the shutdown
 # summary in mock.log measures the load phase alone instead of the load phase
-# plus these dozen requests.
+# plus these fifteen requests.
 #
 # Read it per rule, not per tool: two of the five checks are list-rdps (default
 # args, and maxResults=200 for the paginated one), so "rdps page 1" shows 2 —

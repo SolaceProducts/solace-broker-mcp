@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `list-queues` and `list-client-subscriptions` now report a nonexistent VPN or client as an error instead of an empty list, so a mistyped name no longer reads as "this VPN has no queues" or "this client has no subscriptions". Each tool checks that the VPN or client exists before listing, which adds one SEMP call per invocation; a real VPN with no queues, or a real client with no subscriptions, still returns an empty success. Tracked under SOL-155413.
+- `list-clients`, `list-client-usernames`, `list-client-profiles`, `list-rdps`, `list-bridges`, `list-kafka-receivers`, `list-kafka-senders`, `list-slow-subscribers` and `list-queue-discards` now report a nonexistent VPN as an error instead of an empty list. Like `list-queues`, each checks that the VPN exists before listing, which adds one SEMP call per invocation and a `vpn` key to the result; a real VPN with nothing to list still returns an empty success. Tracked under SOL-155480.
 
 ## [0.11.0] - 2026-10-05
 

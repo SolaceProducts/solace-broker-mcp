@@ -15,6 +15,7 @@
 package composite
 
 import (
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -291,27 +292,56 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 	})
 
-	// SOL-155413: SEMP returns 200 with an empty list for a nonexistent
-	// parent, so these tools must GET the parent first; its NOT_FOUND then
-	// aborts the call before the list step runs. That only holds while the
-	// preflight is sequential: a parallel one would race the list step.
-	t.Run("spot/list-parent-preflight", func(t *testing.T) {
-		for name, op := range map[string]string{
-			"list-queues":               "monitor/getMsgVpn",
-			"list-client-subscriptions": "monitor/getMsgVpnClient",
-			"list-queue-subscriptions":  "monitor/getMsgVpnQueue",
-		} {
-			tool := findTool(tools, name)
-			if tool == nil || len(tool.Steps) < 2 {
-				t.Errorf("%s: want a preflight step before the list step", name)
+	// SOL-155413, SOL-155480: SEMP returns 200 with an empty list for a
+	// nonexistent parent, so every scoped list-* tool (one with a required
+	// parameter naming its parent) must GET the parent first; its NOT_FOUND
+	// then aborts the call before the list step runs. Lint-style over the
+	// whole catalog so a new list tool cannot ship without one.
+	t.Run("lint/list-parent-preflight", func(t *testing.T) {
+		checked := 0
+		for i := range tools {
+			tool := &tools[i]
+			if !strings.HasPrefix(tool.Name, "list-") {
 				continue
 			}
-			if tool.Steps[0].Operation != op {
-				t.Errorf("%s: first step operation = %q, want %q", name, tool.Steps[0].Operation, op)
+			var required []string
+			for _, p := range tool.Parameters {
+				if p.Required {
+					required = append(required, p.Name)
+				}
 			}
-			if tool.Steps[0].Parallel {
-				t.Errorf("%s: preflight step must not be parallel, or it no longer gates the list step", name)
+			if len(required) == 0 {
+				continue // unscoped (e.g. list-vpns): no parent to check
 			}
+			checked++
+			if len(tool.Steps) < 2 {
+				t.Errorf("%s: want a preflight step that GETs the parent before the list step", tool.Name)
+				continue
+			}
+			pre := tool.Steps[0]
+			// Only a sequential preflight gates the list step: a parallel one
+			// races it, and a paginated or fan-out one is itself a collection.
+			if pre.Parallel || pre.FollowPages || pre.ForEach != "" {
+				t.Errorf("%s: preflight step %q must be a single sequential GET (parallel=%v followPages=%v forEach=%q)",
+					tool.Name, pre.ID, pre.Parallel, pre.FollowPages, pre.ForEach)
+			}
+			// A collection GET returns 200 for a missing parent too, so the
+			// preflight must address one object: its path ends in a parameter.
+			if op, ok := operations[pre.Operation]; ok && (op.Method != http.MethodGet || !strings.HasSuffix(op.Path, "}")) {
+				t.Errorf("%s: preflight step %q (%s %s) must GET a single object, not a collection",
+					tool.Name, pre.ID, op.Method, op.Path)
+			}
+			// The preflight must name the whole parent, or it checks the wrong
+			// object (e.g. the VPN when the parent is a client in it).
+			for _, name := range required {
+				if _, ok := pre.Args[name]; !ok {
+					t.Errorf("%s: preflight step %q does not pass required parameter %q, so it does not identify the parent",
+						tool.Name, pre.ID, name)
+				}
+			}
+		}
+		if checked == 0 {
+			t.Fatal("no scoped list-* tools found; the lint is not checking anything")
 		}
 	})
 }
