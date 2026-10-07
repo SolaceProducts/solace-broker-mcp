@@ -291,6 +291,7 @@ Common causes:
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
 - **429** — Rate limiting from a proxy, gateway, or load balancer in front of the event broker. (The event broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
 - **503** — The event broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
+- **"…the broker may have already applied it"** (`retryable: false`) — A `create-*` or `update-*` timed out or lost its connection after the request was sent, so the event broker may have carried it out. It is deliberately not retried. Check the object's current state first (for example, `list-queues` after `create-queue`) before issuing the call again; a repeated create that had already landed comes back `already_exists` (see [Desired State Already Held](#desired-state-already-held)). `status` is absent, or is the success code of a response that was lost partway through. A request that never reached the event broker (connection refused, DNS or TLS failure) is reported as retryable instead.
 
 ### Desired State Already Held
 
