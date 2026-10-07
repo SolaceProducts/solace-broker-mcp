@@ -51,7 +51,7 @@ import (
 func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next http.Handler, hook AuthAuditHook) (http.Handler, error) {
 	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
 	// lives in cmd/server/main.go via banner.LogStartupAuthMode — DO NOT add WARN
-	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	// logs here. See docs/_superpowers/specs/2026-05-20-client-auth-mode-design.md.
 	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeDisabled:
 		return next, nil

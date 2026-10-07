@@ -2,7 +2,7 @@
 
 Status: Living document, updated as sub-tickets land.
 
-This file records decisions made *during implementation* of SOL-150070 (OAuth Token Exchange Hop 2). It complements — and does not replace — the upstream architecture plan at [`docs/oauth/token-exchange-SOL-150070/architecture-plan.md`](../../oauth/token-exchange-SOL-150070/architecture-plan.md).
+This file records decisions made *during implementation* of SOL-150070 (OAuth Token Exchange Hop 2). It complements — and does not replace — the upstream architecture plan at [`docs/_oauth/token-exchange-SOL-150070/architecture-plan.md`](../../_oauth/token-exchange-SOL-150070/architecture-plan.md).
 
 **Scope of this doc:** decisions that surface during coding and are too granular for the architecture plan but too significant to leave only in a commit message or a PR thread. Examples:
 

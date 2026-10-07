@@ -68,7 +68,7 @@ import (
 // mcp_client_auth block. The caller unpacks them rather than passing a
 // ServerConfig pointer so this package stays free of internal/config
 // dependencies. See SOL-149989 design spec at
-// docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+// docs/_superpowers/specs/2026-05-20-client-auth-mode-design.md.
 //
 // bindAddr is the effective host:port the server listens on. It is always
 // logged so operators can confirm at a glance whether the (auth-mode-dependent)

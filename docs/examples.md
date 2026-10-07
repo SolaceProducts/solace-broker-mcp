@@ -1,7 +1,7 @@
 # Examples
 
 Task-oriented examples for connecting clients and using the tools. For the full
-per-tool schema reference see [Tools Reference](tools-reference.md); for setup and
+per-tool schema reference, see [Tools Reference](tools-reference.md); for setup and
 deployment see the [README](../README.md) and [User Guide](user-guide.md).
 
 > The server runs as a standalone HTTP service. It has **no stdio transport** and
@@ -22,12 +22,12 @@ deployment see the [README](../README.md) and [User Guide](user-guide.md).
 ## Connect Claude Desktop
 
 Claude Desktop connects to this server as a **remote (HTTP) Model Context
-Protocol (MCP) server**, not a stdio subprocess. Two methods:
+Protocol (MCP) server**, not a stdio subprocess. Two methods you can use:
 
 ### Method A — Custom Connector (Recommended)
 
 1. Start the MCP server (binary, Docker, or `go run`).
-2. In Claude Desktop: **Settings → Connectors → Add custom connector**.
+2. In Claude Desktop, select **Settings → Connectors → Add custom connector**.
 3. Set the URL to the `/mcp` endpoint, for example `http://localhost:9090/mcp`.
 4. If the server runs in `mode: oauth`, Claude Desktop runs the browser login on
    first use (the server advertises its authorization server via
@@ -39,12 +39,12 @@ No configuration file editing required.
 ### Method B — `mcp-remote` Bridge
 
 Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm bridge when
-you prefer file-based configuration. Edit `claude_desktop_config.json`:
+you want file-based configuration. Edit `claude_desktop_config.json`:
 
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
-(Linux is not an officially supported Claude Desktop platform; on Linux use
+(Linux is not supported for the Claude Desktop platform. For Linux, you can use
 [Claude Code](#connect-claude-code) instead.)
 
 ```json
@@ -95,16 +95,16 @@ See [Authentication](authentication.md) for full OAuth setup.
 
 ## Natural-Language Queries
 
-After connecting, ask in plain language. The agent selects the tool and fills
+After connecting, make queries using plain language. The agent selects the tool and fills
 parameters.
 
-> **Note:** `<your-vpn-name>` in the examples below stands in for a Message VPN
+> **Note:** `<your-vpn-name>` in the following examples stands in for a Message VPN
 > name — replace it with one from your own event broker. The name is
 > per-broker; Solace Cloud services use the service name rather than `default`.
 > To look it up, ask "What VPNs are configured on prod-broker?" (invokes
 > `list-vpns`), or check the service details in the Solace Cloud console.
 
-Representative queries and the shape they return:
+The following are examples of representative queries and the shape they return:
 
 | You ask | Tool invoked | Returns (shape) |
 |---|---|---|
@@ -117,7 +117,7 @@ Representative queries and the shape they return:
 | "Create a queue orders.q in `<your-vpn-name>`, then subscribe it to orders/>" | `create-queue` then `create-queue-subscription` | a bare `create-queue` alone leaves the queue inert — it attracts no messages until a subscription is added |
 
 Read-only tools return their event broker data in a step-keyed envelope. See
-[Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
+[Tools Reference → Output](tools-reference.md#step-keyed-response-envelope).
 
 ## Tool Invocations by Category
 

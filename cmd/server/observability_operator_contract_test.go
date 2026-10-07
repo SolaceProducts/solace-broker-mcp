@@ -48,7 +48,7 @@ func publicObservabilityDoc(t *testing.T) string {
 
 func archivedObservabilityDoc(t *testing.T) string {
 	t.Helper()
-	return readRepoFile(t, "docs", "internal", "observability-schema-review.md")
+	return readRepoFile(t, "docs", "_internal", "observability-schema-review.md")
 }
 
 func markdownSection(t *testing.T, raw, heading string) string {
@@ -352,7 +352,7 @@ func TestObservabilityDoc_DocumentsExtraCodeBackedScenarios(t *testing.T) {
 
 func TestObservabilityDoc_DocumentsSharedOTLPTransportSecurity(t *testing.T) {
 	doc := publicObservabilityDoc(t)
-	section := markdownSection(t, doc, "### OTLP transport security")
+	section := markdownSection(t, doc, "### OTLP Transport Security")
 	for _, needle := range []string{
 		"both OTLP metrics and traces",
 		"TLS is the default",
@@ -377,7 +377,7 @@ func TestObservabilityDoc_DocumentsSharedOTLPTransportSecurity(t *testing.T) {
 }
 
 func TestObservabilityDoc_QuotesUnsetOTLPMetricsEndpointWarning(t *testing.T) {
-	section := markdownSection(t, publicObservabilityDoc(t), "### OTLP metrics push arrives nowhere")
+	section := markdownSection(t, publicObservabilityDoc(t), "### OTLP Metrics Push Arrives Nowhere")
 	if !strings.Contains(section, otlpMetricsEndpointUnsetWarning) {
 		t.Errorf("OTLP metrics runbook does not quote startup warning %q", otlpMetricsEndpointUnsetWarning)
 	}
