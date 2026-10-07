@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `list-queues` and `list-client-subscriptions` now report a nonexistent VPN or client as an error instead of an empty list, so a mistyped name no longer reads as "this VPN has no queues" or "this client has no subscriptions". Each tool checks that the VPN or client exists before listing, which adds one SEMP call per invocation; a real VPN with no queues, or a real client with no subscriptions, still returns an empty success. Tracked under SOL-155413.
 
+- Create and update calls rejected before any write is sent (a field set twice, a path or query name inside the configuration object, or an attribute the operation does not define) now return the message naming the field, not "The broker reported an internal error", and the `tool invoked` log's `detail` holds that message. Searches that match `*fmt.wrapError` for these calls stop matching; `error_type` is unchanged. Tracked under SOL-155412.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added
