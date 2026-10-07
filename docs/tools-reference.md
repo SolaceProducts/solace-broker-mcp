@@ -1072,7 +1072,12 @@ request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
 `topicEndpointName`, `restDeliveryPointName`) inside the configuration object — the
 name comes from its dedicated parameter. A reserved name, or any attribute the
 object's schema doesn't define, placed inside the configuration object is rejected
-before the event broker call rather than sent on. Every management tool's description
+before the write is sent. The reply names the field and what to change, for example
+`request body field "maxMsgSpoolUsage" is not a known attribute of operation
+"updateMsgVpnTopicEndpoint"`. It is not a broker error, so repeating the same call
+will not help. Queues and topic endpoints name some settings differently
+(`maxMsgSpoolUsage` and `maxSpoolUsage`); `describe-semp-schema` lists the exact
+names. Every management tool's description
 instructs the LLM to obtain explicit user confirmation — restating the target
 and effect — as a separate reply before invoking.
 
