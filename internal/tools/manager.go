@@ -935,8 +935,9 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// emit, keeps one tool error in one record at a single (ERROR) level.
 	//
 	// We log the raw err.Error() ONLY for the broker error types we've audited
-	// (and, below, for a locally rejected request body): each one's Error() implementation is verified to render only broker- or
-	// server-generated text, never unreviewed content from an intermediary
+	// (and, below, for a locally rejected request body): each one's Error()
+	// implementation is verified to render only broker- or server-generated
+	// text, never unreviewed content from an intermediary
 	// (proxy/gateway/WAF) or credentials (auth is applied via headers, not
 	// URLs). errors.As above matches an audited type anywhere in the wrap
 	// chain, but detail = (*toolErr).Error() below renders the OUTERMOST
