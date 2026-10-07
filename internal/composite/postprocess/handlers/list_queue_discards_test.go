@@ -436,4 +436,20 @@ func TestListQueueDiscards_ValidatorCrossCheck(t *testing.T) {
 			}
 		})
 	}
+	// SOL-155480: the vpn preflight also selects msgVpnName. The check is per
+	// step, so that must not cover for the queueDiscards step dropping it.
+	t.Run("drop msgVpnName with vpn step present", func(t *testing.T) {
+		pruned := make([]string, 0, len(selectFields)-1)
+		for _, f := range selectFields {
+			if f != "msgVpnName" {
+				pruned = append(pruned, f)
+			}
+		}
+		err := postprocess.ValidateTool("list-queue-discards", "listQueueDiscards",
+			[]string{"vpn", listQueueDiscardsStepID},
+			map[string][]string{"vpn": {"msgVpnName"}, listQueueDiscardsStepID: pruned})
+		if err == nil {
+			t.Error("ValidateTool must fail when only the vpn step selects msgVpnName")
+		}
+	})
 }

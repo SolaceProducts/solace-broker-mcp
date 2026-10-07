@@ -1128,6 +1128,13 @@ file. If you extend the tool set, teach `capture.sh` to record the new
 response, update the handler, add the file to `sanitize.sh`'s list, and re-run
 `regen-golden.sh` so the new fixture arrives from the same capture as the rest.
 
+A capture made before SOL-155480 has no `msgvpn_object.json`, the VPN existence
+check `list-queues` and `list-rdps` now make first, so `mock-semp` refuses to
+start on it. `fixtures-manifest.sh check` does not flag this, because it checks
+the files the manifest lists, not the files the handler needs. Re-run
+`regen-golden.sh`; the fidelity goldens need it anyway, since they predate the
+`vpn` key.
+
 That gate is why `get-rdp-status` is pinned to one RDP by exact path match. The
 alternative shape — matching `/restDeliveryPoints/` by prefix — would answer a
 request for any of the VPN's 196 RDPs with the one RDP that was captured: a

@@ -399,17 +399,22 @@ test_list_nonexistent_vpn() {
 }
 
 # SOL-155480: the preflight must not turn "VPN exists, nothing to list" into an
-# error. F1's test-vpn has no queues, RDPs, bridges, Kafka bridges or clients.
+# error. F1's test-vpn (disabled) and test-vpn-empty (enabled) have no queues,
+# RDPs, bridges, Kafka bridges or clients. Both checks are exact: a JSON-RPC
+# error has no .result, and jq reads a missing list's `null | length` as 0, so
+# a looser check would pass a failed call.
 test_list_empty_vpn() {
-    local tool="$1" step="$2" broker="$3"
+    local tool="$1" step="$2" broker="$3" vpn
     local response content
-    response=$(mcp_call_tool "$tool" \
-        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"test-vpn"}')") || return 1
-    assert_json_field "$response" ".result.isError // false" "false" \
-        "$tool [$broker]: existing VPN with nothing to list is not an error" || return 1
-    content=$(extract_content "$response")
-    assert_json_field "$content" ".${step}.data | length" "0" \
-        "$tool [$broker]: existing VPN with nothing to list returns an empty list" || return 1
+    for vpn in test-vpn test-vpn-empty; do
+        response=$(mcp_call_tool "$tool" \
+            "$(jq -nc --arg b "$broker" --arg v "$vpn" '{broker:$b,msgVpnName:$v}')") || return 1
+        assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list is a successful result" || return 1
+        content=$(extract_content "$response")
+        assert_json_field "$content" ".${step}.data == []" "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list returns an empty list" || return 1
+    done
 }
 
 # Each wrapper covers both brokers, so a tool costs one run_test line per check.

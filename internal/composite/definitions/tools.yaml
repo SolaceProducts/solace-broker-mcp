@@ -32,9 +32,9 @@
 #   the reference case), add a sequential preflight step (a single GET on the
 #   parent itself, minimal select) before the list step — Execute's sequential
 #   short-circuit (executor.go) means the preflight's own NOT_FOUND aborts the
-#   call with no extra code. Every list-* tool with a required parameter
-#   naming its parent has one; lint/list-parent-preflight in
-#   loader_embedded_test.go fails the build for a new one that doesn't.
+#   call with no extra code. Every tool with a collection step under a named
+#   parent has one (fan-out steps excepted); lint/collection-parent-preflight
+#   in loader_embedded_test.go fails the build for a new one that doesn't.
 
 tools:
   - name: get-rdp-status
