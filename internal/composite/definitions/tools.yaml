@@ -1018,15 +1018,22 @@ tools:
 
   - name: list-queue-discards
     description: >
-      List per-queue message discard counts for a Message VPN. Returns each
-      queue with its TTL-expired, max-redelivery-exceeded, spool-quota-exceeded,
-      and other discard category counters. Use this to diagnose why messages
-      are being dropped across queues. The response summary counts queues with any
-      cumulative discards (discardingQueueCount) and provides topOffenderQueues —
-      the top 10 by total cumulative count of truly-lost discards (messages
-      successfully moved to a DMQ are excluded), each annotated with its
-      dominantCategory; topOffenderQueues is omitted from summary entirely when
-      no discards are present, so its absence is a meaningful zero signal.
+      Scan per-queue message discard counts for a Message VPN and return an
+      aggregated summary — not the per-queue raw counters themselves, and not
+      every scanned queue. Use this to diagnose why messages are being
+      dropped across queues. The summary counts queues with any cumulative
+      discards (discardingQueueCount) and provides topOffenderQueues — only
+      the top 10 by total cumulative count of truly-lost discards across
+      every TTL-expired, max-redelivery-exceeded, spool-quota-exceeded, and
+      other discard category (messages successfully moved to a DMQ are
+      excluded), each row naming its queueName, its totalDiscards, and only
+      its single dominantCategory, not the full per-category breakdown; no
+      tool exposes that breakdown today. topOffenderQueues is omitted from
+      summary entirely when no discards are present, so its absence is a
+      meaningful zero signal. If the scan itself was truncated (more queues
+      exist than maxResults/the 500 cap reached), a larger offender outside
+      the scanned window can be missing from topOffenderQueues — narrow
+      msgVpnName or raise maxResults and re-run if that matters.
       For broker-wide or per-VPN aggregate totals, use get-discard-stats.
     annotations:
       readOnly: true
@@ -1038,7 +1045,7 @@ tools:
       - name: maxResults
         type: integer
         required: false
-        description: "Maximum number of queues to return (default 100, max 500)"
+        description: "Maximum number of queues to scan for the summary (default 100, max 500) — not a count of queues returned individually"
     steps:
       - id: queueDiscards
         operation: monitor/getMsgVpnQueues

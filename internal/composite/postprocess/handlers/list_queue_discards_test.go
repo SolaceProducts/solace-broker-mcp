@@ -376,6 +376,17 @@ func TestListQueueDiscards_TruncatedMessageSurfaced(t *testing.T) {
 			t.Errorf("truncatedMessage key should be omitted when empty")
 		}
 	})
+	t.Run("truncated with message key entirely absent omits key rather than panicking", func(t *testing.T) {
+		got := runListQueueDiscards(t, items, map[string]any{
+			"truncated": true,
+			// truncatedMessage deliberately not set at all, distinct from set-
+			// but-empty: the handler's type assertion on step["truncatedMessage"]
+			// must fail safely (ok=false) rather than on a present empty string.
+		})
+		if _, present := got["truncatedMessage"]; present {
+			t.Errorf("truncatedMessage key should be omitted when entirely absent from the step")
+		}
+	})
 }
 
 // TestListQueueDiscards_SkippedOmittedWhenZero keeps the common-case summary
