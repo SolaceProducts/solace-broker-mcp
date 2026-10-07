@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `list-queues` and `list-client-subscriptions` now report a nonexistent VPN or client as an error instead of an empty list, so a mistyped name no longer reads as "this VPN has no queues" or "this client has no subscriptions". Each tool checks that the VPN or client exists before listing, which adds one SEMP call per invocation; a real VPN with no queues, or a real client with no subscriptions, still returns an empty success. Tracked under SOL-155413.
 
+### Security
+
+- **BREAKING**: Composite tool results no longer include the broker's `links` object or any `uri`-bearing `meta` field (e.g. `meta.request.uri`) — they leaked the broker's management hostname:port, SEMP API variant, VPN name, and resource path through ordinary successful tool use. Migration: stop reading `.links.*` or `.meta.request.uri`/`.meta.paging.nextPageUri`; `data` is unaffected. Tracked under SOL-155432.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added

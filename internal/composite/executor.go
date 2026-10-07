@@ -887,20 +887,97 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 // "postProcess" runs a registered Go postprocessor over the step results and
 // merges its summary map under a top-level "summary" key alongside the raw
 // results.
+//
+// Both branches scrub the broker's self-referential envelope fields
+// (scrubBrokerURIs) before the result is assembled for the caller
+// (SOL-155432) — after postprocess.Apply has already run for "postProcess",
+// not before: a postprocessor may depend on this metadata internally (see
+// scrubBrokerURIs's doc comment), even though the raw value must never reach
+// the caller.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
 	case "collect":
+		scrubBrokerURIs(stepResults)
 		return collectSteps(stepResults, 0), nil
 	case "postProcess":
 		summary, err := postprocess.Apply(strategy.PostProcess, stepResults)
 		if err != nil {
 			return nil, err
 		}
+		scrubBrokerURIs(stepResults)
 		out := collectSteps(stepResults, 1)
 		out["summary"] = summary
 		return out, nil
 	default:
 		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", strategy.Strategy)
+	}
+}
+
+// scrubBrokerURIs removes the broker's self-referential "links" object and
+// any uri-bearing field inside "meta" from every step result, in place,
+// before a composite tool's result reaches the caller. Left unscrubbed, the
+// raw SEMP v2 response envelope ({"data":..., "meta":{...}, "links":{...}})
+// leaks the broker's management hostname:port, SEMP API variant (e.g.
+// __private_config__), VPN name, and resource path through ordinary
+// successful tool use — observed live on both a plain read (meta.request.uri,
+// including the full select= query string) and a write (links.uri,
+// links.subscriptionsUri) (SOL-155432).
+//
+// Must run after any postprocessor has already read stepResults.
+// internal/composite/postprocess/handlers/list_vpns.go's hasNextPage checks
+// meta.paging.nextPageUri's PRESENCE, not its value, to detect an
+// indeterminate "real clients" probe (SOL-153071) — scrubbing before that
+// handler runs would silently misclassify every indeterminate probe as "no
+// real clients". ApplyResultStrategy calls this after postprocess.Apply
+// returns, never before.
+//
+// "data" is deliberately untouched: a broker resource's own configured
+// attributes live there, and nothing observed ever names a real attribute
+// "uri" or "*Uri" the way the self-referential envelope fields do — this
+// server has no business guessing that it's safe to strip fields there too.
+func scrubBrokerURIs(stepResults map[string]map[string]any) {
+	for _, step := range stepResults {
+		scrubEnvelope(step)
+	}
+}
+
+// scrubEnvelope removes "links" and any uri-bearing "meta" field from one
+// step result (or one fan-out row), recursing into a fan-out step's "byKey"
+// entries — list-vpns's real-clients probe is the only ForEach step in the
+// catalog today, and it already replaces each byKey entry with a minimal
+// derived fact before this ever runs (see list_vpns.go), but a future
+// fan-out tool without that custom sanitization needs the same scrub a
+// direct step gets.
+func scrubEnvelope(m map[string]any) {
+	if m == nil {
+		return
+	}
+	delete(m, "links")
+	if meta, ok := m["meta"].(map[string]any); ok {
+		scrubURIFields(meta)
+	}
+	if byKey, ok := m["byKey"].(map[string]any); ok {
+		for _, v := range byKey {
+			if entry, ok := v.(map[string]any); ok {
+				scrubEnvelope(entry)
+			}
+		}
+	}
+}
+
+// scrubURIFields deletes any key named "uri" or ending in "Uri" from m,
+// recursing into nested maps — meta.paging.nextPageUri sits one level deeper
+// than meta.request.uri, and a future SEMP response shape may nest another
+// uri-bearing field differently again.
+func scrubURIFields(m map[string]any) {
+	for k, v := range m {
+		if k == "uri" || strings.HasSuffix(k, "Uri") {
+			delete(m, k)
+			continue
+		}
+		if nested, ok := v.(map[string]any); ok {
+			scrubURIFields(nested)
+		}
 	}
 }
 
