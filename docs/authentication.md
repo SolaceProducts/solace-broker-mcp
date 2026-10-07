@@ -848,7 +848,7 @@ The numbered steps in detail:
    **Option B:** Claude Code performs Dynamic Client Registration (RFC 7591) to obtain a client ID at runtime
 4. A browser window opens for the user to log in with IdP credentials
 5. After login, Claude Code receives a JWT access token and includes it in all subsequent requests
-6. The MCP server validates each token's signature (via JWKS), issuer, audience, and expiry — tokens are automatically refreshed when they expire
+6. The MCP server validates each token's signature (via JWKS), issuer, audience, and expiry. It never refreshes a token: when one expires, the MCP client renews it against the IdP, which it can do silently only if the IdP issued it a refresh token — otherwise the user is prompted to log in again
 
 On success, the server logs: `"using JWT token for authentication — production mode"`
 
@@ -889,7 +889,15 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 ### Entra `AADSTS9010010` After Claude Fetches PRM
 
-The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set both `openid` and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+The authorize request used only `openid` while also sending RFC 8707 `resource` as this MCP URL. Entra may return `AADSTS9010010`. Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`. If it is `["openid"]`, `mcp_client_auth.scopes_supported` was omitted or empty — the process still started. Set `openid`, `offline_access`, and this app’s Application ID URI scope as in Step 2. This is an IdP refusal, not a config load error, and not an inbound-scope check on this server.
+
+### Entra: the browser login comes back after a while
+
+Everything works, and then the MCP client asks the user to sign in again — and keeps asking, every time the access token expires. The server logs show nothing wrong, because nothing is: there are no 401s, no rejected tokens, and no failing request for this server to log. The client simply has no refresh token, so a fresh interactive login is the only way it can get a new access token.
+
+Grep `registered OAuth protected resource metadata endpoint` and read `scopes_supported`, the same line Step 2 uses. If `offline_access` is not in that array, Entra was never asked for a refresh token: clients build the authorization request from what this list advertises. Add it as in Step 2 and restart. Existing clients keep their cached credentials, so remove and re-add the server at the client, or otherwise clear its stored credentials, to make it re-authenticate and pick up the new list.
+
+Being granted is not the same as being requested. Microsoft documents `offline_access` as implicitly granted once any delegated permission is granted, which is why consent can look complete while no refresh token is ever issued. Also expect `offline_access` to be missing from the granted `scope` of the access token itself — it is an OIDC scope, not a scope of this API — so check for a refresh token in the token response rather than in the granted scopes. `offline_access` belongs to Hop 1 only; it does not go in `brokers.*.auth.target`.
 
 ### Entra: login works but every tool call fails
 
@@ -928,7 +936,7 @@ Check consent before `auth.target`: a missing or blank target fails differently,
   ```
   Same message after the Entra YAML above (grep `scopes_supported`; the array is the proof the list left config):
   ```json
-  {"level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://mcp.example.com/mcp","issuers":["https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"],"scopes_supported":["openid","https://mcp.example.com/mcp/access_as_user"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
+  {"level":"INFO","msg":"registered OAuth protected resource metadata endpoint","resource":"https://mcp.example.com/mcp","issuers":["https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"],"scopes_supported":["openid","offline_access","https://mcp.example.com/mcp/access_as_user"],"bearer_methods_supported":["header"],"resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource","prm_paths":["/.well-known/oauth-protected-resource","/.well-known/oauth-protected-resource/mcp"]}
   ```
 - That line is `INFO`. `log_level: warn` or `error` hides it. You do not need `debug` to see it at the shipped default.
 - If that line is missing at `info`, this process is not in oauth mode (`static` and `disabled` do not emit it), or it is an older build.
