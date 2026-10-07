@@ -99,9 +99,9 @@ mcp_client_auth:
   # still starts either way; there is no way to advertise an empty list.
   # Entra: keep openid AND add offline_access AND this API's delegated scope.
   # openid alone with resource = the MCP URL was refused with AADSTS9010010
-  # in our testing. Without offline_access Entra issues no refresh token, and
-  # the client sends the user through a browser login again at every
-  # access-token expiry. See docs/authentication.md step 2.
+  # in our testing. Without offline_access Entra issues no refresh token, so a
+  # client that requests the advertised list falls back to a browser login at
+  # every access-token expiry. See docs/authentication.md step 2.
   # Blank or whitespace-in-entry is a load error. Not brokers.*.auth.target.
   #
   # scopes_supported:
