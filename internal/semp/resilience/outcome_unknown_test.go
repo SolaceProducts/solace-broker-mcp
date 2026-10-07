@@ -47,8 +47,10 @@ func stallAfterReadHandler(counter *atomic.Int32) http.HandlerFunc {
 }
 
 // newTimeoutSender points a Sender at handler through an http.Client whose
-// Timeout is short, mirroring semp.request_timeout_duration in production
-// (sempv2.NewHTTPClient sets http.Client.Timeout from it).
+// Timeout is short. That exercises the http.Client.Timeout path; in production
+// the transport's ResponseHeaderTimeout (half of semp.request_timeout_duration)
+// usually fires first, which the tools-layer test exercises through a real
+// sempv2 client.
 func newTimeoutSender(t *testing.T, handler http.HandlerFunc) (*Sender, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(handler)

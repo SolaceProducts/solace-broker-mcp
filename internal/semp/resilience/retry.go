@@ -72,15 +72,15 @@ type retryStateKey struct{}
 // checkRetry and prepareRetry all run there, in sequence — so no other field
 // needs a lock.
 type retryState struct {
-	// requestWritten records that net/http began writing the request to the
-	// connection, so the broker may have received and acted on it. Set from
-	// the httptrace WroteHeaders hook, which fires just before the headers are
-	// flushed — deliberately conservative: it is always set before any byte
-	// can reach the broker. net/http calls it on its connection write
-	// goroutine, hence atomic. Never cleared: Do reads it only for POST/PATCH,
-	// which the method guard in checkRetry sends exactly once.
+	// requestWritten records that the request's full header block was written
+	// to the connection, so the broker may have received and acted on it. Set
+	// from the httptrace WroteHeaders hook, before the body is sent. A request
+	// that never got that far reached the broker incomplete, if at all, and
+	// cannot have been applied. net/http calls the hook on its connection write
+	// goroutine, hence atomic. Never cleared: checkRetry never replays a
+	// POST/PATCH, and a resend net/http makes on its own after a stale reused
+	// connection can only make the flag more conservative, never less.
 	requestWritten atomic.Bool
-
 
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)

@@ -820,8 +820,8 @@ func translateParentNotFound(description string) string {
 // isRetryable returns true for errors that represent transient conditions where
 // the same request might succeed later: a request shed at admission because the
 // broker was too busy (never sent, so always safe to repeat), exhausted
-// internal retries (the resilience layer only exhausts on genuinely transient
-// HTTP statuses, e.g. 429/503), a live HTTP 429 or 503, or a transient comRc_t
+// internal retries — unless the broker may already have applied the request
+// (RetriesExhaustedError.NonIdempotent) — a live HTTP 429 or 503, or a transient comRc_t
 // code (229 TIME_OUT). All other SEMP/envelope errors are deterministic and
 // non-retryable.
 func isRetryable(err error) bool {
@@ -837,8 +837,9 @@ func isRetryable(err error) bool {
 	}
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
-		// A request the caller declared non-idempotent was not replayed at all,
-		// because the broker may already have carried it out. Reporting it as
+		// A request the caller declared non-idempotent, or a write that failed
+		// after it was sent, was not replayed at all, because the broker may
+		// already have carried it out. Reporting it as
 		// retryable would invite the agent to repeat the very side effect the
 		// retry policy refused to duplicate.
 		return !retriesErr.NonIdempotent

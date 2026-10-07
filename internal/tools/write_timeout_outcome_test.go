@@ -29,18 +29,13 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
-// TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown is the
-// SOL-155411 reproduction end to end: a real SEMPv2 client sends a create
-// (POST), the broker reads it and never answers within
-// semp.request_timeout_duration, and the agent-facing message must say the
-// broker may already have applied it — not "(HTTP 0) ... try again later",
-// which led operators to retry a create that had in fact succeeded.
-func TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		<-r.Context().Done()
-	}))
-	defer server.Close()
+// executeCreateQueue sends a create (POST) through a real SEMPv2 client with a
+// short semp.request_timeout_duration to a broker played by handler, and
+// returns the error the tools layer would see.
+func executeCreateQueue(t *testing.T, handler http.HandlerFunc) error {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
 
 	retries := 2
 	minInterval := time.Duration(0)
@@ -72,10 +67,16 @@ func TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown(t *test
 	_, execErr := client.Execute(context.Background(), op,
 		map[string]any{"body": map[string]any{"queueName": "mcp-test-timeout-1"}})
 	if execErr == nil {
-		t.Fatal("expected the create to fail with a timeout, got nil")
+		t.Fatal("expected the create to fail, got nil")
 	}
+	return execErr
+}
 
-	msg, _ := buildErrorMessage(execErr, "ucd-editor")
+// requireOutcomeUnknown asserts the agent is told the write may have been
+// applied, and is not invited to repeat it.
+func requireOutcomeUnknown(t *testing.T, err error) {
+	t.Helper()
+	msg, _ := buildErrorMessage(err, "ucd-editor")
 	if !strings.Contains(msg, "may have already applied it") {
 		t.Errorf("message does not warn that the create may have been applied: %q", msg)
 	}
@@ -84,7 +85,34 @@ func TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown(t *test
 			t.Errorf("message still contains %q for a write whose outcome is unknown: %q", banned, msg)
 		}
 	}
-	if isRetryable(execErr) {
+	if isRetryable(err) {
 		t.Error("isRetryable is true; the agent would be invited to repeat a create the broker may already have applied")
 	}
+}
+
+// TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown is the
+// SOL-155411 reproduction end to end: the broker reads the create and never
+// answers within semp.request_timeout_duration. The agent-facing message must
+// say the broker may already have applied it — not "(HTTP 0) ... try again
+// later", which reported a failure for a queue that had in fact been created.
+func TestBuildErrorMessage_CreateTimedOutAfterSend_ReportsOutcomeUnknown(t *testing.T) {
+	requireOutcomeUnknown(t, executeCreateQueue(t, func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+}
+
+// The broker answers 200 — so it applied the create — but the connection
+// stalls partway through the body. The failure surfaces while reading the
+// response, after the Sender has returned, and must get the same treatment.
+func TestBuildErrorMessage_CreateResponseBodyLost_ReportsOutcomeUnknown(t *testing.T) {
+	requireOutcomeUnknown(t, executeCreateQueue(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"data":{"queueName":`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
 }
