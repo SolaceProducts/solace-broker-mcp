@@ -823,10 +823,11 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 		retryUnsafe: isRetryUnsafe(ctx),
 	}
 	ctx = context.WithValue(ctx, retryStateKey{}, state)
-	// Record when the request actually leaves the client. A write that fails
-	// before this (connection refused, DNS, TLS handshake) cannot have reached
-	// the broker; one that fails after it (timeout, connection reset) may have
-	// been applied. WithClientTrace composes with any trace already on ctx.
+	// Record that the request is about to go on the wire (see requestWritten
+	// for why WroteHeaders, not WroteRequest). A write that fails before this
+	// (connection refused, DNS, TLS handshake) cannot have reached the broker;
+	// one that fails after it (timeout, connection reset) may have been
+	// applied. WithClientTrace composes with any trace already on ctx.
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		WroteHeaders: func() { state.requestWritten.Store(true) },
 	})
