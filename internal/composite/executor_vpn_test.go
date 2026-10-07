@@ -517,6 +517,50 @@ func TestExecute_UpdateMessageVPN_RejectsPathParamInConfig(t *testing.T) {
 	if !strings.Contains(err.Error(), "msgVpnName") {
 		t.Errorf("error should name the offending field, got: %v", err)
 	}
+	var bodyErr *RequestBodyError
+	if !errors.As(err, &bodyErr) {
+		t.Errorf("error = %T, want a *RequestBodyError in the chain so the tools package can show it to the agent", err)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
+	}
+}
+
+func TestExecute_CreateMessageVPN_RejectsFieldDefinedTwice(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	// On create, msgVpnName is a body field, so the dedicated param and a key of
+	// the same name inside msgVpnConfig both target it. With no defined winner the
+	// call is rejected before any SEMP request.
+	ops := map[string]*sempv2.Operation{
+		"config/createMsgVpn": {
+			ID:     "createMsgVpn",
+			Method: "POST",
+			Path:   "/SEMP/v2/__private_config__/msgVpns",
+			Parameters: []sempv2.Parameter{
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+			BodyFields: map[string]bool{"msgVpnName": true, "enabled": true},
+		},
+	}
+	executor := NewCompositeExecutor(ops)
+
+	_, err := executor.Execute(context.Background(), createMessageVPNTool(), capture, map[string]any{
+		"msgVpnName":   "prod-vpn",
+		"msgVpnConfig": map[string]any{"msgVpnName": "other-vpn"},
+	})
+	if err == nil {
+		t.Fatal("expected error for a field defined twice, got nil")
+	}
+	if !strings.Contains(err.Error(), "defined more than once") || !strings.Contains(err.Error(), `"msgVpnName"`) {
+		t.Errorf("error should say which field is defined twice, got: %v", err)
+	}
+	var bodyErr *RequestBodyError
+	if !errors.As(err, &bodyErr) {
+		t.Errorf("error = %T, want a *RequestBodyError in the chain", err)
+	}
 	if len(recorded) != 0 {
 		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
 	}
@@ -557,6 +601,10 @@ func TestExecute_UpdateMessageVPN_RejectsUnknownBodyField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "dryRun") {
 		t.Errorf("error should name the unknown field, got: %v", err)
+	}
+	var bodyErr *RequestBodyError
+	if !errors.As(err, &bodyErr) {
+		t.Errorf("error = %T, want a *RequestBodyError in the chain", err)
 	}
 	if len(recorded) != 0 {
 		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))

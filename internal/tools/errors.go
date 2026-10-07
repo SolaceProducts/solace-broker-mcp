@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
@@ -506,6 +507,19 @@ func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err err
 	return m.buildErrorResult(err, brokerAlias)
 }
 
+// requestBodyErrorText returns the executor's own message when err is, or wraps,
+// a request body the executor rejected locally (SOL-155412). The agent reply and
+// the log's detail field both call it, so the two always say the same thing.
+// Only the dedicated type matches: an error that merely uses the same words does
+// not, and a broker error never does.
+func requestBodyErrorText(err error) (string, bool) {
+	var bodyErr *composite.RequestBodyError
+	if errors.As(err, &bodyErr) {
+		return bodyErr.Error(), true
+	}
+	return "", false
+}
+
 // buildErrorMessage produces the human-readable, agent-facing error string
 // along with any actionable suggestions. It prefers the broker's own
 // description for client/config errors (lightly sanitized as defense-in-depth),
@@ -520,6 +534,12 @@ func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err err
 // (permission-denied) path so a multi-broker operator can tell which broker
 // denied the request from the agent's output alone.
 func buildErrorMessage(err error, brokerAlias string) (string, []string) {
+	// The executor's own text for a request body it rejected before sending
+	// anything (package-authored, no wrapped cause), so it is safe to show as is.
+	if msg, ok := requestBodyErrorText(err); ok {
+		return msg, nil
+	}
+
 	var retriesErr *resilience.RetriesExhaustedError
 	var busyErr *resilience.BrokerBusyError
 	var sempv2Err *sempv2.SEMPError
