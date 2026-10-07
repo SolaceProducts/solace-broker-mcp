@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Create and update calls rejected before any write is sent (a field set twice, a path or query name inside the configuration object, or an attribute the operation does not define) now return the message naming the field, not "The broker reported an internal error", and the `tool invoked` log's `detail` holds that message. Searches that match `*fmt.wrapError` for these calls stop matching; `error_type` is unchanged. Tracked under SOL-155412.
 
+- The Entra examples for `mcp_client_auth.scopes_supported` now include `offline_access`. Entra issues a refresh token only when the authorization request carries that scope, and MCP clients request what this server advertises, so an Entra deployment configured from the previous two-scope examples sent its users through an interactive browser login at every access-token expiry. No server behaviour changed — `scopes_supported` is advertised as written, as before — so an existing deployment picks this up by adding the scope and re-authenticating. Documentation only. Tracked under SOL-155451.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added
