@@ -54,9 +54,9 @@ type ObservabilityConfig struct {
 	// MetricsScrapeEnabled (OBS_METRICS_SCRAPE_ENABLED) turns on the Prometheus
 	// scrape egress: the client_golang registry, the Go/process collectors, the
 	// Prometheus exporter, and the /metrics listener on MetricsBindAddress. It
-	// is one of the two metrics egress flags (see MetricsProviderEnabled).
-	// It gates only the scrape egress, so an OTLP-only deployment does not bind
-	// an unauthenticated scrape listener nothing reads.
+	// is one of the two metrics egress flags (see MetricsProviderEnabled), so an
+	// OTLP-only deployment does not bind an unauthenticated scrape listener
+	// nothing reads.
 	MetricsScrapeEnabled    bool `yaml:"-"`
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
