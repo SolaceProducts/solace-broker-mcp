@@ -48,11 +48,11 @@ The Solace Broker MCP Server requires:
 
 ### Deployment
 
-The server can be deployed several ways. See the [README](../README.md#quickstart) for detailed setup instructions:
+You can review these options to help you decide which deployment to use for your environment. See the [README](../README.md#quickstart) for detailed setup instructions:
 
 | Environment | Notes |
 |---|---|
-| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick. |
+| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. |
 | **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check. |
 | **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`. |
 | **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/`.|
