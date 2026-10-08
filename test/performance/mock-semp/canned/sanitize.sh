@@ -71,6 +71,7 @@ files=(
   "$canned_dir/show_memory.xml"
   "$canned_dir/show_message_spool.xml"
   "$canned_dir/show_hardware_details.xml"
+  "$canned_dir/msgvpn_object.json"
   "$canned_dir/rdp_object.json"
   "$canned_dir/rdp_queue_bindings.json"
   "$canned_dir/rdp_rest_consumers.json"

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
@@ -66,10 +67,24 @@ type retryStateKey struct{}
 // in-flight attempt span. Each Do() call creates its own instance via context,
 // so concurrent requests to the same Sender are safe.
 //
-// Every field is written and read on the single goroutine driving
-// retryablehttp's Do loop for that request — the transport wrapper, checkRetry
-// and prepareRetry all run there, in sequence — so no field needs a lock.
+// Every field except requestWritten is written and read on the single goroutine
+// driving retryablehttp's Do loop for that request — the transport wrapper,
+// checkRetry and prepareRetry all run there, in sequence — so no other field
+// needs a lock.
 type retryState struct {
+	// requestWritten records that net/http has serialized the request's full
+	// header block for sending, so the broker may have received and acted on
+	// it. Set from the httptrace WroteHeaders hook, which fires before the
+	// buffered headers are flushed: the flag is always set before a complete
+	// request can reach the broker. That is deliberately conservative — a
+	// socket write that then fails still leaves it set — while a request that
+	// fails earlier (dial, DNS, TLS handshake) reached the broker incomplete,
+	// if at all, and cannot have been applied. net/http calls the hook on its
+	// connection write goroutine, hence atomic. Never cleared: checkRetry
+	// never replays a POST/PATCH, and a resend net/http makes on its own after
+	// a stale reused connection can only make the flag more conservative.
+	requestWritten atomic.Bool
+
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)
 	other5xxRetried  bool   // true after first non-429/503 5xx retry

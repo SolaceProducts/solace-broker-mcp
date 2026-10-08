@@ -52,10 +52,10 @@ The server can be deployed several ways. See the [README](../README.md#quickstar
 
 | Environment | Notes |
 |---|---|
-| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick. |
-| **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check |
-| **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH` |
-| **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/` |
+| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Use deployment if you're not sure which to pick. |
+| **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check. |
+| **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`. |
+| **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/`.|
 
 Binary, Docker, and `go install` use the same YAML configuration file and `.env` credentials — configuration must be completed before starting the server. Kubernetes carries the equivalent settings in its own ConfigMap and Secret manifests instead. Contributors running from source instead of a tagged release should see [Development Setup](../README.md#development-setup).
 
@@ -138,10 +138,10 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 
 | Tool | Description |
 |---|---|
-| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
+| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Verifies the client exists first, so a nonexistent client reports an error rather than an empty list. Default 100 results, max 500. |
-| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does NOT flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
+| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does **not** flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 
 ### Client Access
 
@@ -149,32 +149,32 @@ These read the provisioned client-username and client-profile configuration obje
 
 | Tool | Description |
 |---|---|
-| `list-client-usernames` | List the client usernames provisioned in a VPN with their enabled state, client profile, ACL profile, and `dynamic` flag. A `dynamic=true` username is broker-auto-provisioned (OAuth or client certificate) and may be ephemeral. Default 100 results, max 500. |
+| `list-client-usernames` | List the client usernames provisioned in a VPN with their enabled state, client profile, ACL profile, and `dynamic` flag. A `dynamic=true` username is broker-auto-provisioned (OAuth or client certificate) and may be ephemeral. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-username` | Configuration of a single provisioned client username: enabled state, client profile, ACL profile, and permission flags. Reflects configuration, not a live connection. |
-| `list-client-profiles` | List the client profiles in a VPN with their guaranteed-messaging permission flags and per-username limits. A client profile is the permission template a client username points at. Default 100 results, max 500. |
+| `list-client-profiles` | List the client profiles in a VPN with their guaranteed-messaging permission flags and per-username limits. A client profile is the permission template a client username points at. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-profile` | Configuration of a single client profile: the guaranteed-messaging allow flags and the per-username connection, endpoint, flow, subscription, and transaction limits (configured and effective). A profile with guaranteed-messaging send/receive disabled silently blocks it for every username that uses it. |
 
 ### REST Delivery Points
 
 | Tool | Description |
 |---|---|
-| `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-rdp-status` | Detailed RDP status: enabled state, up/down status, client name, last failure reason, queue bindings, and REST consumer status. |
 
 ### Bridges
 
 | Tool | Description |
 |---|---|
-| `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Default 100 results, max 500. |
+| `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/event broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
 
 ### Kafka
 
 | Tool | Description |
 |---|---|
-| `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`). |
-| `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`). |
 
 ### Discards
@@ -182,7 +182,7 @@ These read the provisioned client-username and client-profile configuration obje
 | Tool | Description |
 |---|---|
 | `get-discard-stats` | Event-broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus event-broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the event broker exposes no per-VPN spool breakdown via SEMPv1. |
-| `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
+| `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 
 ### Actions
 
@@ -279,12 +279,19 @@ Tool errors include structured fields to help diagnose the problem:
 | `fullyDecodedValue` | `value` with every layer of HTML escaping undone — the value to resend. May differ from a single substitution of `matchedEntity` if `value` was escaped more than once. | `error_source: input_validation` |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
+**A request your client built wrongly.** If a create or update call sets a field
+twice, puts a path or query name such as `msgVpnName` inside the configuration
+object, or uses an attribute the operation does not define, `error` says which field
+and what to change. These replies have `retryable: false`, and the rejected call was not
+sent. Fix the named field and call again.
+
 Common causes:
 - **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason. **Exception: on a `delete-*` tool, this is not an error result at all** — deleting an object that's already gone is treated as the caller's desired state already holding, so the call comes back `isError: false` instead; see [Desired State Already Held](#desired-state-already-held) below.
 - **404** — The request never reached the event broker's SEMP API at all: a misconfigured broker `url`, an incorrect SEMP base path, or a SEMP version mismatch. Check the broker's `url` and SEMP version compatibility; not retried.
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
 - **429** — Rate limiting from a proxy, gateway, or load balancer in front of the event broker. (The event broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
 - **503** — The event broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
+- **"…the broker may have already applied it"** (`retryable: false`) — A `create-*` or `update-*` timed out or lost its connection after the request was sent, so the event broker may have carried it out. It is deliberately not retried. Check the object's current state first (for example, `list-queues` after `create-queue`) before issuing the call again; a repeated create that had already landed comes back `already_exists` (see [Desired State Already Held](#desired-state-already-held)). `status` is absent, or is the success code of a response that was lost partway through. A request that never reached the event broker (connection refused, DNS or TLS failure) is reported as retryable instead.
 
 ### Desired State Already Held
 

@@ -67,17 +67,19 @@ func init() {
 	// declaration order. Kept as an init-time step rather than a hand-sorted
 	// literal so an edit to the slice can't silently break the invariant.
 	sort.Strings(discardFields)
-	// RequiredFields is the union of discardFields plus the identifiers used
-	// to name each offender row. ValidatePostProcess enforces this ⊆ select:
-	// at boot so a YAML select-list edit that drops a counter is caught then,
-	// not at first invocation.
+	// The required fields are discardFields plus the identifiers used to name
+	// each offender row. ValidatePostProcess enforces this ⊆ select: at boot
+	// so a YAML select-list edit that drops a counter is caught then, not at
+	// first invocation. Per-step, not flat: the tool's vpn preflight also
+	// selects msgVpnName, and a flat check against the union of selects would
+	// accept the queueDiscards step dropping it (SOL-155480).
 	required := make([]string, 0, len(discardFields)+2)
 	required = append(required, "queueName", "msgVpnName")
 	required = append(required, discardFields...)
 	postprocess.Register("listQueueDiscards", postprocess.Handler{
-		Fn:             ListQueueDiscards,
-		RequiredSteps:  []string{listQueueDiscardsStepID},
-		RequiredFields: required,
+		Fn:                    ListQueueDiscards,
+		RequiredSteps:         []string{listQueueDiscardsStepID},
+		RequiredFieldsPerStep: map[string][]string{listQueueDiscardsStepID: required},
 	})
 }
 

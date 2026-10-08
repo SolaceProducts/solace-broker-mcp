@@ -934,29 +934,30 @@ The miss count is never reset — it feeds the shutdown gate.
 
 | call | SEMP requests | note |
 |---|---|---|
-| `list-rdps` (default args) | 1 | reported tool rate **is** the SEMP rate, no conversion |
-| `list-rdps maxResults=200` | 2 | page 1 + one cursor follow |
-| `list-queues` (default args) | 1 | same 1-call shape |
+| `list-rdps` (default args) | 2 | VPN existence check, then page 1 |
+| `list-rdps maxResults=200` | 3 | VPN existence check, page 1 + one cursor follow |
+| `list-queues` (default args) | 2 | same 2-call shape |
 | `get-rdp-status` | 3 | object, then queue bindings and REST consumers in parallel |
 | `get-broker-status` | 5 | SEMPv1; the fifth (`show hardware details`) fires on appliances only, so this is 4 on a software broker |
 
-`semp-fanout.json` is keyed by **rule, not by tool**, and the two `list-rdps`
-rows above share rules. The gate calls `list-rdps` twice — once at default
-arguments, once at `maxResults=200` — so `sempv2 rdps page 1` reads 2 (one hit
-from each) and `sempv2 rdps page 2 (cursor)` reads 1, belonging only to the
-paginated call. The totals reconcile with the table (2 + 1 = 1 + 2), but the
-per-call numbers are the table's, not the file's. Every other row maps to its
-rules one-to-one.
+`semp-fanout.json` is keyed by **rule, not by tool**, and the list rows above
+share rules. The gate calls `list-rdps` twice — once at default arguments, once
+at `maxResults=200` — so `sempv2 rdps page 1` reads 2 (one hit from each) and
+`sempv2 rdps page 2 (cursor)` reads 1, belonging only to the paginated call.
+`sempv2 msgVpn object` reads 3: one hit from each `list-rdps` call and one from
+`list-queues`. The totals reconcile with the table (3 + 2 + 1 + 1 = 2 + 3 + 2),
+but the per-call numbers are the table's, not the file's. Every other row maps
+to its rules one-to-one.
 
 The default `maxResults` is **100**, so `followPages` never paginates at
 default arguments regardless of how much data the broker holds — the SEMP cost
 of a list tool is set by the caller's `maxResults`, not by broker size.
 `loadgen` has no `maxResults` flag, so every list tool in a load run costs
-exactly 1 SEMP request.
+exactly 2 SEMP requests: the VPN existence check and one page.
 
 `TOOLS` defaults to all four, and each client rotates through them evenly, so
-the default workload averages `(5 + 1 + 1 + 3) / 4 = 2.5` SEMP requests per
-tool call (2.25 against a software broker, where `get-broker-status` is 4).
+the default workload averages `(5 + 2 + 2 + 3) / 4 = 3` SEMP requests per
+tool call (2.75 against a software broker, where `get-broker-status` is 4).
 There is no single conversion factor for a mixed rotation: read the per-rule
 counts out of `mock.log` rather than multiplying the reported tool rate. Set
 `TOOLS` to one tool when you want a rate that converts by a single number, or
@@ -972,7 +973,7 @@ gated; `list-rdps` carries the paginated check instead, and the cursor
 machinery is shared by both collections, so the code path is covered either
 way.
 
-`list-rdps` and `get-rdp-status` are in the fixture specifically as a 1-call
+`list-rdps` and `get-rdp-status` are in the fixture specifically as a 2-call
 and 3-call pair on the same protocol against the same objects in the same VPN,
 differing in nothing but fan-out. `get-rdp-status` also contributes two things
 no other fixture tool does: concurrent sub-requests inside a single tool call
@@ -1126,6 +1127,13 @@ code, so an unrecognized SEMP call fails the run instead of hiding in a log
 file. If you extend the tool set, teach `capture.sh` to record the new
 response, update the handler, add the file to `sanitize.sh`'s list, and re-run
 `regen-golden.sh` so the new fixture arrives from the same capture as the rest.
+
+A capture made before SOL-155480 has no `msgvpn_object.json`, the VPN existence
+check `list-queues` and `list-rdps` now make first, so `mock-semp` refuses to
+start on it. `fixtures-manifest.sh check` does not flag this, because it checks
+the files the manifest lists, not the files the handler needs. Re-run
+`regen-golden.sh`; the fidelity goldens need it anyway, since they predate the
+`vpn` key.
 
 That gate is why `get-rdp-status` is pinned to one RDP by exact path match. The
 alternative shape — matching `/restDeliveryPoints/` by prefix — would answer a

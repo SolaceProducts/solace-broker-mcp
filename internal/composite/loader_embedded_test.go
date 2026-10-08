@@ -15,6 +15,7 @@
 package composite
 
 import (
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -291,27 +292,70 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 	})
 
-	// SOL-155413: SEMP returns 200 with an empty list for a nonexistent
-	// parent, so these tools must GET the parent first; its NOT_FOUND then
-	// aborts the call before the list step runs. That only holds while the
-	// preflight is sequential: a parallel one would race the list step.
-	t.Run("spot/list-parent-preflight", func(t *testing.T) {
-		for name, op := range map[string]string{
-			"list-queues":               "monitor/getMsgVpn",
-			"list-client-subscriptions": "monitor/getMsgVpnClient",
-			"list-queue-subscriptions":  "monitor/getMsgVpnQueue",
-		} {
-			tool := findTool(tools, name)
-			if tool == nil || len(tool.Steps) < 2 {
-				t.Errorf("%s: want a preflight step before the list step", name)
-				continue
+	// SOL-155413, SOL-155480: SEMP returns 200 with an empty list for a
+	// nonexistent parent, so any step that GETs a collection under a named
+	// parent (a path parameter) must follow a preflight that GETs the parent
+	// itself; its NOT_FOUND then aborts the call before the collection step
+	// runs. Selected by what the steps do, not by tool name, so a scoped
+	// collection read cannot ship without one whatever the tool is called.
+	// Fan-out steps are exempt: their parents are rows a prior step returned.
+	t.Run("lint/collection-parent-preflight", func(t *testing.T) {
+		checked := 0
+		for i := range tools {
+			tool := &tools[i]
+			for j, step := range tool.Steps {
+				op, ok := operations[step.Operation]
+				if !ok {
+					t.Errorf("%s: step %q operation %q not found in spec, so it cannot be checked", tool.Name, step.ID, step.Operation)
+					continue
+				}
+				parents := sempv2.PathParamNames(op.Path)
+				if op.Method != http.MethodGet || strings.HasSuffix(op.Path, "}") || len(parents) == 0 || step.ForEach != "" {
+					continue // not a collection read under a named parent
+				}
+				checked++
+				if j == 0 {
+					t.Errorf("%s: collection step %q (%s) runs first; want a preflight step that GETs its parent before it",
+						tool.Name, step.ID, op.Path)
+					continue
+				}
+				pre := tool.Steps[0]
+				// Only a sequential preflight gates the collection step: a
+				// parallel one does not (the collection still runs, and the
+				// first error wins), and a paginated or fan-out one is itself a
+				// collection.
+				if pre.Parallel || pre.FollowPages || pre.ForEach != "" {
+					t.Errorf("%s: preflight step %q must be a single sequential GET (parallel=%v followPages=%v forEach=%q)",
+						tool.Name, pre.ID, pre.Parallel, pre.FollowPages, pre.ForEach)
+				}
+				preOp, ok := operations[pre.Operation]
+				if !ok {
+					continue // reported when the loop reaches step 0
+				}
+				// A collection GET returns 200 for a missing parent too, so the
+				// preflight must address one object: its path ends in a parameter.
+				if preOp.Method != http.MethodGet || !strings.HasSuffix(preOp.Path, "}") {
+					t.Errorf("%s: preflight step %q (%s %s) must GET a single object, not a collection",
+						tool.Name, pre.ID, preOp.Method, preOp.Path)
+				}
+				// The preflight's path must name every parent of the collection.
+				// Checking args alone is not enough: a getMsgVpn preflight passed
+				// clientName ignores it, so a missing client would read as an
+				// empty list again. path-params-wired covers the args side.
+				preParams := make(map[string]bool)
+				for _, p := range sempv2.PathParamNames(preOp.Path) {
+					preParams[p] = true
+				}
+				for _, p := range parents {
+					if !preParams[p] {
+						t.Errorf("%s: preflight step %q (%s) does not address parent %q of collection step %q (%s)",
+							tool.Name, pre.ID, preOp.Path, p, step.ID, op.Path)
+					}
+				}
 			}
-			if tool.Steps[0].Operation != op {
-				t.Errorf("%s: first step operation = %q, want %q", name, tool.Steps[0].Operation, op)
-			}
-			if tool.Steps[0].Parallel {
-				t.Errorf("%s: preflight step must not be parallel, or it no longer gates the list step", name)
-			}
+		}
+		if checked == 0 {
+			t.Fatal("no collection steps under a named parent found; the lint is not checking anything")
 		}
 	})
 }
