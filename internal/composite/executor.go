@@ -969,10 +969,8 @@ func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[str
 // real clients". ApplyResultStrategy calls this after postprocess.Apply
 // returns, never before.
 //
-// "data" is deliberately untouched: a broker resource's own configured
-// attributes live there, and nothing observed ever names a real attribute
-// "uri" or "*Uri" the way the self-referential envelope fields do — this
-// server has no business guessing that it's safe to strip fields there too.
+// Why "data" survives untouched is documented once, at sempv2.ScrubEnvelope,
+// which does the actual field removal per step.
 func scrubBrokerURIs(stepResults map[string]map[string]any) {
 	for _, step := range stepResults {
 		scrubEnvelope(step)
@@ -1002,7 +1000,10 @@ func scrubEnvelope(m map[string]any) {
 }
 
 // collectSteps returns a new map keyed by step ID. extraCap reserves space
-// for keys the caller will add (e.g. "summary").
+// for keys the caller will add (e.g. "summary"). The per-step values are the
+// same map[string]any objects as stepResults' — not deep-copied — so
+// ApplyResultStrategy's scrubBrokerURIs call, made on stepResults after this
+// returns, still mutates exactly what out holds.
 func collectSteps(stepResults map[string]map[string]any, extraCap int) map[string]any {
 	out := make(map[string]any, len(stepResults)+extraCap)
 	for stepID, res := range stepResults {

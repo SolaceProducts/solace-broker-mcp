@@ -35,12 +35,14 @@ import "strings"
 // attributes live there, and nothing observed ever names a real attribute
 // "uri" or "*Uri" the way the self-referential envelope fields do — this
 // package has no business guessing that it's safe to strip fields there too.
+// This is the one place that rationale is stated; every caller's own doc
+// comment points back here instead of repeating it.
 //
-// Shared by every caller that returns a SEMP v2 envelope to an MCP client:
-// internal/composite/executor.go's scrubBrokerURIs (composite tool results)
-// and internal/tools/queuemetrics's handler (the native get-queue-metrics
-// tool). A caller with its own nested envelopes (composite's fan-out "byKey"
-// rows) recurses into those itself and calls this once per envelope.
+// The contract: every MCP-facing caller that hands a parsed SEMP v2 envelope
+// to a tool result calls this on it, exactly once per envelope, before the
+// result is assembled for the caller. A caller with its own nested envelopes
+// (e.g. a fan-out's per-key rows) recurses into those itself and calls this
+// once per envelope — this function has no opinion on where envelopes nest.
 func ScrubEnvelope(m map[string]any) {
 	if m == nil {
 		return
