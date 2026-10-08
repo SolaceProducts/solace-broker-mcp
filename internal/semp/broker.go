@@ -36,7 +36,7 @@ import (
 // The authenticator field is the single Authenticator built for this broker.
 // SEMPv1 and SEMPv2 receive the same pointer at construction and share it for
 // the broker's lifetime — see Decision 7 in
-// docs/oauth/token-exchange-SOL-150070/architecture-plan.md for the rationale.
+// docs/_oauth/token-exchange-SOL-150070/architecture-plan.md for the rationale.
 type BrokerClient struct {
 	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client
 	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client

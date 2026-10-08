@@ -327,7 +327,7 @@ type MCPClientAuthConfig struct {
 	ScopesSupported []string `yaml:"scopes_supported,omitempty"`
 	// Mode selects the client authentication backend. One of AuthModeDisabled,
 	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
-	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
+	// rejects configs that omit it. See docs/_superpowers/specs/2026-05-20-client-auth-mode-design.md
 	// for the design rationale.
 	Mode string `yaml:"mode"`
 
@@ -1174,7 +1174,7 @@ func validate(cfg *ServerConfig) error {
 	// Validate client authentication configuration. mode is the single source
 	// of truth for auth backend selection AND production-vs-dev operational
 	// profile (via IsProductionMode). Required fields follow from the mode.
-	// See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	// See docs/_superpowers/specs/2026-05-20-client-auth-mode-design.md.
 	//
 	// Modes are tiered, not interleaved:
 	//   - disabled / static: dev-only, http:// broker URLs allowed

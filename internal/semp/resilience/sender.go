@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
@@ -39,12 +40,13 @@ type RetriesExhaustedError struct {
 	Attempts   int   // total attempts made
 	Err        error // underlying cause (nil for HTTP-status exhaustion)
 
-	// NonIdempotent reports that the caller declared the request
-	// non-idempotent (WithRetryUnsafe), so the retry policy deliberately did
-	// not replay it. Callers must not present this failure as "try again":
-	// the broker may already have carried out the request, which is the whole
-	// reason no retry was attempted. Upper layers key their agent-facing
-	// retryable flag off this.
+	// NonIdempotent reports that the retry policy deliberately did not replay
+	// the request because the broker may already have carried it out: either
+	// the caller declared it non-idempotent (WithRetryUnsafe), or it was a
+	// POST/PATCH write that failed after it was sent (SOL-155411). Callers must
+	// not present this failure as "try again" — that is the whole reason no
+	// retry was attempted. Upper layers key their agent-facing retryable flag
+	// off this.
 	NonIdempotent bool
 
 	// Body is the final response body, truncated at errorHandlerDrainLimit and
@@ -69,7 +71,7 @@ type RetriesExhaustedError struct {
 func (e *RetriesExhaustedError) Error() string {
 	if e.NonIdempotent {
 		return fmt.Sprintf("request failed after %d attempt(s) and was not retried "+
-			"because the caller declared it non-idempotent: %v", e.Attempts, e.Err)
+			"because the broker may already have applied it: %v", e.Attempts, e.Err)
 	}
 	if e.Err != nil {
 		return fmt.Sprintf("request failed after %d attempts: %v", e.Attempts, e.Err)
@@ -821,6 +823,14 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 		retryUnsafe: isRetryUnsafe(ctx),
 	}
 	ctx = context.WithValue(ctx, retryStateKey{}, state)
+	// Record that the request is about to go on the wire (see requestWritten
+	// for why WroteHeaders, not WroteRequest). A write that fails before this
+	// (connection refused, DNS, TLS handshake) cannot have reached the broker;
+	// one that fails after it (timeout, connection reset) may have been
+	// applied. WithClientTrace composes with any trace already on ctx.
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteHeaders: func() { state.requestWritten.Store(true) },
+	})
 	req = req.WithContext(ctx)
 
 	// Backstop for the attempt span's lifecycle (SOL-152422). The
@@ -857,10 +867,16 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 		}
 		// Record that the non-idempotency guard was in force, so upper layers
 		// do not tell the agent to "try again later" on a request the broker
-		// may already have carried out. This is set here rather than in
+		// may already have carried out. That covers a caller-declared
+		// non-idempotent request, and a POST/PATCH write — which checkRetry
+		// never replays — that failed after it was sent (SOL-155411: a
+		// create that timed out was reported as "try again later" although
+		// the broker had applied it). This is set here rather than in
 		// errorHandler because a connection error leaves resp nil, so
 		// errorHandler has no route back to the request context.
-		if isRetryUnsafe(ctx) {
+		writeSent := (state.method == http.MethodPost || state.method == http.MethodPatch) &&
+			!state.retrySafe && state.requestWritten.Load()
+		if isRetryUnsafe(ctx) || writeSent {
 			var exhausted *RetriesExhaustedError
 			if errors.As(err, &exhausted) {
 				exhausted.NonIdempotent = true

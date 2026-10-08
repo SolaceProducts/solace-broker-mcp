@@ -381,6 +381,48 @@ test_list_queues_vpn_scope() {
     assert_json_field "$content" \
         '(.queues.data | map(.queueName) | index("test-queue")) == null' "true" \
         "list-queues [$broker]: test-vpn scope must not include default's test-queue" || return 1
+    assert_json_field "$content" '.queues.data | length' "0" \
+        "list-queues [$broker]: existing VPN with no queues returns an empty list" || return 1
+}
+
+# SOL-155413, SOL-155480: a nonexistent VPN is an error, not an empty list.
+# Shared by every VPN-scoped list-* tool.
+test_list_nonexistent_vpn() {
+    local tool="$1" broker="$2"
+    local response
+    response=$(mcp_call_tool "$tool" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"e2e-no-such-vpn"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "$tool [$broker]: nonexistent VPN reports isError=true, not an empty list" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "$tool [$broker]: nonexistent VPN reports NOT_FOUND" || return 1
+}
+
+# SOL-155480: the preflight must not turn "VPN exists, nothing to list" into an
+# error. F1's test-vpn (disabled) and test-vpn-empty (enabled) have no queues,
+# RDPs, bridges, Kafka bridges or clients. Both checks are exact: a JSON-RPC
+# error has no .result, and jq reads a missing list's `null | length` as 0, so
+# a looser check would pass a failed call.
+test_list_empty_vpn() {
+    local tool="$1" step="$2" broker="$3" vpn
+    local response content
+    for vpn in test-vpn test-vpn-empty; do
+        response=$(mcp_call_tool "$tool" \
+            "$(jq -nc --arg b "$broker" --arg v "$vpn" '{broker:$b,msgVpnName:$v}')") || return 1
+        assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list is a successful result" || return 1
+        content=$(extract_content "$response")
+        assert_json_field "$content" ".${step}.data == []" "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list returns an empty list" || return 1
+    done
+}
+
+# Each wrapper covers both brokers, so a tool costs one run_test line per check.
+test_list_nonexistent_vpn_both() {
+    test_list_nonexistent_vpn "$1" "broker-a" && test_list_nonexistent_vpn "$1" "broker-b"
+}
+test_list_empty_vpn_both() {
+    test_list_empty_vpn "$1" "$2" "broker-a" && test_list_empty_vpn "$1" "$2" "broker-b"
 }
 
 test_list_queues_a()            { test_list_queues "broker-a"; }
@@ -389,6 +431,25 @@ test_list_queues_pagination_a() { test_list_queues_pagination "broker-a"; }
 test_list_queues_pagination_b() { test_list_queues_pagination "broker-b"; }
 test_list_queues_vpn_scope_a()  { test_list_queues_vpn_scope "broker-a"; }
 test_list_queues_vpn_scope_b()  { test_list_queues_vpn_scope "broker-b"; }
+test_list_queues_nonexistent_vpn_a() { test_list_nonexistent_vpn "list-queues" "broker-a"; }
+test_list_queues_nonexistent_vpn_b() { test_list_nonexistent_vpn "list-queues" "broker-b"; }
+
+test_list_clients_nonexistent_vpn()          { test_list_nonexistent_vpn_both "list-clients"; }
+test_list_client_usernames_nonexistent_vpn() { test_list_nonexistent_vpn_both "list-client-usernames"; }
+test_list_client_profiles_nonexistent_vpn()  { test_list_nonexistent_vpn_both "list-client-profiles"; }
+test_list_rdps_nonexistent_vpn()             { test_list_nonexistent_vpn_both "list-rdps"; }
+test_list_bridges_nonexistent_vpn()          { test_list_nonexistent_vpn_both "list-bridges"; }
+test_list_kafka_receivers_nonexistent_vpn()  { test_list_nonexistent_vpn_both "list-kafka-receivers"; }
+test_list_kafka_senders_nonexistent_vpn()    { test_list_nonexistent_vpn_both "list-kafka-senders"; }
+test_list_slow_subscribers_nonexistent_vpn() { test_list_nonexistent_vpn_both "list-slow-subscribers"; }
+test_list_queue_discards_nonexistent_vpn()   { test_list_nonexistent_vpn_both "list-queue-discards"; }
+
+test_list_rdps_empty_vpn()             { test_list_empty_vpn_both "list-rdps" "rdps"; }
+test_list_bridges_empty_vpn()          { test_list_empty_vpn_both "list-bridges" "bridges"; }
+test_list_kafka_receivers_empty_vpn()  { test_list_empty_vpn_both "list-kafka-receivers" "kafkaReceivers"; }
+test_list_kafka_senders_empty_vpn()    { test_list_empty_vpn_both "list-kafka-senders" "kafkaSenders"; }
+test_list_slow_subscribers_empty_vpn() { test_list_empty_vpn_both "list-slow-subscribers" "slowSubscribers"; }
+test_list_queue_discards_empty_vpn()   { test_list_empty_vpn_both "list-queue-discards" "queueDiscards"; }
 
 # Summary aggregation (SOL-151519): recompute each summary count from raw rows
 # and require equality. Fixtures on the default VPN cover each signal:
@@ -564,10 +625,24 @@ test_list_client_subscriptions_pagination() {
         "list-client-subscriptions [$broker]: uncapped call must return more than 1" || return 1
 }
 
+# SOL-155413: a nonexistent client is an error, not an empty list.
+test_list_client_subscriptions_nonexistent_client() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "list-client-subscriptions" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientName:"e2e-no-such-client"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "list-client-subscriptions [$broker]: nonexistent client reports isError=true, not an empty list" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "list-client-subscriptions [$broker]: nonexistent client reports NOT_FOUND" || return 1
+}
+
 test_list_client_subscriptions_a() { test_list_client_subscriptions "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_b() { test_list_client_subscriptions "broker-b" "$F3_CLIENT_NAME_B"; }
 test_list_client_subscriptions_pagination_a() { test_list_client_subscriptions_pagination "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_pagination_b() { test_list_client_subscriptions_pagination "broker-b" "$F3_CLIENT_NAME_B"; }
+test_list_client_subscriptions_nonexistent_client_a() { test_list_client_subscriptions_nonexistent_client "broker-a"; }
+test_list_client_subscriptions_nonexistent_client_b() { test_list_client_subscriptions_nonexistent_client "broker-b"; }
 
 # ── Client-username / client-profile reads (provisioned config objects) ──────
 # These read the provisioned client-username and client-profile config objects,
@@ -1642,11 +1717,14 @@ run_test "Tool 3 — list-queues VPN scope (broker-a)"   test_list_queues_vpn_sc
 run_test "Tool 3 — list-queues VPN scope (broker-b)"   test_list_queues_vpn_scope_b
 run_test "Tool 3 — list-queues summary (broker-a)"     test_list_queues_summary_a
 run_test "Tool 3 — list-queues summary (broker-b)"     test_list_queues_summary_b
+run_test "Tool 3 — list-queues nonexistent VPN (broker-a)" test_list_queues_nonexistent_vpn_a
+run_test "Tool 3 — list-queues nonexistent VPN (broker-b)" test_list_queues_nonexistent_vpn_b
 
 run_test "Tool 4 — list-clients (broker-a)"            test_list_clients_a
 run_test "Tool 4 — list-clients (broker-b)"            test_list_clients_b
 run_test "Tool 4 — list-clients pagination (broker-a)" test_list_clients_pagination_a
 run_test "Tool 4 — list-clients pagination (broker-b)" test_list_clients_pagination_b
+run_test "Tool 4 — list-clients nonexistent VPN" test_list_clients_nonexistent_vpn
 
 run_test "Tool 5 — get-client-details F3 (broker-a)"   test_get_client_details_f3_a
 run_test "Tool 5 — get-client-details F3 (broker-b)"   test_get_client_details_f3_b
@@ -1655,6 +1733,8 @@ run_test "Tool 6 — list-client-subscriptions (broker-a)"            test_list_
 run_test "Tool 6 — list-client-subscriptions (broker-b)"            test_list_client_subscriptions_b
 run_test "Tool 6 — list-client-subscriptions pagination (broker-a)" test_list_client_subscriptions_pagination_a
 run_test "Tool 6 — list-client-subscriptions pagination (broker-b)" test_list_client_subscriptions_pagination_b
+run_test "Tool 6 — list-client-subscriptions nonexistent client (broker-a)" test_list_client_subscriptions_nonexistent_client_a
+run_test "Tool 6 — list-client-subscriptions nonexistent client (broker-b)" test_list_client_subscriptions_nonexistent_client_b
 
 run_test "Tool 7 — get-message-rates (broker-a)"       test_get_message_rates_a
 run_test "Tool 7 — get-message-rates (broker-b)"       test_get_message_rates_b
@@ -1665,6 +1745,8 @@ run_test "Tool 8 — list-rdps pagination (broker-a)"    test_list_rdps_paginati
 run_test "Tool 8 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
 run_test "Tool 8 — list-rdps summary (broker-a)"       test_list_rdps_summary_a
 run_test "Tool 8 — list-rdps summary (broker-b)"       test_list_rdps_summary_b
+run_test "Tool 8 — list-rdps nonexistent VPN" test_list_rdps_nonexistent_vpn
+run_test "Tool 8 — list-rdps empty VPN" test_list_rdps_empty_vpn
 
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
@@ -1675,6 +1757,8 @@ run_test "Tool 10 — list-slow-subscribers pagination (broker-a)" test_list_slo
 run_test "Tool 10 — list-slow-subscribers pagination (broker-b)" test_list_slow_subscribers_pagination_b
 run_test "Tool 10 — list-slow-subscribers summary (broker-a)"    test_list_slow_subscribers_summary_a
 run_test "Tool 10 — list-slow-subscribers summary (broker-b)"    test_list_slow_subscribers_summary_b
+run_test "Tool 10 — list-slow-subscribers nonexistent VPN" test_list_slow_subscribers_nonexistent_vpn
+run_test "Tool 10 — list-slow-subscribers empty VPN" test_list_slow_subscribers_empty_vpn
 
 run_test "Tool 11 — list-queue-discards (broker-a)"             test_list_queue_discards_a
 run_test "Tool 11 — list-queue-discards (broker-b)"             test_list_queue_discards_b
@@ -1682,6 +1766,8 @@ run_test "Tool 11 — list-queue-discards pagination (broker-a)"  test_list_queu
 run_test "Tool 11 — list-queue-discards pagination (broker-b)"  test_list_queue_discards_pagination_b
 run_test "Tool 11 — list-queue-discards summary (broker-a)"     test_list_queue_discards_summary_a
 run_test "Tool 11 — list-queue-discards summary (broker-b)"     test_list_queue_discards_summary_b
+run_test "Tool 11 — list-queue-discards nonexistent VPN" test_list_queue_discards_nonexistent_vpn
+run_test "Tool 11 — list-queue-discards empty VPN" test_list_queue_discards_empty_vpn
 
 run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_discard_stats_broker_wide_a
 run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
@@ -1697,6 +1783,8 @@ run_test "Tool 14 — list-bridges pagination (broker-a)"         test_list_brid
 run_test "Tool 14 — list-bridges pagination (broker-b)"         test_list_bridges_pagination_b
 run_test "Tool 14 — list-bridges summary (broker-a)"            test_list_bridges_summary_a
 run_test "Tool 14 — list-bridges summary (broker-b)"            test_list_bridges_summary_b
+run_test "Tool 14 — list-bridges nonexistent VPN" test_list_bridges_nonexistent_vpn
+run_test "Tool 14 — list-bridges empty VPN" test_list_bridges_empty_vpn
 
 run_test "Tool 15 — get-bridge-status healthy (broker-a)"       test_get_bridge_status_healthy_a
 run_test "Tool 15 — get-bridge-status healthy (broker-b)"       test_get_bridge_status_healthy_b
@@ -1709,6 +1797,8 @@ run_test "Tool 16 — list-kafka-receivers pagination (broker-a)"     test_list_
 run_test "Tool 16 — list-kafka-receivers pagination (broker-b)"     test_list_kafka_receivers_pagination_b
 run_test "Tool 16 — list-kafka-receivers summary (broker-a)"        test_list_kafka_receivers_summary_a
 run_test "Tool 16 — list-kafka-receivers summary (broker-b)"        test_list_kafka_receivers_summary_b
+run_test "Tool 16 — list-kafka-receivers nonexistent VPN" test_list_kafka_receivers_nonexistent_vpn
+run_test "Tool 16 — list-kafka-receivers empty VPN" test_list_kafka_receivers_empty_vpn
 
 run_test "Tool 17 — get-kafka-receiver-status healthy (broker-a)"   test_get_kafka_receiver_status_healthy_a
 run_test "Tool 17 — get-kafka-receiver-status healthy (broker-b)"   test_get_kafka_receiver_status_healthy_b
@@ -1723,6 +1813,8 @@ run_test "Tool 18 — list-kafka-senders pagination (broker-a)"       test_list_
 run_test "Tool 18 — list-kafka-senders pagination (broker-b)"       test_list_kafka_senders_pagination_b
 run_test "Tool 18 — list-kafka-senders summary (broker-a)"          test_list_kafka_senders_summary_a
 run_test "Tool 18 — list-kafka-senders summary (broker-b)"          test_list_kafka_senders_summary_b
+run_test "Tool 18 — list-kafka-senders nonexistent VPN" test_list_kafka_senders_nonexistent_vpn
+run_test "Tool 18 — list-kafka-senders empty VPN" test_list_kafka_senders_empty_vpn
 
 run_test "Tool 19 — get-kafka-sender-status healthy (broker-a)"     test_get_kafka_sender_status_healthy_a
 run_test "Tool 19 — get-kafka-sender-status healthy (broker-b)"     test_get_kafka_sender_status_healthy_b
@@ -1733,12 +1825,14 @@ run_test "Tool 19 — get-kafka-sender-status not found (broker-b)"   test_get_k
 
 run_test "Tool 20 — list-client-usernames (broker-a)"   test_list_client_usernames_a
 run_test "Tool 20 — list-client-usernames (broker-b)"   test_list_client_usernames_b
+run_test "Tool 20 — list-client-usernames nonexistent VPN" test_list_client_usernames_nonexistent_vpn
 run_test "Tool 21 — get-client-username (broker-a)"     test_get_client_username_a
 run_test "Tool 21 — get-client-username (broker-b)"     test_get_client_username_b
 run_test "Tool 21 — get-client-username not found (broker-a)" test_get_client_username_not_found_a
 run_test "Tool 21 — get-client-username not found (broker-b)" test_get_client_username_not_found_b
 run_test "Tool 22 — list-client-profiles (broker-a)"    test_list_client_profiles_a
 run_test "Tool 22 — list-client-profiles (broker-b)"    test_list_client_profiles_b
+run_test "Tool 22 — list-client-profiles nonexistent VPN" test_list_client_profiles_nonexistent_vpn
 run_test "Tool 23 — get-client-profile (broker-a)"      test_get_client_profile_a
 run_test "Tool 23 — get-client-profile (broker-b)"      test_get_client_profile_b
 run_test "Tool 23 — get-client-profile not found (broker-a)" test_get_client_profile_not_found_a

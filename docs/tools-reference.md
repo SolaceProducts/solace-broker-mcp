@@ -23,15 +23,14 @@ These apply to every tool unless noted otherwise.
 
 Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
 identifying which configured event broker to query. It is injected automatically into
-each tool's input schema at registration (`injectBrokerParam` in
-`internal/tools/register.go`), so it is not declared in any tool definition:
+each tool's input schema at registration and not declared in any tool definition:
 
 ```json
 { "type": "string", "description": "Target broker alias (required). Available brokers: <alias>, <alias>, ..." }
 ```
 
 The accepted values are the event broker aliases from your configuration. Call `list-brokers`
-to discover them. Alias matching is case-insensitive; original casing is
+to discover them. Alias matching is case-insensitive and original casing is
 preserved in output.
 
 ### The `msgVpnName` Parameter
@@ -62,7 +61,12 @@ proxy/gateway, 503 from an overloaded event broker) are retried automatically an
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
-### Output: the Step-Keyed Envelope
+`create-*` and `update-*` requests are never retried. If one times out or loses
+its connection after it was sent, the error says the event broker may have
+already applied it and is reported as `retryable: false`: check the current
+state before issuing the call again.
+
+### Step-Keyed Response Envelope
 
 Most read-only tools return their event broker data in a **step-keyed envelope** — a
 top-level JSON object whose keys are the tool's internal step IDs and whose values
@@ -203,11 +207,17 @@ call, that is the expected path. Direct invocation is supported but uncommon.
 
 ### get-broker-status
 
-Curated point-in-time status snapshot of an event broker: edition and version, uptime
-and restart reason, scaling limits and resource headroom, memory and
-message-spool utilization, and — on hardware appliances — chassis identity and
-physical-component inventory (CPU, memory, power, disks, and blades). Reports raw
-state, not a health verdict.
+Curated point-in-time status snapshot of an event broker that includes:
+- edition, version
+- uptime and restart reason 
+- scaling limits and resource headroom
+- memory and message-spool utilization
+
+For appliance event brokers (hardware), it also includes:
+-  chassis identity
+- physical-component inventory (CPU, memory, power, disks, and blades). 
+
+It's important to remember that these are status reports at a point in time regarding the state of the event broker and not its overall health.
 
 **Parameters:**
 
@@ -215,10 +225,9 @@ state, not a health verdict.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 
-**Returns:** step-keyed envelope (native SEMPv1). Inner fields cover version,
-uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles;
-appliances add a `hardwareDetails` section. Field shape is documented in
-`docs/internal/semp/get-broker-status-curated-fields.md`.
+**Returns:** step-keyed envelope (native SEMPv1). The inner fields cover version,
+uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles.
+For appliances, a `hardwareDetails` section is included.
 
 ```json
 { "broker": "prod-broker" }
@@ -357,12 +366,14 @@ equivalents.
 
 ### list-queues
 
-List queues in a VPN with cumulative spooled count (`spooledMsgCount` — lifetime,
+List queues in a Message VPN with cumulative spooled count (`spooledMsgCount` — lifetime,
 not live depth), unacked count, bind count, congestion state, and
 rates. Primary VPN-wide scan for slow guaranteed-message consumers (growing
 `spooledMsgCount`, high `txUnackedMsgCount`, `rxMsgRate > txMsgRate`,
 `bindCount > 0`). For authoritative current queue depth and per-queue
-discard/redelivery counters, use `get-queue-metrics`.
+discard/redelivery counters, use `get-queue-metrics`. Verifies the VPN exists
+before listing, so a nonexistent VPN is reported as an error rather than an
+empty list.
 
 **Parameters:**
 
@@ -372,7 +383,8 @@ discard/redelivery counters, use `get-queue-metrics`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `queues` (array). Selected fields per queue:
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `queues`
+(array). Selected fields per queue:
 `queueName`, `accessType`, `spooledMsgCount`, `txUnackedMsgCount`, `bindCount`,
 `rxMsgRate`, `txMsgRate`, `msgSpoolUsage`, `maxMsgSpoolUsage`,
 `lowPriorityMsgCongestionState`, `ingressEnabled`, `egressEnabled`.
@@ -447,6 +459,8 @@ Note: `slowSubscriber` flags TCP-egress stalls (mainly direct messaging); it doe
 not flip for slow guaranteed consumers — use `list-queues` for those. For
 per-client discard counts, byte/message rates, and software version, use
 `get-client-details`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -456,9 +470,10 @@ per-client discard counts, byte/message rates, and software version, use
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max clients to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `clients` (array). Selected fields per
-client: `clientName`, `clientUsername`, `clientAddress`, `platform`, `rxMsgRate`,
-`txMsgRate`, `slowSubscriber`, `uptime`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `clients`
+(array). Selected fields per client: `clientName`, `clientUsername`,
+`clientAddress`, `platform`, `rxMsgRate`, `txMsgRate`, `slowSubscriber`,
+`uptime`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "maxResults": 100 }
@@ -495,7 +510,9 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 
 ### list-client-subscriptions
 
-List topic subscriptions for a specific client.
+List topic subscriptions for a specific client. Verifies the client exists
+before listing, so a nonexistent client is reported as an error rather than an
+empty list.
 
 **Parameters:**
 
@@ -506,8 +523,9 @@ List topic subscriptions for a specific client.
 | `clientName` | string | yes | The client connection name. |
 | `maxResults` | integer | no | Max subscriptions to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `subscriptions` (array of subscription
-records as returned by the event broker).
+**Returns:** step-keyed envelope, steps `client` (existence check) and
+`subscriptions` (array of subscription records as returned by the event
+broker).
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "clientName": "consumer-7" }
@@ -521,6 +539,8 @@ Clients in a VPN flagged with the event broker's `slowSubscriber` field
 (server-side `where: slowSubscriber==true`). Narrow signal — catches direct-
 messaging/replication-bridge backpressure; does **not** flip for slow guaranteed
 consumers. For those, use `list-queues` / `get-queue-metrics`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -530,9 +550,10 @@ consumers. For those, use `list-queues` / `get-queue-metrics`.
 | `msgVpnName` | string | yes | The Message VPN to search. |
 | `maxResults` | integer | no | Max results to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `slowSubscribers` (array). Selected fields
-per client: `clientName`, `clientUsername`, `clientAddress`, `platform`,
-`rxMsgRate`, `txMsgRate`, `txDiscardedMsgCount`, `slowSubscriber`, `uptime`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`slowSubscribers` (array). Selected fields per client: `clientName`,
+`clientUsername`, `clientAddress`, `platform`, `rxMsgRate`, `txMsgRate`,
+`txDiscardedMsgCount`, `slowSubscriber`, `uptime`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
@@ -548,7 +569,7 @@ These read the provisioned client-username and client-profile configuration
 objects — distinct from the connected-session tools above (`list-clients`,
 `get-client-details`), which read live connections. A configured (static)
 username or profile exists whether or not anyone is connected with it; a
-`dynamic=true` username is auto-provisioned by the broker and may be ephemeral.
+`dynamic=true` username is auto-provisioned by the event broker and may be ephemeral.
 Passwords are never returned.
 
 ### list-client-usernames
@@ -556,6 +577,8 @@ Passwords are never returned.
 List the client usernames provisioned in a VPN with their enabled state, client
 profile, ACL profile, and `dynamic` flag. A client username is a configured
 login, not a live session. For currently connected sessions, use `list-clients`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -565,10 +588,11 @@ login, not a live session. For currently connected sessions, use `list-clients`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max usernames to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `clientUsernames` (array). Selected fields
-per username: `clientUsername`, `enabled`, `clientProfileName`, `aclProfileName`,
-`dynamic`, `guaranteedEndpointPermissionOverrideEnabled`,
-`subscriptionManagerEnabled`, `msgVpnName`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`clientUsernames` (array). Selected fields per username: `clientUsername`,
+`enabled`, `clientProfileName`, `aclProfileName`, `dynamic`,
+`guaranteedEndpointPermissionOverrideEnabled`, `subscriptionManagerEnabled`,
+`msgVpnName`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
@@ -608,6 +632,8 @@ clients using the profile may send/receive guaranteed messages and create
 endpoints — plus per-username connection, endpoint, and subscription limits. A
 client profile is the permission template a client username points at. For the
 full attribute set of one profile, use `get-client-profile`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -617,11 +643,11 @@ full attribute set of one profile, use `get-client-profile`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max profiles to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `clientProfiles` (array). Selected fields
-per profile: `clientProfileName`, `allowGuaranteedMsgSendEnabled`,
-`allowGuaranteedMsgReceiveEnabled`, `allowGuaranteedEndpointCreateEnabled`,
-`maxConnectionCountPerClientUsername`, `maxEndpointCountPerClientUsername`,
-`maxSubscriptionCount`, `msgVpnName`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`clientProfiles` (array). Selected fields per profile: `clientProfileName`,
+`allowGuaranteedMsgSendEnabled`, `allowGuaranteedMsgReceiveEnabled`,
+`allowGuaranteedEndpointCreateEnabled`, `maxConnectionCountPerClientUsername`,
+`maxEndpointCountPerClientUsername`, `maxSubscriptionCount`, `msgVpnName`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "maxResults": 100 }
@@ -665,6 +691,8 @@ broker-level ceiling).
 
 List all REST Delivery Points in a VPN with enabled state, up/down status, and
 last failure reason. For full detail use `get-rdp-status`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -674,9 +702,9 @@ last failure reason. For full detail use `get-rdp-status`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max RDPs to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `rdps` (array). Selected fields per RDP:
-`restDeliveryPointName`, `enabled`, `up`, `clientName`, `lastFailureReason`,
-`lastFailureTime`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `rdps`
+(array). Selected fields per RDP: `restDeliveryPointName`, `enabled`, `up`,
+`clientName`, `lastFailureReason`, `lastFailureTime`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
@@ -720,6 +748,8 @@ bindings, and its REST consumers.
 
 List Bridges in a VPN with enabled state, inbound/outbound connection state,
 and last inbound failure reason. For full detail use `get-bridge-status`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -729,10 +759,10 @@ and last inbound failure reason. For full detail use `get-bridge-status`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max bridges to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `bridges` (array). Selected fields per
-bridge: `bridgeName`, `bridgeVirtualRouter`, `enabled`, `inboundState`,
-`outboundState`, `inboundFailureReason`, `remoteMsgVpnName`,
-`remoteRouterName`, `uptime`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and `bridges`
+(array). Selected fields per bridge: `bridgeName`, `bridgeVirtualRouter`,
+`enabled`, `inboundState`, `outboundState`, `inboundFailureReason`,
+`remoteMsgVpnName`, `remoteRouterName`, `uptime`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
@@ -776,6 +806,8 @@ pair; most deployments use `bridgeVirtualRouter: "auto"`.
 List Kafka Receivers in a VPN with enabled state, up/down status, and last
 failure reason. A Kafka Receiver pulls messages from an external Kafka
 cluster into this VPN. For full detail use `get-kafka-receiver-status`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -785,11 +817,11 @@ cluster into this VPN. For full detail use `get-kafka-receiver-status`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max Kafka Receivers to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `kafkaReceivers` (array). Selected
-fields per receiver: `kafkaReceiverName`, `clientName`, `enabled`, `up`,
-`failureReason`, `uptime`, `connectionCount`, `topicBindingCount`,
-`topicBindingUpCount`, `bootstrapAddressList`, `authenticationScheme`,
-`transportTlsEnabled`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`kafkaReceivers` (array). Selected fields per receiver: `kafkaReceiverName`,
+`clientName`, `enabled`, `up`, `failureReason`, `uptime`, `connectionCount`,
+`topicBindingCount`, `topicBindingUpCount`, `bootstrapAddressList`,
+`authenticationScheme`, `transportTlsEnabled`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
@@ -828,6 +860,8 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 List Kafka Senders in a VPN with enabled state, up/down status, and last
 failure reason. A Kafka Sender pushes messages from this VPN's queues out to
 an external Kafka cluster. For full detail use `get-kafka-sender-status`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -837,11 +871,11 @@ an external Kafka cluster. For full detail use `get-kafka-sender-status`.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max Kafka Senders to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `kafkaSenders` (array). Selected
-fields per sender: `kafkaSenderName`, `clientName`, `enabled`, `up`,
-`failureReason`, `uptime`, `connectionCount`, `queueBindingCount`,
-`queueBindingUpCount`, `bootstrapAddressList`, `authenticationScheme`,
-`transportTlsEnabled`.
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`kafkaSenders` (array). Selected fields per sender: `kafkaSenderName`,
+`clientName`, `enabled`, `up`, `failureReason`, `uptime`, `connectionCount`,
+`queueBindingCount`, `queueBindingUpCount`, `bootstrapAddressList`,
+`authenticationScheme`, `transportTlsEnabled`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }
@@ -924,9 +958,11 @@ scope; `vpnName` echoes the requested VPN when scoped.
 
 ### list-queue-discards
 
-Per-queue message discard counts for a VPN: time-to-live (TTL)–expired, max-redelivery-exceeded,
+Per-queue message discard counts for a VPN: time-to-live (TTL)-expired, max-redelivery-exceeded,
 spool-quota-exceeded, and other categories. For event broker/VPN aggregates use
 `get-discard-stats`.
+Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
+error rather than an empty list.
 
 **Parameters:**
 
@@ -936,10 +972,11 @@ spool-quota-exceeded, and other categories. For event broker/VPN aggregates use
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, step `queueDiscards` (array). Selected fields per
-queue: `queueName`, `maxTtlExpiredDiscardedMsgCount`,
-`maxRedeliveryExceededDiscardedMsgCount`,
-`maxMsgSpoolUsageExceededDiscardedMsgCount`, `maxMsgSizeExceededDiscardedMsgCount`,
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`queueDiscards` (array). Selected fields per queue: `queueName`,
+`maxTtlExpiredDiscardedMsgCount`, `maxRedeliveryExceededDiscardedMsgCount`,
+`maxMsgSpoolUsageExceededDiscardedMsgCount`,
+`maxMsgSizeExceededDiscardedMsgCount`,
 `lowPriorityMsgCongestionDiscardedMsgCount`, `disabledDiscardedMsgCount`,
 `noLocalDeliveryDiscardedMsgCount`, `clientProfileDeniedDiscardedMsgCount`,
 `destinationGroupErrorDiscardedMsgCount`, dead message queue (DMQ) counters, and
@@ -1066,7 +1103,12 @@ request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
 `topicEndpointName`, `restDeliveryPointName`) inside the configuration object — the
 name comes from its dedicated parameter. A reserved name, or any attribute the
 object's schema doesn't define, placed inside the configuration object is rejected
-before the event broker call rather than sent on. Every management tool's description
+before the write is sent. The reply names the field and what to change, for example
+`request body field "maxMsgSpoolUsage" is not a known attribute of operation
+"updateMsgVpnTopicEndpoint"`. It is not a broker error, so repeating the same call
+will not help. Queues and topic endpoints name some settings differently
+(`maxMsgSpoolUsage` and `maxSpoolUsage`); `describe-semp-schema` lists the exact
+names. Every management tool's description
 instructs the LLM to obtain explicit user confirmation — restating the target
 and effect — as a separate reply before invoking.
 
