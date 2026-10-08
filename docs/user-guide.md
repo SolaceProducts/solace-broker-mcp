@@ -52,7 +52,7 @@ The server can be deployed several ways. See the [README](../README.md#quickstar
 
 | Environment | Notes |
 |---|---|
-| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Use deployment if you're not sure which to pick. |
+| **Binary** | Single executable with no dependencies; suitable for local development and VM deployment. Start here if you're not sure which to pick. |
 | **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check. |
 | **go install** | Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`. |
 | **Kubernetes** | Cluster deployment via the reference manifests in `deploy/kubernetes/`.|
