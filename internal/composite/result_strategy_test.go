@@ -68,6 +68,30 @@ func TestApplyResultStrategy_PostProcess_MergesSummary(t *testing.T) {
 	}
 }
 
+func TestApplyResultStrategy_PostProcess_OmitRawSteps(t *testing.T) {
+	postprocesstest.Register(t, "__test_summary_omit", postprocess.Handler{
+		Fn: func(map[string]map[string]any) (map[string]any, error) {
+			return map[string]any{"count": 7}, nil
+		},
+	})
+	stepResults := map[string]map[string]any{
+		"queues": {"data": []any{"item1", "item2"}},
+	}
+	got, err := composite.ApplyResultStrategy(
+		composite.ResultStrategy{Strategy: "postProcess", PostProcess: "__test_summary_omit", OmitRawSteps: true},
+		stepResults,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"summary": map[string]any{"count": 7},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v (raw step %q must not survive when OmitRawSteps is set)", got, want, "queues")
+	}
+}
+
 func TestApplyResultStrategy_Unsupported(t *testing.T) {
 	_, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "bogus"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {

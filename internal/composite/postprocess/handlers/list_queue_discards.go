@@ -105,6 +105,12 @@ type offender struct {
 //   - discardingQueueCount: count of queues where totalDiscards > 0.
 //   - scanned: number of items observed.
 //   - truncated: true iff the paginator stopped early (propagated from step).
+//   - truncatedMessage: the paginator's own remediation hint (e.g. "use
+//     maxResults up to 500"), present iff truncated. This tool's result
+//     strategy omits the raw step from the final output (SOL-155426), so the
+//     summary is a caller's only chance to learn this — unlike a sibling list
+//     tool, where the same message also survives on the raw step as a
+//     fallback.
 //   - skipped: count of rows dropped due to a missing/malformed required
 //     field, present only when non-zero.
 //
@@ -182,6 +188,9 @@ func ListQueueDiscards(stepResults map[string]map[string]any) (map[string]any, e
 	}
 	if t, _ := step["truncated"].(bool); t {
 		out["truncated"] = true
+		if msg, ok := step["truncatedMessage"].(string); ok && msg != "" {
+			out["truncatedMessage"] = msg
+		}
 	}
 	return out, nil
 }
