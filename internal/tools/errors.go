@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
@@ -506,6 +507,19 @@ func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err err
 	return m.buildErrorResult(err, brokerAlias)
 }
 
+// requestBodyErrorText returns the executor's own message when err is, or wraps,
+// a request body the executor rejected locally (SOL-155412). The agent reply and
+// the log's detail field both call it, so the two always say the same thing.
+// Only the dedicated type matches: an error that merely uses the same words does
+// not, and a broker error never does.
+func requestBodyErrorText(err error) (string, bool) {
+	var bodyErr *composite.RequestBodyError
+	if errors.As(err, &bodyErr) {
+		return bodyErr.Error(), true
+	}
+	return "", false
+}
+
 // buildErrorMessage produces the human-readable, agent-facing error string
 // along with any actionable suggestions. It prefers the broker's own
 // description for client/config errors (lightly sanitized as defense-in-depth),
@@ -520,6 +534,15 @@ func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err err
 // (permission-denied) path so a multi-broker operator can tell which broker
 // denied the request from the agent's output alone.
 func buildErrorMessage(err error, brokerAlias string) (string, []string) {
+	// The executor's own text for a request body it rejected before sending the
+	// step's write (package-authored, no wrapped cause), so it is safe to show as
+	// is. It may run ahead of the ownerCheckFailedError case below: that error
+	// wraps a broker read that failed before the executor ran, and
+	// RequestBodyError wraps nothing, so the two can never share an error chain.
+	if msg, ok := requestBodyErrorText(err); ok {
+		return msg, nil
+	}
+
 	var retriesErr *resilience.RetriesExhaustedError
 	var busyErr *resilience.BrokerBusyError
 	var sempv2Err *sempv2.SEMPError
@@ -820,8 +843,8 @@ func translateParentNotFound(description string) string {
 // isRetryable returns true for errors that represent transient conditions where
 // the same request might succeed later: a request shed at admission because the
 // broker was too busy (never sent, so always safe to repeat), exhausted
-// internal retries (the resilience layer only exhausts on genuinely transient
-// HTTP statuses, e.g. 429/503), a live HTTP 429 or 503, or a transient comRc_t
+// internal retries — unless the broker may already have applied the request
+// (RetriesExhaustedError.NonIdempotent) — a live HTTP 429 or 503, or a transient comRc_t
 // code (229 TIME_OUT). All other SEMP/envelope errors are deterministic and
 // non-retryable.
 func isRetryable(err error) bool {
@@ -837,8 +860,9 @@ func isRetryable(err error) bool {
 	}
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
-		// A request the caller declared non-idempotent was not replayed at all,
-		// because the broker may already have carried it out. Reporting it as
+		// A request the caller declared non-idempotent, or a write that failed
+		// after it was sent, was not replayed at all, because the broker may
+		// already have carried it out. Reporting it as
 		// retryable would invite the agent to repeat the very side effect the
 		// retry policy refused to duplicate.
 		return !retriesErr.NonIdempotent

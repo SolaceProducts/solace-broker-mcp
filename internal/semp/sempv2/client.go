@@ -288,6 +288,19 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 	body, err := resilience.ReadCappedBody(resp.Body, defaults.MaxSEMPResponseBytes)
 	if err != nil {
+		// The broker answered, so it received this request. A write
+		// (POST/PATCH, which the Sender never replays) may therefore already
+		// be applied even though its response was lost — report it the way
+		// the Sender reports a write that failed after it was sent, not as a
+		// generic error the agent is told to retry (SOL-155411).
+		if op.Method == http.MethodPost || op.Method == http.MethodPatch {
+			err = &resilience.RetriesExhaustedError{
+				StatusCode:    resp.StatusCode,
+				Attempts:      1,
+				Err:           err,
+				NonIdempotent: true,
+			}
+		}
 		return nil, fmt.Errorf("reading response for %s: %w", op.ID, err)
 	}
 

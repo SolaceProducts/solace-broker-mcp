@@ -61,6 +61,11 @@ proxy/gateway, 503 from an overloaded event broker) are retried automatically an
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
+`create-*` and `update-*` requests are never retried. If one times out or loses
+its connection after it was sent, the error says the event broker may have
+already applied it and is reported as `retryable: false`: check the current
+state before issuing the call again.
+
 ### Step-Keyed Response Envelope
 
 Most read-only tools return their event broker data in a **step-keyed envelope** — a
@@ -1098,7 +1103,12 @@ request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
 `topicEndpointName`, `restDeliveryPointName`) inside the configuration object — the
 name comes from its dedicated parameter. A reserved name, or any attribute the
 object's schema doesn't define, placed inside the configuration object is rejected
-before the event broker call rather than sent on. Every management tool's description
+before the write is sent. The reply names the field and what to change, for example
+`request body field "maxMsgSpoolUsage" is not a known attribute of operation
+"updateMsgVpnTopicEndpoint"`. It is not a broker error, so repeating the same call
+will not help. Queues and topic endpoints name some settings differently
+(`maxMsgSpoolUsage` and `maxSpoolUsage`); `describe-semp-schema` lists the exact
+names. Every management tool's description
 instructs the LLM to obtain explicit user confirmation — restating the target
 and effect — as a separate reply before invoking.
 
