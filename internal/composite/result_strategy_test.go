@@ -108,7 +108,11 @@ func TestApplyResultStrategy_Unsupported(t *testing.T) {
 func TestApplyResultStrategy_Collect_StripsLinksAndMetaRequestURI(t *testing.T) {
 	stepResults := map[string]map[string]any{
 		"createQueue": {
-			"data": map[string]any{"queueName": "orders", "accessType": "exclusive"},
+			// fooUri is a URI-shaped key that happens to live under "data" —
+			// the scrub only ever touches "links" and "meta", so this must
+			// survive even though it would be stripped if it were a sibling
+			// of "data" instead.
+			"data": map[string]any{"queueName": "orders", "accessType": "exclusive", "fooUri": "not-a-broker-link"},
 			"meta": map[string]any{
 				"request":      map[string]any{"method": "POST", "uri": "https://broker:943/SEMP/v2/__private_config__/msgVpns/default/queues"},
 				"responseCode": float64(200),
@@ -143,11 +147,42 @@ func TestApplyResultStrategy_Collect_StripsLinksAndMetaRequestURI(t *testing.T) 
 	if meta["responseCode"] != float64(200) {
 		t.Errorf("meta.responseCode should survive untouched: got %+v", meta["responseCode"])
 	}
-	// data is the resource's own attributes — must survive completely untouched.
+	// data is the resource's own attributes — must survive completely
+	// untouched, including a URI-shaped key living there rather than under
+	// "links" or "meta".
 	data := step["data"].(map[string]any)
-	want := map[string]any{"queueName": "orders", "accessType": "exclusive"}
+	want := map[string]any{"queueName": "orders", "accessType": "exclusive", "fooUri": "not-a-broker-link"}
 	if !reflect.DeepEqual(data, want) {
 		t.Errorf("data must survive untouched: got %+v, want %+v", data, want)
+	}
+}
+
+func TestApplyResultStrategy_StripsArrayValuedLinks(t *testing.T) {
+	// A collection GET's "links" is an array (one entry per returned item),
+	// not the single object a create/update response returns — confirmed
+	// against the embedded swagger specs (e.g. MsgVpnQueuesResponse.links is
+	// {"type": "array", "items": {"$ref": ".../MsgVpnQueueLinks"}}). The
+	// scrub deletes the "links" key unconditionally, so it must disappear
+	// regardless of shape.
+	stepResults := map[string]map[string]any{
+		"listQueues": {
+			"data": []any{map[string]any{"queueName": "orders"}},
+			"links": []any{
+				map[string]any{"uri": "https://broker:943/SEMP/v2/monitor/msgVpns/default/queues/orders"},
+			},
+			"meta": map[string]any{"responseCode": float64(200)},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := got["listQueues"].(map[string]any)
+	if _, present := step["links"]; present {
+		t.Errorf("array-valued links must not survive: got %+v", step["links"])
+	}
+	if meta := step["meta"].(map[string]any); meta["responseCode"] != float64(200) {
+		t.Errorf("meta.responseCode should survive untouched: got %+v", meta["responseCode"])
 	}
 }
 

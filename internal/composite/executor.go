@@ -916,34 +916,39 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 // is returned (SOL-155426: the raw step data is dead weight for a tool whose
 // postprocessor already folds everything a caller needs into its summary).
 //
-// Both branches scrub the broker's self-referential envelope fields
-// (scrubBrokerURIs) before the result is assembled for the caller
-// (SOL-155432) — after postprocess.Apply has already run for "postProcess",
-// not before: a postprocessor may depend on this metadata internally (see
-// scrubBrokerURIs's doc comment), even though the raw value must never reach
-// the caller. This still runs when OmitRawSteps discards the raw steps
-// afterward — stepResults is mutated in place regardless, so there's no
-// branch that skips it by accident.
+// Scrubbing the broker's self-referential envelope fields (scrubBrokerURIs,
+// SOL-155432) happens once, after the switch below has built out but before
+// it's returned — not inside either case — so a future third strategy can't
+// forget to call it. out's step values are the same map objects as
+// stepResults' (collectSteps copies references, not a deep copy), so
+// scrubbing stepResults in place after out is built still reaches everything
+// out holds. For "postProcess", this still runs after postprocess.Apply has
+// already read stepResults, not before: a postprocessor may depend on this
+// metadata internally (see scrubBrokerURIs's doc comment), even though the
+// raw value must never reach the caller. An error return (an unknown
+// strategy, or a failing postprocessor) skips the scrub entirely — stepResults
+// is discarded either way, so there's nothing to protect.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
+	var out map[string]any
 	switch strategy.Strategy {
 	case "collect":
-		scrubBrokerURIs(stepResults)
-		return collectSteps(stepResults, 0), nil
+		out = collectSteps(stepResults, 0)
 	case "postProcess":
 		summary, err := postprocess.Apply(strategy.PostProcess, stepResults)
 		if err != nil {
 			return nil, err
 		}
-		scrubBrokerURIs(stepResults)
 		if strategy.OmitRawSteps {
-			return map[string]any{"summary": summary}, nil
+			out = map[string]any{"summary": summary}
+		} else {
+			out = collectSteps(stepResults, 1)
+			out["summary"] = summary
 		}
-		out := collectSteps(stepResults, 1)
-		out["summary"] = summary
-		return out, nil
 	default:
 		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", strategy.Strategy)
 	}
+	scrubBrokerURIs(stepResults)
+	return out, nil
 }
 
 // scrubBrokerURIs removes the broker's self-referential "links" object and
@@ -975,41 +980,23 @@ func scrubBrokerURIs(stepResults map[string]map[string]any) {
 }
 
 // scrubEnvelope removes "links" and any uri-bearing "meta" field from one
-// step result (or one fan-out row), recursing into a fan-out step's "byKey"
-// entries — list-vpns's real-clients probe is the only ForEach step in the
-// catalog today, and it already replaces each byKey entry with a minimal
-// derived fact before this ever runs (see list_vpns.go), but a future
-// fan-out tool without that custom sanitization needs the same scrub a
-// direct step gets.
+// step result (or one fan-out row) via sempv2.ScrubEnvelope, recursing into a
+// fan-out step's "byKey" entries — list-vpns's real-clients probe is the only
+// ForEach step in the catalog today, and it already replaces each byKey entry
+// with a minimal derived fact before this ever runs (see list_vpns.go), but a
+// future fan-out tool without that custom sanitization needs the same scrub a
+// direct step gets. The byKey recursion is composite's own fan-out shape, not
+// part of the SEMP envelope, so it stays here rather than in sempv2.
 func scrubEnvelope(m map[string]any) {
 	if m == nil {
 		return
 	}
-	delete(m, "links")
-	if meta, ok := m["meta"].(map[string]any); ok {
-		scrubURIFields(meta)
-	}
+	sempv2.ScrubEnvelope(m)
 	if byKey, ok := m["byKey"].(map[string]any); ok {
 		for _, v := range byKey {
 			if entry, ok := v.(map[string]any); ok {
 				scrubEnvelope(entry)
 			}
-		}
-	}
-}
-
-// scrubURIFields deletes any key named "uri" or ending in "Uri" from m,
-// recursing into nested maps — meta.paging.nextPageUri sits one level deeper
-// than meta.request.uri, and a future SEMP response shape may nest another
-// uri-bearing field differently again.
-func scrubURIFields(m map[string]any) {
-	for k, v := range m {
-		if k == "uri" || strings.HasSuffix(k, "Uri") {
-			delete(m, k)
-			continue
-		}
-		if nested, ok := v.(map[string]any); ok {
-			scrubURIFields(nested)
 		}
 	}
 }
