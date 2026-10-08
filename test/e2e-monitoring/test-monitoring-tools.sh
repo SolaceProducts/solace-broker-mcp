@@ -381,6 +381,20 @@ test_list_queues_vpn_scope() {
     assert_json_field "$content" \
         '(.queues.data | map(.queueName) | index("test-queue")) == null' "true" \
         "list-queues [$broker]: test-vpn scope must not include default's test-queue" || return 1
+    assert_json_field "$content" '.queues.data | length' "0" \
+        "list-queues [$broker]: existing VPN with no queues returns an empty list" || return 1
+}
+
+# SOL-155413: a nonexistent VPN is an error, not an empty list.
+test_list_queues_nonexistent_vpn() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "list-queues" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"e2e-no-such-vpn"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "list-queues [$broker]: nonexistent VPN reports isError=true, not an empty list" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "list-queues [$broker]: nonexistent VPN reports NOT_FOUND" || return 1
 }
 
 test_list_queues_a()            { test_list_queues "broker-a"; }
@@ -389,6 +403,8 @@ test_list_queues_pagination_a() { test_list_queues_pagination "broker-a"; }
 test_list_queues_pagination_b() { test_list_queues_pagination "broker-b"; }
 test_list_queues_vpn_scope_a()  { test_list_queues_vpn_scope "broker-a"; }
 test_list_queues_vpn_scope_b()  { test_list_queues_vpn_scope "broker-b"; }
+test_list_queues_nonexistent_vpn_a() { test_list_queues_nonexistent_vpn "broker-a"; }
+test_list_queues_nonexistent_vpn_b() { test_list_queues_nonexistent_vpn "broker-b"; }
 
 # Summary aggregation (SOL-151519): recompute each summary count from raw rows
 # and require equality. Fixtures on the default VPN cover each signal:
@@ -564,10 +580,24 @@ test_list_client_subscriptions_pagination() {
         "list-client-subscriptions [$broker]: uncapped call must return more than 1" || return 1
 }
 
+# SOL-155413: a nonexistent client is an error, not an empty list.
+test_list_client_subscriptions_nonexistent_client() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "list-client-subscriptions" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",clientName:"e2e-no-such-client"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "list-client-subscriptions [$broker]: nonexistent client reports isError=true, not an empty list" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "list-client-subscriptions [$broker]: nonexistent client reports NOT_FOUND" || return 1
+}
+
 test_list_client_subscriptions_a() { test_list_client_subscriptions "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_b() { test_list_client_subscriptions "broker-b" "$F3_CLIENT_NAME_B"; }
 test_list_client_subscriptions_pagination_a() { test_list_client_subscriptions_pagination "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_pagination_b() { test_list_client_subscriptions_pagination "broker-b" "$F3_CLIENT_NAME_B"; }
+test_list_client_subscriptions_nonexistent_client_a() { test_list_client_subscriptions_nonexistent_client "broker-a"; }
+test_list_client_subscriptions_nonexistent_client_b() { test_list_client_subscriptions_nonexistent_client "broker-b"; }
 
 # ── Client-username / client-profile reads (provisioned config objects) ──────
 # These read the provisioned client-username and client-profile config objects,
@@ -1699,6 +1729,8 @@ run_test "Tool 3 — list-queues VPN scope (broker-a)"   test_list_queues_vpn_sc
 run_test "Tool 3 — list-queues VPN scope (broker-b)"   test_list_queues_vpn_scope_b
 run_test "Tool 3 — list-queues summary (broker-a)"     test_list_queues_summary_a
 run_test "Tool 3 — list-queues summary (broker-b)"     test_list_queues_summary_b
+run_test "Tool 3 — list-queues nonexistent VPN (broker-a)" test_list_queues_nonexistent_vpn_a
+run_test "Tool 3 — list-queues nonexistent VPN (broker-b)" test_list_queues_nonexistent_vpn_b
 
 run_test "Tool 4 — list-clients (broker-a)"            test_list_clients_a
 run_test "Tool 4 — list-clients (broker-b)"            test_list_clients_b
@@ -1712,6 +1744,8 @@ run_test "Tool 6 — list-client-subscriptions (broker-a)"            test_list_
 run_test "Tool 6 — list-client-subscriptions (broker-b)"            test_list_client_subscriptions_b
 run_test "Tool 6 — list-client-subscriptions pagination (broker-a)" test_list_client_subscriptions_pagination_a
 run_test "Tool 6 — list-client-subscriptions pagination (broker-b)" test_list_client_subscriptions_pagination_b
+run_test "Tool 6 — list-client-subscriptions nonexistent client (broker-a)" test_list_client_subscriptions_nonexistent_client_a
+run_test "Tool 6 — list-client-subscriptions nonexistent client (broker-b)" test_list_client_subscriptions_nonexistent_client_b
 
 run_test "Tool 7 — get-message-rates (broker-a)"       test_get_message_rates_a
 run_test "Tool 7 — get-message-rates (broker-b)"       test_get_message_rates_b

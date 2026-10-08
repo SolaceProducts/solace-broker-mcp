@@ -32,10 +32,9 @@
 #   the reference case), add a sequential preflight step (a single GET on the
 #   parent itself, minimal select) before the list step — Execute's sequential
 #   short-circuit (executor.go) means the preflight's own NOT_FOUND aborts the
-#   call with no extra code. Not every such tool needs this (e.g.
-#   list-client-subscriptions predates the convention and doesn't have one) —
-#   apply it going forward, and bring existing tools into line as a separate,
-#   deliberate change rather than incidentally.
+#   call with no extra code. Not every such tool needs this — apply it going
+#   forward, and bring existing tools into line as a separate, deliberate
+#   change rather than incidentally.
 
 tools:
   - name: get-rdp-status
@@ -162,7 +161,9 @@ tools:
     description: >
       List topic subscriptions for a specific client. Returns up to 100
       by default (max 500 via maxResults). Use this to understand what topics
-      a client is subscribed to and diagnose subscription patterns.
+      a client is subscribed to and diagnose subscription patterns. Verifies
+      the client exists before listing, so a nonexistent client is reported as
+      an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -179,6 +180,13 @@ tools:
         required: false
         description: "Maximum number of subscriptions to return (default 100, max 500)"
     steps:
+      - id: client
+        operation: monitor/getMsgVpnClient
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+        select:
+          - clientName
       - id: subscriptions
         operation: monitor/getMsgVpnClientSubscriptions
         followPages: true
@@ -421,7 +429,9 @@ tools:
       successive calls, txUnackedMsgCount high, rxMsgRate > txMsgRate, and
       bindCount > 0 indicate consumer-side slowness even when slowSubscriber is
       false on the bound client. For authoritative current queue depth and
-      per-queue discard/redelivery counters, use get-queue-metrics.
+      per-queue discard/redelivery counters, use get-queue-metrics. Verifies
+      the VPN exists before listing, so a nonexistent VPN is reported as an
+      error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -434,6 +444,12 @@ tools:
         required: false
         description: "Maximum number of queues to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: queues
         operation: monitor/getMsgVpnQueues
         followPages: true
@@ -1032,9 +1048,12 @@ tools:
       summary entirely when no discards are present, so its absence is a
       meaningful zero signal. If the scan itself was truncated (more queues
       exist than maxResults/the 500 cap reached), a larger offender outside
-      the scanned window can be missing from topOffenderQueues — narrow
-      msgVpnName or raise maxResults and re-run if that matters.
-      For broker-wide or per-VPN aggregate totals, use get-discard-stats.
+      the scanned window can be missing from topOffenderQueues — on a VPN
+      with more than 500 queues this tool cannot see them all, maxResults
+      cannot be raised past the cap, and msgVpnName is already one VPN with
+      no further narrowing available; re-running cannot close the gap.
+      For broker-wide or per-VPN aggregate totals instead, use
+      get-discard-stats.
     annotations:
       readOnly: true
     parameters:

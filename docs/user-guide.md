@@ -130,7 +130,7 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 
 | Tool | Description |
 |---|---|
-| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Default 100 results, max 500. |
+| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-queue-metrics` | Detailed metrics for a specific queue. Returns `liveDepth.currentMsgCount` — the **authoritative current queue depth** (messages in the queue right now, decreases as they are consumed; sourced from SEMPv1) — plus a `queueMetrics` block with throughput rates, spool usage, configuration, and cumulative counters. Note `queueMetrics.spooledMsgCount` is a lifetime counter (messages ever spooled), not the current depth. |
 | `list-queue-subscriptions` | Topic subscriptions attached to a queue. Verifies the queue exists first, so a nonexistent queue reports an error rather than an empty list. Default 100 results, max 500. |
 
@@ -140,7 +140,7 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 |---|---|
 | `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
-| `list-client-subscriptions` | Topic subscriptions for a specific client. Default 100 results, max 500. |
+| `list-client-subscriptions` | Topic subscriptions for a specific client. Verifies the client exists first, so a nonexistent client reports an error rather than an empty list. Default 100 results, max 500. |
 | `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does NOT flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
 
 ### Client Access
