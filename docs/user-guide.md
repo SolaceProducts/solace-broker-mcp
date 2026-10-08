@@ -138,10 +138,10 @@ The server exposes 29 read-only tools plus 18 write tools (47 total when write t
 
 | Tool | Description |
 |---|---|
-| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
+| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Verifies the client exists first, so a nonexistent client reports an error rather than an empty list. Default 100 results, max 500. |
-| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does **not** flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
+| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does **not** flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 
 ### Client Access
 
@@ -149,32 +149,32 @@ These read the provisioned client-username and client-profile configuration obje
 
 | Tool | Description |
 |---|---|
-| `list-client-usernames` | List the client usernames provisioned in a VPN with their enabled state, client profile, ACL profile, and `dynamic` flag. A `dynamic=true` username is broker-auto-provisioned (OAuth or client certificate) and may be ephemeral. Default 100 results, max 500. |
+| `list-client-usernames` | List the client usernames provisioned in a VPN with their enabled state, client profile, ACL profile, and `dynamic` flag. A `dynamic=true` username is broker-auto-provisioned (OAuth or client certificate) and may be ephemeral. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-username` | Configuration of a single provisioned client username: enabled state, client profile, ACL profile, and permission flags. Reflects configuration, not a live connection. |
-| `list-client-profiles` | List the client profiles in a VPN with their guaranteed-messaging permission flags and per-username limits. A client profile is the permission template a client username points at. Default 100 results, max 500. |
+| `list-client-profiles` | List the client profiles in a VPN with their guaranteed-messaging permission flags and per-username limits. A client profile is the permission template a client username points at. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-client-profile` | Configuration of a single client profile: the guaranteed-messaging allow flags and the per-username connection, endpoint, flow, subscription, and transaction limits (configured and effective). A profile with guaranteed-messaging send/receive disabled silently blocks it for every username that uses it. |
 
 ### REST Delivery Points
 
 | Tool | Description |
 |---|---|
-| `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-rdp-status` | Detailed RDP status: enabled state, up/down status, client name, last failure reason, queue bindings, and REST consumer status. |
 
 ### Bridges
 
 | Tool | Description |
 |---|---|
-| `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Default 100 results, max 500. |
+| `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/event broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
 
 ### Kafka
 
 | Tool | Description |
 |---|---|
-| `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`). |
-| `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 | `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`). |
 
 ### Discards
@@ -182,7 +182,7 @@ These read the provisioned client-username and client-profile configuration obje
 | Tool | Description |
 |---|---|
 | `get-discard-stats` | Event-broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus event-broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the event broker exposes no per-VPN spool breakdown via SEMPv1. |
-| `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
+| `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
 
 ### Actions
 

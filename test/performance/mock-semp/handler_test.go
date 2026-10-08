@@ -56,6 +56,8 @@ func testFixtures() fstest.MapFS {
 		"rdps_page1.json": page(`{"restDeliveryPointName":"`+testRDPName+`"}`, testRDPCursor),
 		"rdps_page2.json": page(`{"restDeliveryPointName":"rdp_196"}`, ""),
 
+		"msgvpn_object.json": {Data: []byte(`{"data":{"msgVpnName":"vpn_2"},"meta":{}}`)},
+
 		"rdp_object.json":         {Data: []byte(`{"data":{"restDeliveryPointName":"` + testRDPName + `","up":false},"meta":{}}`)},
 		"rdp_queue_bindings.json": page(`{"queueBindingName":"`+testRDPName+`_queue"}`, ""),
 		"rdp_rest_consumers.json": page(`{"restConsumerName":"consumer_1"}`, ""),
@@ -138,6 +140,32 @@ func TestRdpsListMatchesBothMonitorPrefixes(t *testing.T) {
 			}
 			if h.missCount() != 0 {
 				t.Errorf("missCount = %d, want 0", h.missCount())
+			}
+		})
+	}
+}
+
+// TestMsgVpnObject covers the VPN existence check list-queues and list-rdps
+// make first: the VPN object is served on both monitor prefixes, and a path
+// under the VPN is never mistaken for it.
+func TestMsgVpnObject(t *testing.T) {
+	for _, base := range []string{privateVPNBase, publicVPNBase} {
+		t.Run(base, func(t *testing.T) {
+			h := newTestHandler(t)
+			rec := get(t, h, base+"?select=msgVpnName")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), `"msgVpnName":"vpn_2"`) {
+				t.Errorf("body is not the VPN object: %s", rec.Body.String())
+			}
+		})
+	}
+	for _, p := range []string{"/", "/restDeliveryPoints/" + testRDPName + "/x/y", "/unknownCollection"} {
+		t.Run("not "+p, func(t *testing.T) {
+			h := newTestHandler(t)
+			if rec := get(t, h, privateVPNBase+p); rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404", rec.Code)
 			}
 		})
 	}
@@ -291,7 +319,7 @@ func TestHitCountsPerRule(t *testing.T) {
 
 // TestHitsSnapshotResetSeparatesPhases covers what /_mock/hits exists for: one
 // mock process serves the fidelity gate and then the load run, so the counts
-// have to be separable or the gate's dozen requests are folded into the load
+// have to be separable or the gate's fifteen requests are folded into the load
 // phase's fan-out measurement.
 func TestHitsSnapshotResetSeparatesPhases(t *testing.T) {
 	h := newTestHandler(t)
