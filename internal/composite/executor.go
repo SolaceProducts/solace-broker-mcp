@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 
@@ -791,6 +792,31 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 	return buf.String(), nil
 }
 
+// RequestBodyError is a request body rejected locally, before the write for that
+// step is sent, because of how the caller shaped it. The text is written here,
+// never taken from the broker, so the tools package can show it to the agent and
+// log it as is. It wraps no cause, so a broker error can never travel inside it.
+type RequestBodyError struct {
+	message string
+}
+
+func (e *RequestBodyError) Error() string { return e.message }
+
+// maxEchoedNameRunes bounds how much of a caller-chosen name an error repeats, so
+// a very long key cannot fill the reply or the ERROR log line.
+const maxEchoedNameRunes = 128
+
+func boundedName(name string) string {
+	if utf8.RuneCountInString(name) <= maxEchoedNameRunes {
+		return name
+	}
+	return string([]rune(name)[:maxEchoedNameRunes]) + "…"
+}
+
+func requestBodyErrorf(format string, args ...any) error {
+	return &RequestBodyError{message: fmt.Sprintf(format, args...)}
+}
+
 // constructRequestBody assembles the request body for a write operation from the
 // tool's input params. It only acts on operations that declare a body parameter;
 // for all others it returns args unchanged.
@@ -830,7 +856,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 	body := make(map[string]any)
 	set := func(field string, val any) error {
 		if _, defined := body[field]; defined {
-			return fmt.Errorf("ambiguous request body: field %q is defined more than once; remove it from the config object", field)
+			return requestBodyErrorf("ambiguous request body: field %q is defined more than once; remove it from the config object", boundedName(field))
 		}
 		body[field] = val
 		return nil
@@ -842,7 +868,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		if obj, isObj := val.(map[string]any); isObj {
 			for k, v := range obj {
 				if nonBodyParams[k] {
-					return nil, fmt.Errorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", k, name)
+					return nil, requestBodyErrorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", boundedName(k), boundedName(name))
 				}
 				if err := set(k, v); err != nil {
 					return nil, err
@@ -873,7 +899,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 					"field", field,
 					"operation", op.ID,
 					"schemaVersion", op.SchemaVersion)
-				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", field, op.ID)
+				return nil, requestBodyErrorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", boundedName(field), op.ID)
 			}
 		}
 	}
@@ -886,14 +912,18 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 // strategy configuration. "collect" returns all step results keyed by step ID.
 // "postProcess" runs a registered Go postprocessor over the step results and
 // merges its summary map under a top-level "summary" key alongside the raw
-// results.
+// results — unless strategy.OmitRawSteps is set, in which case only "summary"
+// is returned (SOL-155426: the raw step data is dead weight for a tool whose
+// postprocessor already folds everything a caller needs into its summary).
 //
 // Both branches scrub the broker's self-referential envelope fields
 // (scrubBrokerURIs) before the result is assembled for the caller
 // (SOL-155432) — after postprocess.Apply has already run for "postProcess",
 // not before: a postprocessor may depend on this metadata internally (see
 // scrubBrokerURIs's doc comment), even though the raw value must never reach
-// the caller.
+// the caller. This still runs when OmitRawSteps discards the raw steps
+// afterward — stepResults is mutated in place regardless, so there's no
+// branch that skips it by accident.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
 	case "collect":
@@ -905,6 +935,9 @@ func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[str
 			return nil, err
 		}
 		scrubBrokerURIs(stepResults)
+		if strategy.OmitRawSteps {
+			return map[string]any{"summary": summary}, nil
+		}
 		out := collectSteps(stepResults, 1)
 		out["summary"] = summary
 		return out, nil

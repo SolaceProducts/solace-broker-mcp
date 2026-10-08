@@ -67,17 +67,19 @@ func init() {
 	// declaration order. Kept as an init-time step rather than a hand-sorted
 	// literal so an edit to the slice can't silently break the invariant.
 	sort.Strings(discardFields)
-	// RequiredFields is the union of discardFields plus the identifiers used
-	// to name each offender row. ValidatePostProcess enforces this ⊆ select:
-	// at boot so a YAML select-list edit that drops a counter is caught then,
-	// not at first invocation.
+	// The required fields are discardFields plus the identifiers used to name
+	// each offender row. ValidatePostProcess enforces this ⊆ select: at boot
+	// so a YAML select-list edit that drops a counter is caught then, not at
+	// first invocation. Per-step, not flat: the tool's vpn preflight also
+	// selects msgVpnName, and a flat check against the union of selects would
+	// accept the queueDiscards step dropping it (SOL-155480).
 	required := make([]string, 0, len(discardFields)+2)
 	required = append(required, "queueName", "msgVpnName")
 	required = append(required, discardFields...)
 	postprocess.Register("listQueueDiscards", postprocess.Handler{
-		Fn:             ListQueueDiscards,
-		RequiredSteps:  []string{listQueueDiscardsStepID},
-		RequiredFields: required,
+		Fn:                    ListQueueDiscards,
+		RequiredSteps:         []string{listQueueDiscardsStepID},
+		RequiredFieldsPerStep: map[string][]string{listQueueDiscardsStepID: required},
 	})
 }
 
@@ -103,6 +105,12 @@ type offender struct {
 //   - discardingQueueCount: count of queues where totalDiscards > 0.
 //   - scanned: number of items observed.
 //   - truncated: true iff the paginator stopped early (propagated from step).
+//   - truncatedMessage: the paginator's own remediation hint (e.g. "use
+//     maxResults up to 500"), present iff truncated. This tool's result
+//     strategy omits the raw step from the final output (SOL-155426), so the
+//     summary is a caller's only chance to learn this — unlike a sibling list
+//     tool, where the same message also survives on the raw step as a
+//     fallback.
 //   - skipped: count of rows dropped due to a missing/malformed required
 //     field, present only when non-zero.
 //
@@ -180,6 +188,9 @@ func ListQueueDiscards(stepResults map[string]map[string]any) (map[string]any, e
 	}
 	if t, _ := step["truncated"].(bool); t {
 		out["truncated"] = true
+		if msg, ok := step["truncatedMessage"].(string); ok && msg != "" {
+			out["truncatedMessage"] = msg
+		}
 	}
 	return out, nil
 }

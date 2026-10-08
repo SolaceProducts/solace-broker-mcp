@@ -389,6 +389,21 @@ tools:
 			wantSub: `postProcess must be empty when strategy is "collect"`,
 		},
 		{
+			name: "collect with omitRawSteps set",
+			yaml: `
+tools:
+  - name: bad
+    description: omitRawSteps on collect strategy
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: collect
+      omitRawSteps: true
+`,
+			wantSub: `omitRawSteps must be false when strategy is "collect"`,
+		},
+		{
 			name: "summary step ID reserved under postProcess",
 			yaml: `
 tools:

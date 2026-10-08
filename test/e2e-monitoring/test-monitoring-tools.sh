@@ -385,16 +385,71 @@ test_list_queues_vpn_scope() {
         "list-queues [$broker]: existing VPN with no queues returns an empty list" || return 1
 }
 
-# SOL-155413: a nonexistent VPN is an error, not an empty list.
-test_list_queues_nonexistent_vpn() {
-    local broker="$1"
+# SOL-155413, SOL-155480: a nonexistent VPN is an error, not an empty list.
+# Shared by every VPN-scoped list-* tool.
+test_list_nonexistent_vpn() {
+    local tool="$1" broker="$2"
     local response
-    response=$(mcp_call_tool "list-queues" \
+    response=$(mcp_call_tool "$tool" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"e2e-no-such-vpn"}')") || return 1
     assert_json_field "$response" ".result.isError" "true" \
-        "list-queues [$broker]: nonexistent VPN reports isError=true, not an empty list" || return 1
+        "$tool [$broker]: nonexistent VPN reports isError=true, not an empty list" || return 1
     assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
-        "list-queues [$broker]: nonexistent VPN reports NOT_FOUND" || return 1
+        "$tool [$broker]: nonexistent VPN reports NOT_FOUND" || return 1
+}
+
+# SOL-155480: the preflight must not turn "VPN exists, nothing to list" into an
+# error. F1's test-vpn (disabled) and test-vpn-empty (enabled) have no queues,
+# RDPs, bridges, Kafka bridges or clients. Both checks are exact: a JSON-RPC
+# error has no .result, and jq reads a missing list's `null | length` as 0, so
+# a looser check would pass a failed call.
+test_list_empty_vpn() {
+    local tool="$1" step="$2" broker="$3" vpn
+    local response content
+    for vpn in test-vpn test-vpn-empty; do
+        response=$(mcp_call_tool "$tool" \
+            "$(jq -nc --arg b "$broker" --arg v "$vpn" '{broker:$b,msgVpnName:$v}')") || return 1
+        assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list is a successful result" || return 1
+        content=$(extract_content "$response")
+        assert_json_field "$content" ".${step}.data == []" "true" \
+            "$tool [$broker/$vpn]: existing VPN with nothing to list returns an empty list" || return 1
+    done
+}
+
+# Each wrapper covers both brokers, so a tool costs one run_test line per check.
+test_list_nonexistent_vpn_both() {
+    test_list_nonexistent_vpn "$1" "broker-a" && test_list_nonexistent_vpn "$1" "broker-b"
+}
+test_list_empty_vpn_both() {
+    test_list_empty_vpn "$1" "$2" "broker-a" && test_list_empty_vpn "$1" "$2" "broker-b"
+}
+
+# list-queue-discards cannot use test_list_empty_vpn/_both: that helper
+# asserts ".${step}.data == []", but SOL-155426's omitRawSteps means this
+# tool's response never has a "queueDiscards" step at all — summary is the
+# entire response. Same VPN-exists-but-is-empty scenario, checked instead via
+# the fields that actually appear: a zero-queue VPN scans zero rows, and
+# topOffenderQueues stays omitted (same as "no discards" — a quiet VPN and a
+# busy-but-undiscarding one are indistinguishable at this tool's output, which
+# is correct: both legitimately have nothing to report).
+test_list_queue_discards_empty_vpn_one() {
+    local broker="$1" vpn
+    local response content
+    for vpn in test-vpn test-vpn-empty; do
+        response=$(mcp_call_tool "list-queue-discards" \
+            "$(jq -nc --arg b "$broker" --arg v "$vpn" '{broker:$b,msgVpnName:$v}')") || return 1
+        assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+            "list-queue-discards [$broker/$vpn]: existing VPN with nothing to list is a successful result" || return 1
+        content=$(extract_content "$response")
+        assert_json_field "$content" '.summary.scanned == 0' "true" \
+            "list-queue-discards [$broker/$vpn]: existing VPN with no queues scans zero" || return 1
+        assert_json_field "$content" '(.summary | has("topOffenderQueues")) | not' "true" \
+            "list-queue-discards [$broker/$vpn]: topOffenderQueues must be omitted when nothing was scanned" || return 1
+    done
+}
+test_list_queue_discards_empty_vpn_both() {
+    test_list_queue_discards_empty_vpn_one "broker-a" && test_list_queue_discards_empty_vpn_one "broker-b"
 }
 
 test_list_queues_a()            { test_list_queues "broker-a"; }
@@ -403,8 +458,25 @@ test_list_queues_pagination_a() { test_list_queues_pagination "broker-a"; }
 test_list_queues_pagination_b() { test_list_queues_pagination "broker-b"; }
 test_list_queues_vpn_scope_a()  { test_list_queues_vpn_scope "broker-a"; }
 test_list_queues_vpn_scope_b()  { test_list_queues_vpn_scope "broker-b"; }
-test_list_queues_nonexistent_vpn_a() { test_list_queues_nonexistent_vpn "broker-a"; }
-test_list_queues_nonexistent_vpn_b() { test_list_queues_nonexistent_vpn "broker-b"; }
+test_list_queues_nonexistent_vpn_a() { test_list_nonexistent_vpn "list-queues" "broker-a"; }
+test_list_queues_nonexistent_vpn_b() { test_list_nonexistent_vpn "list-queues" "broker-b"; }
+
+test_list_clients_nonexistent_vpn()          { test_list_nonexistent_vpn_both "list-clients"; }
+test_list_client_usernames_nonexistent_vpn() { test_list_nonexistent_vpn_both "list-client-usernames"; }
+test_list_client_profiles_nonexistent_vpn()  { test_list_nonexistent_vpn_both "list-client-profiles"; }
+test_list_rdps_nonexistent_vpn()             { test_list_nonexistent_vpn_both "list-rdps"; }
+test_list_bridges_nonexistent_vpn()          { test_list_nonexistent_vpn_both "list-bridges"; }
+test_list_kafka_receivers_nonexistent_vpn()  { test_list_nonexistent_vpn_both "list-kafka-receivers"; }
+test_list_kafka_senders_nonexistent_vpn()    { test_list_nonexistent_vpn_both "list-kafka-senders"; }
+test_list_slow_subscribers_nonexistent_vpn() { test_list_nonexistent_vpn_both "list-slow-subscribers"; }
+test_list_queue_discards_nonexistent_vpn()   { test_list_nonexistent_vpn_both "list-queue-discards"; }
+
+test_list_rdps_empty_vpn()             { test_list_empty_vpn_both "list-rdps" "rdps"; }
+test_list_bridges_empty_vpn()          { test_list_empty_vpn_both "list-bridges" "bridges"; }
+test_list_kafka_receivers_empty_vpn()  { test_list_empty_vpn_both "list-kafka-receivers" "kafkaReceivers"; }
+test_list_kafka_senders_empty_vpn()    { test_list_empty_vpn_both "list-kafka-senders" "kafkaSenders"; }
+test_list_slow_subscribers_empty_vpn() { test_list_empty_vpn_both "list-slow-subscribers" "slowSubscribers"; }
+test_list_queue_discards_empty_vpn()   { test_list_queue_discards_empty_vpn_both; }
 
 # Summary aggregation (SOL-151519): recompute each summary count from raw rows
 # and require equality. Fixtures on the default VPN cover each signal:
@@ -1030,42 +1102,102 @@ test_list_slow_subscribers_summary_b() { test_list_slow_subscribers_summary "bro
 
 # ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
 # Value check (AC 13): list-queue-discards returns each queue's per-category
-# discard counters. F7-spool's queue overflows its 1 MB spool quota
-# (maxMsgSpoolUsageExceededDiscardedMsgCount > 0) and F7-ttl's queue expires
-# messages by its 1 s TTL with no DMQ route (maxTtlExpiredDiscardedMsgCount > 0).
-# These are the exact per-queue fields AC 13 names; the broker-wide aggregates
-# are covered by get-discard-stats (Tool 12). VPN scoping: every returned queue
-# belongs to the queried VPN. Pagination: maxResults=1 caps to one entry and
-# flags truncated (the default VPN holds many queues).
-# Envelope: {"queueDiscards":{"data":[...],"truncated":bool}}.
+# discard counters, aggregated into a per-queue offender summary. F7-spool's
+# queue overflows its 1 MB spool quota (maxMsgSpoolUsageExceededDiscardedMsgCount
+# > 0) and F7-ttl's queue expires messages by its 1 s TTL with no DMQ route
+# (maxTtlExpiredDiscardedMsgCount > 0). The broker-wide aggregates are covered
+# by get-discard-stats (Tool 12). VPN scoping: every returned offender belongs
+# to the queried VPN. Pagination: maxResults=1 caps to one entry and flags
+# truncated (the default VPN holds many queues).
+#
+# Envelope: {"summary": {...}} only — SOL-155426 made this tool's result
+# strategy omit the raw per-queue step from the response (each row carries ~15
+# mostly-zero counters, heavy enough at the documented default to overflow a
+# calling MCP host's token budget). Unlike list-rdps/list-clients/etc., whose
+# summary tests recompute via assert_recompute_count/_group against their own
+# raw step, there is no raw data left in THIS tool's response to recompute
+# from — ground truth instead comes from a direct SEMP GET against each known
+# fixture queue (fetch_queue_discard_ground_truth, below), bypassing the MCP
+# tool entirely.
+
+# QUEUE_DISCARD_FIELDS_JQ: the handler's discardFields (SOL-151316), pre-sorted
+# alphabetically. Shared by every ground-truth computation below so dominant-
+# category ties resolve identically to the handler (strict > + sorted list →
+# the alphabetically-earliest field wins).
+QUEUE_DISCARD_FIELDS_JQ='["clientProfileDeniedDiscardedMsgCount","destinationGroupErrorDiscardedMsgCount","disabledDiscardedMsgCount","lowPriorityMsgCongestionDiscardedMsgCount","maxMsgSizeExceededDiscardedMsgCount","maxMsgSpoolUsageExceededDiscardedMsgCount","maxRedeliveryExceededDiscardedMsgCount","maxRedeliveryExceededToDmqFailedMsgCount","maxTtlExceededDiscardedMsgCount","maxTtlExpiredDiscardedMsgCount","maxTtlExpiredToDmqFailedMsgCount","noLocalDeliveryDiscardedMsgCount","xaTransactionNotSupportedDiscardedMsgCount"]'
+
+# fetch_queue_discard_ground_truth: direct SEMP GET for one queue's discard
+# counters, bypassing the MCP tool entirely. Prints
+# {queueName, msgVpnName, totalDiscards, dominantCategory} on stdout — the
+# same shape as one summary.topOffenderQueues row — computed with the same
+# sum/strict-> dominant-category logic as the handler (ListQueueDiscards),
+# so a caller can assert equality against the MCP tool's own output.
+# Args: $1 broker_url  $2 queue_name
+fetch_queue_discard_ground_truth() {
+    local broker_url="$1" queue_name="$2"
+    local select_fields body
+    select_fields=$(jq -nr --argjson f "$QUEUE_DISCARD_FIELDS_JQ" '(["queueName","msgVpnName"] + $f) | join(",")')
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$queue_name?select=$select_fields") || {
+        log_fail "direct SEMP GET for queue $queue_name failed"
+        return 1
+    }
+    jq -c --argjson f "$QUEUE_DISCARD_FIELDS_JQ" \
+        '.data | . as $r
+         | ($f | map($r[.]) | add) as $total
+         | ($f | reduce .[] as $fld ({max:0,name:""}; if $r[$fld] > .max then {max:$r[$fld], name:$fld} else . end) | .name) as $dominant
+         | {queueName: $r.queueName, msgVpnName: $r.msgVpnName, totalDiscards: $total, dominantCategory: $dominant}' \
+        <<<"$body"
+}
+
+# assert_offender_matches_ground_truth: asserts content's
+# summary.topOffenderQueues contains exactly one row for ground_truth's
+# queueName, and that row equals ground_truth verbatim (totalDiscards and
+# dominantCategory both correct, not just "present").
+assert_offender_matches_ground_truth() {
+    local content="$1" ground_truth="$2" label="$3"
+    if ! jq -e --argjson want "$ground_truth" \
+        '((.summary.topOffenderQueues // []) | map(select(.queueName == $want.queueName))) == [$want]' \
+        <<<"$content" >/dev/null; then
+        log_fail "$label: summary.topOffenderQueues must carry $(jq -r .queueName <<<"$ground_truth") matching ground truth $(jq -c . <<<"$ground_truth")"
+        return 1
+    fi
+}
 
 test_list_queue_discards() {
-    local broker="$1"
-    local response content spool ttl
+    local broker="$1" broker_url="$2"
+    local label="list-queue-discards [$broker]"
+    local response content
     response=$(mcp_call_tool "list-queue-discards" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
-    spool=$(echo "$content" | jq -r \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) // 0")
-    # Sum all three TTL-expired counter paths the broker may use:
-    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed).
-    ttl=$(echo "$content" | jq -r \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) // 0")
-    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired-total=$ttl"
+
+    local spool_truth ttl_truth
+    spool_truth=$(fetch_queue_discard_ground_truth "$broker_url" "$F7_SPOOL_QUEUE") || return 1
+    ttl_truth=$(fetch_queue_discard_ground_truth "$broker_url" "$F7_TTL_QUEUE") || return 1
+    log_info "$label: ground truth $F7_SPOOL_QUEUE=$(jq -c . <<<"$spool_truth") $F7_TTL_QUEUE=$(jq -c . <<<"$ttl_truth")"
+
+    # Fixture sanity (AC 13's "spool/ttl must be > 0"), independent of the MCP
+    # tool entirely — if this fails, the fixture isn't producing discards.
+    assert_json_field "$spool_truth" '.totalDiscards > 0' "true" \
+        "$label: ground truth $F7_SPOOL_QUEUE totalDiscards must be > 0 (fixture not producing discards)" || return 1
+    assert_json_field "$ttl_truth" '.totalDiscards > 0' "true" \
+        "$label: ground truth $F7_TTL_QUEUE totalDiscards must be > 0 (fixture not producing discards)" || return 1
+
+    # Product check: the MCP tool's summary must carry a matching row for each.
+    assert_offender_matches_ground_truth "$content" "$spool_truth" "$label" || return 1
+    assert_offender_matches_ground_truth "$content" "$ttl_truth" "$label" || return 1
+
+    # VPN scoping: every offender the tool reports belongs to the queried VPN.
+    # Narrower than the pre-SOL-155426 check (which covered every scanned
+    # queue, not just the top-10 offenders) because the full scanned set is no
+    # longer in the response — this is still a real regression guard against a
+    # cross-VPN leak into the one part of the response left to check.
+    assert_json_field "$content" '(.summary.topOffenderQueues // []) | all(.msgVpnName == "default")' "true" \
+        "$label: every reported offender must be scoped to the default VPN" || return 1
+    # No duplicate queue names among the reported offenders.
     assert_json_field "$content" \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) > 0" "true" \
-        "list-queue-discards [$broker]: $F7_SPOOL_QUEUE maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $spool)" || return 1
-    assert_json_field "$content" \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) > 0" "true" \
-        "list-queue-discards [$broker]: $F7_TTL_QUEUE total TTL-expired count must be > 0 (got $ttl)" || return 1
-    # VPN scoping: every returned queue belongs to the default VPN.
-    assert_json_field "$content" '.queueDiscards.data | all(.msgVpnName == "default")' "true" \
-        "list-queue-discards [$broker]: every queue must be scoped to the default VPN" || return 1
-    # No duplicates across the full (uncapped) set — page stitching must not
-    # repeat a queue (PR goal: pagination has no gaps/duplicates).
-    assert_json_field "$content" \
-        '(.queueDiscards.data | map(.queueName)) as $n | ($n | length) == ($n | unique | length)' "true" \
-        "list-queue-discards [$broker]: queue names must be unique (no pagination duplicates)" || return 1
+        '((.summary.topOffenderQueues // []) | map(.queueName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "$label: topOffenderQueues queue names must be unique" || return 1
 }
 
 test_list_queue_discards_pagination() {
@@ -1074,65 +1206,62 @@ test_list_queue_discards_pagination() {
     response=$(mcp_call_tool "list-queue-discards" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '.queueDiscards.data | length' "1" \
-        "list-queue-discards [$broker]: maxResults=1 must return exactly 1 queue" || return 1
-    assert_json_field "$content" '.queueDiscards.truncated' "true" \
+    assert_json_field "$content" '.summary.scanned' "1" \
+        "list-queue-discards [$broker]: maxResults=1 must scan exactly 1 queue" || return 1
+    assert_json_field "$content" '.summary.truncated' "true" \
         "list-queue-discards [$broker]: maxResults=1 must flag truncated=true" || return 1
+    # SOL-155426: truncatedMessage rides in the summary now — it's the only
+    # copy of this remediation hint left once the raw step is gone, so confirm
+    # it actually made it through rather than just the bare boolean.
+    assert_json_field "$content" '(.summary.truncatedMessage | type)' "string" \
+        "list-queue-discards [$broker]: truncated response must carry a truncatedMessage string" || return 1
+    assert_json_field "$content" '(.summary.truncatedMessage | length) > 0' "true" \
+        "list-queue-discards [$broker]: truncatedMessage must be non-empty" || return 1
 }
 
-test_list_queue_discards_a()            { test_list_queue_discards "broker-a"; }
-test_list_queue_discards_b()            { test_list_queue_discards "broker-b"; }
+test_list_queue_discards_a()            { test_list_queue_discards "broker-a" "$BROKER_A_URL"; }
+test_list_queue_discards_b()            { test_list_queue_discards "broker-b" "$BROKER_B_URL"; }
 test_list_queue_discards_pagination_a() { test_list_queue_discards_pagination "broker-a"; }
 test_list_queue_discards_pagination_b() { test_list_queue_discards_pagination "broker-b"; }
 
-# Summary aggregation (SOL-151519): recompute discardingQueueCount and the top
-# offender list from raw rows and require equality. Fixtures on the default VPN
-# provide multiple offenders:
+# Summary aggregation (SOL-151519, adapted for SOL-155426): cross-check
+# summary.topOffenderQueues against all 3 known discard fixtures on the
+# default VPN, each fetched independently via fetch_queue_discard_ground_truth:
 #   - test-queue-discards-spool (F7 spool)         → maxMsgSpoolUsageExceededDiscardedMsgCount
 #   - test-queue-discards-ttl   (F7 ttl)           → maxTtlExpiredDiscardedMsgCount
 #   - test-queue-lowprio-congestion (F-lowprio)    → lowPriorityMsgCongestionDiscardedMsgCount
-# → discardingQueueCount ≥ 3, topOffenderQueues has ≥ 3 entries with correct
-# dominantCategory per queue.
 #
-# The 13 discard field names match the handler's discardFields (SOL-151316),
-# pre-sorted alphabetically. Both sides tie-break dominantCategory on
-# alphabetical field name (strict > + sorted list → first-encountered wins).
+# This differs from a sibling tool's assert_recompute_count/_group check (a
+# full recompute of the raw response, required to equal summary.* exactly):
+# there is no raw step left in this tool's response to recompute the WHOLE
+# VPN's offender set from, so this only proves the 3 known fixtures are
+# correctly reflected — not that summary.discardingQueueCount is the exact
+# total across every queue in the VPN. The exact ordering/cap/tie-break math
+# itself is already pinned exhaustively against synthetic data in
+# TestListQueueDiscards_OrderingAndCap; the self-consistency check below
+# re-verifies that same invariant against whatever the real broker returns
+# this run.
 test_list_queue_discards_summary() {
-    local broker="$1"
+    local broker="$1" broker_url="$2"
     local label="list-queue-discards [$broker]"
     local response content
     response=$(mcp_call_tool "list-queue-discards" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
 
-    # Sorted-alphabetical list matches handler init (SOL-151316); both sides
-    # must use the SAME order so the ties in dominantCategory resolve identically.
-    local fields_jq='["clientProfileDeniedDiscardedMsgCount","destinationGroupErrorDiscardedMsgCount","disabledDiscardedMsgCount","lowPriorityMsgCongestionDiscardedMsgCount","maxMsgSizeExceededDiscardedMsgCount","maxMsgSpoolUsageExceededDiscardedMsgCount","maxRedeliveryExceededDiscardedMsgCount","maxRedeliveryExceededToDmqFailedMsgCount","maxTtlExceededDiscardedMsgCount","maxTtlExpiredDiscardedMsgCount","maxTtlExpiredToDmqFailedMsgCount","noLocalDeliveryDiscardedMsgCount","xaTransactionNotSupportedDiscardedMsgCount"]'
+    local q truth
+    for q in "$F7_SPOOL_QUEUE" "$F7_TTL_QUEUE" "$F_LOWPRIO_QUEUE"; do
+        truth=$(fetch_queue_discard_ground_truth "$broker_url" "$q") || return 1
+        assert_offender_matches_ground_truth "$content" "$truth" "$label" || return 1
+    done
 
-    # well_typed: identifiers well-typed AND every one of the 13 counters is a
-    # number. `all(FIELDS[]; …)` folds the per-field check without spelling out
-    # 13 && clauses.
-    local well_typed="[.queueDiscards.data[] | . as \$r | select((\$r.queueName | type) == \"string\" and (\$r.msgVpnName | type) == \"string\" and all(${fields_jq}[]; (\$r[.] | type) == \"number\"))]"
+    # Self-consistency: topOffenderQueues must already be sorted the way the
+    # handler promises (descending totalDiscards, ties broken ascending by
+    # queueName) and capped at 10.
+    assert_json_field "$content" \
+        '(.summary.topOffenderQueues // []) as $got | ($got | length) <= 10 and ($got == ($got | sort_by([-.totalDiscards, .queueName])))' "true" \
+        "$label: topOffenderQueues must be sorted descending by totalDiscards (ties ascending by queueName) and capped at 10" || return 1
 
-    # offenders: for each well-typed row, compute {queueName, msgVpnName,
-    # totalDiscards, dominantCategory} and drop rows with totalDiscards == 0
-    # (matches handler's `if total > 0` filter). Reused for both count and top-10.
-    # dominantCategory: reduce with strict > (handler behaviour) over the
-    # pre-sorted field list → the alphabetically-earliest field wins on ties.
-    local offenders="${well_typed} | map(. as \$r | ${fields_jq} as \$F | (\$F | map(\$r[.]) | add) as \$total | (\$F | reduce .[] as \$f ({max:0,name:\"\"}; if \$r[\$f] > .max then {max:\$r[\$f], name:\$f} else . end) | .name) as \$dominant | {queueName: \$r.queueName, msgVpnName: \$r.msgVpnName, totalDiscards: \$total, dominantCategory: \$dominant}) | map(select(.totalDiscards > 0))"
-
-    assert_json_field "$content" \
-        "(.summary.discardingQueueCount) == (${offenders} | length)" "true" \
-        "$label: summary.discardingQueueCount must equal recomputed offender count" || return 1
-    # topOffenderQueues: sort desc by totalDiscards, asc by queueName (handler
-    # comparator), cap at 10. Handler omits the key when the list is empty; use
-    # `// []` so an absent key still equals our (also empty) recompute.
-    assert_json_field "$content" \
-        "(.summary.topOffenderQueues // []) == (${offenders} | sort_by([-.totalDiscards, .queueName]) | .[0:10])" "true" \
-        "$label: summary.topOffenderQueues must equal recomputed top-10 offenders" || return 1
-    assert_json_field "$content" \
-        '(.summary.scanned) == (.queueDiscards.data | length)' "true" \
-        "$label: summary.scanned must equal len(data)" || return 1
     # Non-zero coverage: fixtures produce ≥3 offenders per broker (F7 spool +
     # F7 ttl + F-lowprio). Guarding on ≥1 keeps the assertion robust if any
     # single fixture is later removed while still catching a broken handler.
@@ -1144,8 +1273,8 @@ test_list_queue_discards_summary() {
         "$label: topOffenderQueues must have at least one entry (fixtures: F7 spool/ttl, F-lowprio)" || return 1
 }
 
-test_list_queue_discards_summary_a() { test_list_queue_discards_summary "broker-a"; }
-test_list_queue_discards_summary_b() { test_list_queue_discards_summary "broker-b"; }
+test_list_queue_discards_summary_a() { test_list_queue_discards_summary "broker-a" "$BROKER_A_URL"; }
+test_list_queue_discards_summary_b() { test_list_queue_discards_summary "broker-b" "$BROKER_B_URL"; }
 
 # ── Tool 12: get-discard-stats (F7 discards; broker-wide + per-VPN aggregates) ─
 # Value check (AC 13, aggregate half): get-discard-stats is a NATIVE SEMPv1 tool
@@ -1679,6 +1808,7 @@ run_test "Tool 4 — list-clients (broker-a)"            test_list_clients_a
 run_test "Tool 4 — list-clients (broker-b)"            test_list_clients_b
 run_test "Tool 4 — list-clients pagination (broker-a)" test_list_clients_pagination_a
 run_test "Tool 4 — list-clients pagination (broker-b)" test_list_clients_pagination_b
+run_test "Tool 4 — list-clients nonexistent VPN" test_list_clients_nonexistent_vpn
 
 run_test "Tool 5 — get-client-details F3 (broker-a)"   test_get_client_details_f3_a
 run_test "Tool 5 — get-client-details F3 (broker-b)"   test_get_client_details_f3_b
@@ -1699,6 +1829,8 @@ run_test "Tool 8 — list-rdps pagination (broker-a)"    test_list_rdps_paginati
 run_test "Tool 8 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
 run_test "Tool 8 — list-rdps summary (broker-a)"       test_list_rdps_summary_a
 run_test "Tool 8 — list-rdps summary (broker-b)"       test_list_rdps_summary_b
+run_test "Tool 8 — list-rdps nonexistent VPN" test_list_rdps_nonexistent_vpn
+run_test "Tool 8 — list-rdps empty VPN" test_list_rdps_empty_vpn
 
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
@@ -1709,6 +1841,8 @@ run_test "Tool 10 — list-slow-subscribers pagination (broker-a)" test_list_slo
 run_test "Tool 10 — list-slow-subscribers pagination (broker-b)" test_list_slow_subscribers_pagination_b
 run_test "Tool 10 — list-slow-subscribers summary (broker-a)"    test_list_slow_subscribers_summary_a
 run_test "Tool 10 — list-slow-subscribers summary (broker-b)"    test_list_slow_subscribers_summary_b
+run_test "Tool 10 — list-slow-subscribers nonexistent VPN" test_list_slow_subscribers_nonexistent_vpn
+run_test "Tool 10 — list-slow-subscribers empty VPN" test_list_slow_subscribers_empty_vpn
 
 run_test "Tool 11 — list-queue-discards (broker-a)"             test_list_queue_discards_a
 run_test "Tool 11 — list-queue-discards (broker-b)"             test_list_queue_discards_b
@@ -1716,6 +1850,8 @@ run_test "Tool 11 — list-queue-discards pagination (broker-a)"  test_list_queu
 run_test "Tool 11 — list-queue-discards pagination (broker-b)"  test_list_queue_discards_pagination_b
 run_test "Tool 11 — list-queue-discards summary (broker-a)"     test_list_queue_discards_summary_a
 run_test "Tool 11 — list-queue-discards summary (broker-b)"     test_list_queue_discards_summary_b
+run_test "Tool 11 — list-queue-discards nonexistent VPN" test_list_queue_discards_nonexistent_vpn
+run_test "Tool 11 — list-queue-discards empty VPN" test_list_queue_discards_empty_vpn
 
 run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_discard_stats_broker_wide_a
 run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
@@ -1731,6 +1867,8 @@ run_test "Tool 14 — list-bridges pagination (broker-a)"         test_list_brid
 run_test "Tool 14 — list-bridges pagination (broker-b)"         test_list_bridges_pagination_b
 run_test "Tool 14 — list-bridges summary (broker-a)"            test_list_bridges_summary_a
 run_test "Tool 14 — list-bridges summary (broker-b)"            test_list_bridges_summary_b
+run_test "Tool 14 — list-bridges nonexistent VPN" test_list_bridges_nonexistent_vpn
+run_test "Tool 14 — list-bridges empty VPN" test_list_bridges_empty_vpn
 
 run_test "Tool 15 — get-bridge-status healthy (broker-a)"       test_get_bridge_status_healthy_a
 run_test "Tool 15 — get-bridge-status healthy (broker-b)"       test_get_bridge_status_healthy_b
@@ -1743,6 +1881,8 @@ run_test "Tool 16 — list-kafka-receivers pagination (broker-a)"     test_list_
 run_test "Tool 16 — list-kafka-receivers pagination (broker-b)"     test_list_kafka_receivers_pagination_b
 run_test "Tool 16 — list-kafka-receivers summary (broker-a)"        test_list_kafka_receivers_summary_a
 run_test "Tool 16 — list-kafka-receivers summary (broker-b)"        test_list_kafka_receivers_summary_b
+run_test "Tool 16 — list-kafka-receivers nonexistent VPN" test_list_kafka_receivers_nonexistent_vpn
+run_test "Tool 16 — list-kafka-receivers empty VPN" test_list_kafka_receivers_empty_vpn
 
 run_test "Tool 17 — get-kafka-receiver-status healthy (broker-a)"   test_get_kafka_receiver_status_healthy_a
 run_test "Tool 17 — get-kafka-receiver-status healthy (broker-b)"   test_get_kafka_receiver_status_healthy_b
@@ -1757,6 +1897,8 @@ run_test "Tool 18 — list-kafka-senders pagination (broker-a)"       test_list_
 run_test "Tool 18 — list-kafka-senders pagination (broker-b)"       test_list_kafka_senders_pagination_b
 run_test "Tool 18 — list-kafka-senders summary (broker-a)"          test_list_kafka_senders_summary_a
 run_test "Tool 18 — list-kafka-senders summary (broker-b)"          test_list_kafka_senders_summary_b
+run_test "Tool 18 — list-kafka-senders nonexistent VPN" test_list_kafka_senders_nonexistent_vpn
+run_test "Tool 18 — list-kafka-senders empty VPN" test_list_kafka_senders_empty_vpn
 
 run_test "Tool 19 — get-kafka-sender-status healthy (broker-a)"     test_get_kafka_sender_status_healthy_a
 run_test "Tool 19 — get-kafka-sender-status healthy (broker-b)"     test_get_kafka_sender_status_healthy_b
@@ -1767,12 +1909,14 @@ run_test "Tool 19 — get-kafka-sender-status not found (broker-b)"   test_get_k
 
 run_test "Tool 20 — list-client-usernames (broker-a)"   test_list_client_usernames_a
 run_test "Tool 20 — list-client-usernames (broker-b)"   test_list_client_usernames_b
+run_test "Tool 20 — list-client-usernames nonexistent VPN" test_list_client_usernames_nonexistent_vpn
 run_test "Tool 21 — get-client-username (broker-a)"     test_get_client_username_a
 run_test "Tool 21 — get-client-username (broker-b)"     test_get_client_username_b
 run_test "Tool 21 — get-client-username not found (broker-a)" test_get_client_username_not_found_a
 run_test "Tool 21 — get-client-username not found (broker-b)" test_get_client_username_not_found_b
 run_test "Tool 22 — list-client-profiles (broker-a)"    test_list_client_profiles_a
 run_test "Tool 22 — list-client-profiles (broker-b)"    test_list_client_profiles_b
+run_test "Tool 22 — list-client-profiles nonexistent VPN" test_list_client_profiles_nonexistent_vpn
 run_test "Tool 23 — get-client-profile (broker-a)"      test_get_client_profile_a
 run_test "Tool 23 — get-client-profile (broker-b)"      test_get_client_profile_b
 run_test "Tool 23 — get-client-profile not found (broker-a)" test_get_client_profile_not_found_a

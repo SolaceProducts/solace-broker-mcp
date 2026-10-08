@@ -284,7 +284,7 @@ sequenceDiagram
 The executor supports two `result.strategy` values:
 
 - **`collect`** — returns the raw step-result map keyed by step ID.
-- **`postProcess`** — runs a Go handler registered in [`internal/composite/postprocess/`](../../internal/composite/postprocess/) over the step results and merges its summary map under a top-level `"summary"` key alongside the raw results. Handlers register from `init()`; `cmd/server/main.go` blank-imports the handlers package so registration happens before startup validation. At boot the server cross-checks each handler's `RequiredFields` against the union of its tool's step `select:` arrays and refuses to start on a mismatch (template: `tool %q: postprocessor %q reads %q but it is not in select`). This catches SEMP field-name drift before any tool call.
+- **`postProcess`** — runs a Go handler registered in [`internal/composite/postprocess/`](../../internal/composite/postprocess/) over the step results and merges its summary map under a top-level `"summary"` key alongside the raw results — unless the tool sets `result.omitRawSteps: true`, in which case only `"summary"` is returned (SOL-155426: for a tool whose raw per-item data is otherwise dead weight on every response, e.g. `list-queue-discards`, where it was heavy enough at the tool's own documented default to overflow a calling MCP host's token budget). Handlers register from `init()`; `cmd/server/main.go` blank-imports the handlers package so registration happens before startup validation. At boot the server cross-checks each handler's `RequiredFields` against the union of its tool's step `select:` arrays and refuses to start on a mismatch (template: `tool %q: postprocessor %q reads %q but it is not in select`). This catches SEMP field-name drift before any tool call.
 
 ---
 
@@ -347,6 +347,17 @@ sequenceDiagram
   `disconnect-client` are the two tools this covers; the loader requires any
   tool with an `action/` step to declare `idempotent` explicitly, so an
   omission fails at load rather than silently allowing a replay. SOL-152400.
+- **A write that may have run is reported as outcome-unknown, never "try
+  again".** Because POST/PATCH are never replayed, a failure after the request
+  was sent — `Sender.Do` records `retryState.requestWritten` from an
+  `httptrace` `WroteHeaders` hook — or a response body lost after the broker
+  answered (`sempv2.Execute`) marks the `RetriesExhaustedError`
+  `NonIdempotent`, the same signal `WithRetryUnsafe` sets. The tools layer
+  reports it as "the broker may have already applied it" with `retryable:
+  false` (`internal/tools/errors.go:buildErrorMessage`, `isRetryable`). A
+  failure before the request was sent (dial, DNS, TLS handshake) stays
+  retryable. A new write path that bypasses `Sender.Do`, or reads the response
+  body outside `sempv2.Execute`, has to preserve this. SOL-155411.
 - **Destructive confirmation is prompt-only.** Destructive handlers carry
   description text instructing the agent to obtain separate user confirmation;
   there is no server-side confirmation gate, token, two-phase step, or dry-run.
@@ -467,7 +478,7 @@ cap is per broker.
 | **Handler resolves broker, executor receives client** | Executor is pure orchestration — no knowledge of brokers, auth, or pools (`internal/composite/executor.go`) |
 | **Broker param is always required** | No default broker concept. The LLM always specifies which broker to target. |
 | **Write tools gated at registration** | A single `enable_write_tools` flag (default false) decides whether state-changing tools register at all (`internal/tools/register.go:isWriteTool`); safest default surface |
-| **Retry policy keyed on HTTP method, overridable per tool** | POST/PATCH never retried (unsafe double-write); PUT/DELETE retried as RFC-idempotent; a tool declaring `idempotent: false` suppresses replay entirely except 401 re-auth, via `resilience.WithRetryUnsafe` (`internal/semp/resilience/retry.go`) |
+| **Retry policy keyed on HTTP method, overridable per tool** | POST/PATCH never retried (unsafe double-write); PUT/DELETE retried as RFC-idempotent; a tool declaring `idempotent: false` suppresses replay entirely except 401 re-auth, via `resilience.WithRetryUnsafe` (`internal/semp/resilience/retry.go`); a POST/PATCH that fails after it was sent is reported as outcome-unknown, not retryable (SOL-155411) |
 | **Engine is fail-fast, no compensation** | Simpler engine; safe today only because writes are single-step. Multi-step writes await a compensating engine (SOL-148546). |
 | **Two-hop identity, token exchange over passthrough** | Broker stays the authz authority in oauth mode; hop-2 exchange (RFC 8693) is gated behind `Hop2OAuthActive()` (`internal/tokenexchange/`) |
 | **Correlation ID outside auth** | A rejected (401) request still gets a correlation ID for tracing (`cmd/server/main.go`, ADR-001) |
