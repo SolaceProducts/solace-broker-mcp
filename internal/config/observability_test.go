@@ -39,7 +39,6 @@ func clearObsEnv(t *testing.T) {
 		envObsSaturationEventsEnabled,
 		envObsAuthFailureCounterEnabled,
 		envObsMetricsOTLPEnabled,
-		envObsMetricsEnabledRetired,
 	}
 	for _, name := range vars {
 		if prev, ok := os.LookupEnv(name); ok {
@@ -180,45 +179,6 @@ func TestObservability_AuthFailureCounter_FollowsProviderWhenUnset(t *testing.T)
 			}
 		})
 	}
-}
-
-// TestObservability_RetiredMetricsFlag_WarnsAndIsIgnored pins SOL-154607's
-// no-alias rename: OBS_METRICS_ENABLED is not read, so setting it turns
-// nothing on — and because a deployment that still sets it would otherwise
-// get metrics silently off, config load says so once, naming the var and its
-// replacement, so the operator has one line to act on. Absent, nothing is
-// logged about it.
-func TestObservability_RetiredMetricsFlag_WarnsAndIsIgnored(t *testing.T) {
-	t.Run("set: ignored and warned", func(t *testing.T) {
-		clearObsEnv(t)
-		t.Setenv(envObsMetricsEnabledRetired, "true")
-		buf := captureSlog(t)
-
-		cfg, err := LoadConfig(writeTemp(t, obsYAML))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cfg.Observability.MetricsScrapeEnabled || cfg.Observability.MetricsOTLPEnabled {
-			t.Error("the retired OBS_METRICS_ENABLED must not turn any egress on (no alias)")
-		}
-		logged := buf.String()
-		if !strings.Contains(logged, envObsMetricsEnabledRetired) || !strings.Contains(logged, envObsMetricsScrapeEnabled) {
-			t.Errorf("expected a warning naming %s and its replacement %s; log was: %s",
-				envObsMetricsEnabledRetired, envObsMetricsScrapeEnabled, logged)
-		}
-	})
-
-	t.Run("unset: silent", func(t *testing.T) {
-		clearObsEnv(t)
-		buf := captureSlog(t)
-
-		if _, err := LoadConfig(writeTemp(t, obsYAML)); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if strings.Contains(buf.String(), envObsMetricsEnabledRetired) {
-			t.Errorf("no warning expected when the retired var is unset; log was: %s", buf.String())
-		}
-	})
 }
 
 // TestObservability_AuthFailureCounter_ExplicitOverridesMetrics proves the

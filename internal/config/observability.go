@@ -15,7 +15,6 @@
 package config
 
 import (
-	"log/slog"
 	"os"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
@@ -56,9 +55,8 @@ type ObservabilityConfig struct {
 	// scrape egress: the client_golang registry, the Go/process collectors, the
 	// Prometheus exporter, and the /metrics listener on MetricsBindAddress. It
 	// is one of the two metrics egress flags (see MetricsProviderEnabled).
-	// Before SOL-154607 it was OBS_METRICS_ENABLED and also gated the meter
-	// provider the OTLP egress pushes from, so an OTLP-only deployment could
-	// not avoid binding an unauthenticated scrape listener nothing read.
+	// It gates only the scrape egress, so an OTLP-only deployment does not bind
+	// an unauthenticated scrape listener nothing reads.
 	MetricsScrapeEnabled    bool `yaml:"-"`
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
@@ -134,15 +132,6 @@ const (
 	envObsMetricsOTLPEnabled        = "OBS_METRICS_OTLP_ENABLED"
 )
 
-// envObsMetricsEnabledRetired is the pre-SOL-154607 name of
-// envObsMetricsScrapeEnabled. It is never read — the rename is deliberate and
-// has no alias, while the config surface is still uncommitted — but a
-// deployment that still sets it would otherwise get metrics silently off,
-// and a missing counter is indistinguishable from one reading zero.
-// applyObservabilityEnv warns when it is present so the operator has one log
-// line to act on.
-const envObsMetricsEnabledRetired = "OBS_METRICS_ENABLED"
-
 // applyObservabilityEnv populates the capability flags on cfg from the OBS_*
 // environment variables, using the v1 "door-closing" defaults. Called from
 // applyEnvOverrides so it runs in the same phase as the other env-driven
@@ -157,17 +146,6 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o.TracingEnabled = envBool(envObsTracingEnabled, false, "observability")
 	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false, "observability")
 	o.MetricsOTLPEnabled = envBool(envObsMetricsOTLPEnabled, false, "observability")
-
-	// Names only, never the value: the retired var is not read, so its value
-	// has nothing to say, and the operator's fix is the same either way. The
-	// message states the consequence and the action because this line is the
-	// only thing that distinguishes "renamed and forgotten" from "metrics
-	// deliberately off" — docs/observability.md's runbook quotes it verbatim.
-	if _, ok := os.LookupEnv(envObsMetricsEnabledRetired); ok {
-		slog.Warn("retired observability flag is set and ignored: it enables nothing (no meter provider, no /metrics listener, no security counters); rename it to the replacement",
-			slog.String("var", envObsMetricsEnabledRetired),
-			slog.String("replacement", envObsMetricsScrapeEnabled))
-	}
 
 	// Auth-failure counter follows the metrics provider (either egress flag)
 	// unless its own var is explicitly set. LookupEnv distinguishes "unset"
