@@ -57,9 +57,9 @@ see your shell env, so set it for the login session:
 launchctl setenv SAM_PLATFORM_ALLOW_PRIVATE_MCP true
 ```
 
-You must fully quit the app (Cmd+Q (macOS)/Ctrl+Q (Windows) because closing the window is not enough) and relaunch it. An already-running app keeps its old environment and will not pick up the new values.
+You must fully quit the app (Cmd+Q on macOS; closing the window is not enough) and relaunch it. An already-running app keeps its old environment and will not pick up the new values.
 
-Exiting is required whenever the MCP server's URL resolves to a loopback or private
+Setting `SAM_PLATFORM_ALLOW_PRIVATE_MCP` is required whenever the MCP server's URL resolves to a loopback or private
 address — local development, and also self-hosted deployments
 where Agent Mesh reaches the server over a cluster-internal or otherwise private
 address. It relaxes only private and loopback addresses; link-local (including

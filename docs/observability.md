@@ -1,8 +1,9 @@
 # Observability
 
 Observability features are available with Solace Broker MCP Server.
-You can use it to choose a signal, enable it, connect it to your monitoring stack, and
-understand the data it emits.
+You can use it to choose a signal (a kind of telemetry: metrics, traces, audit records,
+or correlation IDs), enable it, connect it to your monitoring stack, and understand the
+data it emits.
 
 The MCP server provides:
 
@@ -457,7 +458,7 @@ record.
 
 ### Authentication Events
 
-The following list are authentication events:
+The following are authentication events:
 
 - `auth_success`: verified request, with identity when available.
 - `auth_failure`: rejected credential. `reason` uses the same five values as
@@ -703,8 +704,10 @@ The Kubernetes example requests `100m` CPU and `128Mi` memory, sets a `512Mi` me
 and deliberately has no CPU limit. When you set a container memory cap, set `GOMEMLIMIT` to
 about 75% of that cap; the shipped pair is `512Mi` and `384MiB`. Change them together.
 
-Go uses `MiB`; Kubernetes uses `Mi`. An invalid `GOMEMLIMIT` prevents startup. On bare metal
-or a VM without a process memory cap, leaving it unset is normally correct.
+The `GOMEMLIMIT` suffix is `MiB`; the Kubernetes memory suffix is `Mi`. They are the same
+unit with different spelling, and each accepts only its own. A `GOMEMLIMIT` with a
+Kubernetes-style suffix is invalid and prevents startup. On bare metal or a VM without a
+process memory cap, leaving it unset is normally correct.
 
 ### Scraping and Securing the Metrics Endpoint
 
@@ -914,15 +917,13 @@ leaves rotation before it stops accepting `/mcp` work.
 **Symptom.** The Prometheus target is down, or absent from the targets page. `/metrics` does
 not answer. `mcp_metrics_scrape_total` is flat or missing.
 
-**Likely cause.** In order: the retired `OBS_METRICS_ENABLED` is still set (startup warning
-`retired observability flag is set and ignored`); `OBS_METRICS_SCRAPE_ENABLED` is off,
-including OTLP-only, so nothing listens on `:9091`; `/readyz` reason `metrics_endpoint`
-means the scrape listener failed to bind; `/readyz` reason `metrics_provider` means the
-shared meter provider failed to build (`metrics provider build failed` in the startup
-log); the ServiceMonitor is not selected; the NetworkPolicy does not admit Prometheus.
+**Likely cause.** In order: `OBS_METRICS_SCRAPE_ENABLED` is off, including OTLP-only, so
+nothing listens on `:9091`; `/readyz` reason `metrics_endpoint` means the scrape listener
+failed to bind; `/readyz` reason `metrics_provider` means the shared meter provider failed
+to build (`metrics provider build failed` in the startup log); the ServiceMonitor is not
+selected; the NetworkPolicy does not admit Prometheus.
 
-**First response.** Grep startup logs for `retired observability flag` and
-`metrics provider build failed`. Check `/readyz` for `metrics_endpoint` and
+**First response.** Grep startup logs for `metrics provider build failed`. Check `/readyz` for `metrics_endpoint` and
 `metrics_provider`. Confirm `OBS_METRICS_SCRAPE_ENABLED`. An unselected ServiceMonitor is
 simply not listed. Verify with `mcp_metrics_scrape_total` rising, not with
 `kubectl get servicemonitor`.
@@ -1135,14 +1136,15 @@ trace.
 **First response.** Raise `OTEL_TRACES_SAMPLER_ARG` only if coverage matters more than
 collector volume. This is not the same as zero exemplars everywhere.
 
-## Not in This Release
+## Limitations
 
-The following operator surfaces are not emitted:
+The server does not emit the following:
 
-- saturation as metrics;
+- saturation as metrics (saturation is logs only);
 - broker connection-pool gauges;
 - a dedicated SEMP retry-outcome counter;
-- tool-invocation cancellation/progress signals (`cancelled` remains reserved there).
+- tool-invocation cancellation or progress signals (the `cancelled` outcome on tool metrics is reserved and not produced).
 
-Do not build dashboards or alerts against names proposed for those future surfaces.
+Do not build dashboards or alerts on metrics that do not exist. Such a panel stays empty
+and an alert on it never fires.
 
