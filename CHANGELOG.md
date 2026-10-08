@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list-clients`, `list-client-usernames`, `list-client-profiles`, `list-rdps`, `list-bridges`, `list-kafka-receivers`, `list-kafka-senders`, `list-slow-subscribers` and `list-queue-discards` now report a nonexistent VPN as an error instead of an empty list. Like `list-queues`, each checks that the VPN exists before listing, which adds one SEMP call per invocation and a `vpn` key to the result (except `list-queue-discards`, which returns `summary` only); a real VPN with nothing to list still returns an empty success. Tracked under SOL-155480.
 - A create or update (`create-*`, `update-*`) that times out or loses its connection after it was sent, including while the response is arriving, is now reported as possibly already applied, with advice to check the current state before reissuing it, and as not retryable. It was reported as "Request failed after 1 attempts (HTTP 0). Internal retries exhausted; try again later." A request that never reached the broker (connection refused, DNS or TLS failure) is still retryable. Tracked under SOL-155411.
 - Create and update calls rejected before any write is sent (a field set twice, a path or query name inside the configuration object, or an attribute the operation does not define) now return the message naming the field, not "The broker reported an internal error", and the `tool invoked` log's `detail` holds that message. Searches that match `*fmt.wrapError` for these calls stop matching; `error_type` is unchanged. Tracked under SOL-155412.
+
+### Security
+
+- **BREAKING**: Composite tool results and `get-queue-metrics` no longer include the broker's `links` object or any `uri`-bearing `meta` field (e.g. `meta.request.uri`) — they leaked the broker's management hostname:port, SEMP API variant, VPN name, and resource path through ordinary successful tool use. Migration: stop reading `.links.*` or `.meta.request.uri`; `data` is unaffected. Tracked under SOL-155432.
+
 ## [0.11.0] - 2026-10-05
 
 ### Added

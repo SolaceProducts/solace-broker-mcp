@@ -915,28 +915,95 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 // results — unless strategy.OmitRawSteps is set, in which case only "summary"
 // is returned (SOL-155426: the raw step data is dead weight for a tool whose
 // postprocessor already folds everything a caller needs into its summary).
+//
+// Scrubbing the broker's self-referential envelope fields (scrubBrokerURIs,
+// SOL-155432) happens once, after the switch below has built out but before
+// it's returned — not inside either case — so a future third strategy can't
+// forget to call it. out's step values are the same map objects as
+// stepResults' (collectSteps copies references, not a deep copy), so
+// scrubbing stepResults in place after out is built still reaches everything
+// out holds. For "postProcess", this still runs after postprocess.Apply has
+// already read stepResults, not before: a postprocessor may depend on this
+// metadata internally (see scrubBrokerURIs's doc comment), even though the
+// raw value must never reach the caller. An error return (an unknown
+// strategy, or a failing postprocessor) skips the scrub entirely — stepResults
+// is discarded either way, so there's nothing to protect.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
+	var out map[string]any
 	switch strategy.Strategy {
 	case "collect":
-		return collectSteps(stepResults, 0), nil
+		out = collectSteps(stepResults, 0)
 	case "postProcess":
 		summary, err := postprocess.Apply(strategy.PostProcess, stepResults)
 		if err != nil {
 			return nil, err
 		}
 		if strategy.OmitRawSteps {
-			return map[string]any{"summary": summary}, nil
+			out = map[string]any{"summary": summary}
+		} else {
+			out = collectSteps(stepResults, 1)
+			out["summary"] = summary
 		}
-		out := collectSteps(stepResults, 1)
-		out["summary"] = summary
-		return out, nil
 	default:
 		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", strategy.Strategy)
+	}
+	scrubBrokerURIs(stepResults)
+	return out, nil
+}
+
+// scrubBrokerURIs removes the broker's self-referential "links" object and
+// any uri-bearing field inside "meta" from every step result, in place,
+// before a composite tool's result reaches the caller. Left unscrubbed, the
+// raw SEMP v2 response envelope ({"data":..., "meta":{...}, "links":{...}})
+// leaks the broker's management hostname:port, SEMP API variant (e.g.
+// __private_config__), VPN name, and resource path through ordinary
+// successful tool use — observed live on both a plain read (meta.request.uri,
+// including the full select= query string) and a write (links.uri,
+// links.subscriptionsUri) (SOL-155432).
+//
+// Must run after any postprocessor has already read stepResults.
+// internal/composite/postprocess/handlers/list_vpns.go's hasNextPage checks
+// meta.paging.nextPageUri's PRESENCE, not its value, to detect an
+// indeterminate "real clients" probe (SOL-153071) — scrubbing before that
+// handler runs would silently misclassify every indeterminate probe as "no
+// real clients". ApplyResultStrategy calls this after postprocess.Apply
+// returns, never before.
+//
+// Why "data" survives untouched is documented once, at sempv2.ScrubEnvelope,
+// which does the actual field removal per step.
+func scrubBrokerURIs(stepResults map[string]map[string]any) {
+	for _, step := range stepResults {
+		scrubEnvelope(step)
+	}
+}
+
+// scrubEnvelope removes "links" and any uri-bearing "meta" field from one
+// step result (or one fan-out row) via sempv2.ScrubEnvelope, recursing into a
+// fan-out step's "byKey" entries — list-vpns's real-clients probe is the only
+// ForEach step in the catalog today, and it already replaces each byKey entry
+// with a minimal derived fact before this ever runs (see list_vpns.go), but a
+// future fan-out tool without that custom sanitization needs the same scrub a
+// direct step gets. The byKey recursion is composite's own fan-out shape, not
+// part of the SEMP envelope, so it stays here rather than in sempv2.
+func scrubEnvelope(m map[string]any) {
+	if m == nil {
+		return
+	}
+	sempv2.ScrubEnvelope(m)
+	if byKey, ok := m["byKey"].(map[string]any); ok {
+		for _, v := range byKey {
+			if entry, ok := v.(map[string]any); ok {
+				scrubEnvelope(entry)
+			}
+		}
 	}
 }
 
 // collectSteps returns a new map keyed by step ID. extraCap reserves space
-// for keys the caller will add (e.g. "summary").
+// for keys the caller will add (e.g. "summary"). The per-step values are the
+// same map[string]any objects as stepResults' — not deep-copied — so
+// ApplyResultStrategy's scrubBrokerURIs call, made on stepResults after this
+// returns, still mutates exactly what out holds.
 func collectSteps(stepResults map[string]map[string]any, extraCap int) map[string]any {
 	out := make(map[string]any, len(stepResults)+extraCap)
 	for stepID, res := range stepResults {
