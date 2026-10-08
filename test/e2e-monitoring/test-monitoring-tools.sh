@@ -425,6 +425,33 @@ test_list_empty_vpn_both() {
     test_list_empty_vpn "$1" "$2" "broker-a" && test_list_empty_vpn "$1" "$2" "broker-b"
 }
 
+# list-queue-discards cannot use test_list_empty_vpn/_both: that helper
+# asserts ".${step}.data == []", but SOL-155426's omitRawSteps means this
+# tool's response never has a "queueDiscards" step at all — summary is the
+# entire response. Same VPN-exists-but-is-empty scenario, checked instead via
+# the fields that actually appear: a zero-queue VPN scans zero rows, and
+# topOffenderQueues stays omitted (same as "no discards" — a quiet VPN and a
+# busy-but-undiscarding one are indistinguishable at this tool's output, which
+# is correct: both legitimately have nothing to report).
+test_list_queue_discards_empty_vpn_one() {
+    local broker="$1" vpn
+    local response content
+    for vpn in test-vpn test-vpn-empty; do
+        response=$(mcp_call_tool "list-queue-discards" \
+            "$(jq -nc --arg b "$broker" --arg v "$vpn" '{broker:$b,msgVpnName:$v}')") || return 1
+        assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+            "list-queue-discards [$broker/$vpn]: existing VPN with nothing to list is a successful result" || return 1
+        content=$(extract_content "$response")
+        assert_json_field "$content" '.summary.scanned == 0' "true" \
+            "list-queue-discards [$broker/$vpn]: existing VPN with no queues scans zero" || return 1
+        assert_json_field "$content" '(.summary | has("topOffenderQueues")) | not' "true" \
+            "list-queue-discards [$broker/$vpn]: topOffenderQueues must be omitted when nothing was scanned" || return 1
+    done
+}
+test_list_queue_discards_empty_vpn_both() {
+    test_list_queue_discards_empty_vpn_one "broker-a" && test_list_queue_discards_empty_vpn_one "broker-b"
+}
+
 test_list_queues_a()            { test_list_queues "broker-a"; }
 test_list_queues_b()            { test_list_queues "broker-b"; }
 test_list_queues_pagination_a() { test_list_queues_pagination "broker-a"; }
@@ -449,7 +476,7 @@ test_list_bridges_empty_vpn()          { test_list_empty_vpn_both "list-bridges"
 test_list_kafka_receivers_empty_vpn()  { test_list_empty_vpn_both "list-kafka-receivers" "kafkaReceivers"; }
 test_list_kafka_senders_empty_vpn()    { test_list_empty_vpn_both "list-kafka-senders" "kafkaSenders"; }
 test_list_slow_subscribers_empty_vpn() { test_list_empty_vpn_both "list-slow-subscribers" "slowSubscribers"; }
-test_list_queue_discards_empty_vpn()   { test_list_empty_vpn_both "list-queue-discards" "queueDiscards"; }
+test_list_queue_discards_empty_vpn()   { test_list_queue_discards_empty_vpn_both; }
 
 # Summary aggregation (SOL-151519): recompute each summary count from raw rows
 # and require equality. Fixtures on the default VPN cover each signal:
