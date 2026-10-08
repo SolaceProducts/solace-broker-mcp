@@ -141,11 +141,6 @@ func TestObservabilityDoc_DocumentsEveryOBSFlag(t *testing.T) {
 	}
 	doc := publicObservabilityDoc(t)
 	for _, m := range flags {
-		// Retired flags are ignored by the server, and the public doc does not
-		// carry rename history while releases are pre-GA, so they are exempt.
-		if strings.HasSuffix(m[1], "Retired") {
-			continue
-		}
 		name := m[2]
 		if !strings.Contains(doc, "`"+name+"`") {
 			t.Errorf("docs/observability.md does not mention `%s` — every OBS_* constant must appear so an operator can find the shipped switch", name)
