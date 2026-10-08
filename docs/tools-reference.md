@@ -972,15 +972,18 @@ error rather than an empty list.
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, steps `vpn` (existence check) and
-`queueDiscards` (array). Selected fields per queue: `queueName`,
-`maxTtlExpiredDiscardedMsgCount`, `maxRedeliveryExceededDiscardedMsgCount`,
-`maxMsgSpoolUsageExceededDiscardedMsgCount`,
-`maxMsgSizeExceededDiscardedMsgCount`,
-`lowPriorityMsgCongestionDiscardedMsgCount`, `disabledDiscardedMsgCount`,
-`noLocalDeliveryDiscardedMsgCount`, `clientProfileDeniedDiscardedMsgCount`,
-`destinationGroupErrorDiscardedMsgCount`, dead message queue (DMQ) counters, and
-`xaTransactionNotSupportedDiscardedMsgCount`.
+**Returns:** summary only — unlike other `list-*` tools, the raw per-queue scan
+is not included in the response, including the `vpn` existence check's own
+result (SOL-155426: each queue carries ~15 mostly-zero discard counters,
+heavy enough at the documented default to overflow a calling MCP host's
+token budget). `discardingQueueCount` (queues with any cumulative
+discards), `scanned` (queues observed), `topOffenderQueues` (up to the 10
+queues with the highest total discards, each `{queueName, msgVpnName,
+totalDiscards, dominantCategory}`; omitted entirely when no queue has any
+discards), `truncated` and `truncatedMessage` (present iff the scan stopped
+before `maxResults`/500 — this is the only place that remediation hint
+appears, since there is no raw step to fall back to), and `skipped` (rows
+dropped due to a malformed response field; present only when non-zero).
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" }

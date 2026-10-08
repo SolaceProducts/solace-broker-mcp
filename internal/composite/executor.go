@@ -912,7 +912,9 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 // strategy configuration. "collect" returns all step results keyed by step ID.
 // "postProcess" runs a registered Go postprocessor over the step results and
 // merges its summary map under a top-level "summary" key alongside the raw
-// results.
+// results — unless strategy.OmitRawSteps is set, in which case only "summary"
+// is returned (SOL-155426: the raw step data is dead weight for a tool whose
+// postprocessor already folds everything a caller needs into its summary).
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
 	case "collect":
@@ -921,6 +923,9 @@ func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[str
 		summary, err := postprocess.Apply(strategy.PostProcess, stepResults)
 		if err != nil {
 			return nil, err
+		}
+		if strategy.OmitRawSteps {
+			return map[string]any{"summary": summary}, nil
 		}
 		out := collectSteps(stepResults, 1)
 		out["summary"] = summary

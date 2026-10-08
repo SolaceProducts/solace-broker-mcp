@@ -14,14 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: `list-queue-discards` no longer returns raw per-queue discard counters (`queueDiscards.data`) — they overflowed the calling MCP host's token budget at the tool's own documented default. Only the aggregated `summary` (`topOffenderQueues`, `discardingQueueCount`, `scanned`, `truncated`/`truncatedMessage`, `skipped`) is returned now. Migration: read `summary.topOffenderQueues` for per-queue detail instead of `queueDiscards.data`. Tracked under SOL-155426.
+
 ### Fixed
 
 - `list-queues` and `list-client-subscriptions` now report a nonexistent VPN or client as an error instead of an empty list, so a mistyped name no longer reads as "this VPN has no queues" or "this client has no subscriptions". Each tool checks that the VPN or client exists before listing, which adds one SEMP call per invocation; a real VPN with no queues, or a real client with no subscriptions, still returns an empty success. Tracked under SOL-155413.
-- `list-clients`, `list-client-usernames`, `list-client-profiles`, `list-rdps`, `list-bridges`, `list-kafka-receivers`, `list-kafka-senders`, `list-slow-subscribers` and `list-queue-discards` now report a nonexistent VPN as an error instead of an empty list. Like `list-queues`, each checks that the VPN exists before listing, which adds one SEMP call per invocation and a `vpn` key to the result; a real VPN with nothing to list still returns an empty success. Tracked under SOL-155480.
+- `list-clients`, `list-client-usernames`, `list-client-profiles`, `list-rdps`, `list-bridges`, `list-kafka-receivers`, `list-kafka-senders`, `list-slow-subscribers` and `list-queue-discards` now report a nonexistent VPN as an error instead of an empty list. Like `list-queues`, each checks that the VPN exists before listing, which adds one SEMP call per invocation and a `vpn` key to the result (except `list-queue-discards`, which returns `summary` only); a real VPN with nothing to list still returns an empty success. Tracked under SOL-155480.
 - A create or update (`create-*`, `update-*`) that times out or loses its connection after it was sent, including while the response is arriving, is now reported as possibly already applied, with advice to check the current state before reissuing it, and as not retryable. It was reported as "Request failed after 1 attempts (HTTP 0). Internal retries exhausted; try again later." A request that never reached the broker (connection refused, DNS or TLS failure) is still retryable. Tracked under SOL-155411.
-
 - Create and update calls rejected before any write is sent (a field set twice, a path or query name inside the configuration object, or an attribute the operation does not define) now return the message naming the field, not "The broker reported an internal error", and the `tool invoked` log's `detail` holds that message. Searches that match `*fmt.wrapError` for these calls stop matching; `error_type` is unchanged. Tracked under SOL-155412.
-
 ## [0.11.0] - 2026-10-05
 
 ### Added

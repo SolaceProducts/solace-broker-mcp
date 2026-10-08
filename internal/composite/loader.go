@@ -135,6 +135,9 @@ func validateTool(tool *CompositeTool) error {
 		if tool.Result.PostProcess != "" {
 			return fmt.Errorf("postProcess must be empty when strategy is %q", tool.Result.Strategy)
 		}
+		if tool.Result.OmitRawSteps {
+			return fmt.Errorf("omitRawSteps must be false when strategy is %q (it has no effect outside postProcess)", tool.Result.Strategy)
+		}
 	case "postProcess":
 		if tool.Result.PostProcess == "" {
 			return fmt.Errorf("postProcess is required when strategy is %q", tool.Result.Strategy)
