@@ -98,3 +98,212 @@ func TestApplyResultStrategy_Unsupported(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// SOL-155432: the broker's response envelope ({"data":..., "meta":{...},
+// "links":{...}}) must never reach the caller unstripped — links.uri,
+// links.subscriptionsUri, meta.request.uri, and meta.paging.nextPageUri all
+// leak the broker's management hostname:port, SEMP API variant, VPN name,
+// and resource path through ordinary successful tool use.
+
+func TestApplyResultStrategy_Collect_StripsLinksAndMetaRequestURI(t *testing.T) {
+	stepResults := map[string]map[string]any{
+		"createQueue": {
+			// fooUri is a URI-shaped key that happens to live under "data" —
+			// the scrub only ever touches "links" and "meta", so this must
+			// survive even though it would be stripped if it were a sibling
+			// of "data" instead.
+			"data": map[string]any{"queueName": "orders", "accessType": "exclusive", "fooUri": "not-a-broker-link"},
+			"meta": map[string]any{
+				"request":      map[string]any{"method": "POST", "uri": "https://broker:943/SEMP/v2/__private_config__/msgVpns/default/queues"},
+				"responseCode": float64(200),
+			},
+			"links": map[string]any{
+				"uri":              "https://broker:943/SEMP/v2/__private_config__/msgVpns/default/queues/orders",
+				"subscriptionsUri": "https://broker:943/SEMP/v2/__private_config__/msgVpns/default/queues/orders/subscriptions",
+			},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := got["createQueue"].(map[string]any)
+	if _, present := step["links"]; present {
+		t.Errorf("links must not survive: got %+v", step["links"])
+	}
+	meta := step["meta"].(map[string]any)
+	request, ok := meta["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta.request: got %T, want map[string]any", meta["request"])
+	}
+	if _, present := request["uri"]; present {
+		t.Errorf("meta.request.uri must not survive: got %+v", request)
+	}
+	// method is not uri-bearing and carries no broker identity — kept,
+	// alongside the sibling request map itself (only the leaf is stripped).
+	if request["method"] != "POST" {
+		t.Errorf("meta.request.method should survive untouched: got %+v", request)
+	}
+	if meta["responseCode"] != float64(200) {
+		t.Errorf("meta.responseCode should survive untouched: got %+v", meta["responseCode"])
+	}
+	// data is the resource's own attributes — must survive completely
+	// untouched, including a URI-shaped key living there rather than under
+	// "links" or "meta".
+	data := step["data"].(map[string]any)
+	want := map[string]any{"queueName": "orders", "accessType": "exclusive", "fooUri": "not-a-broker-link"}
+	if !reflect.DeepEqual(data, want) {
+		t.Errorf("data must survive untouched: got %+v, want %+v", data, want)
+	}
+}
+
+func TestApplyResultStrategy_StripsArrayValuedLinks(t *testing.T) {
+	// A collection GET's "links" is an array (one entry per returned item),
+	// not the single object a create/update response returns — confirmed
+	// against the embedded swagger specs (e.g. MsgVpnQueuesResponse.links is
+	// {"type": "array", "items": {"$ref": ".../MsgVpnQueueLinks"}}). The
+	// scrub deletes the "links" key unconditionally, so it must disappear
+	// regardless of shape.
+	stepResults := map[string]map[string]any{
+		"listQueues": {
+			"data": []any{map[string]any{"queueName": "orders"}},
+			"links": []any{
+				map[string]any{"uri": "https://broker:943/SEMP/v2/monitor/msgVpns/default/queues/orders"},
+			},
+			"meta": map[string]any{"responseCode": float64(200)},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := got["listQueues"].(map[string]any)
+	if _, present := step["links"]; present {
+		t.Errorf("array-valued links must not survive: got %+v", step["links"])
+	}
+	if meta := step["meta"].(map[string]any); meta["responseCode"] != float64(200) {
+		t.Errorf("meta.responseCode should survive untouched: got %+v", meta["responseCode"])
+	}
+}
+
+func TestApplyResultStrategy_StripsNestedPagingNextPageURI(t *testing.T) {
+	// meta.paging.nextPageUri sits one level deeper than meta.request.uri —
+	// a flat (non-recursive) strip of meta's own top-level keys would miss it.
+	stepResults := map[string]map[string]any{
+		"probe": {
+			"data": []any{},
+			"meta": map[string]any{
+				"paging":       map[string]any{"nextPageUri": "https://broker:943/SEMP/v2/monitor/msgVpns/default/clients?cursor=abc"},
+				"responseCode": float64(200),
+			},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := got["probe"].(map[string]any)["meta"].(map[string]any)
+	paging, ok := meta["paging"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta.paging: got %T, want map[string]any", meta["paging"])
+	}
+	if _, present := paging["nextPageUri"]; present {
+		t.Errorf("meta.paging.nextPageUri must not survive: got %+v", paging)
+	}
+	if meta["responseCode"] != float64(200) {
+		t.Errorf("meta.responseCode should survive untouched: got %+v", meta["responseCode"])
+	}
+}
+
+func TestApplyResultStrategy_StripsByKeyFanOutEnvelopes(t *testing.T) {
+	// A future fan-out tool without list_vpns.go's own custom sanitization
+	// would otherwise ship each row's raw envelope verbatim.
+	stepResults := map[string]map[string]any{
+		"real-clients": {
+			"byKey": map[string]any{
+				"vpn-a": map[string]any{
+					"data":  []any{},
+					"links": map[string]any{"uri": "https://broker:943/SEMP/v2/monitor/msgVpns/vpn-a/clients"},
+					"meta": map[string]any{"request": map[string]any{
+						"method": "GET",
+						"uri":    "https://broker:943/SEMP/v2/monitor/msgVpns/vpn-a/clients",
+					}},
+				},
+			},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := got["real-clients"].(map[string]any)["byKey"].(map[string]any)
+	entry := byKey["vpn-a"].(map[string]any)
+	if _, present := entry["links"]; present {
+		t.Errorf("byKey entry's links must not survive: got %+v", entry["links"])
+	}
+	meta, ok := entry["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("byKey entry's meta: got %T, want map[string]any", entry["meta"])
+	}
+	request, ok := meta["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("byKey entry's meta.request: got %T, want map[string]any", meta["request"])
+	}
+	if _, present := request["uri"]; present {
+		t.Errorf("byKey entry's meta.request.uri must not survive: got %+v", request)
+	}
+	if request["method"] != "GET" {
+		t.Errorf("byKey entry's meta.request.method should survive untouched: got %+v", request)
+	}
+}
+
+func TestApplyResultStrategy_PaginatedShapePassesThroughUnchanged(t *testing.T) {
+	// fetchPaginated already rebuilds {"data":..., "truncated":...} itself and
+	// never forwards links/meta — scrubbing must be a no-op here, not just
+	// harmless but observably untouched (no extra keys, no panic on a step
+	// with neither links nor meta present).
+	stepResults := map[string]map[string]any{
+		"queues": {
+			"data":      []any{map[string]any{"queueName": "orders"}},
+			"truncated": false,
+		},
+	}
+	got, err := composite.ApplyResultStrategy(composite.ResultStrategy{Strategy: "collect"}, stepResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"queues": map[string]any{
+			"data":      []any{map[string]any{"queueName": "orders"}},
+			"truncated": false,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestApplyResultStrategy_PostProcess_StripsLinksFromRawStep(t *testing.T) {
+	postprocesstest.Register(t, "__test_summary_links", postprocess.Handler{
+		Fn: func(map[string]map[string]any) (map[string]any, error) {
+			return map[string]any{"count": 1}, nil
+		},
+	})
+	stepResults := map[string]map[string]any{
+		"queues": {
+			"data":  []any{},
+			"links": map[string]any{"uri": "https://broker:943/SEMP/v2/monitor/msgVpns/default/queues"},
+		},
+	}
+	got, err := composite.ApplyResultStrategy(
+		composite.ResultStrategy{Strategy: "postProcess", PostProcess: "__test_summary_links"},
+		stepResults,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queues := got["queues"].(map[string]any)
+	if _, present := queues["links"]; present {
+		t.Errorf("links must not survive a postProcess tool's raw step either: got %+v", queues["links"])
+	}
+}
