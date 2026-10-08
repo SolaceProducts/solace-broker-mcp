@@ -1269,6 +1269,9 @@ func main() {
 			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
 				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
 			}
+			if mlErr := metricsProvider.MetricsListenerExposure(cfg.MetricsListenerWiderThanMCP()); mlErr != nil {
+				slog.Error("metrics listener exposure gauge unavailable", slog.String("error", mlErr.Error()))
+			}
 			// The snapshot reports the breaker disabled when it is configured
 			// off, and the collection callback then observes nothing, so the
 			// metric family stays absent rather than reporting a false state.

@@ -163,6 +163,12 @@ func TestGoldenSchema(t *testing.T) {
 		t.Fatalf("BrokerMetrics() error = %v", err)
 	}
 
+	// mcp_metrics_listener_exposed_beyond_mcp (SOL-155414): fixed true so the
+	// fixture pins the "exposed" (1) value, not just the gauge's existence.
+	if err := p.MetricsListenerExposure(true); err != nil {
+		t.Fatalf("MetricsListenerExposure() error = %v", err)
+	}
+
 	// Token-exchange circuit-breaker state (SOL-152284): the closed startup
 	// snapshot captures the complete three-series one-hot contract.
 	if _, err := p.TokenExchangeBreakerMetrics(func() (tokenexchange.BreakerSnapshot, bool) {

@@ -175,6 +175,10 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 		t.Fatalf("BrokerMetrics: %v", err)
 	}
 
+	if err := mp.MetricsListenerExposure(true); err != nil {
+		t.Fatalf("MetricsListenerExposure: %v", err)
+	}
+
 	// tracing.New mutates two OTel globals: otel.SetTracerProvider and
 	// otel.SetTextMapPropagator. Save and restore both, matching the
 	// established pattern for each — internal/observability/tracing/

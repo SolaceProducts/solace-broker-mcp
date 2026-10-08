@@ -4520,8 +4520,11 @@ func TestServerConfig_MetricsListenerWiderThanMCP(t *testing.T) {
 		{"disabled mode, metrics explicit wildcard host -> exposed", "127.0.0.1", true, "0.0.0.0:9091", true},
 		{"disabled mode, metrics locked to loopback -> safe", "127.0.0.1", true, "127.0.0.1:9091", false},
 		{"disabled mode, metrics scrape off -> no listener, safe", "127.0.0.1", false, ":9091", false},
-		{"oauth mode (non-loopback MCP) -> not an asymmetry, safe", "", true, ":9091", false},
-		{"malformed metrics_bind_address -> safe (left for the listener to reject)", "127.0.0.1", true, "not-a-host-port", false},
+		{"empty ListenAddress (oauth mode's own default) -> not loopback, safe", "", true, ":9091", false},
+		{"malformed metrics_bind_address -> no warning (config validation rejects it)", "127.0.0.1", true, "not-a-host-port", false},
+		{"IPv6 loopback MCP (::1), metrics wildcard -> exposed", "::1", true, ":9091", true},
+		{"IPv6 loopback MCP (::1), metrics locked to bracketed IPv6 loopback -> safe", "::1", true, "[::1]:9091", false},
+		{"disabled mode, metrics bound to a non-IP hostname -> exposed (not localhost, conservatively treated as non-loopback)", "127.0.0.1", true, "metrics.internal:9091", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

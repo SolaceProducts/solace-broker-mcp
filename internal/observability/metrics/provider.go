@@ -80,6 +80,9 @@ type Provider struct {
 	tokenExchangeBreakerMetricsOnce sync.Once
 	tokenExchangeBreakerMetrics     *TokenExchangeBreakerMetrics
 	tokenExchangeBreakerMetricsErr  error
+
+	metricsListenerExposureOnce sync.Once
+	metricsListenerExposureErr  error
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -404,6 +407,40 @@ func (p *Provider) TokenExchangeBreakerMetrics(
 			NewTokenExchangeBreakerMetrics(p.Meter(instrumentScope), snapshot)
 	})
 	return p.tokenExchangeBreakerMetrics, p.tokenExchangeBreakerMetricsErr
+}
+
+// MetricsListenerExposure registers mcp_metrics_listener_exposed_beyond_mcp
+// (SOL-155414), once on first call: 1 iff /metrics is reachable from a wider
+// network scope than the MCP server's own listener, 0 otherwise. A
+// continuously-scraped, alertable companion to the one-time startup WARN
+// (banner.LogMetricsAllInterfacesExposure) — an operator restarting a fleet
+// of pods routinely, or running at a raised log level, would otherwise have
+// no way to notice this condition after boot.
+//
+// exposed is the caller's already-computed
+// config.ServerConfig.MetricsListenerWiderThanMCP() result, taken as a plain
+// bool (like BrokerMetrics takes a snapshot func) rather than threading the
+// full ServerConfig through New, so every other caller of New is unaffected.
+// Fixed for the life of the process: the predicate is a startup-time
+// configuration fact (loopback-ness of two configured addresses), not live
+// listener state, so the callback has nothing to recompute per scrape.
+func (p *Provider) MetricsListenerExposure(exposed bool) error {
+	p.metricsListenerExposureOnce.Do(func() {
+		_, err := p.Meter(instrumentScope).Int64ObservableGauge(
+			"mcp.metrics_listener.exposed_beyond_mcp",
+			metric.WithDescription("1 iff /metrics is reachable from a wider network scope than the MCP server's own listener."),
+			metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+				v := int64(0)
+				if exposed {
+					v = 1
+				}
+				o.Observe(v)
+				return nil
+			}),
+		)
+		p.metricsListenerExposureErr = err
+	})
+	return p.metricsListenerExposureErr
 }
 
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a
