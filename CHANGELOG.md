@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **BREAKING**: Composite tool results and `get-queue-metrics` no longer include the broker's `links` object or any `uri`-bearing `meta` field (e.g. `meta.request.uri`) — they leaked the broker's management hostname:port, SEMP API variant, VPN name, and resource path through ordinary successful tool use. Migration: stop reading `.links.*` or `.meta.request.uri`; `data` is unaffected. Tracked under SOL-155432.
+- A startup WARN, and a continuously-scraped `mcp_metrics_listener_exposed_beyond_mcp` gauge, now fire when `/metrics` is reachable from a wider network scope than the MCP server's own listener (e.g. loopback-only dev modes alongside `metrics_bind_address`'s all-interfaces default). The default stays all-interfaces deliberately — a loopback default would break Kubernetes ServiceMonitor scraping (SOL-154042) — so the fix is a NetworkPolicy, or setting `metrics_bind_address` to a loopback host for a sidecar-scrape deployment. Tracked under SOL-155414.
 
 ## [0.11.0] - 2026-10-05
 

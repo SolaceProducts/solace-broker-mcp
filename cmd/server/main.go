@@ -1033,7 +1033,8 @@ func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, poli
 }
 
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
-// static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
+// static-cleartext exposure, OAuth plaintext-listener acknowledgement, and the
+// metrics-listener-wider-than-MCP exposure.
 func logStartupBanners(cfg *config.ServerConfig) {
 	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
 	if cfg.StaticTokenExposedCleartext() {
@@ -1041,6 +1042,9 @@ func logStartupBanners(cfg *config.ServerConfig) {
 	}
 	if cfg.OAuthPlaintextListenerAcknowledged() {
 		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+	}
+	if cfg.MetricsListenerWiderThanMCP() {
+		banner.LogMetricsAllInterfacesExposure(cfg.Observability.MetricsBindAddress, cfg.BindAddress())
 	}
 }
 
@@ -1264,6 +1268,9 @@ func main() {
 			}
 			if _, bmErr := metricsProvider.BrokerMetrics(brokerTracker.SnapshotForMetrics); bmErr != nil {
 				slog.Error("broker reachability metrics unavailable", slog.String("error", bmErr.Error()))
+			}
+			if mlErr := metricsProvider.MetricsListenerExposure(cfg.MetricsListenerWiderThanMCP()); mlErr != nil {
+				slog.Error("metrics listener exposure gauge unavailable", slog.String("error", mlErr.Error()))
 			}
 			// The snapshot reports the breaker disabled when it is configured
 			// off, and the collection callback then observes nothing, so the
