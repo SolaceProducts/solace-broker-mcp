@@ -95,11 +95,11 @@ under MPL-2.0.
 | `go.opentelemetry.io/otel/trace` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.46.0/LICENSE) |
 | `go.opentelemetry.io/proto/otlp` | v1.11.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.0/otlp/LICENSE) |
 | `go.yaml.in/yaml/v3` | v3.0.5 | MIT | [license](https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE) |
-| `golang.org/x/net` | v0.58.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.58.0:LICENSE) |
+| `golang.org/x/net` | v0.60.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.60.0:LICENSE) |
 | `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE) |
-| `golang.org/x/sys/cpu` | v0.47.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
-| `golang.org/x/text` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
+| `golang.org/x/sys/cpu` | v0.48.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE) |
+| `golang.org/x/text` | v0.42.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.42.0:LICENSE) |
 | `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 | `google.golang.org/genproto/googleapis/api` | 08b0e4226688 | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/08b0e4226688/googleapis/api/LICENSE) |
 | `google.golang.org/genproto/googleapis/rpc` | 08b0e4226688 | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/08b0e4226688/googleapis/rpc/LICENSE) |
