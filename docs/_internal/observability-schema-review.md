@@ -635,7 +635,8 @@ active.
   `OBS_AUTH_FAILURE_COUNTER_ENABLED` flag as `mcp_auth_failure_total`. With either off, the
   series is absent rather than zero. Unlike `mcp_auth_failure_total`, nothing is pre-seeded: a
   series appears on the first denial for a given `tool` and `reason`, so `absent()` is not a
-  usable alert here — alert on `increase()` instead.
+  usable alert here, and `increase()` alone misses the first denial on each series — use the
+  appearance-clause alert in `docs/observability.md` (Authorization Denials).
 
 **Cardinality:** `|tool| x 2`.
 
@@ -673,7 +674,8 @@ denial rather than an MCP-server-side one (SOL-153332, Story 49).
   so a denial that is a policy gap on one broker and correct on another is only
   distinguishable with the label.
 - Behind the metrics egress flags, like every other `mcp_*` instrument. Nothing is pre-seeded, so
-  `absent()` is not a usable alert — alert on `increase()`.
+  `absent()` is not a usable alert, and `increase()` alone misses the first denial on each series
+  — use the same appearance-clause alert as `mcp_authz_denied_total` in `docs/observability.md`.
 
 **Cardinality:** `|tool| x |broker| x 1`.
 

@@ -291,8 +291,9 @@ This is hop 1: the MCP server refused an authenticated caller before dispatch. T
 
 Series appear only after their first denial, so `absent()` is not an alert. `increase()` alone also
 misses the first denial on each series: Prometheus has no earlier sample to subtract, so a series
-born at `1` and never moving again reads `increase() == 0`, and every process restart starts new
-series. Add a clause that matches a series appearing:
+born at `1` and never moving again reads `increase() == 0`. A new instance, such as a pod restarted
+with a new `instance` label, starts new series; a restart under the same labels resets the existing
+series, which `increase()` handles. Add a clause that matches a series appearing:
 
 ```promql
 # any new denial, including the one that creates a series
@@ -302,6 +303,10 @@ increase(mcp_authz_denied_total[5m]) > 0
 # denials since the process started: read the counter, not increase()
 sum by (tool, reason) (mcp_authz_denied_total)
 ```
+
+The appearance clause also matches an existing series that returns after a scrape gap longer than
+five minutes, even though no new denial happened. Check `up` for the target before treating a match
+as a new denial.
 
 ### Broker-Side Authorization Denials
 
@@ -337,8 +342,9 @@ exchange, never reaches the transport and appears only here.
 
 Series appear only after their first rejection, so `absent()` is not an alert. `increase()` alone
 also misses the first rejection on each series: Prometheus has no earlier sample to subtract, so a
-series that is born at `1` and never moves again reads `increase() == 0`, and every process
-restart starts new series. Add a clause that matches a series appearing:
+series that is born at `1` and never moves again reads `increase() == 0`. A new instance, such as a
+pod restarted with a new `instance` label, starts new series; a restart under the same labels resets
+the existing series, which `increase()` handles. Add a clause that matches a series appearing:
 
 ```promql
 # any new rejection, including the one that creates a series
@@ -348,6 +354,10 @@ increase(mcp_owner_validation_total[5m]) > 0
 # rejections since the process started: read the counter, not increase()
 sum by (tool, outcome) (mcp_owner_validation_total)
 ```
+
+The appearance clause also matches an existing series that returns after a scrape gap longer than
+five minutes, even though no new rejection happened. Check `up` for the target before treating a
+match as a new rejection.
 
 Only the two rejection paths are counted. A call that passes the check, or supplies no `owner`,
 is not. For a rejection rate against all calls of the same tool, aggregate both sides first,
