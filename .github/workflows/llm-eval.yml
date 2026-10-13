@@ -2,9 +2,13 @@ name: LLM E2E Eval
 
 # LLM e2e suite under test/e2e-llm/. release.yml calls this on a v* tag and
 # does not push the image or create the GitHub Release until it passes.
-# workflow_dispatch still evaluates inputs.target_branch (default main).
-# No per-PR trigger and no schedule. One attempt per run. A full matrix
-# costs API credits (~$4.78 measured 2026-08-05). A red run is re-run with
+# A nightly schedule also runs it on main's tip (full matrix, local-docker, no
+# filter), so a regression shows up the day it lands, not at the next release.
+# The nightly gates nothing. workflow_dispatch still evaluates
+# inputs.target_branch (default main).
+# No per-PR trigger. One attempt per run. A full matrix
+# costs API credits (~$4.78 measured 2026-08-05; once a day is about $145 a
+# month at that price). A red run is re-run with
 # `gh run rerun <run-id> --failed`; there is no admin skip. The call path
 # has no inputs: a caller cannot narrow the matrix or point it at a lab broker.
 #
@@ -36,6 +40,11 @@ on:
         required: false
         default: ''
         type: string
+  schedule:
+    # 06:00 UTC, which is 02:00 EDT / 01:00 EST. GitHub can delay or drop a
+    # scheduled run under load, and it only fires from the default branch.
+    # Failure emails go to whoever last edited the cron line.
+    - cron: '0 6 * * *' # schedule owner: lkiri
 
 # Do not cancel an in-progress run. Cancelling spends the API credits and
 # leaves broker containers on a runner that is about to be reclaimed.
@@ -49,8 +58,14 @@ on:
 # already evaluating. Hosted runners do not share a Docker daemon. The
 # release path is local-docker, so it does not share a lab broker with a
 # manual lab run.
+# The nightly has its own group, llm-eval-nightly. Its github.sha is main's
+# tip, so under the shared name a nightly and a tag on that commit would wait
+# in one line and a third arrival could cancel the waiting release run.
+# github.event_name is `schedule` only for the nightly. On the call path it is
+# the caller's event (push on a tag), so release and dispatch keep
+# llm-eval-<sha>. .github/scripts/llm-eval-triggers.test.sh pins all of this.
 concurrency:
-  group: llm-eval-${{ github.sha }}
+  group: llm-eval-${{ github.event_name == 'schedule' && 'nightly' || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -58,6 +73,10 @@ permissions:
 
 jobs:
   llm-eval:
+    # A schedule fires in every fork that has Actions enabled. Run the nightly
+    # only in this repository. Dispatch and the release call path never carry
+    # the event `schedule`, so they are unaffected.
+    if: github.event_name != 'schedule' || github.repository == 'SolaceProducts/solace-broker-mcp'
     runs-on: ubuntu-latest
     # Headroom, not a guess: the full 35-row matrix took 7m50s of suite time in
     # a 10m26s job on a hosted runner (run 31039920539, 2026-08-05), measured
@@ -66,8 +85,10 @@ jobs:
     env:
       # Steps read env.*, never inputs.*. Dispatch sets target_branch (default
       # main). workflow_call does not define that input, so it is empty and
-      # the ref is github.sha, the caller's commit. Do not branch on
-      # github.event_name: in a called workflow that is the caller's event.
+      # the ref is github.sha, the caller's commit. A schedule has no inputs
+      # either, so the nightly checks out github.sha, main's tip commit. Do not
+      # branch on github.event_name: in a called workflow that is the caller's
+      # event.
       TARGET_BRANCH: ${{ inputs.target_branch || github.sha }}
       BROKER_TARGET: ${{ inputs.broker_target || 'local-docker' }}
       SCENARIO_FILTER: ${{ inputs.scenario_filter }}
