@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -96,6 +97,48 @@ func (e *ownerNotFoundError) Error() string {
 	return fmt.Sprintf("client username %q does not exist in Message VPN %q", e.owner, e.msgVpn)
 }
 
+// ownerLogMaxRunes is the most runes truncateOwnerLogValue returns. It bounds
+// the owner and VPN values LogAttrs writes, both caller-supplied and neither
+// length-limited upstream. 200 is just above the broker's own 189-character
+// client-username limit, so no legitimate value is ever cut.
+//
+// It does NOT bound ownerCheckFailedError.Error(), which %q-formats the
+// untruncated owner and VPN into "detail" when the wrapped cause is a vouched
+// type. That predates these attributes and is left as it was, so on that path
+// the line can carry the value twice: once bounded here, once as before.
+const ownerLogMaxRunes = 200
+
+// truncateOwnerLogValue returns s unchanged if it is at most ownerLogMaxRunes
+// runes, and otherwise its first ownerLogMaxRunes-1 runes followed by "…", so
+// the result never exceeds the cap and says it was cut. It cuts by rune, never
+// by byte, so a multi-byte character is never split. Same rule as
+// tokenexchange.truncateRunes, which is unexported and so cannot be shared.
+func truncateOwnerLogValue(s string) string {
+	r := []rune(s)
+	if len(r) <= ownerLogMaxRunes {
+		return s
+	}
+	return string(r[:ownerLogMaxRunes-1]) + "…"
+}
+
+// LogAttrs returns structured slog attributes for this error, called by
+// logToolResult — field ownership stays with the type, like
+// tokenexchange.ExchangeError.LogAttrs. This type is on no vouched-type gate,
+// so without these the "tool invoked" line reports only the Go type name and an
+// operator cannot see which owner or VPN a rejection concerned, nor tell this
+// control apart from any other execution_error. Keys mirror the structured
+// fields buildErrorResult returns to the agent (error_source, owner, objectKind,
+// msgVpnName), in the log's snake_case. That list is written out here and in
+// errors.go; TestOwnerErrorLogKeys_MirrorAgentFacingFields fails if the two drift.
+func (e *ownerNotFoundError) LogAttrs() []slog.Attr {
+	return []slog.Attr{
+		slog.String("error_source", "owner_validation"),
+		slog.String("owner", truncateOwnerLogValue(e.owner)),
+		slog.String("msg_vpn", truncateOwnerLogValue(e.msgVpn)),
+		slog.String("object_kind", e.objectKind),
+	}
+}
+
 // ownerCheckStage names which of ownerValidatingHandler's two pre-flight
 // reads produced an ownerCheckFailedError — the two have different causes
 // and different fixes, so collapsing them into one message loses exactly
@@ -149,6 +192,30 @@ func (e *ownerCheckFailedError) Error() string {
 }
 
 func (e *ownerCheckFailedError) Unwrap() error { return e.cause }
+
+// LogAttrs returns structured slog attributes for this error, called by
+// logToolResult. Only fields this package wrote are emitted — never cause's
+// text: cause is whatever sempv2.Client.Execute returned, which can be an
+// unvouched transport or auth wrap error, and the vouched-type gate on "detail"
+// exists to keep exactly that out of the log.
+//
+// error_stage, not error_source, mirrors buildErrorResult (errors.go), where
+// the same wrapper is layered on top of a switch that may already have set
+// error_source from the wrapped cause (load_shed, token_exchange); overwriting
+// it there would discard a correct classification. Nothing on the log line sets
+// error_source from a cause, so this is for parity, not collision avoidance: an
+// operator correlating a log line with the agent-facing result sees the same
+// names. A vouched cause's own attributes (http_status, semp_code, ...) are
+// emitted by logToolResult alongside these.
+func (e *ownerCheckFailedError) LogAttrs() []slog.Attr {
+	return []slog.Attr{
+		slog.String("error_stage", "owner_validation_check"),
+		slog.String("check_stage", string(e.stage)),
+		slog.String("owner", truncateOwnerLogValue(e.owner)),
+		slog.String("msg_vpn", truncateOwnerLogValue(e.msgVpn)),
+		slog.String("object_kind", e.objectKind),
+	}
+}
 
 // ownerValidatingHandler wraps a create/update composite tool handler to
 // reject an "owner" that doesn't name a real, existing client username

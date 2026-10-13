@@ -663,6 +663,24 @@ Notes:
   {"level":"ERROR","msg":"tool invoked","tool":"update-topic-endpoint","outcome":"error","error_type":"execution_error","detail":"request body field \"maxMsgSpoolUsage\" is not a known attribute of operation \"updateMsgVpnTopicEndpoint\"; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server"}
   ```
 
+- A create or update call (`create-queue`, `update-queue`, `create-topic-endpoint`,
+  `update-topic-endpoint`) that the owner-existence check blocks is also recorded as
+  `execution_error`, or `broker_permission_denied` when the failed pre-flight read was itself
+  refused by the broker. For a confirmed-absent owner `detail` is the Go type name only, by
+  design. The `tool invoked` record instead carries `owner`, `msg_vpn`, and `object_kind`, plus one of
+  `error_source="owner_validation"` (the check completed and the owner is absent) or
+  `error_stage="owner_validation_check"` with `check_stage` of `client-username-read` or
+  `vpn-disambiguation-read` (the check could not complete, so the write was denied). When the
+  failed read has its own status, the record also has that error's `http_status`, `semp_code`, and
+  `operation`. These are the agent-facing result's `owner`, `msgVpnName`, and `objectKind` in
+  snake_case. `owner` and `msg_vpn` are caller-supplied and cut at 200 characters, ending in `…`
+  when cut. To find these, search `tool invoked` records for `error_source="owner_validation"` or
+  `error_stage="owner_validation_check"`. Abridged record (other fields omitted):
+
+  ```json
+  {"level":"ERROR","msg":"tool invoked","tool":"create-queue","outcome":"error","error_type":"execution_error","detail":"*fmt.wrapError","error_source":"owner_validation","owner":"ghost-user","msg_vpn":"default","object_kind":"queue"}
+  ```
+
 ## Load and Saturation Visibility
 
 Saturation visibility is structured logging, not metrics, in this release. Enable it with
