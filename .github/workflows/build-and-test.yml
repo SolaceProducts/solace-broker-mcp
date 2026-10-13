@@ -99,7 +99,7 @@ on:
 # the same string, so test and the Guardian scan already share one queue.
 # A third workflow Release calls joins that queue and cancels whichever
 # member is waiting. A new callee must use a literal group name.
-# llm-eval.yml uses llm-eval-<sha>.
+# llm-eval.yml uses llm-eval-<sha>, and llm-eval-nightly for its schedule.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

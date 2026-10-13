@@ -22,13 +22,22 @@ across two modes:
 A `v*` tag runs this suite on that tag's commit. `release.yml` calls
 `llm-eval.yml` and does not push the image or create the GitHub Release
 until it passes. The binary build does not wait, so a finished archive job
-is not a sign the release is clear. Manual dispatch still checks out
-`target_branch` (default `main`). There is no pull-request run and no daily
-run. One attempt. A red release job is `gh run rerun <run-id> --failed`. A missing
+is not a sign the release is clear. A nightly run at 06:00 UTC runs the full
+matrix on the tip of `main`. It gates nothing: a red nightly blocks no
+release. GitHub emails whoever last edited the cron line in `llm-eval.yml`,
+and the run shows red in the Actions tab. GitHub can delay or skip a
+scheduled run, only runs it from the default branch, and turns schedules off
+after 60 days with no repository activity. A nightly and a release run can
+overlap. They use separate concurrency groups and run side by side. Manual
+dispatch still checks out `target_branch` (default `main`). There is no
+pull-request run. One attempt. A red release job is
+`gh run rerun <run-id> --failed`. A missing
 or rotated `LLM_SERVICE_API_KEY`, or an empty endpoint or model variable, is
 fixed in repo settings and then that same rerun. It is not a new tag. The run record's
 `head` line is `git rev-parse HEAD`. It matches `commit` when the checkout
-is the tag. A full run costs API credits (~$4.78 measured 2026-08-05).
+is the tag. On the nightly, `event` is `schedule` and `commit` is the tip of
+`main`. A full run costs API credits (~$4.78 measured 2026-08-05). Once a day
+that is about $145 a month at that price.
 
 ## Quickstart
 
