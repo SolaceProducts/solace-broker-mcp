@@ -145,7 +145,9 @@ the minor version. A rename or removal requires a major version, an announcement
 least two minor releases of notice. Metric or audit-field renames are dual-emitted when that
 can be done without changing the meaning or doubling a single-valued record.
 
-Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`. The Go
+Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`. The minor
+component is an integer, so `1.10` is later than `1.9`: compare the components numerically, because
+a string comparison or a pattern such as `1\.[0-9]` stops matching at `1.10`. The Go
 runtime and process collectors are upstream Prometheus schema and are outside this
 compatibility commitment.
 
@@ -310,11 +312,42 @@ runs. This counts the calls that check blocked. `outcome` is one of:
 | `outcome` | Meaning |
 |---|---|
 | `rejected_not_found` | The check completed and the owner is confirmed absent from the VPN. The write did not run. |
-| `rejected_check_failed` | The check itself could not complete (timeout, 5xx, rate limit, or the broker refused the read). The write was denied on doubt and did not run. |
+| `rejected_check_failed` | The check itself could not complete, so the write was denied on doubt and did not run. |
 
-Series appear only after their first rejection; alert on `increase()`, not `absent()`. Only the
-two rejection paths are counted. A call that passes the check, or supplies no `owner`, is not;
-read the rejection rate against `mcp_tool_invocation_total` for the same `tool`.
+`rejected_check_failed` moves with broker health, not only with the check. Any failure to
+complete the read counts: a timeout, a 5xx, a rate limit, the broker refusing the read, a request
+shed because the broker was too busy, or a failed token exchange. A call the caller cancelled
+while the check was running is not counted. Timeouts, 5xx, and rate limits also appear in
+`mcp_semp_request_total` with `operation` `getMsgVpnClientUsername` or `getMsgVpn` (an empty
+status when there was no response). A request shed before it was sent, or a failed token
+exchange, never reaches the transport and appears only here.
+
+Series appear only after their first rejection, so `absent()` is not an alert. `increase()` alone
+also misses the first rejection on each series: Prometheus has no earlier sample to subtract, so a
+series that is born at `1` and never moves again reads `increase() == 0`, and every process
+restart starts new series. Add a clause that matches a series appearing:
+
+```promql
+# any new rejection, including the one that creates a series
+increase(mcp_owner_validation_total[5m]) > 0
+  or (mcp_owner_validation_total unless mcp_owner_validation_total offset 5m)
+
+# rejections since the process started: read the counter, not increase()
+sum by (tool, outcome) (mcp_owner_validation_total)
+```
+
+Only the two rejection paths are counted. A call that passes the check, or supplies no `owner`,
+is not. For a rejection rate against all calls of the same tool, aggregate both sides first,
+because the two families have an `outcome` label with different values and a direct division
+matches nothing:
+
+```promql
+sum by (tool) (rate(mcp_owner_validation_total[1h]))
+  / sum by (tool) (rate(mcp_tool_invocation_total[1h]))
+```
+
+`rate()` has the same blind spot for a series' first sample, so treat a rate over a short window on
+a quiet system as approximate.
 
 A blocked call is also an ordinary failed invocation in `mcp_tool_invocation_total`
 (`outcome="error"`, `error_type="execution_error"`). When the failed read was itself refused by

@@ -360,6 +360,14 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 // confirmed-absent owner, ownerCheckFailedError an inconclusive check denied on
 // doubt. Any other error, including a nil one, records nothing.
 //
+// A check that failed because the caller cancelled (context.Canceled on ctx) is
+// not counted: the caller abandoned the call, the check did not block it, and
+// counting it would make the series move with how often clients hit stop. A
+// timeout (DeadlineExceeded) is a check that could not complete and does count,
+// and a confirmed-absent owner counts regardless, since that check completed.
+// ctx, not errors.Is on err: the caller's cancellation is what ctx reports,
+// whatever the failed read's error chain happens to expose.
+//
 // This lives in CallTool's error path rather than in ownerValidatingHandler for
 // one concrete reason: the handler's params have "broker" stripped
 // (stripBrokerParam), so it cannot label the series by broker the way
@@ -367,11 +375,10 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 // threading *metrics.ToolMetrics and the tool name into it.
 //
 // errors.As, not a type switch, so a wrapped error still matches — handleErr
-// reaches here raw, but ownerCheckFailedError itself wraps its cause.
+// reaches here raw, but ownerCheckFailedError itself wraps its cause. Metrics
+// disabled needs no guard here: RecordOwnerValidation is nil-safe on its
+// receiver, the same single guard RecordBrokerAuthzDenied relies on.
 func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAlias string, err error) {
-	if m.metrics == nil {
-		return
-	}
 	var notFound *ownerNotFoundError
 	var checkFailed *ownerCheckFailedError
 	var outcome metrics.OwnerValidationOutcome
@@ -379,6 +386,9 @@ func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAli
 	case errors.As(err, &notFound):
 		outcome = metrics.OwnerValidationRejectedNotFound
 	case errors.As(err, &checkFailed):
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
 		outcome = metrics.OwnerValidationRejectedCheckFailed
 	default:
 		return

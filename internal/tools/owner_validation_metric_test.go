@@ -32,6 +32,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
@@ -151,6 +152,77 @@ func TestOwnerValidationMetric_CheckFailedWrappingCode72_StillCounts(t *testing.
 	}
 }
 
+// TestOwnerValidationMetric_CallerCancelled pins what rejected_check_failed
+// does and does not mean. A caller that cancels mid-check (context.Canceled)
+// abandoned the call; the check did not block the write, so counting it would
+// make the counter move with how often clients hit stop. A timeout
+// (context.DeadlineExceeded) is a check that could not complete and still counts,
+// and a confirmed-absent owner counts however the context ends, since that check
+// did complete.
+func TestOwnerValidationMetric_CallerCancelled(t *testing.T) {
+	checkFailed := &ownerCheckFailedError{
+		cause: context.Canceled, objectKind: "queue", owner: "real-user", msgVpn: "default",
+		stage: ownerCheckStageClientUsername,
+	}
+	for name, tc := range map[string]struct {
+		err  error
+		ctx  func() (context.Context, context.CancelFunc)
+		want string // outcome label, or "" for no series
+	}{
+		"cancelled mid-check is not counted": {
+			err: checkFailed,
+			ctx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			want: "",
+		},
+		"deadline exceeded is a failed check": {
+			err: &ownerCheckFailedError{cause: context.DeadlineExceeded, objectKind: "queue", owner: "real-user",
+				msgVpn: "default", stage: ownerCheckStageClientUsername},
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+			want: "rejected_check_failed",
+		},
+		"live context is a failed check": {
+			err:  checkFailed,
+			ctx:  func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+			want: "rejected_check_failed",
+		},
+		"confirmed-absent owner counts even if cancelled afterwards": {
+			err: &ownerNotFoundError{owner: "ghost", msgVpn: "default", objectKind: "queue"},
+			ctx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			want: "rejected_not_found",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mgr, p := ownerMetricManager(t, "create-queue", false, tc.err)
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			if _, err := mgr.CallTool(ctx, "create-queue", map[string]any{"broker": "dev", "msgVpnName": "default"}, Identity{}); err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			got := ownerValidationLines(scrape(t, p))
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("series = %v, want none for a call the caller abandoned", got)
+				}
+				return
+			}
+			want := fmt.Sprintf(`%s{broker="dev",outcome=%q,tool="create-queue"} 1`, ownerValidationFamily, tc.want)
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("series = %v, want exactly [%s]", got, want)
+			}
+		})
+	}
+}
+
 func TestOwnerValidationMetric_UnrelatedFailureAndSuccess_AreNotCounted(t *testing.T) {
 	for name, handleErr := range map[string]error{
 		"unrelated error": errors.New("broker refused"),
@@ -166,6 +238,10 @@ func TestOwnerValidationMetric_UnrelatedFailureAndSuccess_AreNotCounted(t *testi
 	}
 }
 
+// TestOwnerValidationMetric_MetricsDisabled_IsNoop pins only that a blocked call
+// with metrics disabled does not panic. recordOwnerValidation has no nil guard of
+// its own, so this is what fails if RecordOwnerValidation's receiver check goes;
+// it cannot tell whether anything was recorded, and nothing exists to record to.
 func TestOwnerValidationMetric_MetricsDisabled_IsNoop(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t)) // no WithToolMetrics: m.metrics is nil
 	h := newStubHandler("create-queue")
