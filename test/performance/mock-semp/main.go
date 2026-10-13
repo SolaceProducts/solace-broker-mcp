@@ -61,7 +61,7 @@
 // own measurement of per-tool SEMP fan-out — the factor that converts
 // loadgen's tool calls/s into the SEMP requests/s the performance targets are
 // written in. GET /_mock/hits reports the same counts mid-run; POST reports
-// and zeroes them, which is how the run scripts keep the fidelity gate's dozen
+// and zeroes them, which is how the run scripts keep the fidelity gate's fifteen
 // requests out of the load phase's totals.
 package main
 

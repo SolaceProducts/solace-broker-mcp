@@ -104,6 +104,18 @@ func makeQueueItems(n int) []any {
 	return items
 }
 
+// makeQueueItemsFrom is makeQueueItems with queueName numbered starting at
+// start instead of always 0, so two pages built from it don't coincidentally
+// share names — needed to make a cross-page duplicate assertion meaningful
+// (see TestExecute_ListQueues_MultiPage_NoDuplicatesAcrossPages).
+func makeQueueItemsFrom(start, n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{"queueName": fmt.Sprintf("queue-%d", start+i), "bindCount": float64(0)}
+	}
+	return items
+}
+
 // makeQueueDiscardItems builds a slice of n mock queue objects with discard
 // counters for use in list-queue-discards paginated responses.
 func makeQueueDiscardItems(n int) []any {
@@ -186,6 +198,61 @@ func TestExecute_ListQueues_MultiPage(t *testing.T) {
 	}
 	if len(client.calls) != 2 {
 		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
+	}
+}
+
+// TestExecute_ListQueues_MultiPage_NoDuplicatesAcrossPages asserts
+// fetchPaginated's page-stitching never repeats (or drops) an item across a
+// cursor boundary. TestExecute_ListQueues_MultiPage above only checks
+// len(items), which can't tell "150 distinct items" apart from "150 items
+// with one duplicated and a different one dropped" — and its two pages,
+// built from makeQueueItems(100) and makeQueueItems(50), already
+// coincidentally share names (both start at queue-0), so a real duplicate
+// couldn't be distinguished from the mock data's own overlap anyway. This
+// test uses makeQueueItemsFrom so the two pages' names are disjoint by
+// construction, making a cross-page duplicate assertion actually mean
+// something. (Review finding on SOL-155426: the only place this invariant
+// was previously checked was an e2e-monitoring shell test against
+// list-queue-discards, which that PR narrowed to just the top-10 offenders —
+// no longer able to see a duplicate among the non-offender majority of a
+// large scanned set. This unit test, in the package's canonical pagination
+// suite, closes that gap at the shared fetchPaginated mechanism instead of
+// depending on one tool's e2e coverage for a property every followPages
+// tool relies on.)
+func TestExecute_ListQueues_MultiPage_NoDuplicatesAcrossPages(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues",
+		pageResult(makeQueueItemsFrom(0, 100), "cursor-q2"),
+		pageResult(makeQueueItemsFrom(100, 50), ""),
+	)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(200),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := result["queues"].(map[string]any)["data"].([]any)
+	if len(items) != 150 {
+		t.Fatalf("len(items) = %d, want 150", len(items))
+	}
+	seen := make(map[string]bool, len(items))
+	for _, raw := range items {
+		name := raw.(map[string]any)["queueName"].(string)
+		if seen[name] {
+			t.Fatalf("queueName %q appears more than once across stitched pages", name)
+		}
+		seen[name] = true
+	}
+	for i := 0; i < 150; i++ {
+		name := fmt.Sprintf("queue-%d", i)
+		if !seen[name] {
+			t.Fatalf("queueName %q missing from stitched pages", name)
+		}
 	}
 }
 

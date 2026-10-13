@@ -343,6 +343,52 @@ func TestListQueueDiscards_TruncationSurfaced(t *testing.T) {
 	})
 }
 
+// TestListQueueDiscards_TruncatedMessageSurfaced: this tool's result strategy
+// omits the raw step from the final output (SOL-155426), so truncatedMessage
+// must ride in the summary — it's the only copy a caller ever sees, unlike a
+// sibling list tool where the raw step is still a fallback.
+func TestListQueueDiscards_TruncatedMessageSurfaced(t *testing.T) {
+	items := []any{queueDiscard("q", "default", map[string]float64{"maxTtlExpiredDiscardedMsgCount": 1})}
+	t.Run("truncated carries the message", func(t *testing.T) {
+		got := runListQueueDiscards(t, items, map[string]any{
+			"truncated":        true,
+			"truncatedMessage": "Results limited to 1. Use maxResults (up to 500) to retrieve more.",
+		})
+		if got["truncatedMessage"] != "Results limited to 1. Use maxResults (up to 500) to retrieve more." {
+			t.Errorf("truncatedMessage: got %v", got["truncatedMessage"])
+		}
+	})
+	t.Run("not truncated omits message even if somehow present on step", func(t *testing.T) {
+		got := runListQueueDiscards(t, items, map[string]any{
+			"truncated":        false,
+			"truncatedMessage": "should never surface",
+		})
+		if _, present := got["truncatedMessage"]; present {
+			t.Errorf("truncatedMessage key should be omitted when not truncated")
+		}
+	})
+	t.Run("truncated with empty message omits key rather than emitting empty string", func(t *testing.T) {
+		got := runListQueueDiscards(t, items, map[string]any{
+			"truncated":        true,
+			"truncatedMessage": "",
+		})
+		if _, present := got["truncatedMessage"]; present {
+			t.Errorf("truncatedMessage key should be omitted when empty")
+		}
+	})
+	t.Run("truncated with message key entirely absent omits key rather than panicking", func(t *testing.T) {
+		got := runListQueueDiscards(t, items, map[string]any{
+			"truncated": true,
+			// truncatedMessage deliberately not set at all, distinct from set-
+			// but-empty: the handler's type assertion on step["truncatedMessage"]
+			// must fail safely (ok=false) rather than on a present empty string.
+		})
+		if _, present := got["truncatedMessage"]; present {
+			t.Errorf("truncatedMessage key should be omitted when entirely absent from the step")
+		}
+	})
+}
+
 // TestListQueueDiscards_SkippedOmittedWhenZero keeps the common-case summary
 // minimal — skipped is noise when nothing was skipped.
 func TestListQueueDiscards_SkippedOmittedWhenZero(t *testing.T) {
@@ -436,4 +482,20 @@ func TestListQueueDiscards_ValidatorCrossCheck(t *testing.T) {
 			}
 		})
 	}
+	// SOL-155480: the vpn preflight also selects msgVpnName. The check is per
+	// step, so that must not cover for the queueDiscards step dropping it.
+	t.Run("drop msgVpnName with vpn step present", func(t *testing.T) {
+		pruned := make([]string, 0, len(selectFields)-1)
+		for _, f := range selectFields {
+			if f != "msgVpnName" {
+				pruned = append(pruned, f)
+			}
+		}
+		err := postprocess.ValidateTool("list-queue-discards", "listQueueDiscards",
+			[]string{"vpn", listQueueDiscardsStepID},
+			map[string][]string{"vpn": {"msgVpnName"}, listQueueDiscardsStepID: pruned})
+		if err == nil {
+			t.Error("ValidateTool must fail when only the vpn step selects msgVpnName")
+		}
+	})
 }

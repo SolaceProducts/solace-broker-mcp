@@ -142,13 +142,18 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 }
 
 // envelopeSchema wraps an item schema in the SEMP response envelope shape —
-// {"data": item, "meta": {...}, "links": {...}}, only "data" required. Shared
-// by the flat (default) and fan-out-item cases in buildStepSchema, both of
-// which receive the raw envelope at runtime (see buildStepSchema's case
-// comments). Only "data" is required — the swagger envelope schemas mark
-// "meta" as the sole required envelope field, but a create/update tool
-// returning no "data" would be meaningless to the caller regardless of what
-// the spec technically permits.
+// {"data": item, "meta": {...}}, only "data" required. Shared by the flat
+// (default) and fan-out-item cases in buildStepSchema, both of which receive
+// the raw envelope at runtime (see buildStepSchema's case comments). Only
+// "data" is required — the swagger envelope schemas mark "meta" as the sole
+// required envelope field, but a create/update tool returning no "data"
+// would be meaningless to the caller regardless of what the spec technically
+// permits.
+//
+// "links" is deliberately not declared: ApplyResultStrategy's scrub
+// (sempv2.ScrubEnvelope, SOL-155432) always removes it before a result
+// reaches the caller, so advertising it here would describe a field that
+// never actually arrives.
 //
 // Additional envelope keys are tolerated for the same reason
 // fieldPropertiesSchema tolerates additional attributes (SOL-154164): this
@@ -157,9 +162,8 @@ func envelopeSchema(item map[string]any) map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"data":  item,
-			"meta":  map[string]any{"type": "object"},
-			"links": map[string]any{"type": "object"},
+			"data": item,
+			"meta": map[string]any{"type": "object"},
 		},
 		"required": []string{"data"},
 	}

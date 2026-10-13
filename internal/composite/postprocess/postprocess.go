@@ -15,7 +15,17 @@
 // Package postprocess provides a registry of named Go postprocessors that the
 // composite-tool executor can apply to step results. A handler returns a
 // "summary" map (e.g., aggregate counts) which the executor merges with the
-// raw step results under a top-level "summary" key.
+// raw step results under a top-level "summary" key — or, for a tool whose
+// result strategy sets omitRawSteps (SOL-155426), summary is the entire
+// response, with no raw step as a fallback for anything summary leaves out.
+//
+// A handler's summary must itself stay bounded, regardless of how many items
+// the step scanned — cap any per-item list (see listQueueDiscards's
+// topOffenderQueues, capped at 10) rather than returning one row per scanned
+// item. ApplyResultStrategy has no generic size backstop today: a handler
+// that returns an unbounded list is exactly how list-queue-discards'
+// documented default first overflowed a calling MCP host's token budget
+// (SOL-155426; a systemic safety valve is tracked separately, not yet built).
 //
 // Handlers register from their package's init() block; main.go pulls them in
 // via a blank import. Each handler declares the field names it reads off each

@@ -162,6 +162,9 @@ capture_pages() {
 # internal/composite/definitions/tools.yaml (SEMP wire format — verified in
 # internal/semp/sempv2/client_test.go). A field captured that the tool does not
 # select, or the reverse, breaks the exact-mode gate.
+echo "--- SEMPv2: VPN existence check (first step of list-queues and list-rdps) ---"
+curl_get msgvpn_object.json "$SEMP_BASE?select=msgVpnName"
+
 echo "--- SEMPv2: list-queues (page 1 + follow pagination) ---"
 QUEUES_SELECT="accessType,bindCount,egressEnabled,ingressEnabled,lowPriorityMsgCongestionState,maxMsgSpoolUsage,msgSpoolUsage,msgVpnName,queueName,rxMsgRate,spooledMsgCount,txMsgRate,txUnackedMsgCount"
 capture_pages queues_page "$SEMP_BASE/queues?count=100&select=$QUEUES_SELECT"

@@ -1,8 +1,9 @@
 # Observability
 
 Observability features are available with Solace Broker MCP Server.
-You can use it to choose a signal, enable it, connect it to your monitoring stack, and
-understand the data it emits.
+You can use it to choose a signal (a kind of telemetry: metrics, traces, audit records,
+or correlation IDs), enable it, connect it to your monitoring stack, and understand the
+data it emits.
 
 The MCP server provides:
 
@@ -135,7 +136,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 
 Two versions identify the published contract:
 
-- `metrics_schema` is **1.8**, exposed by `mcp_schema_version`.
+- `metrics_schema` is **1.9**, exposed by `mcp_schema_version`.
 - `audit_schema` is **1.2**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
@@ -162,6 +163,7 @@ compatibility commitment.
 
 > The following `mcp_*` instruments are wired and emitted today when their required flags and
 > runtime paths are active: `mcp_build_info`, `mcp_schema_version`,
+> `mcp_metrics_listener_exposed_beyond_mcp`,
 > `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
 > `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`,
 > `mcp_semp_request_duration_seconds`, `mcp_broker_reachable`,
@@ -182,6 +184,7 @@ conditions.
 |---|---|---|---|
 | `mcp_build_info` | Gauge (constant `1`) | `version` | Solace |
 | `mcp_schema_version` | Gauge (constant `1`) | `metrics_schema`, `audit_schema` | Solace |
+| `mcp_metrics_listener_exposed_beyond_mcp` | Gauge (`0` or `1`) | none | Solace |
 | `mcp_metrics_scrape_total` | Counter | none | Solace |
 | `mcp_http_active_requests` | Gauge | none | Solace |
 
@@ -189,8 +192,16 @@ The `mcp_http_active_requests` metric counts requests on `/mcp` from request ent
 It therefore includes requests later rejected with 401, 403, or 413.
 
 The `/metrics` endpoint is unauthenticated and unencrypted. It binds to all interfaces by
-default. Restrict it with a NetworkPolicy, bind it to loopback for a sidecar, or place an
-equivalent network control around it.
+default — deliberately, even in the `disabled`/`static` dev modes where the MCP port itself
+defaults to loopback-only: a loopback default here would break Kubernetes ServiceMonitor
+scraping, which connects over the pod network rather than localhost (SOL-154042 Decision #5).
+Restrict it with a NetworkPolicy, bind it to loopback for a sidecar, or place an equivalent
+network control around it. When the MCP port is loopback-only and `metrics_bind_address`
+resolves to anything reachable beyond loopback — its all-interfaces default, or an operator-set
+specific address — the server logs a startup WARN naming both addresses (SOL-155414) and
+exposes it continuously as `mcp_metrics_listener_exposed_beyond_mcp` (`1` while exposed). It
+does not fire under `oauth` mode, where an all-interfaces MCP port is itself the expected,
+recommended shape behind a Service/ingress.
 
 ### Tool Invocations (RED)
 
@@ -457,7 +468,7 @@ record.
 
 ### Authentication Events
 
-The following list are authentication events:
+The following are authentication events:
 
 - `auth_success`: verified request, with identity when available.
 - `auth_failure`: rejected credential. `reason` uses the same five values as
@@ -703,8 +714,10 @@ The Kubernetes example requests `100m` CPU and `128Mi` memory, sets a `512Mi` me
 and deliberately has no CPU limit. When you set a container memory cap, set `GOMEMLIMIT` to
 about 75% of that cap; the shipped pair is `512Mi` and `384MiB`. Change them together.
 
-Go uses `MiB`; Kubernetes uses `Mi`. An invalid `GOMEMLIMIT` prevents startup. On bare metal
-or a VM without a process memory cap, leaving it unset is normally correct.
+The `GOMEMLIMIT` suffix is `MiB`; the Kubernetes memory suffix is `Mi`. They are the same
+unit with different spelling, and each accepts only its own. A `GOMEMLIMIT` with a
+Kubernetes-style suffix is invalid and prevents startup. On bare metal or a VM without a
+process memory cap, leaving it unset is normally correct.
 
 ### Scraping and Securing the Metrics Endpoint
 
@@ -725,6 +738,11 @@ a pod outside the monitoring namespace.
 
 The shipped policy is ingress-only. If your cluster default-denies egress, add DNS and TCP
 4317 access to your OTLP collector in your own egress policy.
+
+When the MCP port is loopback-only (the `disabled`/`static` dev modes' default) and
+`metrics_bind_address` is left reachable beyond loopback, the server logs a startup WARN
+naming both addresses and exposes it continuously as `mcp_metrics_listener_exposed_beyond_mcp`
+(SOL-155414) — see [Server and Scrape Health](#server-and-scrape-health).
 
 ## Operator Runbook
 
@@ -914,15 +932,13 @@ leaves rotation before it stops accepting `/mcp` work.
 **Symptom.** The Prometheus target is down, or absent from the targets page. `/metrics` does
 not answer. `mcp_metrics_scrape_total` is flat or missing.
 
-**Likely cause.** In order: the retired `OBS_METRICS_ENABLED` is still set (startup warning
-`retired observability flag is set and ignored`); `OBS_METRICS_SCRAPE_ENABLED` is off,
-including OTLP-only, so nothing listens on `:9091`; `/readyz` reason `metrics_endpoint`
-means the scrape listener failed to bind; `/readyz` reason `metrics_provider` means the
-shared meter provider failed to build (`metrics provider build failed` in the startup
-log); the ServiceMonitor is not selected; the NetworkPolicy does not admit Prometheus.
+**Likely cause.** In order: `OBS_METRICS_SCRAPE_ENABLED` is off, including OTLP-only, so
+nothing listens on `:9091`; `/readyz` reason `metrics_endpoint` means the scrape listener
+failed to bind; `/readyz` reason `metrics_provider` means the shared meter provider failed
+to build (`metrics provider build failed` in the startup log); the ServiceMonitor is not
+selected; the NetworkPolicy does not admit Prometheus.
 
-**First response.** Grep startup logs for `retired observability flag` and
-`metrics provider build failed`. Check `/readyz` for `metrics_endpoint` and
+**First response.** Grep startup logs for `metrics provider build failed`. Check `/readyz` for `metrics_endpoint` and
 `metrics_provider`. Confirm `OBS_METRICS_SCRAPE_ENABLED`. An unselected ServiceMonitor is
 simply not listed. Verify with `mcp_metrics_scrape_total` rising, not with
 `kubectl get servicemonitor`.
@@ -943,8 +959,8 @@ together.
 **Symptom.** The process is ready, but some `mcp_*` families are absent from `/metrics`.
 Startup logs include one of: `tool metrics unavailable`, `SEMP metrics unavailable`,
 `broker reachability metrics unavailable`, `token exchange circuit breaker metrics unavailable`,
-`panic counter unavailable: registration failed`, `audit drop counter unavailable: registration failed`,
-or `security counters unavailable: registration failed`.
+`metrics listener exposure gauge unavailable`, `panic counter unavailable: registration failed`,
+`audit drop counter unavailable: registration failed`, or `security counters unavailable: registration failed`.
 
 **Likely cause.** That instrument group failed to register. The server continues with a
 partial surface.
@@ -1135,14 +1151,15 @@ trace.
 **First response.** Raise `OTEL_TRACES_SAMPLER_ARG` only if coverage matters more than
 collector volume. This is not the same as zero exemplars everywhere.
 
-## Not in This Release
+## Limitations
 
-The following operator surfaces are not emitted:
+The server does not emit the following:
 
-- saturation as metrics;
+- saturation as metrics (saturation is logs only);
 - broker connection-pool gauges;
 - a dedicated SEMP retry-outcome counter;
-- tool-invocation cancellation/progress signals (`cancelled` remains reserved there).
+- tool-invocation cancellation or progress signals (the `cancelled` outcome on tool metrics is reserved and not produced).
 
-Do not build dashboards or alerts against names proposed for those future surfaces.
+Do not build dashboards or alerts on metrics that do not exist. Such a panel stays empty
+and an alert on it never fires.
 

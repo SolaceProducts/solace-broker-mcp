@@ -32,9 +32,9 @@
 #   the reference case), add a sequential preflight step (a single GET on the
 #   parent itself, minimal select) before the list step — Execute's sequential
 #   short-circuit (executor.go) means the preflight's own NOT_FOUND aborts the
-#   call with no extra code. Not every such tool needs this — apply it going
-#   forward, and bring existing tools into line as a separate, deliberate
-#   change rather than incidentally.
+#   call with no extra code. Every tool with a collection step under a named
+#   parent has one (fan-out steps excepted); lint/collection-parent-preflight
+#   in loader_embedded_test.go fails the build for a new one that doesn't.
 
 tools:
   - name: get-rdp-status
@@ -484,6 +484,8 @@ tools:
       queues with growing spooledMsgCount, high txUnackedMsgCount, and rxMsgRate
       > txMsgRate while bindCount > 0. For per-client discard counts, byte/
       message rates, and software version, use get-client-details.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -496,6 +498,12 @@ tools:
         required: false
         description: "Maximum number of clients to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: clients
         operation: monitor/getMsgVpnClients
         followPages: true
@@ -518,6 +526,8 @@ tools:
       entry was auto-provisioned by the broker (OAuth or client certificate) and
       may be ephemeral — do not rely on it for provisioning. For currently
       connected sessions, use list-clients instead.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -530,6 +540,12 @@ tools:
         required: false
         description: "Maximum number of client usernames to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: clientUsernames
         operation: monitor/getMsgVpnClientUsernames
         followPages: true
@@ -590,6 +606,8 @@ tools:
       points at; it is never a connection itself. Use this to discover which
       profiles exist before creating or updating a client username. For the full
       attribute set of one profile, use get-client-profile.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -602,6 +620,12 @@ tools:
         required: false
         description: "Maximum number of client profiles to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: clientProfiles
         operation: monitor/getMsgVpnClientProfiles
         followPages: true
@@ -684,6 +708,8 @@ tools:
       grouped by their failure reason; admin-disabled RDPs and recovered RDPs
       with stale reasons are excluded). For detailed RDP status including
       consumers and queue bindings, use get-rdp-status.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -696,6 +722,12 @@ tools:
         required: false
         description: "Maximum number of RDPs to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: rdps
         operation: monitor/getMsgVpnRestDeliveryPoints
         followPages: true
@@ -730,6 +762,8 @@ tools:
       equivalent failure-reason field for outbound). For additional per-bridge
       diagnostic detail — connection establisher, failure category, and
       client name — use get-bridge-status.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -742,6 +776,12 @@ tools:
         required: false
         description: "Maximum number of bridges to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: bridges
         operation: monitor/getMsgVpnBridges
         followPages: true
@@ -817,6 +857,8 @@ tools:
       excluded). For per-receiver connection details including the remote
       Kafka bootstrap address and topic-binding status, use
       get-kafka-receiver-status.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -829,6 +871,12 @@ tools:
         required: false
         description: "Maximum number of Kafka Receivers to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: kafkaReceivers
         operation: monitor/getMsgVpnKafkaReceivers
         followPages: true
@@ -895,6 +943,8 @@ tools:
       admin-disabled senders and recovered senders with stale reasons are
       excluded). For per-sender connection details including the remote Kafka
       bootstrap address and queue-binding status, use get-kafka-sender-status.
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -907,6 +957,12 @@ tools:
         required: false
         description: "Maximum number of Kafka Senders to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: kafkaSenders
         operation: monitor/getMsgVpnKafkaSenders
         followPages: true
@@ -997,6 +1053,8 @@ tools:
       summary block with byClientProfile, byPlatform (grouped counts),
       and totalTxDiscardedMsgCount (cumulative lifetime discards across
       all slow subscribers, not a rate).
+      Verifies the VPN exists before listing, so a nonexistent VPN is
+      reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -1009,6 +1067,12 @@ tools:
         required: false
         description: "Maximum number of slow subscribers to return (default 100, max 500)"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: slowSubscribers
         operation: monitor/getMsgVpnClients
         followPages: true
@@ -1034,16 +1098,27 @@ tools:
 
   - name: list-queue-discards
     description: >
-      List per-queue message discard counts for a Message VPN. Returns each
-      queue with its TTL-expired, max-redelivery-exceeded, spool-quota-exceeded,
-      and other discard category counters. Use this to diagnose why messages
-      are being dropped across queues. The response summary counts queues with any
-      cumulative discards (discardingQueueCount) and provides topOffenderQueues —
-      the top 10 by total cumulative count of truly-lost discards (messages
-      successfully moved to a DMQ are excluded), each annotated with its
-      dominantCategory; topOffenderQueues is omitted from summary entirely when
-      no discards are present, so its absence is a meaningful zero signal.
-      For broker-wide or per-VPN aggregate totals, use get-discard-stats.
+      Scan per-queue message discard counts for a Message VPN and return an
+      aggregated summary — not the per-queue raw counters themselves, and not
+      every scanned queue. Use this to diagnose why messages are being
+      dropped across queues. The summary counts queues with any cumulative
+      discards (discardingQueueCount) and provides topOffenderQueues — only
+      the top 10 by total cumulative count of truly-lost discards across
+      every TTL-expired, max-redelivery-exceeded, spool-quota-exceeded, and
+      other discard category (messages successfully moved to a DMQ are
+      excluded), each row naming its queueName, its totalDiscards, and only
+      its single dominantCategory, not the full per-category breakdown; no
+      tool exposes that breakdown today. topOffenderQueues is omitted from
+      summary entirely when no discards are present, so its absence is a
+      meaningful zero signal. If the scan itself was truncated (more queues
+      exist than maxResults/the 500 cap reached), a larger offender outside
+      the scanned window can be missing from topOffenderQueues — on a VPN
+      with more than 500 queues this tool cannot see them all, maxResults
+      cannot be raised past the cap, and msgVpnName is already one VPN with
+      no further narrowing available; re-running cannot close the gap.
+      For broker-wide or per-VPN aggregate totals instead, use
+      get-discard-stats. Verifies the VPN exists before listing, so a
+      nonexistent VPN is reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
@@ -1054,8 +1129,14 @@ tools:
       - name: maxResults
         type: integer
         required: false
-        description: "Maximum number of queues to return (default 100, max 500)"
+        description: "Maximum number of queues to scan for the summary (default 100, max 500) — not a count of queues returned individually"
     steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
       - id: queueDiscards
         operation: monitor/getMsgVpnQueues
         followPages: true
@@ -1083,6 +1164,7 @@ tools:
     result:
       strategy: postProcess
       postProcess: listQueueDiscards
+      omitRawSteps: true
 
   - name: create-message-vpn
     description: >

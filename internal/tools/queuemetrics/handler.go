@@ -184,6 +184,7 @@ func (h *Handler) Handle(ctx context.Context, tc *tools.ToolContext, params map[
 		if err != nil {
 			return err
 		}
+		sempv2.ScrubEnvelope(result.Data)
 		queueMetrics = result.Data
 		return nil
 	})

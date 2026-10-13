@@ -732,6 +732,11 @@ func applyDefaults(cfg *ServerConfig) {
 	// box. The dev modes (disabled, static) must opt in to a routable bind by
 	// setting listen_address explicitly. Mode is not normalized until validate(),
 	// so compare case-insensitively here.
+	//
+	// This is one side of the asymmetry MetricsListenerWiderThanMCP (below)
+	// warns about: metrics_bind_address's own default (DefaultMetricsBindAddress)
+	// deliberately does NOT follow this same loopback-in-dev-modes rule — a
+	// future change to either side's default should check the other.
 	if cfg.ListenAddress == "" && strings.ToLower(cfg.MCPClientAuth.Mode) != AuthModeOAuth {
 		cfg.ListenAddress = defaults.DefaultLoopbackListenAddress
 	}
@@ -1679,6 +1684,39 @@ func (c *ServerConfig) OAuthPlaintextListenerAcknowledged() bool {
 	return c.MCPClientAuth.Mode == AuthModeOAuth &&
 		c.TLSCertFile == "" &&
 		c.TLSTerminatedUpstream
+}
+
+// MetricsListenerWiderThanMCP reports whether the /metrics listener, when the
+// scrape egress is actually enabled, is configured to be reachable from a
+// wider network scope than the MCP server's own listener — e.g. the MCP port
+// is loopback-only (the disabled/static dev-mode default) while
+// metrics_bind_address is left at its all-interfaces default (SOL-155414).
+// "Configured to be reachable," not a confirmed live bind: this is evaluated
+// from startup configuration before either listener has necessarily bound
+// (the same timing the two sibling startup banners already use — see
+// logStartupBanners in cmd/server/main.go), so a later bind failure on either
+// side is a separate, independently logged condition this predicate does not
+// observe. metrics_bind_address stays all-interfaces by default deliberately
+// (SOL-154042 Decision #5: a loopback default would break Kubernetes
+// ServiceMonitor scraping), so this is a WARN naming the exposed address, not
+// a reason to change that default. False when the scrape listener never
+// starts, when the MCP port itself is not loopback-only (oauth mode's own
+// all-interfaces default is the expected, recommended shape behind a
+// Service/ingress — see banner.LogOAuthPlaintextListener's identical
+// reasoning), or when the operator already locked metrics_bind_address to a
+// loopback host themselves.
+func (c *ServerConfig) MetricsListenerWiderThanMCP() bool {
+	if !c.Observability.MetricsScrapeEnabled {
+		return false
+	}
+	if !isLoopbackHost(c.ListenAddress) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(c.Observability.MetricsBindAddress)
+	if err != nil {
+		return false
+	}
+	return !isLoopbackHost(host)
 }
 
 // isLoopbackHost reports whether host binds the loopback interface only.

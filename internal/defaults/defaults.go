@@ -29,6 +29,15 @@ const DefaultPort = 9090
 // DefaultMetricsBindAddress is the address the Prometheus /metrics listener
 // binds to when observability.metrics_bind_address is unset. A dedicated port
 // lets operators network-policy scraping independently of MCP traffic.
+//
+// Deliberately all interfaces, not loopback, even though the MCP port itself
+// defaults to loopback in the dev/disabled modes (SOL-155414): a loopback
+// default here would break Kubernetes ServiceMonitor scraping, which connects
+// over the pod network rather than localhost. Reviewed and kept at
+// SOL-154042 (Decision #5). The resulting asymmetry — MCP loopback-only,
+// metrics reachable from the network — gets a startup WARN instead
+// (config.ServerConfig.MetricsListenerWiderThanMCP,
+// banner.LogMetricsAllInterfacesExposure), not a changed default.
 const DefaultMetricsBindAddress = ":9091"
 
 // DefaultServiceName is the OTel service.name resource attribute (SOL-152425,

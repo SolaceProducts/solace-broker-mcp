@@ -110,10 +110,19 @@ type Step struct {
 // output. "collect" returns all step results keyed by step ID. "postProcess"
 // runs a registered Go postprocessor (see internal/composite/postprocess) on
 // the collected step results and merges its output under a top-level "summary"
-// key alongside the raw step results.
+// key alongside the raw step results, unless OmitRawSteps opts out.
 type ResultStrategy struct {
 	Strategy    string `yaml:"strategy"`    // "collect" or "postProcess"
 	PostProcess string `yaml:"postProcess"` // registry name of the handler when strategy="postProcess"
+
+	// OmitRawSteps drops the raw step results from a "postProcess" tool's
+	// output, leaving only the postprocessor's "summary". Default false
+	// (today's behavior: raw steps + summary both present) — set true only
+	// for a tool whose postprocessor summary is already self-sufficient (does
+	// not need the raw per-item data downstream), to avoid the response-size
+	// blowup of carrying both (SOL-155426). Has no effect when
+	// Strategy != "postProcess".
+	OmitRawSteps bool `yaml:"omitRawSteps"`
 }
 
 // ToolAnnotations holds behavior hints for a composite tool, matching the MCP

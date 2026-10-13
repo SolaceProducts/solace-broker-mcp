@@ -136,10 +136,11 @@ func (h *handler) missCount() int64 { return h.misses.Load() }
 //
 // The window matters and is stated in the header. One mock process serves both
 // the fidelity gate and the load run, so without a mid-run reset these totals
-// are the sum of the two — a fixed dozen requests from the gate, which is
-// nothing next to a load run and everything next to a calibration one. The run
-// scripts POST /_mock/hits after the gate to bank its counts and zero the
-// counters, and this says so rather than leaving the reader to know it.
+// are the sum of the two — a fixed fifteen requests from the gate (fourteen on
+// a software broker), which is nothing next to a load run and everything next
+// to a calibration one. The run scripts POST /_mock/hits after the gate to bank
+// its counts and zero the counters, and this says so rather than leaving the
+// reader to know it.
 //
 // Zero-hit rules are called out because a rule that never fires is a real
 // hazard — a predicate matching only the public monitor path would look
@@ -297,6 +298,13 @@ func (h *handler) buildRules() []*rule {
 	// rule, but the ordering makes that structural rather than a property of
 	// how the predicates happen to be written today.
 	rules = append(rules, buildPinnedRDPRules()...)
+	// list-queues and list-rdps first GET the VPN itself (SOL-155413,
+	// SOL-155480), so a missing VPN is a NOT_FOUND rather than an empty list.
+	rules = append(rules, &rule{
+		name:    "sempv2 msgVpn object",
+		match:   sempv2MsgVpnObject,
+		respond: staticFile("msgvpn_object.json", "application/json"),
+	})
 	rules = append(rules, buildPagedRules(queuesCollection)...)
 	rules = append(rules, buildPagedRules(rdpsCollection)...)
 	return rules
@@ -541,6 +549,17 @@ func sempv1Body(needle string) func(*http.Request, []byte) bool {
 func isMonitorMsgVpnPath(p string) bool {
 	return strings.HasPrefix(p, "/SEMP/v2/monitor/msgVpns/") ||
 		strings.HasPrefix(p, "/SEMP/v2/__private_monitor__/msgVpns/")
+}
+
+// sempv2MsgVpnObject matches a GET for the VPN object itself — exactly one
+// path segment after msgVpns/, so nothing under the VPN matches. Like the
+// queues rules, the VPN name is not compared: one capture serves every VPN.
+func sempv2MsgVpnObject(r *http.Request, _ []byte) bool {
+	if r.Method != http.MethodGet || !isMonitorMsgVpnPath(r.URL.Path) {
+		return false
+	}
+	_, vpn, _ := strings.Cut(r.URL.Path, "/msgVpns/")
+	return vpn != "" && !strings.Contains(vpn, "/")
 }
 
 func isQueuesListPath(p string) bool {

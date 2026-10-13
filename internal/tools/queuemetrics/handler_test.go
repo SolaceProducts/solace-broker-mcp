@@ -61,8 +61,9 @@ func (m *mockV2) Execute(_ context.Context, op *sempv2.Operation, args map[strin
 }
 
 // sempv2Envelope is a representative SEMPv2 monitor response body: the queue
-// fields nested under "data", plus a "meta" block — the shape get-queue-metrics
-// preserves under the "queueMetrics" key.
+// fields nested under "data", plus "meta" and "links" blocks carrying the
+// broker's self-referential URIs — the shape get-queue-metrics scrubs before
+// returning it under the "queueMetrics" key (SOL-155432).
 func sempv2Envelope() map[string]any {
 	return map[string]any{
 		"data": map[string]any{
@@ -74,7 +75,13 @@ func sempv2Envelope() map[string]any {
 			"rxMsgRate":         float64(5),
 			"txMsgRate":         float64(5),
 		},
-		"meta": map[string]any{"responseCode": float64(200)},
+		"meta": map[string]any{
+			"request":      map[string]any{"method": "GET", "uri": "https://broker:943/SEMP/v2/__private_monitor__/msgVpns/vpn_1/queues/sol150260-test"},
+			"responseCode": float64(200),
+		},
+		"links": map[string]any{
+			"uri": "https://broker:943/SEMP/v2/__private_monitor__/msgVpns/vpn_1/queues/sol150260-test",
+		},
 	}
 }
 
@@ -106,7 +113,8 @@ func TestHandle_MergesBothProtocols(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 
-	// queueMetrics is the SEMPv2 envelope verbatim.
+	// queueMetrics is the SEMPv2 envelope, minus the broker's self-referential
+	// links/meta.request.uri (SOL-155432) — data and the rest of meta survive.
 	qm, ok := res.StructuredContent["queueMetrics"].(map[string]any)
 	if !ok {
 		t.Fatalf("queueMetrics missing/wrong type: %T", res.StructuredContent["queueMetrics"])
@@ -117,6 +125,26 @@ func TestHandle_MergesBothProtocols(t *testing.T) {
 	}
 	if data["spooledMsgCount"] != float64(10) {
 		t.Errorf("queueMetrics.data.spooledMsgCount = %v, want 10 (cumulative preserved)", data["spooledMsgCount"])
+	}
+	if _, present := qm["links"]; present {
+		t.Errorf("queueMetrics.links must not survive: got %+v", qm["links"])
+	}
+	meta, ok := qm["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("queueMetrics.meta missing/wrong type: %T", qm["meta"])
+	}
+	if request, ok := meta["request"].(map[string]any); ok {
+		if _, present := request["uri"]; present {
+			t.Errorf("queueMetrics.meta.request.uri must not survive: got %+v", request)
+		}
+		if request["method"] != "GET" {
+			t.Errorf("queueMetrics.meta.request.method should survive untouched: got %+v", request)
+		}
+	} else {
+		t.Fatalf("queueMetrics.meta.request missing/wrong type: %T", meta["request"])
+	}
+	if meta["responseCode"] != float64(200) {
+		t.Errorf("queueMetrics.meta.responseCode should survive untouched: got %v", meta["responseCode"])
 	}
 
 	// liveDepth is the authoritative current depth from SEMPv1.

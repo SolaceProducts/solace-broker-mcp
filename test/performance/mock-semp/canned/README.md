@@ -37,6 +37,7 @@ why you want just one side.
 |---|---|
 | `show_version.xml`, `show_system.xml`, `show_memory.xml`, `show_message_spool.xml` | SEMPv1 `<show>` commands behind `get-broker-status` |
 | `show_hardware_details.xml` | SEMPv1, appliance-only path of `get-broker-status` |
+| `msgvpn_object.json` | SEMPv2 VPN object (`select=msgVpnName`), the existence check `list-queues` and `list-rdps` make before listing |
 | `queues_page<N>.json` | SEMPv2 `list-queues`, one file per page; pages must be contiguous from 1. However many the broker's queue count produces — `sanitize.sh` globs them |
 | `rdps_page<N>.json` | SEMPv2 `list-rdps`, same per-page scheme |
 | `rdp_object.json`, `rdp_queue_bindings.json`, `rdp_rest_consumers.json` | SEMPv2 `get-rdp-status`, for the single RDP pinned at capture time (`RDP_NAME`, or the first the VPN reports) |

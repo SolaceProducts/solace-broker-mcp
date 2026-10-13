@@ -157,6 +157,43 @@ const oauthPlaintextListenerBanner = `
   at the server instead.
 ============================================================`
 
+// LogMetricsAllInterfacesExposure warns that the /metrics listener is
+// reachable from a wider network scope than the MCP server's own listener —
+// the caller decides when to emit it (see
+// config.ServerConfig.MetricsListenerWiderThanMCP, which fires for any
+// non-loopback metrics_bind_address, not only its literal all-interfaces
+// default — the banner text below is worded to stay accurate either way:
+// "all interfaces" describes the default, not an assumed live value).
+// /metrics is unauthenticated and exposes broker aliases, tool names,
+// per-alias denial counts, and the broker hostname; no credentials. This is a
+// WARN, not a hard error: metrics_bind_address stays all-interfaces by
+// default deliberately (SOL-154042 Decision #5 — a loopback default would
+// break Kubernetes ServiceMonitor scraping), so the fix is either a
+// NetworkPolicy/equivalent network control, or setting metrics_bind_address
+// to a loopback host for a sidecar-scrape deployment — not a change to the
+// shipped default. Both addresses are logged so operators can see exactly
+// which interface carries which listener regardless of how the banner text
+// phrases it.
+func LogMetricsAllInterfacesExposure(metricsBindAddr, mcpBindAddr string) {
+	slog.Warn(metricsAllInterfacesBanner,
+		slog.String("metrics_bind_address", metricsBindAddr),
+		slog.String("mcp_bind_address", mcpBindAddr))
+}
+
+const metricsAllInterfacesBanner = `
+============================================================
+  /metrics is reachable from the network while the MCP port
+  is loopback-only
+  The MCP server itself binds loopback only, but the metrics
+  listener binds a network-reachable interface (all interfaces
+  by default, kept deliberately for Kubernetes ServiceMonitor
+  scraping — see SOL-154042).
+  It carries no credentials, but does expose broker aliases,
+  tool names, and the broker hostname. Restrict it with a
+  NetworkPolicy, or set metrics_bind_address to a loopback host
+  for a sidecar-scrape deployment.
+============================================================`
+
 // LogHop2WithoutHop1 is the structural-mismatch headline for the Hop 1 /
 // Hop 2 OAuth alignment invariant: if any broker uses auth.mode: oauth
 // (Hop 2 — MCP server obtains a broker-bound token via RFC 8693 token

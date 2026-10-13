@@ -131,7 +131,7 @@ func headingSet(headings []string) map[string]string {
 	return out
 }
 
-var obsFlagConstRE = regexp.MustCompile(`envObs[A-Za-z]+(?:Retired)?\s*=\s*"(OBS_[A-Z0-9_]+)"`)
+var obsFlagConstRE = regexp.MustCompile(`(envObs[A-Za-z]+)\s*=\s*"(OBS_[A-Z0-9_]+)"`)
 
 func TestObservabilityDoc_DocumentsEveryOBSFlag(t *testing.T) {
 	src := readRepoFile(t, "internal", "config", "observability.go")
@@ -141,7 +141,7 @@ func TestObservabilityDoc_DocumentsEveryOBSFlag(t *testing.T) {
 	}
 	doc := publicObservabilityDoc(t)
 	for _, m := range flags {
-		name := m[1]
+		name := m[2]
 		if !strings.Contains(doc, "`"+name+"`") {
 			t.Errorf("docs/observability.md does not mention `%s` — every OBS_* constant must appear so an operator can find the shipped switch", name)
 		}

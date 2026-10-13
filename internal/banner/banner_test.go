@@ -124,3 +124,21 @@ func Test_OAuthPlaintextListener(t *testing.T) {
 		}
 	}
 }
+
+func Test_MetricsAllInterfacesExposure(t *testing.T) {
+	buf, restore := captureSlog(t)
+	defer restore()
+	LogMetricsAllInterfacesExposure(":9091", "127.0.0.1:9090")
+	out := buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		"reachable from the network while the MCP port",
+		"ServiceMonitor",
+		"metrics_bind_address=:9091",
+		"mcp_bind_address=127.0.0.1:9090",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics-all-interfaces-exposure banner missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
