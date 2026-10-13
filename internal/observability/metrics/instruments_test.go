@@ -290,6 +290,67 @@ func TestToolMetrics_RecordBrokerAuthzDenied_NilReceiverIsNoop(t *testing.T) {
 	tm.RecordBrokerAuthzDenied(context.Background(), "delete-queue", "dev", "permission_denied")
 }
 
+// TestToolMetrics_RecordOwnerValidation pins the label set on
+// mcp_owner_validation_total (SOL-154679): one series per
+// tool/broker/outcome, with both rejection outcomes distinct.
+func TestToolMetrics_RecordOwnerValidation(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tm.RecordOwnerValidation(context.Background(), "create-queue", "dev", OwnerValidationRejectedNotFound)
+	tm.RecordOwnerValidation(context.Background(), "create-queue", "dev", OwnerValidationRejectedNotFound)
+	tm.RecordOwnerValidation(context.Background(), "update-queue", "prod", OwnerValidationRejectedCheckFailed)
+
+	const want = `
+# HELP mcp_owner_validation_total Number of tool calls blocked by the owner-existence pre-flight check, by outcome.
+# TYPE mcp_owner_validation_total counter
+mcp_owner_validation_total{broker="dev",outcome="rejected_not_found",tool="create-queue"} 2
+mcp_owner_validation_total{broker="prod",outcome="rejected_check_failed",tool="update-queue"} 1
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_owner_validation_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestToolMetrics_RecordOwnerValidation_UnknownOutcomeIsCoerced pins the closed
+// set: a value outside it must land on the "other" sentinel rather than mint a
+// new series, the same guard ErrorType and DenialReason give their labels.
+func TestToolMetrics_RecordOwnerValidation_UnknownOutcomeIsCoerced(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tm.RecordOwnerValidation(context.Background(), "create-queue", "dev", "passed")
+	tm.RecordOwnerValidation(context.Background(), "create-queue", "dev", "")
+
+	const want = `
+# HELP mcp_owner_validation_total Number of tool calls blocked by the owner-existence pre-flight check, by outcome.
+# TYPE mcp_owner_validation_total counter
+mcp_owner_validation_total{broker="dev",outcome="other",tool="create-queue"} 2
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_owner_validation_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestToolMetrics_RecordOwnerValidation_NilReceiverIsNoop matches every other
+// ToolMetrics method: metrics disabled (nil *ToolMetrics) records nothing.
+func TestToolMetrics_RecordOwnerValidation_NilReceiverIsNoop(t *testing.T) {
+	var tm *ToolMetrics
+	tm.RecordOwnerValidation(context.Background(), "create-queue", "dev", OwnerValidationRejectedNotFound)
+}
+
 // TestToolMetrics_Record_BrokerPermissionDeniedIsAKnownErrorType pins that
 // ErrorTypeBrokerPermissionDenied is in the closed set Record validates
 // against, so it reaches mcp_tool_invocation_total's error_type label

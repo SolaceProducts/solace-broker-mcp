@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `mcp_owner_validation_total{tool,broker,outcome}`, counting writes the owner check (SOL-153080) blocked in `create-queue`, `update-queue`, `create-topic-endpoint` and `update-topic-endpoint`: `rejected_not_found` (the owner does not exist) or `rejected_check_failed` (the check could not complete). These were previously indistinguishable `execution_error`s. Compare with `mcp_tool_invocation_total` for rates. `metrics_schema` is now **1.10**. Tracked under SOL-154679.
+
 ### Changed
 
 - **BREAKING**: `list-queue-discards` no longer returns raw per-queue discard counters (`queueDiscards.data`) — they overflowed the calling MCP host's token budget at the tool's own documented default. Only the aggregated `summary` (`topOffenderQueues`, `discardingQueueCount`, `scanned`, `truncated`/`truncatedMessage`, `skipped`) is returned now. Migration: read `summary.topOffenderQueues` for per-queue detail instead of `queueDiscards.data`. Tracked under SOL-155426.

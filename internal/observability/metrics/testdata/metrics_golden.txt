@@ -38,13 +38,16 @@ mcp_metrics_listener_exposed_beyond_mcp 1
 # HELP mcp_metrics_scrape_total Number of /metrics scrapes served.
 # TYPE mcp_metrics_scrape_total counter
 mcp_metrics_scrape_total 1
+# HELP mcp_owner_validation_total Number of tool calls blocked by the owner-existence pre-flight check, by outcome.
+# TYPE mcp_owner_validation_total counter
+mcp_owner_validation_total{broker="test-broker",outcome="rejected_not_found",tool="test-tool"} 1
 # HELP mcp_panic_recovered_total Panics trapped by a request-path recovery net, by boundary.
 # TYPE mcp_panic_recovered_total counter
 mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.2",metrics_schema="1.9"} 1
+mcp_schema_version{audit_schema="1.2",metrics_schema="1.10"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1

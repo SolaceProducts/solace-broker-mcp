@@ -140,6 +140,12 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// way as the hop-1 authz-denied counter above, via ToolMetrics.
 	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", metrics.DenialReasonPermissionDenied)
 
+	// mcp_owner_validation_total (SOL-154679): a conditional ToolMetrics
+	// counter that renders only after a rejection, so it is seeded the same
+	// way as mcp_broker_authz_denied_total above — a direct Record call, not a
+	// triggered end-to-end rejection.
+	tm.RecordOwnerValidation(context.Background(), "test-tool", "test-broker", metrics.OwnerValidationRejectedNotFound)
+
 	// mcp_audit_events_dropped_total (SOL-154569): seeded at zero on
 	// registration, so registering it is enough — main.go's buildAuditMetrics
 	// does exactly this and nothing more.
