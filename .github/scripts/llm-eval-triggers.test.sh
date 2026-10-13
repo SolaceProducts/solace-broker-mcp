@@ -16,7 +16,7 @@
 # mutation check feeds it a deliberately broken copy.
 #
 # Run manually:  .github/scripts/llm-eval-triggers.test.sh [workflow-file]
-# Runs in CI as the `llm_eval_triggers_selftest` job in .github/workflows/ci-pr.yaml.
+# Runs in CI as the `llm_eval_triggers` job in .github/workflows/ci-pr.yaml.
 #
 set -euo pipefail
 
@@ -148,6 +148,13 @@ else:
             ok("nightly group can never equal an llm-eval-<sha> group")
         else:
             bad("nightly group can never equal an llm-eval-<sha> group", f"got {sched!r}")
+        # Pinned, not just "different": a nightly put into another workflow's
+        # group (for example Release) would pass the checks above. Renaming it
+        # should be a deliberate edit here.
+        if sched == "llm-eval-nightly":
+            ok("nightly group is exactly llm-eval-nightly")
+        else:
+            bad("nightly group is exactly llm-eval-nightly", f"got {sched!r}")
 
 # --- Proof 2 (guard): the release gate is unchanged ---------------------------
 if conc.get("cancel-in-progress") is False:
@@ -163,6 +170,19 @@ else:
         ok("the llm-eval job runs on the release call path (event push)")
     else:
         bad("the llm-eval job runs on the release call path (event push)")
+# The group only keeps the release out of the nightly queue while the caller's
+# event is never `schedule`. A schedule on release.yml would put every release
+# run in llm-eval-nightly.
+release_doc = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
+release_on = release_doc.get("on", release_doc.get(True)) or {}
+release_events = set(release_on) if isinstance(release_on, (dict, list)) else {release_on}
+if "schedule" not in release_events:
+    ok("release.yml has no schedule trigger")
+else:
+    bad(
+        "release.yml has no schedule trigger",
+        "a scheduled release.yml would resolve llm-eval to the nightly group",
+    )
 
 # --- Proof 3: a single daily schedule, not run in forks -----------------------
 sched_cfg = triggers.get("schedule") if isinstance(triggers, dict) else None
