@@ -514,6 +514,17 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// success, so a denial classified after it would emit a
 		// broker_authz_denied record for a call the caller was just told
 		// succeeded.
+		// SOL-154679: count a write blocked by the owner-existence check
+		// (SOL-153080). Deliberately ahead of the isBrokerAuthzDenial return
+		// below, and independent of it: an ownerCheckFailedError whose cause is
+		// a SEMP code-72 denial also matches that branch through Unwrap, and
+		// returning early from it first would leave a blocked write uncounted.
+		// The two are not exclusive — that call is both a hop-2 denial and a
+		// blocked owner check — so each records its own counter. It sets no
+		// errorType and returns nothing: the invocation metric's classification
+		// is decided below, exactly as before.
+		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr)
+
 		if isBrokerAuthzDenial(handleErr) {
 			errorType = metrics.ErrorTypeBrokerPermissionDenied
 			m.metrics.RecordBrokerAuthzDenied(ctx, name, canonicalBrokerLabel(m.pool, brokerAlias), brokerAuthzDeniedReasonPermission)

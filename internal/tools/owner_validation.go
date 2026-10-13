@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -352,4 +353,35 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 		}
 	}
 	return "", "", false
+}
+
+// recordOwnerValidation increments mcp_owner_validation_total (SOL-154679) when
+// err says the owner-existence check blocked the write: ownerNotFoundError is a
+// confirmed-absent owner, ownerCheckFailedError an inconclusive check denied on
+// doubt. Any other error, including a nil one, records nothing.
+//
+// This lives in CallTool's error path rather than in ownerValidatingHandler for
+// one concrete reason: the handler's params have "broker" stripped
+// (stripBrokerParam), so it cannot label the series by broker the way
+// mcp_broker_authz_denied_total is, and recording there would also mean
+// threading *metrics.ToolMetrics and the tool name into it.
+//
+// errors.As, not a type switch, so a wrapped error still matches — handleErr
+// reaches here raw, but ownerCheckFailedError itself wraps its cause.
+func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAlias string, err error) {
+	if m.metrics == nil {
+		return
+	}
+	var notFound *ownerNotFoundError
+	var checkFailed *ownerCheckFailedError
+	var outcome metrics.OwnerValidationOutcome
+	switch {
+	case errors.As(err, &notFound):
+		outcome = metrics.OwnerValidationRejectedNotFound
+	case errors.As(err, &checkFailed):
+		outcome = metrics.OwnerValidationRejectedCheckFailed
+	default:
+		return
+	}
+	m.metrics.RecordOwnerValidation(ctx, tool, canonicalBrokerLabel(m.pool, brokerAlias), outcome)
 }

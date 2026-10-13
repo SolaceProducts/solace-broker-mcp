@@ -136,7 +136,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 
 Two versions identify the published contract:
 
-- `metrics_schema` is **1.9**, exposed by `mcp_schema_version`.
+- `metrics_schema` is **1.10**, exposed by `mcp_schema_version`.
 - `audit_schema` is **1.2**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
@@ -170,7 +170,7 @@ compatibility commitment.
 > `mcp_broker_unreachable_reason`, `mcp_broker_last_result_timestamp_seconds`,
 > `mcp_token_exchange_circuit_breaker_state`, `mcp_auth_failure_total`,
 > `mcp_authz_denied_total`, `mcp_broker_authz_denied_total`,
-> `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
+> `mcp_owner_validation_total`, `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
 > `mcp_otel_spans_exported_total`, `mcp_otel_spans_dropped_total`,
 > `mcp_otel_metrics_exported_total`, and `mcp_otel_metrics_dropped_total`.
 
@@ -296,6 +296,33 @@ This is hop 1: the MCP server refused an authenticated caller before dispatch. T
 
 This is hop 2: the event broker refused the SEMP operation after dispatch. The `reason` field is `permission_denied`. A destructive call also produces its tool-invocation sample and
 operation audit record because execution had already started.
+
+### Owner-Validation Rejections
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_owner_validation_total` | Counter | `tool`, `broker`, `outcome` | Solace |
+
+`create-queue`, `update-queue`, `create-topic-endpoint`, and `update-topic-endpoint` check that a
+supplied `owner` names an existing client username in the target Message VPN before the write
+runs. This counts the calls that check blocked. `outcome` is one of:
+
+| `outcome` | Meaning |
+|---|---|
+| `rejected_not_found` | The check completed and the owner is confirmed absent from the VPN. The write did not run. |
+| `rejected_check_failed` | The check itself could not complete (timeout, 5xx, rate limit, or the broker refused the read). The write was denied on doubt and did not run. |
+
+Series appear only after their first rejection; alert on `increase()`, not `absent()`. Only the
+two rejection paths are counted. A call that passes the check, or supplies no `owner`, is not;
+read the rejection rate against `mcp_tool_invocation_total` for the same `tool`.
+
+A blocked call is also an ordinary failed invocation in `mcp_tool_invocation_total`
+(`outcome="error"`, `error_type="execution_error"`). When the failed read was itself refused by
+the broker (SEMP code 72), it is `error_type="broker_permission_denied"` and
+`mcp_broker_authz_denied_total` increments as well, so the two counters can both move for one
+call. The latency of the two pre-flight reads is in `mcp_semp_request_duration_seconds` with
+`operation` `getMsgVpnClientUsername` or `getMsgVpn`; those operations are shared with
+`get-client-username` and `get-vpn-status`, so the series are not exclusive to this check.
 
 ### Audit Pipeline Health
 

@@ -44,7 +44,8 @@ package schema
 // 1.7 (SOL-152284): added mcp_token_exchange_circuit_breaker_state.
 // 1.8 (SOL-154569): added the mcp_audit_events_dropped_total family.
 // 1.9 (SOL-155414): added mcp_metrics_listener_exposed_beyond_mcp.
-const MetricsSchemaVersion = "1.9"
+// 1.10 (SOL-154679): added the mcp_owner_validation_total family.
+const MetricsSchemaVersion = "1.10"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major

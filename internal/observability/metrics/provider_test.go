@@ -109,6 +109,10 @@ func TestGoldenSchema(t *testing.T) {
 	// only-renders-after-observed rule as the tool-RED instruments above, so a
 	// fixed sample seeds it into the fixture.
 	tm.RecordBrokerAuthzDenied(context.Background(), "test-tool", "test-broker", "permission_denied")
+	// mcp_owner_validation_total (SOL-154679): a ToolMetrics counter that, like
+	// the one above, only renders after it is observed, so a fixed sample seeds
+	// it into the fixture.
+	tm.RecordOwnerValidation(context.Background(), "test-tool", "test-broker", OwnerValidationRejectedNotFound)
 
 	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
 	// labels and a 5ms duration keep the fixture stable.

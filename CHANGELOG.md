@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New counter `mcp_owner_validation_total{tool,broker,outcome}` counts writes the owner-existence check (SOL-153080) blocked in `create-queue`, `update-queue`, `create-topic-endpoint` and `update-topic-endpoint`. `outcome` is `rejected_not_found` (the owner is confirmed absent from the VPN) or `rejected_check_failed` (the check itself could not complete and the write was denied on doubt). Before this a blocked call was only `outcome="error", error_type="execution_error"` on `mcp_tool_invocation_total`, indistinguishable from any other failure, so the rejection rate was not measurable; the absolute count is the evidence for closing this check broker-side, where `MsgVpnClientUsername.aclProfileName` and `clientProfileName` are already validated atomically. Only the two rejection paths are counted, so read the rate against `mcp_tool_invocation_total` for the same `tool`. Series appear after their first rejection (alert on `increase()`, not `absent()`). A call whose failed pre-flight read was itself refused by the broker (SEMP code 72) increments this counter and `mcp_broker_authz_denied_total`. Recorded in `CallTool` so it carries the broker label. Like `mcp_broker_authz_denied_total` it is gated only by the metrics provider existing. `metrics_schema` is now **1.10** (additive: `1.9` consumers are unaffected). The existing tool-invocation classification is unchanged. Tracked under SOL-154679.
+
 ### Changed
 
 - **BREAKING**: `list-queue-discards` no longer returns raw per-queue discard counters (`queueDiscards.data`) — they overflowed the calling MCP host's token budget at the tool's own documented default. Only the aggregated `summary` (`topOffenderQueues`, `discardingQueueCount`, `scanned`, `truncated`/`truncatedMessage`, `skipped`) is returned now. Migration: read `summary.topOffenderQueues` for per-queue detail instead of `queueDiscards.data`. Tracked under SOL-155426.
