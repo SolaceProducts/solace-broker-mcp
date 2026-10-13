@@ -993,6 +993,23 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 		attrs = append(attrs, exchErr.LogAttrs()...)
 	}
 
+	// SOL-155918: the owner-validation errors, layered on top of the switch
+	// above rather than a case inside it. An ownerCheckFailedError wraps the
+	// failed read's own error, which errors.As above has already found and
+	// classified (a SEMPError's http_status/semp_code, ...) exactly as if the
+	// wrapper weren't there; a case here would shadow that. Neither type is
+	// added to the "detail" gate: ownerCheckFailedError's cause can be an
+	// unvouched wrap error, so the new information travels as attributes the
+	// types build from fields this package wrote, not as error text.
+	var ownerNotFoundErr *ownerNotFoundError
+	var ownerCheckErr *ownerCheckFailedError
+	switch {
+	case errors.As(*toolErr, &ownerNotFoundErr):
+		attrs = append(attrs, ownerNotFoundErr.LogAttrs()...)
+	case errors.As(*toolErr, &ownerCheckErr):
+		attrs = append(attrs, ownerCheckErr.LogAttrs()...)
+	}
+
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
 }
 
