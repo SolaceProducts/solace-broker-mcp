@@ -29,11 +29,19 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
 // ownerLogTestManager registers one tool named name (destructive as asked)
@@ -168,24 +176,186 @@ func TestToolInvokedLine_OwnerCheckFailed_UnvouchedCause_DetailStaysTypeOnly(t *
 	}
 }
 
+// TestTruncateOwnerLogValue pins the exact output, not just a bound. The cases
+// are chosen so each plausible regression fails one: a byte slice cuts the
+// multi-byte values at the wrong place (and splits a rune at an odd offset), an
+// off-by-one changes the length of a cut value or cuts a value at the limit.
+// The two properties the CHANGELOG states — never mid-rune, at most
+// ownerLogMaxRunes — are asserted for every case.
+func TestTruncateOwnerLogValue(t *testing.T) {
+	const cut = "…"
+	for name, tc := range map[string]struct {
+		in   string
+		want string // exact
+	}{
+		"empty":                     {"", ""},
+		"short":                     {"ghost-user", "ghost-user"},
+		"ascii at limit":            {strings.Repeat("a", ownerLogMaxRunes), strings.Repeat("a", ownerLogMaxRunes)},
+		"ascii one over":            {strings.Repeat("a", ownerLogMaxRunes+1), strings.Repeat("a", ownerLogMaxRunes-1) + cut},
+		"multi-byte at limit":       {strings.Repeat("é", ownerLogMaxRunes), strings.Repeat("é", ownerLogMaxRunes)}, // 400 bytes, 200 runes: a byte-length check cuts it
+		"multi-byte one over":       {strings.Repeat("é", ownerLogMaxRunes+1), strings.Repeat("é", ownerLogMaxRunes-1) + cut},
+		"odd byte offset":           {"a" + strings.Repeat("é", 300), "a" + strings.Repeat("é", ownerLogMaxRunes-2) + cut}, // a byte cut at 199 lands inside an é
+		"three and four byte runes": {strings.Repeat("日", 150) + strings.Repeat("😀", 150), strings.Repeat("日", 150) + strings.Repeat("😀", ownerLogMaxRunes-1-150) + cut},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := truncateOwnerLogValue(tc.in)
+			if got != tc.want {
+				t.Errorf("truncateOwnerLogValue = %q (%d runes), want %q (%d runes)",
+					got, utf8.RuneCountInString(got), tc.want, utf8.RuneCountInString(tc.want))
+			}
+			if !utf8.ValidString(got) {
+				t.Error("result is not valid UTF-8: a rune was split")
+			}
+			if n := utf8.RuneCountInString(got); n > ownerLogMaxRunes {
+				t.Errorf("result is %d runes, want <= %d", n, ownerLogMaxRunes)
+			}
+			if wasCut := got != tc.in; wasCut != strings.HasSuffix(got, cut) || (wasCut && !strings.HasPrefix(tc.in, strings.TrimSuffix(got, cut))) {
+				t.Errorf("a cut value must end in %q and be a prefix of the input; got %q", cut, got)
+			}
+		})
+	}
+}
+
+// TestToolInvokedLine_OwnerAttrs_AreBoundedAndEscaped checks the bound and JSON
+// escaping on the real log line. The exact-output cases live in
+// TestTruncateOwnerLogValue; this pins that LogAttrs actually applies them.
 func TestToolInvokedLine_OwnerAttrs_AreBoundedAndEscaped(t *testing.T) {
-	long := strings.Repeat("é", 5000) // multi-byte: truncation must not split a rune
+	long := "a" + strings.Repeat("é", 5000) // odd byte offset: a byte cut splits a rune
 	mgr := ownerLogTestManager(t, "create-queue", false,
-		&ownerNotFoundError{owner: long + "\nforged=line", msgVpn: "v\"pn", objectKind: "queue"})
+		&ownerNotFoundError{owner: long, msgVpn: "v\"pn\nforged=line", objectKind: "queue"})
 	line := ownerToolInvokedLine(t, mgr, "create-queue")
 
-	owner, _ := line["owner"].(string)
-	if n := len([]rune(owner)); n > ownerLogMaxRunes+1 { // +1 for the truncation marker
-		t.Errorf("logged owner is %d runes, want <= %d plus a marker", n, ownerLogMaxRunes)
+	if got, want := line["owner"], truncateOwnerLogValue(long); got != want {
+		t.Errorf("logged owner is %d runes, want exactly the %d-rune truncation", utf8.RuneCountInString(got.(string)), utf8.RuneCountInString(want))
 	}
-	if !strings.HasSuffix(owner, "…") {
-		t.Errorf("a truncated owner should say so; got suffix %q", owner[max(0, len(owner)-8):])
-	}
-	if strings.Contains(owner, "�") {
-		t.Error("truncation split a multi-byte rune")
-	}
-	if line["msg_vpn"] != "v\"pn" {
+	// Quote and newline are inside the kept prefix, so this does exercise
+	// escaping: the value must round-trip as one field, not forge a second line
+	// (ownerToolInvokedLine already requires exactly one "tool invoked" line).
+	if line["msg_vpn"] != "v\"pn\nforged=line" {
 		t.Errorf("msg_vpn = %q, want the value round-tripped through JSON escaping", line["msg_vpn"])
+	}
+}
+
+// TestOwnerErrorLogKeys_MirrorAgentFacingFields pins the log attributes to the
+// structured fields buildErrorResult returns for the same error. The owner
+// field set is written out twice — errors.go for the agent, LogAttrs for the
+// log — and nothing else keeps them in step; a key added to one and not the
+// other, or renamed in one, fails here. Log keys are the agent-facing ones in
+// snake_case, plus check_stage, which only the log carries.
+func TestOwnerErrorLogKeys_MirrorAgentFacingFields(t *testing.T) {
+	m := &ToolManager{}
+	agentToLog := map[string]string{
+		"error_source": "error_source",
+		"error_stage":  "error_stage",
+		"owner":        "owner",
+		"msgVpnName":   "msg_vpn",
+		"objectKind":   "object_kind",
+	}
+	logOnly := map[string]bool{"check_stage": true}
+
+	for name, tc := range map[string]struct {
+		err   error
+		attrs []slog.Attr
+	}{
+		"not found": {
+			err:   &ownerNotFoundError{owner: "ghost", msgVpn: "default", objectKind: "queue"},
+			attrs: (&ownerNotFoundError{owner: "ghost", msgVpn: "default", objectKind: "queue"}).LogAttrs(),
+		},
+		"check failed": {
+			err: &ownerCheckFailedError{cause: errors.New("boom"), owner: "ghost", msgVpn: "default",
+				objectKind: "queue", stage: ownerCheckStageClientUsername},
+			attrs: (&ownerCheckFailedError{cause: errors.New("boom"), owner: "ghost", msgVpn: "default",
+				objectKind: "queue", stage: ownerCheckStageClientUsername}).LogAttrs(),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			structured := m.buildErrorResult(tc.err, "dev").StructuredContent.(map[string]any)
+			logged := map[string]string{}
+			for _, a := range tc.attrs {
+				logged[a.Key] = a.Value.String()
+			}
+
+			for agentKey, logKey := range agentToLog {
+				agentVal, inAgent := structured[agentKey]
+				logVal, inLog := logged[logKey]
+				if inAgent != inLog {
+					t.Errorf("%q is in the agent result: %v, but %q is in the log: %v", agentKey, inAgent, logKey, inLog)
+					continue
+				}
+				if inAgent && agentVal != logVal {
+					t.Errorf("agent %q = %v, log %q = %q: the two disagree", agentKey, agentVal, logKey, logVal)
+				}
+			}
+			known := map[string]bool{}
+			for _, k := range agentToLog {
+				known[k] = true
+			}
+			for k := range logged {
+				if !known[k] && !logOnly[k] {
+					t.Errorf("log carries %q, which has no agent-facing counterpart and is not declared log-only", k)
+				}
+			}
+		})
+	}
+}
+
+// TestToolInvokedLine_RealValidator_EndToEnd runs the real ownerValidatingHandler
+// through NewToolManagerFromComposite and CallTool against a stub SEMP server,
+// so the attributes are pinned to the rejection the validator actually
+// produces, not only to a hand-built error handed to a stub handler.
+func TestToolInvokedLine_RealValidator_EndToEnd(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method != http.MethodGet:
+			fmt.Fprint(w, `{"data":{},"meta":{"responseCode":200}}`)
+		case strings.Contains(r.URL.Path, "clientUsernames"):
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"meta":{"responseCode":400,"error":{"code":6,"description":"not found","status":"NOT_FOUND"}}}`)
+		default:
+			fmt.Fprint(w, `{"data":{"msgVpnName":"default"},"meta":{"responseCode":200}}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := semp.NewBrokerPool(writeTestConfig(t, [2]string{"dev", srv.URL}), nil)
+	mgr := NewToolManagerFromComposite(pool, realTools, composite.NewCompositeExecutor(ops), WithAuditLog(true))
+
+	var lines []map[string]any
+	for _, rec := range captureAudit(t, slog.LevelDebug, func() {
+		if _, err := mgr.CallTool(auditCtx(t), "create-queue", map[string]any{
+			"broker": "dev", "msgVpnName": "default", "queueName": "q1",
+			"queueConfig": map[string]any{"owner": "ghost"},
+		}, idFixture()); err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+	}) {
+		if rec["msg"] == "tool invoked" {
+			lines = append(lines, rec)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d \"tool invoked\" lines, want 1: %v", len(lines), lines)
+	}
+	for k, v := range map[string]any{
+		"error_source": "owner_validation",
+		"owner":        "ghost",
+		"msg_vpn":      "default",
+		"object_kind":  "queue",
+		"error_type":   "execution_error",
+		"detail":       "*fmt.wrapError",
+	} {
+		if lines[0][k] != v {
+			t.Errorf("%s = %v, want %v (line: %v)", k, lines[0][k], v, lines[0])
+		}
 	}
 }
 

@@ -97,22 +97,28 @@ func (e *ownerNotFoundError) Error() string {
 	return fmt.Sprintf("client username %q does not exist in Message VPN %q", e.owner, e.msgVpn)
 }
 
-// ownerLogMaxRunes bounds the caller-supplied owner and VPN values written to
-// the server log by LogAttrs. Both come straight from the tool arguments, which
-// nothing upstream length-limits, so an unbounded value would let one call
-// write an arbitrarily large log line. 200 is just above the broker's own
-// 189-character client-username limit, so no legitimate value is ever cut.
+// ownerLogMaxRunes is the most runes truncateOwnerLogValue returns. It bounds
+// the owner and VPN values LogAttrs writes, both caller-supplied and neither
+// length-limited upstream. 200 is just above the broker's own 189-character
+// client-username limit, so no legitimate value is ever cut.
+//
+// It does NOT bound ownerCheckFailedError.Error(), which %q-formats the
+// untruncated owner and VPN into "detail" when the wrapped cause is a vouched
+// type. That predates these attributes and is left as it was, so on that path
+// the line can carry the value twice: once bounded here, once as before.
 const ownerLogMaxRunes = 200
 
-// truncateForLog returns s cut to at most ownerLogMaxRunes runes (never
-// mid-rune), with a trailing "…" when it was cut so the log doesn't present a
-// clipped value as the caller's real one.
-func truncateForLog(s string) string {
+// truncateOwnerLogValue returns s unchanged if it is at most ownerLogMaxRunes
+// runes, and otherwise its first ownerLogMaxRunes-1 runes followed by "…", so
+// the result never exceeds the cap and says it was cut. It cuts by rune, never
+// by byte, so a multi-byte character is never split. Same rule as
+// tokenexchange.truncateRunes, which is unexported and so cannot be shared.
+func truncateOwnerLogValue(s string) string {
 	r := []rune(s)
 	if len(r) <= ownerLogMaxRunes {
 		return s
 	}
-	return string(r[:ownerLogMaxRunes]) + "…"
+	return string(r[:ownerLogMaxRunes-1]) + "…"
 }
 
 // LogAttrs returns structured slog attributes for this error, called by
@@ -122,12 +128,13 @@ func truncateForLog(s string) string {
 // operator cannot see which owner or VPN a rejection concerned, nor tell this
 // control apart from any other execution_error. Keys mirror the structured
 // fields buildErrorResult returns to the agent (error_source, owner, objectKind,
-// msgVpnName), in the log's snake_case.
+// msgVpnName), in the log's snake_case. That list is written out here and in
+// errors.go; TestOwnerErrorLogKeys_MirrorAgentFacingFields fails if the two drift.
 func (e *ownerNotFoundError) LogAttrs() []slog.Attr {
 	return []slog.Attr{
 		slog.String("error_source", "owner_validation"),
-		slog.String("owner", truncateForLog(e.owner)),
-		slog.String("msg_vpn", truncateForLog(e.msgVpn)),
+		slog.String("owner", truncateOwnerLogValue(e.owner)),
+		slog.String("msg_vpn", truncateOwnerLogValue(e.msgVpn)),
 		slog.String("object_kind", e.objectKind),
 	}
 }
@@ -190,16 +197,22 @@ func (e *ownerCheckFailedError) Unwrap() error { return e.cause }
 // logToolResult. Only fields this package wrote are emitted — never cause's
 // text: cause is whatever sempv2.Client.Execute returned, which can be an
 // unvouched transport or auth wrap error, and the vouched-type gate on "detail"
-// exists to keep exactly that out of the log. error_stage (not error_source)
-// matches buildErrorResult: when the cause is itself a vouched SEMP/resilience
-// error, logToolResult's own attributes for it (http_status, semp_code, ...)
-// still apply alongside these, so error_source must stay free for them.
+// exists to keep exactly that out of the log.
+//
+// error_stage, not error_source, mirrors buildErrorResult (errors.go), where
+// the same wrapper is layered on top of a switch that may already have set
+// error_source from the wrapped cause (load_shed, token_exchange); overwriting
+// it there would discard a correct classification. Nothing on the log line sets
+// error_source from a cause, so this is for parity, not collision avoidance: an
+// operator correlating a log line with the agent-facing result sees the same
+// names. A vouched cause's own attributes (http_status, semp_code, ...) are
+// emitted by logToolResult alongside these.
 func (e *ownerCheckFailedError) LogAttrs() []slog.Attr {
 	return []slog.Attr{
 		slog.String("error_stage", "owner_validation_check"),
 		slog.String("check_stage", string(e.stage)),
-		slog.String("owner", truncateForLog(e.owner)),
-		slog.String("msg_vpn", truncateForLog(e.msgVpn)),
+		slog.String("owner", truncateOwnerLogValue(e.owner)),
+		slog.String("msg_vpn", truncateOwnerLogValue(e.msgVpn)),
 		slog.String("object_kind", e.objectKind),
 	}
 }

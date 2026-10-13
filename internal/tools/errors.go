@@ -233,6 +233,8 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	// pre-flight read failing (shedding is per outbound call, token
 	// exchange runs per Execute), so overwriting error_source here would
 	// silently discard a classification the switch got right.
+	// The log-side twin of these owner fields is LogAttrs in owner_validation.go
+	// (snake_case keys); TestOwnerErrorLogKeys_MirrorAgentFacingFields pins the two.
 	if errors.As(err, &ownerCheckErr) {
 		structured["error_stage"] = "owner_validation_check"
 		structured["objectKind"] = ownerCheckErr.objectKind
