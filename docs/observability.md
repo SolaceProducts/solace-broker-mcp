@@ -285,8 +285,21 @@ before broker selection.
 |---|---|---|---|
 | `mcp_authz_denied_total` | Counter | `tool`, `reason` | Solace |
 
-This is hop 1: the MCP server refused an authenticated caller before dispatch. The `reason` field is `missing_claim` or `not_permitted`. Series appear only after their first denial; alert on
-`increase()`, not `absent()`.
+This is hop 1: the MCP server refused an authenticated caller before dispatch. The `reason` field is `missing_claim` or `not_permitted`.
+
+Series appear only after their first denial, so `absent()` is not an alert. `increase()` alone also
+misses the first denial on each series: Prometheus has no earlier sample to subtract, so a series
+born at `1` and never moving again reads `increase() == 0`, and every process restart starts new
+series. Add a clause that matches a series appearing:
+
+```promql
+# any new denial, including the one that creates a series
+increase(mcp_authz_denied_total[5m]) > 0
+  or (mcp_authz_denied_total unless mcp_authz_denied_total offset 5m)
+
+# denials since the process started: read the counter, not increase()
+sum by (tool, reason) (mcp_authz_denied_total)
+```
 
 ### Broker-Side Authorization Denials
 
