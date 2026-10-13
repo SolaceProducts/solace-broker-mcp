@@ -123,13 +123,15 @@ var knownErrorTypes = func() map[ErrorType]bool {
 // duration histogram, and an unlabelled in-flight gauge — plus one counter
 // that is not itself a RED instrument, mcp_broker_authz_denied_total
 // (SOL-153332, Story 49; see NewToolMetrics for why it lives here rather than
-// on SecurityMetrics). Every method is nil-safe, so a disabled server (nil)
-// records nothing.
+// on SecurityMetrics), and mcp_owner_validation_total (SOL-154679), which
+// counts a write blocked by the owner-existence check on the same footing.
+// Every method is nil-safe, so a disabled server (nil) records nothing.
 type ToolMetrics struct {
 	invocations       metric.Int64Counter
 	duration          metric.Float64Histogram
 	activeRequests    metric.Int64UpDownCounter
 	brokerAuthzDenied metric.Int64Counter
+	ownerValidation   metric.Int64Counter
 }
 
 // NewToolMetrics registers the RED instruments. The exporter derives the
@@ -178,11 +180,26 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 		return nil, fmt.Errorf("register mcp_broker_authz_denied_total: %w", err)
 	}
 
+	// mcp_owner_validation_total (SOL-154679): counts a create/update call the
+	// owner-existence pre-flight check (SOL-153080) blocked before its write ran.
+	// Registered here for the same reason as the counter above: gated only by
+	// the metrics provider existing, not by a narrower security-counter flag.
+	// Only the two rejection paths are counted; a call that passes the check, or
+	// supplies no owner, is already in mcp_tool_invocation_total.
+	ownerValidation, err := meter.Int64Counter(
+		"mcp.owner.validation",
+		metric.WithDescription("Number of tool calls blocked by the owner-existence pre-flight check, by outcome."),
+		metric.WithUnit("1"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_owner_validation_total: %w", err)
+	}
+
 	return &ToolMetrics{
 		invocations:       invocations,
 		duration:          duration,
 		activeRequests:    activeRequests,
 		brokerAuthzDenied: brokerAuthzDenied,
+		ownerValidation:   ownerValidation,
 	}, nil
 }
 
@@ -261,6 +278,47 @@ func (t *ToolMetrics) RecordBrokerAuthzDenied(ctx context.Context, tool, broker 
 		attribute.String("tool", tool),
 		attribute.String("broker", broker),
 		attribute.String("reason", string(reason)),
+	))
+}
+
+// OwnerValidationOutcome is the closed set mcp_owner_validation_total's outcome
+// label can carry (SOL-154679). Mirrors DenialReason and ErrorType: a bare
+// string would let a value minted elsewhere create an unbounded series.
+type OwnerValidationOutcome string
+
+const (
+	// OwnerValidationRejectedNotFound: the check completed and the supplied
+	// owner is confirmed absent from the target VPN, so the write never ran.
+	OwnerValidationRejectedNotFound OwnerValidationOutcome = "rejected_not_found"
+	// OwnerValidationRejectedCheckFailed: the check itself could not complete
+	// (timeout, 5xx, rate limit, ...), so the write was denied on doubt.
+	OwnerValidationRejectedCheckFailed OwnerValidationOutcome = "rejected_check_failed"
+	// OwnerValidationOutcomeOther is the sentinel RecordOwnerValidation coerces
+	// any value outside knownOwnerValidationOutcomes to.
+	OwnerValidationOutcomeOther OwnerValidationOutcome = "other"
+)
+
+// knownOwnerValidationOutcomes is the closed set RecordOwnerValidation
+// validates against.
+var knownOwnerValidationOutcomes = map[OwnerValidationOutcome]bool{
+	OwnerValidationRejectedNotFound:    true,
+	OwnerValidationRejectedCheckFailed: true,
+}
+
+// RecordOwnerValidation increments mcp_owner_validation_total for one write the
+// owner-existence check blocked (SOL-154679). No-op on a nil receiver — metrics
+// disabled records nothing, same as every other method here.
+func (t *ToolMetrics) RecordOwnerValidation(ctx context.Context, tool, broker string, outcome OwnerValidationOutcome) {
+	if t == nil {
+		return
+	}
+	if !knownOwnerValidationOutcomes[outcome] {
+		outcome = OwnerValidationOutcomeOther
+	}
+	t.ownerValidation.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("tool", tool),
+		attribute.String("broker", broker),
+		attribute.String("outcome", string(outcome)),
 	))
 }
 

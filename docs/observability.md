@@ -136,7 +136,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 
 Two versions identify the published contract:
 
-- `metrics_schema` is **1.9**, exposed by `mcp_schema_version`.
+- `metrics_schema` is **1.10**, exposed by `mcp_schema_version`.
 - `audit_schema` is **1.2**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
@@ -145,7 +145,9 @@ the minor version. A rename or removal requires a major version, an announcement
 least two minor releases of notice. Metric or audit-field renames are dual-emitted when that
 can be done without changing the meaning or doubling a single-valued record.
 
-Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`. The Go
+Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_version`. The minor
+component is an integer, so `1.10` is later than `1.9`: compare the components numerically, because
+a string comparison or a pattern such as `1\.[0-9]` stops matching at `1.10`. The Go
 runtime and process collectors are upstream Prometheus schema and are outside this
 compatibility commitment.
 
@@ -170,7 +172,7 @@ compatibility commitment.
 > `mcp_broker_unreachable_reason`, `mcp_broker_last_result_timestamp_seconds`,
 > `mcp_token_exchange_circuit_breaker_state`, `mcp_auth_failure_total`,
 > `mcp_authz_denied_total`, `mcp_broker_authz_denied_total`,
-> `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
+> `mcp_owner_validation_total`, `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
 > `mcp_otel_spans_exported_total`, `mcp_otel_spans_dropped_total`,
 > `mcp_otel_metrics_exported_total`, and `mcp_otel_metrics_dropped_total`.
 
@@ -296,6 +298,64 @@ This is hop 1: the MCP server refused an authenticated caller before dispatch. T
 
 This is hop 2: the event broker refused the SEMP operation after dispatch. The `reason` field is `permission_denied`. A destructive call also produces its tool-invocation sample and
 operation audit record because execution had already started.
+
+### Owner-Validation Rejections
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_owner_validation_total` | Counter | `tool`, `broker`, `outcome` | Solace |
+
+`create-queue`, `update-queue`, `create-topic-endpoint`, and `update-topic-endpoint` check that a
+supplied `owner` names an existing client username in the target Message VPN before the write
+runs. This counts the calls that check blocked. `outcome` is one of:
+
+| `outcome` | Meaning |
+|---|---|
+| `rejected_not_found` | The check completed and the owner is confirmed absent from the VPN. The write did not run. |
+| `rejected_check_failed` | The check itself could not complete, so the write was denied on doubt and did not run. |
+
+`rejected_check_failed` moves with broker health, not only with the check. Any failure to
+complete the read counts: a timeout, a 5xx, a rate limit, the broker refusing the read, a request
+shed because the broker was too busy, or a failed token exchange. A call the caller cancelled
+while the check was running is not counted. Timeouts, 5xx, and rate limits also appear in
+`mcp_semp_request_total` with `operation` `getMsgVpnClientUsername` or `getMsgVpn` (an empty
+status when there was no response). A request shed before it was sent, or a failed token
+exchange, never reaches the transport and appears only here.
+
+Series appear only after their first rejection, so `absent()` is not an alert. `increase()` alone
+also misses the first rejection on each series: Prometheus has no earlier sample to subtract, so a
+series that is born at `1` and never moves again reads `increase() == 0`, and every process
+restart starts new series. Add a clause that matches a series appearing:
+
+```promql
+# any new rejection, including the one that creates a series
+increase(mcp_owner_validation_total[5m]) > 0
+  or (mcp_owner_validation_total unless mcp_owner_validation_total offset 5m)
+
+# rejections since the process started: read the counter, not increase()
+sum by (tool, outcome) (mcp_owner_validation_total)
+```
+
+Only the two rejection paths are counted. A call that passes the check, or supplies no `owner`,
+is not. For a rejection rate against all calls of the same tool, aggregate both sides first,
+because the two families have an `outcome` label with different values and a direct division
+matches nothing:
+
+```promql
+sum by (tool) (rate(mcp_owner_validation_total[1h]))
+  / sum by (tool) (rate(mcp_tool_invocation_total[1h]))
+```
+
+`rate()` has the same blind spot for a series' first sample, so treat a rate over a short window on
+a quiet system as approximate.
+
+A blocked call is also an ordinary failed invocation in `mcp_tool_invocation_total`
+(`outcome="error"`, `error_type="execution_error"`). When the failed read was itself refused by
+the broker (SEMP code 72), it is `error_type="broker_permission_denied"` and
+`mcp_broker_authz_denied_total` increments as well, so the two counters can both move for one
+call. The latency of the two pre-flight reads is in `mcp_semp_request_duration_seconds` with
+`operation` `getMsgVpnClientUsername` or `getMsgVpn`; those operations are shared with
+`get-client-username` and `get-vpn-status`, so the series are not exclusive to this check.
 
 ### Audit Pipeline Health
 
