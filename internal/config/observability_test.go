@@ -67,6 +67,25 @@ brokers:
       password: secret
 `
 
+// obsFlagDefaults is the one table of expected capability-flag defaults, keyed
+// by env var. TestObservability_FlagDefaults checks it against LoadConfig, and
+// TestObservabilityDocFlagTableMatchesCode checks it against the Feature
+// Switches table in docs/observability.md (SOL-154609). want is the value with
+// no OBS_* var set.
+var obsFlagDefaults = []struct {
+	env  string
+	get  func(ObservabilityConfig) bool
+	want bool
+}{
+	{envObsCorrelationIDEnabled, func(o ObservabilityConfig) bool { return o.CorrelationIDEnabled }, true},
+	{envObsMetricsScrapeEnabled, func(o ObservabilityConfig) bool { return o.MetricsScrapeEnabled }, false},
+	{envObsAuditLogEnabled, func(o ObservabilityConfig) bool { return o.AuditLogEnabled }, false},
+	{envObsTracingEnabled, func(o ObservabilityConfig) bool { return o.TracingEnabled }, false},
+	{envObsSaturationEventsEnabled, func(o ObservabilityConfig) bool { return o.SaturationEventsEnabled }, false},
+	{envObsAuthFailureCounterEnabled, func(o ObservabilityConfig) bool { return o.AuthFailureCounterEnabled }, false},
+	{envObsMetricsOTLPEnabled, func(o ObservabilityConfig) bool { return o.MetricsOTLPEnabled }, false},
+}
+
 // TestObservability_FlagDefaults pins the v1 "door-closing" defaults: when no
 // OBS_* env var is set, correlation IDs are ON and every other capability is
 // OFF, with the auth-failure counter following metrics (OFF).
@@ -78,23 +97,9 @@ func TestObservability_FlagDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	o := cfg.Observability
-	checks := []struct {
-		name string
-		got  bool
-		want bool
-	}{
-		{"CorrelationIDEnabled", o.CorrelationIDEnabled, true},
-		{"MetricsScrapeEnabled", o.MetricsScrapeEnabled, false},
-		{"AuditLogEnabled", o.AuditLogEnabled, false},
-		{"TracingEnabled", o.TracingEnabled, false},
-		{"SaturationEventsEnabled", o.SaturationEventsEnabled, false},
-		{"AuthFailureCounterEnabled", o.AuthFailureCounterEnabled, false},
-		{"MetricsOTLPEnabled", o.MetricsOTLPEnabled, false},
-	}
-	for _, c := range checks {
-		if c.got != c.want {
-			t.Errorf("default %s = %v, want %v", c.name, c.got, c.want)
+	for _, c := range obsFlagDefaults {
+		if got := c.get(cfg.Observability); got != c.want {
+			t.Errorf("default %s = %v, want %v", c.env, got, c.want)
 		}
 	}
 }
