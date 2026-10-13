@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -461,4 +462,60 @@ func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAli
 		return
 	}
 	m.metrics.RecordOwnerValidation(ctx, tool, canonicalBrokerLabel(m.pool, brokerAlias), outcome)
+}
+
+// ownerValidationRejectedReasonNotFound is the only reason an
+// owner_validation_rejected record can carry today (SOL-154703): the check
+// completed and the supplied owner is absent from the target VPN. audit's own
+// ownerValidationRejectedReasons is the real vocabulary and is package-private,
+// so this is a local copy; TestEmitOwnerValidationRejectedAudit_ReasonMatchesAuditVocabulary
+// pins the two together.
+const ownerValidationRejectedReasonNotFound = "owner_not_found"
+
+// isOwnerValidationRejection reports whether err is a confirmed owner rejection:
+// the pre-flight check completed and the owner is absent. Deliberately
+// ownerNotFoundError only, not ownerCheckFailedError. A check that could not
+// complete (a transient 5xx, a timeout, a refused read) is an ordinary failure,
+// not a refusal, and recording it as one would be a false signal for the operator
+// alerting on this record. (A check whose read was refused by the broker with
+// SEMP code 72 is already a real hop-2 denial and fires broker_authz_denied; that
+// is a different event and is not this one.)
+//
+// errors.As, so a wrapped error still matches — handleErr reaches CallTool raw,
+// but toolErr wraps it in "%w".
+func isOwnerValidationRejection(err error) bool {
+	var notFound *ownerNotFoundError
+	return errors.As(err, &notFound)
+}
+
+// emitOwnerValidationRejectedAudit builds and emits the owner_validation_rejected
+// audit record for a confirmed owner rejection (SOL-154703). Called
+// unconditionally on a match, destructive or not, unlike emitOperationAudit,
+// which fires only for a destructive call; the two coexist for a destructive
+// update tool rather than one suppressing the other. Mirrors
+// emitBrokerAuthzDeniedAudit's shape: tool and broker, a reason, and nothing
+// else. The owner and VPN stay out of the record, as the sibling keeps its
+// request detail out; when correlation is enabled the correlation ID the record
+// carries joins it to the "tool invoked" line, which names both (SOL-155918).
+//
+// Identity is not passed in, for the same reason as the sibling: audit.NewEvent
+// reads the principal from ctx.
+func emitOwnerValidationRejectedAudit(ctx context.Context, tool, broker string) {
+	event, err := audit.NewEvent(ctx, audit.Fields{
+		Type:   audit.EventOwnerValidationRejected,
+		Reason: ownerValidationRejectedReasonNotFound,
+		Tool:   tool,
+		Broker: broker,
+	})
+	if err != nil {
+		// Same reasoning as the sibling's drop path: err.Error() names only
+		// field names and closed-vocabulary values, never argument data.
+		slog.ErrorContext(ctx, "audit: owner_validation_rejected record rejected by the schema constructor; recording a drop",
+			slog.String("tool", tool),
+			slog.String("broker", broker),
+			slog.String("detail", err.Error()))
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOwnerValidationRejected, Tool: tool, Broker: broker})
+		return
+	}
+	audit.Emit(ctx, event)
 }

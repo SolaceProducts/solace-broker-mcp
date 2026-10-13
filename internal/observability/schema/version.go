@@ -63,4 +63,7 @@ const MetricsSchemaVersion = "1.10"
 // bump; correcting that now costs nothing; per v0.8.0 (the latest tag),
 // AuditSchemaVersion was still 1.0 there, so no released consumer has ever
 // pinned to a version that saw the smaller closed sets.
-const AuditSchemaVersion = "1.2"
+// 1.3 (SOL-154703): audit_event_type grew to eight (added
+// owner_validation_rejected), and reason gained a vocabulary
+// (owner_not_found) for it. Additive: 1.2 consumers are unaffected.
+const AuditSchemaVersion = "1.3"

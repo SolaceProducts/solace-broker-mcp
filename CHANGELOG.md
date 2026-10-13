@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the `owner_validation_rejected` audit event, emitted when the owner check (SOL-153080) blocks a `create-queue`, `update-queue`, `create-topic-endpoint` or `update-topic-endpoint` call, whether or not the tool is destructive. It carries `tool`, `broker` and reason `owner_not_found`. A check that could not complete does not emit it. `audit_schema` is now **1.3**. Tracked under SOL-154703.
 - Added `mcp_owner_validation_total{tool,broker,outcome}`, counting writes the owner check (SOL-153080) blocked in `create-queue`, `update-queue`, `create-topic-endpoint` and `update-topic-endpoint`: `rejected_not_found` (the owner does not exist) or `rejected_check_failed` (the check could not complete). These were previously indistinguishable `execution_error`s. Compare with `mcp_tool_invocation_total` for rates. `metrics_schema` is now **1.10**. Tracked under SOL-154679.
 
 ### Changed
