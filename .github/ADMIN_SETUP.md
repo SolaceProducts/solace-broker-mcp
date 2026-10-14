@@ -1063,14 +1063,14 @@ required contexts rather than a verdict. That is expected behavior, not a CI
 failure. The fork-pull-request warning at the end of the Branch Protection section
 explains what maintainers should do about it.
 
-### LLM eval on a release
+### LLM eval on a release and nightly
 
-A `v*` tag runs `.github/workflows/llm-eval.yml` before the GHCR push and the GitHub Release. The job reads:
+A `v*` tag runs `.github/workflows/llm-eval.yml` before the GHCR push and the GitHub Release. A nightly schedule (06:00 UTC) runs the same workflow on the tip of `main` and gates nothing. The job reads:
 
 - Repository secret `LLM_SERVICE_API_KEY`, required. `release.yml` passes this secret by name. It does not use `secrets: inherit`.
 - Repository variables `LLM_SERVICE_ENDPOINT` and `LLM_SERVICE_MODEL_NAME`.
 
-A missing, expired, or rotated key fails the suite and publishes nothing. Fix the secret or the variable, then `gh run rerun <run-id> --failed`. That is not a new tag. `RELEASING.md` has the rest of the gate.
+A missing, expired, or rotated key fails the suite. A release then publishes nothing, and the nightly goes red (GitHub emails whoever last edited the cron line). Fix the secret or the variable, then `gh run rerun <run-id> --failed`. That is not a new tag. `RELEASING.md` has the rest of the gate.
 
 ---
 
@@ -1078,7 +1078,7 @@ A missing, expired, or rotated key fails the suite and publishes nothing. Fix th
 
 Navigate to: **Settings → General → Danger Zone**
 
-The repository is currently **internal**, not private.
+The repository is currently **public**, not private.
 
 **BEFORE making public.** ✅ = confirmed done. ⬜ = still open at the time of
 writing; re-check, do not assume.

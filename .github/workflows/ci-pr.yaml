@@ -75,6 +75,23 @@ jobs:
       - name: Run the release-notes extraction self-test against this PR's version
         run: .github/scripts/extract-release-notes.test.sh
 
+  # The nightly LLM eval and the release-tag call of the same workflow must
+  # never share a concurrency group, or a third arrival can cancel the release
+  # gate's waiting run. Nothing else reads that group, and actionlint accepts
+  # any value, so this check reads the real llm-eval.yml.
+  llm_eval_triggers:
+    name: LLM eval trigger guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the nightly and release-tag runs keep separate concurrency groups
+        run: .github/scripts/llm-eval-triggers.test.sh
+
   # THIRD_PARTY_LICENSES.md is the OSS compliance artifact that ships with the
   # release. It carried the sentence "Regenerate before each release" and drifted
   # anyway, in both directions (SOL-152414). This is the gate that sentence was

@@ -14,8 +14,9 @@ natural-language prompts via the Claude Code CLI lives in the sibling
 [`test/e2e-llm/`](../e2e-llm/README.md) suite. It sources this suite's
 `helpers.sh` for fixture provisioning, but is otherwise independent, and
 runs from [`LLM E2E Eval`](../../.github/workflows/llm-eval.yml). A `v*` tag
-runs it before the image push and the GitHub Release. A manual dispatch
-remains. It does not run on pull requests, and there is no daily run.
+runs it before the image push and the GitHub Release. A nightly run at
+06:00 UTC runs it on the tip of `main` and gates nothing. A manual dispatch remains. It
+does not run on pull requests.
 
 An llm-eval run does not touch this suite's brokers — `test/e2e-llm/` brings up
 its own (`solace-e2e-llm-a/b`) and seeds the fixtures there through the shared
