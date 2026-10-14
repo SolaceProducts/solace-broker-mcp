@@ -14,7 +14,7 @@ One axis describes a release: its **version**. We use [SemVer 2.0.0](https://sem
 | `0.4.0-beta.N` | feature-complete, stabilizing | clears the Stable gate (soaked on beta, no new P0/P1) |
 | `0.4.0` | stable, supported | — |
 
-A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. Pre-1.0, breaking changes bump MINOR. Tags are immutable by convention; CI enforcement is **[Planned]** — today nothing prevents retagging, and a force-updated tag would simply re-run the release workflow. Signed *git tags* are **[Planned]** — distinct from the published artifacts, which do carry build provenance attestations **[Implemented]** (see Gates).
+A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. From 1.0, breaking changes bump MAJOR; through the 0.x line they bumped MINOR. Tags are immutable by convention; CI enforcement is **[Planned]** — today nothing prevents retagging, and a force-updated tag would simply re-run the release workflow. Signed *git tags* are **[Planned]** — distinct from the published artifacts, which do carry build provenance attestations **[Implemented]** (see Gates).
 
 ## Distribution pointers
 

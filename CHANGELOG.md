@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-14
+
 ### Added
 
 - Added `mcp_owner_validation_total{tool,broker,outcome}`, counting writes the owner check (SOL-153080) blocked in `create-queue`, `update-queue`, `create-topic-endpoint` and `update-topic-endpoint`: `rejected_not_found` (the owner does not exist) or `rejected_check_failed` (the check could not complete). These were previously indistinguishable `execution_error`s. Compare with `mcp_tool_invocation_total` for rates. `metrics_schema` is now **1.10**. Tracked under SOL-154679.
@@ -39,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING**: Composite tool results and `get-queue-metrics` no longer include the broker's `links` object or any `uri`-bearing `meta` field (e.g. `meta.request.uri`) — they leaked the broker's management hostname:port, SEMP API variant, VPN name, and resource path through ordinary successful tool use. Migration: stop reading `.links.*` or `.meta.request.uri`; `data` is unaffected. Tracked under SOL-155432.
 - A startup WARN, and a continuously-scraped `mcp_metrics_listener_exposed_beyond_mcp` gauge, now fire when `/metrics` is reachable from a wider network scope than the MCP server's own listener (e.g. loopback-only dev modes alongside `metrics_bind_address`'s all-interfaces default). The default stays all-interfaces deliberately — a loopback default would break Kubernetes ServiceMonitor scraping (SOL-154042) — so the fix is a NetworkPolicy, or setting `metrics_bind_address` to a loopback host for a sidecar-scrape deployment. Tracked under SOL-155414.
+- `golang.org/x/net` is now v0.60.0 (was v0.58.0), fixing four `x/net/http2` vulnerabilities: CVE-2026-78663 (critical) and CVE-2026-78659, CVE-2026-78660 and CVE-2026-78669 (high). Tracked under SOL-155864.
 
 ## [0.11.0] - 2026-10-05
 
@@ -723,7 +726,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.11.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.0.0...HEAD
+- [1.0.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.11.0...v1.0.0
 - [0.11.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.10.0...v0.11.0
 - [0.10.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.9.0...v0.10.0
 - [0.9.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.8.0...v0.9.0
