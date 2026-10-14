@@ -473,9 +473,7 @@ func (c MCPClientAuthConfig) LogValue() slog.Value {
 }
 
 // SEMPConfig holds settings that control how the MCP server communicates with
-// brokers over the SEMP API. The rate-limit and retry fields below are
-// defined here but not yet consumed -- they will be wired up in Story 5 when
-// the rate limiter and retry policy are implemented.
+// brokers over the SEMP API.
 //
 // Field names match the Solace Terraform provider's naming convention so
 // operators familiar with terraform-provider-solacebroker get a consistent
