@@ -442,16 +442,16 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 // mcp_broker_authz_denied_total is, and recording there would also mean
 // threading *metrics.ToolMetrics and the tool name into it.
 //
-// errors.As, not a type switch, so a wrapped error still matches — handleErr
-// reaches here raw, but ownerCheckFailedError itself wraps its cause. Metrics
-// disabled needs no guard here: RecordOwnerValidation is nil-safe on its
+// The confirmed-rejection test is isOwnerValidationRejection, the same one the
+// audit record uses, so the metric and the audit record cannot disagree about
+// what a confirmed rejection is. errors.As for the inconclusive case, because
+// ownerCheckFailedError wraps its cause. Metrics disabled needs no guard here: RecordOwnerValidation is nil-safe on its
 // receiver, the same single guard RecordBrokerAuthzDenied relies on.
 func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAlias string, err error) {
-	var notFound *ownerNotFoundError
 	var checkFailed *ownerCheckFailedError
 	var outcome metrics.OwnerValidationOutcome
 	switch {
-	case errors.As(err, &notFound):
+	case isOwnerValidationRejection(err):
 		outcome = metrics.OwnerValidationRejectedNotFound
 	case errors.As(err, &checkFailed):
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -481,8 +481,9 @@ const ownerValidationRejectedReasonNotFound = "owner_not_found"
 // SEMP code 72 is already a real hop-2 denial and fires broker_authz_denied; that
 // is a different event and is not this one.)
 //
-// errors.As, so a wrapped error still matches — handleErr reaches CallTool raw,
-// but toolErr wraps it in "%w".
+// errors.As rather than a type assertion, like isBrokerAuthzDenial: handleErr
+// reaches CallTool exactly as the handler returned it today, but a handler
+// decorator that wraps the error must keep matching.
 func isOwnerValidationRejection(err error) bool {
 	var notFound *ownerNotFoundError
 	return errors.As(err, &notFound)

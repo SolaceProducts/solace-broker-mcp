@@ -1238,6 +1238,12 @@ outside the table, so two emission sites cannot produce two shapes of the same r
   a hop-2 denial **coexists** with the call's `operation` record rather than suppressing it,
   because execution had already started by the time the broker refused. On a non-destructive
   tool there is no `operation` record to coexist with, so the denial stands alone.
+- **`owner_validation_rejected` follows the same pattern for the owner-existence check
+  (SOL-154703).** It has `broker_authz_denied`'s shape: `tool`, `broker`, and a `reason` from a
+  closed set of one, `owner_not_found`. A blocked `update-queue` or `update-topic-endpoint` call
+  carries it alongside its `operation` record; a blocked `create-queue` or
+  `create-topic-endpoint` call, which has no `operation` record, carries only this one. A check
+  that could not complete is not a rejection and emits nothing.
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written.
   It carries no principal, `outcome`, or `arguments_hash` — there is no surviving record for it
   to describe, and it must never become a second place raw arguments could leak. It carries

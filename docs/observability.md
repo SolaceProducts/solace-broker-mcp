@@ -349,6 +349,9 @@ sum by (tool) (rate(mcp_owner_validation_total[1h]))
 `rate()` has the same blind spot for a series' first sample, so treat a rate over a short window on
 a quiet system as approximate.
 
+With the audit log on, a `rejected_not_found` call also emits an `owner_validation_rejected` audit
+record (see [Audit Trail](#audit-trail)); `rejected_check_failed` does not.
+
 A blocked call is also an ordinary failed invocation in `mcp_tool_invocation_total`
 (`outcome="error"`, `error_type="execution_error"`). When the failed read was itself refused by
 the broker (SEMP code 72), it is `error_type="broker_permission_denied"` and
@@ -536,7 +539,7 @@ record.
 
 ### Authentication Events
 
-The following are authentication events:
+The following events record authentication and access-control decisions:
 
 - `auth_success`: verified request, with identity when available.
 - `auth_failure`: rejected credential. `reason` uses the same five values as
@@ -748,7 +751,9 @@ Notes:
   failed read has its own status, the record also has that error's `http_status`, `semp_code`, and
   `operation`. These are the agent-facing result's `owner`, `msgVpnName`, and `objectKind` in
   snake_case. `owner` and `msg_vpn` are caller-supplied and cut at 200 characters, ending in `…`
-  when cut. To find these, search `tool invoked` records for `error_source="owner_validation"` or
+  when cut. A confirmed rejection (`error_source="owner_validation"`) also emits an
+  `owner_validation_rejected` audit record when the audit log is on, joined by `correlation_id`.
+  To find these, search `tool invoked` records for `error_source="owner_validation"` or
   `error_stage="owner_validation_check"`. Abridged record (other fields omitted):
 
   ```json
