@@ -1078,7 +1078,7 @@ A missing, expired, or rotated key fails the suite. A release then publishes not
 
 Navigate to: **Settings → General → Danger Zone**
 
-The repository is currently **internal**, not private.
+The repository is currently **public**, not private.
 
 **BEFORE making public.** ✅ = confirmed done. ⬜ = still open at the time of
 writing; re-check, do not assume.
