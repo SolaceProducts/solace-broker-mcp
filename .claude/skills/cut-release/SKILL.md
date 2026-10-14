@@ -125,7 +125,7 @@ stop — and because A1's clean-start path already created `release/vX.Y.Z` (wit
 no litter behind: `git switch - && git branch -D release/vX.Y.Z`.
 
 **A3. Version.** If the version was passed, use it. Otherwise suggest a bump from the `[Unreleased]`
-contents per `RELEASING.md` (pre-1.0: any `- **BREAKING**:` → MINOR; new **Added** → MINOR; only
+contents per `RELEASING.md` (from 1.0: any `- **BREAKING**:` → MAJOR; new **Added** → MINOR; only
 **Fixed**/**Security** → PATCH) and confirm with the human before continuing.
 
 **A4. Promote (deterministic).** Edit `CHANGELOG.md` (today = `date +%F`):
