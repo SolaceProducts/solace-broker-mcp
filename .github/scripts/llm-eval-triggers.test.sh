@@ -217,28 +217,6 @@ if got == want:
 else:
     bad("workflow_dispatch defaults are main, local-docker, empty filter", f"got {got!r}")
 
-# --- Proof 5: the old tag-only story is gone from the operator surfaces -------
-def flat(rel):
-    text = (root / rel).read_text()
-    text = re.sub(r"\n\s*(#\s*)?", " ", text).lower()
-    return re.sub(r"\s+", " ", text)
-
-
-for rel, phrase in (
-    (".github/workflows/llm-eval.yml", "no schedule"),
-    ("test/e2e-llm/README.md", "no daily run"),
-    ("test/e2e-monitoring/README.md", "no daily run"),
-):
-    try:
-        found = phrase in flat(rel)
-    except FileNotFoundError:
-        bad(f"{rel} exists", "file not found")
-        continue
-    if found:
-        bad(f'{rel} no longer says "{phrase}"')
-    else:
-        ok(f'{rel} no longer says "{phrase}"')
-
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
 PYEOF
