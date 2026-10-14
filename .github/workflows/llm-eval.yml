@@ -44,7 +44,7 @@ on:
     # 06:00 UTC, which is 02:00 EDT / 01:00 EST. GitHub can delay or drop a
     # scheduled run under load, and it only fires from the default branch.
     # Failure emails go to whoever last edited the cron line.
-    - cron: '0 6 * * *' # schedule owner: lkiri
+    - cron: '0 6 * * *' # schedule owner: amorade
 
 # Do not cancel an in-progress run. Cancelling spends the API credits and
 # leaves broker containers on a runner that is about to be reclaimed.
