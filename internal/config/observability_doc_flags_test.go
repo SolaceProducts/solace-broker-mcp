@@ -20,10 +20,11 @@
 // flags this package defines, in both directions, and checks each documented
 // default against obsFlagDefaults (observability_test.go).
 //
-// The flag inventory is read from observability.go's own AST — every const
-// named envObs* — not from a hand-kept list, so a new flag fails this test
-// until it is documented. The KA's per-capability flag table (Confluence) is
-// outside what CI can read and is not checked.
+// The flag inventory is read from the AST of every non-test Go file in this
+// package — every string literal whose value is an OBS_*_ENABLED name, however
+// the flag is declared or named — not from a hand-kept list, so a new flag
+// fails this test until it is documented. The KA's per-capability flag table
+// (Confluence) is outside what CI can read and is not checked.
 package config
 
 import (
@@ -40,8 +41,19 @@ import (
 	"testing"
 )
 
+// obsFlagPattern is what counts as a capability flag name, in code and in a
+// doc table alike.
+const obsFlagPattern = `OBS_[A-Z0-9_]+_ENABLED`
+
+// obsFlagRE matches a code string literal's value that is a flag name.
+var obsFlagRE = regexp.MustCompile(`^` + obsFlagPattern + `$`)
+
 // flagCellRE matches a flag-name cell: one backticked OBS_*_ENABLED name.
-var flagCellRE = regexp.MustCompile("^`(OBS_[A-Z0-9_]+_ENABLED)`$")
+var flagCellRE = regexp.MustCompile("^`(" + obsFlagPattern + ")`$")
+
+// delimiterCellRE matches one cell of a Markdown table's delimiter row: ---,
+// :---, ---:, or :---:.
+var delimiterCellRE = regexp.MustCompile(`^:?-+:?$`)
 
 // docFlagTable locates one documented flag table: the first table under
 // heading in the repo-relative file path, whose first two columns are
@@ -110,8 +122,22 @@ func parseFlagTable(doc string, tbl docFlagTable) (map[string]string, error) {
 		return nil, fmt.Errorf("%s: table header must start with | %s | Default |, got %q", name, tbl.nameColumn, lines[header])
 	}
 
+	// Markdown only renders a table when the header is followed by a delimiter
+	// row with the same number of cells.
+	if header+1 >= len(lines) {
+		return nil, fmt.Errorf("%s: no delimiter row under the table header", name)
+	}
+	delim := splitTableRow(lines[header+1])
+	if len(delim) != len(cols) {
+		return nil, fmt.Errorf("%s: delimiter row %q has %d cells, header has %d", name, lines[header+1], len(delim), len(cols))
+	}
+	for _, c := range delim {
+		if !delimiterCellRE.MatchString(c) {
+			return nil, fmt.Errorf("%s: malformed delimiter row %q", name, lines[header+1])
+		}
+	}
+
 	flags := map[string]string{}
-	// header+1 is the |---| separator row.
 	for _, l := range lines[header+2:] {
 		if !strings.HasPrefix(strings.TrimSpace(l), "|") {
 			break
@@ -135,40 +161,64 @@ func parseFlagTable(doc string, tbl docFlagTable) (map[string]string, error) {
 	return flags, nil
 }
 
-// codeObsFlags returns the value of every const named envObs* declared in the
-// given Go source file.
-func codeObsFlags(path string) ([]string, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+// codeObsFlags returns, sorted and deduplicated, every string literal in the
+// non-test Go files of dir whose value is an OBS_*_ENABLED name, whatever the
+// enclosing const or call. A const named envObs* must hold such a literal
+// itself: one that is computed or has no explicit value would hide its flag.
+func codeObsFlags(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	var flags []string
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
+	fset := token.NewFileSet()
+	seen := map[string]bool{}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
 			continue
 		}
-		for _, spec := range gd.Specs {
-			vs := spec.(*ast.ValueSpec)
-			for i, name := range vs.Names {
-				if !strings.HasPrefix(name.Name, "envObs") || i >= len(vs.Values) {
-					continue
+		f, err := parser.ParseFile(fset, filepath.Join(dir, n), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		var bad error
+		ast.Inspect(f, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.ValueSpec:
+				for i, id := range node.Names {
+					if !strings.HasPrefix(id.Name, "envObs") {
+						continue
+					}
+					if i >= len(node.Values) {
+						bad = fmt.Errorf("%s: %s has no explicit value", n, id.Name)
+						continue
+					}
+					if lit, ok := node.Values[i].(*ast.BasicLit); !ok || lit.Kind != token.STRING {
+						bad = fmt.Errorf("%s: %s is not a string literal", n, id.Name)
+					}
 				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return nil, fmt.Errorf("%s is not a string literal", name.Name)
+			case *ast.BasicLit:
+				if node.Kind != token.STRING {
+					return true
 				}
-				v, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					return nil, err
+				if v, err := strconv.Unquote(node.Value); err == nil && obsFlagRE.MatchString(v) {
+					seen[v] = true
 				}
-				flags = append(flags, v)
 			}
+			return true
+		})
+		if bad != nil {
+			return nil, bad
 		}
 	}
-	if len(flags) == 0 {
-		return nil, fmt.Errorf("no envObs* constants in %s", path)
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("no OBS_*_ENABLED string literals in %s", dir)
 	}
+	flags := make([]string, 0, len(seen))
+	for v := range seen {
+		flags = append(flags, v)
+	}
+	sort.Strings(flags)
 	return flags, nil
 }
 
@@ -202,9 +252,9 @@ func checkFlagTable(code []string, doc map[string]string, label string) []string
 			problems = append(problems, fmt.Sprintf("%s is defined in code but has no row in the %s table — add one", name, label))
 			continue
 		}
-		if derivedDefaultFlags[name] != "" {
-			if got == "true" || got == "false" {
-				problems = append(problems, fmt.Sprintf("%s: %s says default %q, but its default is derived (%s) — describe it in prose", name, label, got, derivedDefaultFlags[name]))
+		if reason, derived := derivedDefaultFlags[name]; derived {
+			if got == "" || got == "true" || got == "false" {
+				problems = append(problems, fmt.Sprintf("%s: %s says default %q, but its default is derived (%s) — describe it in prose", name, label, got, reason))
 			}
 			continue
 		}
@@ -214,12 +264,12 @@ func checkFlagTable(code []string, doc map[string]string, label string) []string
 	}
 	for name := range doc {
 		if !inCode[name] {
-			problems = append(problems, fmt.Sprintf("%s documents %s, but no envObs* constant defines it — remove the row or add the flag", label, name))
+			problems = append(problems, fmt.Sprintf("%s documents %s, but no OBS_*_ENABLED literal in internal/config defines it — remove the row or add the flag", label, name))
 		}
 	}
 	for name := range derivedDefaultFlags {
 		if !inCode[name] {
-			problems = append(problems, fmt.Sprintf("derivedDefaultFlags names %s, but no envObs* constant defines it — remove the stale exclusion", name))
+			problems = append(problems, fmt.Sprintf("derivedDefaultFlags names %s, but no OBS_*_ENABLED literal in internal/config defines it — remove the stale exclusion", name))
 		}
 	}
 	sort.Strings(problems)
@@ -230,7 +280,7 @@ func checkFlagTable(code []string, doc map[string]string, label string) []string
 // docFlagTables and this package's OBS_* flags disagree: a flag with no row, a
 // row with no flag, or a documented default that is not the code's.
 func TestObservabilityDocFlagTableMatchesCode(t *testing.T) {
-	code, err := codeObsFlags("observability.go")
+	code, err := codeObsFlags(".")
 	if err != nil {
 		t.Fatalf("codeObsFlags: %v", err)
 	}
@@ -275,14 +325,20 @@ func TestParseFlagTable(t *testing.T) {
 	}
 
 	errCases := map[string]string{
-		"no heading":     "## Other\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
-		"no table":       "## Feature Switches\n\nProse only.\n\n## Next\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
-		"wrong header":   "## Feature Switches\n\n| Name | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
-		"no rows":        "## Feature Switches\n\n| Variable | Default |\n|---|---|\n\nText.\n",
-		"bad variable":   "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| OBS_A_ENABLED | `true` |\n",
-		"duplicate row":  "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n| `OBS_A_ENABLED` | `false` |\n",
-		"malformed row":  "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` |\n",
-		"heading suffix": "## Feature Switches Old\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"no heading":            "## Other\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"no table":              "## Feature Switches\n\nProse only.\n\n## Next\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"wrong header":          "## Feature Switches\n\n| Name | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"no rows":               "## Feature Switches\n\n| Variable | Default |\n|---|---|\n\nText.\n",
+		"bad variable":          "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| OBS_A_ENABLED | `true` |\n",
+		"duplicate row":         "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n| `OBS_A_ENABLED` | `false` |\n",
+		"malformed row":         "## Feature Switches\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` |\n",
+		"heading suffix":        "## Feature Switches Old\n\n| Variable | Default |\n|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"header is last line":   "## Feature Switches\n\n| Variable | Default |",
+		"no delimiter row":      "## Feature Switches\n\n| Variable | Default |\n| not a delimiter | x |\n| `OBS_A_ENABLED` | `true` |\n",
+		"delimiter too few":     "## Feature Switches\n\n| Variable | Default |\n|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"delimiter too many":    "## Feature Switches\n\n| Variable | Default |\n|---|---|---|\n| `OBS_A_ENABLED` | `true` |\n",
+		"delimiter empty cell":  "## Feature Switches\n\n| Variable | Default |\n|---||\n| `OBS_A_ENABLED` | `true` |\n",
+		"delimiter dash inside": "## Feature Switches\n\n| Variable | Default |\n|---|--x--|\n| `OBS_A_ENABLED` | `true` |\n",
 	}
 	for name, doc := range errCases {
 		t.Run(name, func(t *testing.T) {
@@ -290,6 +346,13 @@ func TestParseFlagTable(t *testing.T) {
 				t.Error("expected an error")
 			}
 		})
+	}
+
+	// Every alignment form Markdown accepts in a delimiter cell, padded or not.
+	const aligned = "## Feature Switches\n\n| Variable | Default | A | B |\n" +
+		"| --- | :--- | ---: | :---: |\n| `OBS_A_ENABLED` | `true` | x | y |\n"
+	if _, err := parseFlagTable(aligned, featureSwitches); err != nil {
+		t.Errorf("aligned delimiter row: unexpected error: %v", err)
 	}
 
 	// A "###" table's section ends at the next "###" or "##", not at "####",
@@ -369,7 +432,7 @@ func TestCheckFlagTable(t *testing.T) {
 			m := clone()
 			m["OBS_PANIC_RECOVERY_ENABLED"] = "true"
 			return m
-		}, "documents OBS_PANIC_RECOVERY_ENABLED, but no envObs* constant"},
+		}, "documents OBS_PANIC_RECOVERY_ENABLED, but no OBS_*_ENABLED literal"},
 		{"default mismatch", code, func() map[string]string {
 			m := clone()
 			m[envObsCorrelationIDEnabled] = "false"
@@ -385,11 +448,16 @@ func TestCheckFlagTable(t *testing.T) {
 			m[envObsAuthFailureCounterEnabled] = "false"
 			return m
 		}, "OBS_AUTH_FAILURE_COUNTER_ENABLED: docs/observability.md Feature Switches says default \"false\", but its default is derived"},
+		{"derived default left empty", code, func() map[string]string {
+			m := clone()
+			m[envObsAuthFailureCounterEnabled] = ""
+			return m
+		}, "OBS_AUTH_FAILURE_COUNTER_ENABLED: docs/observability.md Feature Switches says default \"\", but its default is derived"},
 		{"stale derived exclusion", withoutAuth(code), func() map[string]string {
 			m := clone()
 			delete(m, envObsAuthFailureCounterEnabled)
 			return m
-		}, "derivedDefaultFlags names OBS_AUTH_FAILURE_COUNTER_ENABLED, but no envObs* constant"},
+		}, "derivedDefaultFlags names OBS_AUTH_FAILURE_COUNTER_ENABLED, but no OBS_*_ENABLED literal"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -402,26 +470,51 @@ func TestCheckFlagTable(t *testing.T) {
 }
 
 func TestCodeObsFlags(t *testing.T) {
-	got, err := codeObsFlags("observability.go")
+	got, err := codeObsFlags(".")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != len(obsFlagDefaults) {
-		t.Errorf("found %d envObs* constants %v, obsFlagDefaults has %d", len(got), got, len(obsFlagDefaults))
+		t.Errorf("found %d OBS_*_ENABLED literals %v, obsFlagDefaults has %d", len(got), got, len(obsFlagDefaults))
 	}
 
-	dir := t.TempDir()
-	write := func(name, src string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
-			t.Fatal(err)
+	// pkg writes files into a fresh directory and returns it.
+	pkg := func(files map[string]string) string {
+		dir := t.TempDir()
+		for name, src := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
-		return p
+		return dir
 	}
-	if _, err := codeObsFlags(write("none.go", "package x\nconst other = \"X\"\n")); err == nil {
-		t.Error("expected an error for a file with no envObs* constants")
+
+	// Found by value, in any file, under any name, and once each; not in a
+	// test file, a comment, or a near-miss string.
+	got, err = codeObsFlags(pkg(map[string]string{
+		"a.go":      "package x\n\nconst anyName = \"OBS_A_ENABLED\"\n",
+		"b.go":      "package x\n\n// OBS_COMMENT_ENABLED\nvar _ = f(\"OBS_B_ENABLED\", \"OBS_A_ENABLED\", \"OBS_X_ENABLED_SUFFIX\", \"obs_y_enabled\")\n\nfunc f(...string) bool { return false }\n",
+		"c_test.go": "package x\n\nconst envObsT = \"OBS_T_ENABLED\"\n",
+		"notes.txt": "OBS_TXT_ENABLED\n",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := codeObsFlags(write("nonlit.go", "package x\nconst base = \"OBS_\"\nconst envObsX = base + \"X_ENABLED\"\n")); err == nil {
-		t.Error("expected an error for a non-literal envObs* constant")
+	if want := []string{"OBS_A_ENABLED", "OBS_B_ENABLED"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	errCases := map[string]map[string]string{
+		"no flags":           {"none.go": "package x\nconst other = \"X\"\n"},
+		"computed envObs*":   {"nonlit.go": "package x\nconst base = \"OBS_\"\nconst envObsX = base + \"X_ENABLED\"\n"},
+		"envObs* no value":   {"implicit.go": "package x\nconst (\n\tenvObsA = \"OBS_A_ENABLED\"\n\tenvObsB\n)\n"},
+		"unparseable source": {"broken.go": "package x\nconst = \n"},
+	}
+	for name, files := range errCases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := codeObsFlags(pkg(files)); err == nil {
+				t.Error("expected an error")
+			}
+		})
 	}
 }

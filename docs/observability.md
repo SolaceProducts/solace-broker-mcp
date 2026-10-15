@@ -65,7 +65,7 @@ credentials to one signal only.
 
 <!-- Parsed by TestObservabilityDocFlagTableMatchesCode (internal/config/observability_doc_flags_test.go).
      Structural requirements this section must keep:
-     - The heading text stays exactly "Feature Switches".
+     - The heading text stays exactly "Feature Switches", at level ##.
      - The first table under the heading starts with | Variable | Default | columns.
      - Each Variable cell is one backticked OBS_*_ENABLED name, one row per flag.
      - Default cells read `true` or `false` and match the code, except a flag with a derived

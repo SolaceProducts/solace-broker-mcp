@@ -70,8 +70,9 @@ brokers:
 // obsFlagDefaults is the one table of expected capability-flag defaults, keyed
 // by env var. TestObservability_FlagDefaults checks it against LoadConfig, and
 // TestObservabilityDocFlagTableMatchesCode checks it against the Feature
-// Switches table in docs/observability.md (SOL-154609). want is the value with
-// no OBS_* var set.
+// Switches table in docs/observability.md and the Flag Defaults at GA table in
+// docs/_internal/observability-schema-review.md (SOL-154609). want is the value
+// with no OBS_* var set.
 var obsFlagDefaults = []struct {
 	env  string
 	get  func(ObservabilityConfig) bool
