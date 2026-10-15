@@ -63,6 +63,15 @@ credentials to one signal only.
 
 ## Feature Switches
 
+<!-- Parsed by TestObservabilityDocFlagTableMatchesCode (internal/config/observability_doc_flags_test.go).
+     Structural requirements this section must keep:
+     - The heading text stays exactly "Feature Switches", at level ##.
+     - The first table under the heading starts with | Variable | Default | columns.
+     - Each Variable cell is one backticked OBS_*_ENABLED name, one row per flag.
+     - Default cells read `true` or `false` and match the code, except a flag with a derived
+       default (derivedDefaultFlags in the test), whose cell must stay prose, not `true`/`false`.
+     Run: go test ./internal/config -run TestObservabilityDocFlagTableMatchesCode -->
+
 Capability switches are environment variables. They are deliberately not accepted in YAML.
 
 | Variable | Default | When `true` | When `false` | Important interaction |
