@@ -46,6 +46,12 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 		"delete-rdp":                {"msgVpnName", "restDeliveryPointName"},
 		"disconnect-client":         {"msgVpnName", "clientName"},
 		"clear-client-stats":        {"msgVpnName", "clientName"},
+
+		"create-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
+		"update-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
+		"delete-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
+		"create-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
+		"delete-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
 	}
 	// *Config bodies are objects, never strings. update-message-vpn's is
 	// required:true, isolating the type gate from the optional create-* ones.
@@ -54,6 +60,10 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 		"create-queue":       "queueConfig",
 		"create-rdp":         "rdpConfig",
 		"update-message-vpn": "msgVpnConfig",
+
+		"create-kafka-receiver":               "kafkaReceiverConfig",
+		"update-kafka-receiver":               "kafkaReceiverConfig",
+		"create-kafka-receiver-topic-binding": "topicBindingConfig",
 	}
 
 	server := registeredServer(t, true)

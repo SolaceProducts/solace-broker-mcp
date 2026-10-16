@@ -137,6 +137,14 @@ func listAllTools(t *testing.T, server *mcp.Server) []*mcp.Tool {
 // intentional (bump the threshold, in the same PR, with an updated comment)
 // or an accident (a runaway description, a copy-pasted oversized schema) —
 // the failure exists to force that judgment call, not to be silenced.
+//
+// SOL-156212: the with-write-tools ceiling was raised 25,000 -> 35,000 for the
+// Kafka bridge write tools. Measured: 47 tools / ~23.9k tokens before; the five
+// Kafka Receiver tools add ~4.2k (~830 each, mostly the generated output schema
+// plus descriptions in line with create-queue's), and the five Kafka Sender tools
+// (SOL-156213) add about as much, ~32k in total. The read-only ceiling is unchanged
+// (~10.0k measured). Write tools are off by default, so only deployments that
+// enable them pay this.
 func TestToolListBudget(t *testing.T) {
 	const bytesPerToken = 4 // same rough estimate used throughout this investigation
 
@@ -146,7 +154,7 @@ func TestToolListBudget(t *testing.T) {
 		maxTokens        int
 	}{
 		{"read-only", false, 15_000},
-		{"with-write-tools", true, 25_000},
+		{"with-write-tools", true, 35_000},
 	}
 
 	for _, tc := range cases {

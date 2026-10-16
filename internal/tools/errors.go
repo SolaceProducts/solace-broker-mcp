@@ -386,6 +386,28 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 	return nil
 }
 
+// alreadyExistsHints holds, per create tool, extra guidance appended to the
+// already_exists outcome message. A postProcess handler never runs when the
+// create is a duplicate (the broker error short-circuits the tool), so a tool
+// whose normal result carries guidance for the agent would otherwise lose it
+// exactly when it matters. The Kafka bridge creates are the case: an existing
+// bridge may have been created with a different authenticationScheme, so the
+// agent must look before it enables one (SOL-156212).
+var alreadyExistsHints = map[string]string{
+	"create-kafka-receiver": "The existing Kafka Receiver was not modified. Before enabling it, check its authenticationScheme with get-kafka-receiver-status: a scheme other than none needs its secret set out of band first.",
+}
+
+// applyAlreadyExistsHint appends the tool's hint, if it has one, to an
+// already_exists outcome's message. It never touches already_absent.
+func applyAlreadyExistsHint(tool string, outcome *desiredStateOutcome) {
+	if outcome.Outcome != DesiredStateAlreadyExists {
+		return
+	}
+	if hint, ok := alreadyExistsHints[tool]; ok {
+		outcome.Message += " " + hint
+	}
+}
+
 // isSEMPStatus reports whether err's SEMPStatus (or, when the broker omitted
 // that string, its SEMPCode) matches the given category.
 func isSEMPStatus(err *sempv2.SEMPError, status string, code int) bool {
