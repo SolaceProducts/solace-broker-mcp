@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. Passwords, client secrets and other credentials are rejected and must be set out of band; the create result tells the user how. `create-kafka-receiver` is annotated destructive, so it is audited. Kafka bridges need the broker's Kafka bridge scaling settings (`system_scaling_maxkafkabridgecount`) set at creation. Tracked under SOL-156212.
+
+### Changed
+
+- The `delete-queue` description now warns that a queue bound to a Kafka Sender can be deleted, leaving its queue binding dangling. Tracked under SOL-156212.
+
 ### Security
 
 - `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. **Upgrade note:** calls that include them now return an error; set them out of band (Broker Manager, CLI, SEMP or Terraform). Tracked under SOL-156210.

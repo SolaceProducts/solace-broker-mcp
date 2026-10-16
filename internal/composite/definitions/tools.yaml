@@ -1387,9 +1387,11 @@ tools:
       identify the queue to delete. This is a destructive operation that removes
       the queue, discards any messages still spooled on it, and removes any
       topic subscriptions attached to it — there is no separate step to detach
-      subscriptions first. If the queue is already gone — including when the
-      VPN itself no longer exists — this is not an error: the call returns
-      outcome:"already_absent" instead of failing.
+      subscriptions first. The broker does not stop you deleting a queue that a
+      Kafka Sender queue binding points at: the binding is left dangling, not
+      removed, so delete that binding first. If the queue is already gone —
+      including when the VPN itself no longer exists — this is not an error:
+      the call returns outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1860,6 +1862,280 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+    result:
+      strategy: collect
+
+  # SOL-156212: Kafka Receiver write tools. Secrets (passwords, client secrets,
+  # access keys, key tabs, client certificates) never pass through the LLM: the
+  # bodyChecks below reject them, and the create result hands the user the
+  # out-of-band step. See internal/composite/bodychecks.go.
+  #
+  # destructive:true on create-kafka-receiver deliberately breaks the create-*
+  # convention (create-* is otherwise destructive:false). A Kafka bridge opens an
+  # outbound connection to a caller-chosen host (bootstrapAddressList), which makes
+  # its creation worth recording: destructive tools are the audit surface
+  # (OBS_AUDIT_LOG_ENABLED -> an "operation" audit record; otherwise the
+  # "executing destructive operation" WARN line). The topic-binding create tool
+  # connects nothing by itself and keeps the convention.
+  - name: create-kafka-receiver
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, receiver name, bootstrap address) and that a new
+      Kafka Receiver will be created. The confirmation MUST come as a separate
+      user reply received AFTER you state the target and effect — do not treat
+      the user's original request as a pre-confirmation, even if it implies
+      intent.
+      Create a Kafka Receiver in a Message VPN. A Kafka Receiver pulls messages
+      from an external Kafka cluster into the VPN. Requires msgVpnName and
+      kafkaReceiverName; set bootstrapAddressList, authenticationScheme and
+      transportTlsEnabled in kafkaReceiverConfig. Omitted attributes take broker
+      defaults (disabled, authenticationScheme none). A receiver does nothing
+      until it has a topic binding: call create-kafka-receiver-topic-binding
+      next (create the destination queue and its subscription first).
+      Two modes. No authentication: authenticationScheme "none" (the default),
+      which may be created with enabled:true. With authentication: create it
+      with the real scheme and its non-secret settings (for example
+      authenticationBasicUsername) and enabled:false — the server rejects
+      enabled:true with a non-none scheme. The result tells the user which
+      secret to set on the receiver themselves; when the user confirms it is
+      set, call update-kafka-receiver with {"enabled": true}.
+      Never ask for or accept a password, secret, key or certificate in chat.
+      The server rejects secret attributes; they must be set out of band
+      (Broker Manager, CLI, SEMP or Terraform).
+      If a receiver with the same name already exists, this is not an error: the
+      call returns outcome:"already_exists" (existence only — nothing is compared
+      or changed). Check the existing receiver's authenticationScheme with
+      get-kafka-receiver-status before enabling it.
+      kafkaReceiverConfig accepts more attributes than listed here; call
+      describe-semp-schema (operation: config/createMsgVpnKafkaReceiver) if you
+      need the full list. If the broker answers "Kafka Bridge limit of 0
+      reached", it was created without Kafka bridge capacity
+      (system_scaling_maxkafkabridgecount) and no Kafka bridge can be created
+      on it.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to create the Kafka Receiver in"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver to create"
+      - name: kafkaReceiverConfig
+        type: object
+        required: false
+        description: "Optional KafkaReceiver attributes (bootstrapAddressList, authenticationScheme, authenticationBasicUsername, transportTlsEnabled, enabled, etc.). Secret attributes (passwords, client secrets, access keys, key tabs, client certificates) are rejected; set them out of band. Do not include msgVpnName or kafkaReceiverName here."
+    steps:
+      - id: createKafkaReceiver
+        operation: config/createMsgVpnKafkaReceiver
+        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated]
+        # Only msgVpnName is a path param of POST .../kafkaReceivers.
+        # kafkaReceiverName is deliberately omitted from args so
+        # constructRequestBody spreads it into the request body, where SEMP
+        # expects it for create.
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        # The identifiers are required by the strict output schema
+        # (writeToolIdentifierFields); the rest feed the kafkaReceiverCreated
+        # handler and keep the echoed response small.
+        select:
+          - msgVpnName
+          - kafkaReceiverName
+          - authenticationScheme
+          - bootstrapAddressList
+          - transportTlsEnabled
+          - enabled
+    result:
+      strategy: postProcess
+      postProcess: kafkaReceiverCreated
+
+  - name: update-kafka-receiver
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, receiver name) and the attributes that will
+      change. The confirmation MUST come as a separate user reply received AFTER
+      you state the target and effect — do not treat the user's original request
+      as a pre-confirmation, even if it implies intent.
+      Update an existing Kafka Receiver; only the attributes in
+      kafkaReceiverConfig change. The common use is enabling a receiver after
+      the user has set its secret out of band: kafkaReceiverConfig
+      {"enabled": true} — do this only after the user confirms the secret is
+      set. Changing bootstrapAddressList, transportTlsEnabled or an
+      authentication setting on an enabled receiver briefly disables it to apply
+      the change.
+      If kafkaReceiverConfig sets a non-none authenticationScheme it MUST also
+      set enabled:false (the server rejects it otherwise): the receiver then
+      stays down until the user sets the new secret and you enable it with a
+      separate update. Enabling is asynchronous; the result says how to check
+      that the receiver came up.
+      Never ask for or accept a password, secret, key or certificate in chat.
+      The server rejects secret attributes; they must be set out of band.
+      kafkaReceiverConfig accepts more attributes than listed here; call
+      describe-semp-schema (operation: config/updateMsgVpnKafkaReceiver) if you
+      need the full list.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Receiver"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver to modify"
+      - name: kafkaReceiverConfig
+        type: object
+        required: true
+        description: "KafkaReceiver attributes to update (enabled, bootstrapAddressList, authenticationScheme, transportTlsEnabled, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. Do not include msgVpnName or kafkaReceiverName here."
+    steps:
+      - id: updateKafkaReceiver
+        operation: config/updateMsgVpnKafkaReceiver
+        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated]
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+        select:
+          - msgVpnName
+          - kafkaReceiverName
+          - authenticationScheme
+          - bootstrapAddressList
+          - transportTlsEnabled
+          - enabled
+    result:
+      strategy: postProcess
+      postProcess: kafkaReceiverUpdated
+
+  - name: delete-kafka-receiver
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, receiver name) and that the Kafka Receiver will
+      be permanently removed and stop pulling messages from Kafka. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
+      Delete a Kafka Receiver from a Message VPN. Requires msgVpnName and
+      kafkaReceiverName. Delete all of its topic bindings first
+      (delete-kafka-receiver-topic-binding): the broker refuses to delete a
+      receiver that still has bindings (HTTP 400) and does not cascade. If the
+      receiver is already gone — including when the VPN itself no longer exists
+      — this is not an error: the call returns outcome:"already_absent".
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Receiver"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver to delete"
+    steps:
+      - id: deleteKafkaReceiver
+        operation: config/deleteMsgVpnKafkaReceiver
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+    result:
+      strategy: collect
+
+  - name: create-kafka-receiver-topic-binding
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, receiver name, Kafka topic) and that a new topic
+      binding will be created. The confirmation MUST come as a separate user
+      reply received AFTER you state the target and effect — do not treat the
+      user's original request as a pre-confirmation, even if it implies intent.
+      Bind a Kafka topic (or a POSIX.2 regular expression starting with ^) on a
+      Kafka Receiver to a Solace topic: records consumed from Kafka are published
+      to localTopic, a substitution expression (a binding with an empty
+      localTopic is not operational). Requires msgVpnName, kafkaReceiverName and
+      topicName; set localTopic, localKey, initialOffset (beginning or end,
+      default end) and enabled in topicBindingConfig.
+      IMPORTANT: a binding is created DISABLED unless topicBindingConfig sets
+      enabled:true, and there is no tool to enable it later (delete the binding
+      and create it again), so normally pass enabled:true.
+      Create the destination queue and its topic subscription first
+      (create-queue, create-queue-subscription). The broker does not require
+      them, but once the binding is up, records published to a Solace topic that
+      nothing subscribes to are lost.
+      If the binding already exists, this is not an error: the call returns
+      outcome:"already_exists" (existence only — attributes are not compared).
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Receiver"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver to add the binding to"
+      - name: topicName
+        type: string
+        required: true
+        description: "The Kafka topic name, or a POSIX.2 regular expression starting with ^"
+      - name: topicBindingConfig
+        type: object
+        required: false
+        description: "Optional binding attributes (localTopic, localKey, initialOffset, enabled). enabled defaults to false: pass enabled:true for a working binding. Do not include msgVpnName, kafkaReceiverName or topicName here."
+    steps:
+      - id: createTopicBinding
+        operation: config/createMsgVpnKafkaReceiverTopicBinding
+        # msgVpnName and kafkaReceiverName are path params of POST
+        # .../kafkaReceivers/{kafkaReceiverName}/topicBindings. topicName is
+        # deliberately omitted from args so constructRequestBody spreads it into
+        # the request body, where SEMP expects it for create.
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+    result:
+      strategy: collect
+
+  - name: delete-kafka-receiver-topic-binding
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, receiver name, Kafka topic) and that the receiver
+      will stop consuming that topic. The confirmation MUST come as a separate
+      user reply received AFTER you state the target and effect — do not treat
+      the user's original request as a pre-confirmation, even if it implies
+      intent.
+      Delete a topic binding from a Kafka Receiver. Requires msgVpnName,
+      kafkaReceiverName and topicName exactly as given when the binding was
+      created (including a leading ^ for a regular expression). If the binding
+      (or the receiver) is already gone, this is not an error: the call returns
+      outcome:"already_absent".
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Receiver"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver"
+      - name: topicName
+        type: string
+        required: true
+        description: "The Kafka topic name or regular expression of the binding to delete, exactly as created"
+    steps:
+      - id: deleteTopicBinding
+        operation: config/deleteMsgVpnKafkaReceiverTopicBinding
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+          topicName: "{{.Params.topicName}}"
     result:
       strategy: collect
 
