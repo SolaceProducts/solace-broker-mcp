@@ -127,6 +127,7 @@ func (h *Handler) Metadata() tools.Metadata {
 						"never silently downgrades to broker-wide.",
 				},
 			},
+			"additionalProperties": false,
 		},
 		OutputSchema: outputSchema(),
 		Annotations:  tools.ReadOnlyAnnotations(),

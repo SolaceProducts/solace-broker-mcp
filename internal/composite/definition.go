@@ -36,6 +36,10 @@ type CompositeTool struct {
 	Steps       []Step          `yaml:"steps"`
 	Result      ResultStrategy  `yaml:"result"`
 	Annotations ToolAnnotations `yaml:"annotations"`
+	// StrictParameters rejects input keys not declared in Parameters
+	// (additionalProperties: false), so a misspelled optional parameter
+	// fails validation instead of being silently ignored.
+	StrictParameters bool `yaml:"strictParameters"`
 }
 
 // ParameterDef defines an input parameter for a composite tool. These are
