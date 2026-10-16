@@ -173,9 +173,9 @@ These read the provisioned client-username and client-profile configuration obje
 | Tool | Description |
 |---|---|
 | `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`). |
+| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`), plus which topic binding is down and its failure reason. |
 | `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`). |
+| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`), plus which queue binding is down and its failure reason. |
 
 ### Discards
 

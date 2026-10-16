@@ -833,7 +833,9 @@ error rather than an empty list.
 
 Detailed status for a single Kafka Receiver, including topic-binding status
 (`topicBindingUpCount` out of `topicBindingCount` — how many of its configured
-Kafka-topic-to-Solace-destination bindings are actually up).
+Kafka-topic-to-Solace-destination bindings are actually up) and, for any
+unexpectedly-down binding, which one and why. A receiver can read `up` while its
+bindings are down, so check the bindings before concluding it works.
 
 **Parameters:**
 
@@ -847,7 +849,21 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 `kafkaReceiverName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
 `upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
 `topicBindingCount`, `topicBindingUpCount`, `bootstrapAddressList`,
-`authenticationScheme`, `transportTlsEnabled`.
+`authenticationScheme`, `transportTlsEnabled`. Step `topicBindings` (the
+receiver's topic bindings, up to 100): `topicName`, `enabled`, `up`,
+`failureReason`, `lastNotice`, `lastNoticeTime`, `localTopic`,
+`rejectedMsgCount`, `uptime`. Plus a `summary` block (below).
+
+**Summary block** (shared by `get-kafka-receiver-status` and
+`get-kafka-sender-status`, which names its bindings by `queueName`):
+`bindingScannedCount`, `bindingUpCount`, `bindingDownCount` (enabled bindings
+that are not up, the unexpectedly-down set), `bindingDisabledCount`
+(administratively disabled, never counted as a failure),
+`byBindingFailureReason` (counts of unexpectedly-down bindings by reason; a
+recovered binding's stale reason is not counted), and `failedBindings` — for
+each unexpectedly-down binding its `name`, `failureReason` and `lastNotice`,
+capped at 20 (`failedBindingsTruncated` is set when cut). `bindingSkipped` and
+`bindingTruncated` appear only when non-zero or true.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-ingest" }
@@ -887,7 +903,10 @@ error rather than an empty list.
 
 Detailed status for a single Kafka Sender, including queue-binding status
 (`queueBindingUpCount` out of `queueBindingCount` — how many of its configured
-Solace-queue-to-Kafka-topic bindings are actually up).
+Solace-queue-to-Kafka-topic bindings are actually up) and, for any
+unexpectedly-down binding, which one and why. A sender can read `up` with an
+empty `failureReason` while its bindings are down (for example "Remote topic has
+no leader on remote-broker" when the Kafka topic does not exist).
 
 **Parameters:**
 
@@ -901,7 +920,10 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 `kafkaSenderName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
 `upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
 `queueBindingCount`, `queueBindingUpCount`, `bootstrapAddressList`,
-`authenticationScheme`, `transportTlsEnabled`.
+`authenticationScheme`, `transportTlsEnabled`. Step `queueBindings` (the
+sender's queue bindings, up to 100): `queueName`, `enabled`, `up`,
+`failureReason`, `lastNotice`, `lastNoticeTime`, `remoteTopic`, `uptime`. Plus a
+`summary` block, described under `get-kafka-receiver-status`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-export" }

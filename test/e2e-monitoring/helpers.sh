@@ -302,6 +302,10 @@ cleanup_bridges_on() {
 # below deletes bindings before the parent object.
 F9_KAFKA_TOPIC="e2e-monitoring-kafka-topic"
 F9_KAFKA_LOCAL_TOPIC="e2e/kafka/receiver"
+# SOL-156211: a topic binding on the FAILING receiver, so get-kafka-receiver-status
+# has a binding that is down with a reason to name. Its topic never exists
+# anywhere: the receiver cannot reach any Kafka broker at all.
+F9_FAILING_BINDING_TOPIC="e2e-monitoring-kafka-failing-binding-topic"
 F10_KAFKA_QUEUE="test-queue-kafka-sender"
 F10_KAFKA_REMOTE_TOPIC="e2e-monitoring-kafka-sender-topic"
 
@@ -419,6 +423,10 @@ create_kafka_receivers_on() {
     # state with failureReason populated (unlike bridges' equivalent case).
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers" \
         '{"kafkaReceiverName":"test-kafka-receiver-failing","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+    # SOL-156211: an enabled binding that cannot come up (its receiver reaches no
+    # Kafka broker), so the status tool has a failed binding with a reason to report.
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing/topicBindings" \
+        "$(jq -nc --arg t "$F9_FAILING_BINDING_TOPIC" '{topicName:$t,localTopic:"e2e/kafka/receiver-failing",enabled:true}')" >/dev/null
 
     # test-kafka-receiver-disabled: enabled=false — feeds disabledCount and
     # gives byFailureReason's admin-disabled exclusion something real to
@@ -437,6 +445,8 @@ verify_kafka_receivers_on() {
         60 '.data.up == true'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing" \
         30 '.data.failureReason != ""'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing/topicBindings/$F9_FAILING_BINDING_TOPIC" \
+        30 '.data.up == false and .data.failureReason != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-disabled" \
         15 '.data.enabled == false'
 }
@@ -449,6 +459,7 @@ cleanup_kafka_receivers_on() {
     log_info "Cleaning up Kafka Receiver fixtures on $label ..."
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver/topicBindings/$F9_KAFKA_TOPIC"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing/topicBindings/$F9_FAILING_BINDING_TOPIC"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-disabled"
     log_info "Kafka Receiver fixtures cleaned up on $label"
@@ -478,6 +489,12 @@ create_kafka_senders_on() {
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders" \
         '{"kafkaSenderName":"test-kafka-sender-failing","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+    # SOL-156211: an enabled binding that cannot come up (its sender reaches no
+    # Kafka broker), so get-kafka-sender-status has a failed binding to name. The
+    # broker accepts one queue bound to several senders, so it reuses the queue.
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing/queueBindings" \
+        "$(jq -nc --arg q "$F10_KAFKA_QUEUE" --arg t "$F10_KAFKA_REMOTE_TOPIC" \
+            '{queueName:$q,remoteTopic:$t,enabled:true}')" >/dev/null
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders" \
         '{"kafkaSenderName":"test-kafka-sender-disabled","enabled":false,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
@@ -493,6 +510,8 @@ verify_kafka_senders_on() {
         60 '.data.up == true'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing" \
         30 '.data.failureReason != ""'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing/queueBindings/$F10_KAFKA_QUEUE" \
+        30 '.data.up == false and .data.failureReason != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-disabled" \
         15 '.data.enabled == false'
 }
@@ -503,6 +522,7 @@ cleanup_kafka_senders_on() {
     log_info "Cleaning up Kafka Sender fixtures on $label ..."
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender/queueBindings/$F10_KAFKA_QUEUE"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing/queueBindings/$F10_KAFKA_QUEUE"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-disabled"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F10_KAFKA_QUEUE"

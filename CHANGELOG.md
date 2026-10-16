@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `get-kafka-receiver-status` and `get-kafka-sender-status` now also name each unexpectedly-down binding and its `failureReason` (new `topicBindings` / `queueBindings` steps and a `summary` with `bindingDownCount`, `byBindingFailureReason` and `failedBindings`). A bridge can read up while a binding is down; before, only the counts showed it. Existing fields are unchanged. Tracked under SOL-156211.
+
 ## [1.0.0] - 2026-10-14
 
 ### Added
