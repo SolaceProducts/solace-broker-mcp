@@ -223,12 +223,36 @@ func TestBuildSEMPv2Message(t *testing.T) {
 			"Could not find match for subscription a/b+c/*",
 		},
 		{
-			// Sanitized after decoding: the encoded form hides "/etc/" from
-			// fsPrefixPattern, so sanitizing first would let it through.
-			"NOT_FOUND on delete, decoded subscription topic is still sanitized",
+			// Sanitizing the decoded topic would truncate it (a[path]); the
+			// caller's own topic is never redacted, so fall back to the raw text.
+			"NOT_FOUND on delete, topic that sanitizing would alter falls back to raw encoded text",
 			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
 				Description: "Could not find match for subscription a%2Fetc%2Fpasswd"},
-			"Could not find match for subscription a[path]",
+			"Could not find match for subscription a%2Fetc%2Fpasswd",
+		},
+		{
+			"NOT_FOUND on delete, /home/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription fleet%2Fhome%2F%3E"},
+			"Could not find match for subscription fleet%2Fhome%2F%3E",
+		},
+		{
+			"NOT_FOUND on delete, /tmp/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription acme%2Ftmp%2Forders"},
+			"Could not find match for subscription acme%2Ftmp%2Forders",
+		},
+		{
+			"NOT_FOUND on delete, /var/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription plant%2Fvar%2Fsensor%2F%3E"},
+			"Could not find match for subscription plant%2Fvar%2Fsensor%2F%3E",
+		},
+		{
+			"NOT_FOUND on delete, IP-like segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription devices%2F10.0.0.1%2Fstatus"},
+			"Could not find match for subscription devices%2F10.0.0.1%2Fstatus",
 		},
 		{
 			"NOT_FOUND on delete, plain subscription topic is unchanged",

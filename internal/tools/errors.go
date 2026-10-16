@@ -381,7 +381,7 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 			Operation:  sempErr.Operation,
 			Detail:     sempErr.Error(),
 		}
-	case isSEMPStatus(sempErr, "NOT_FOUND", 6) && strings.HasPrefix(sempErr.Operation, "delete"):
+	case isNotFoundOnDelete(sempErr):
 		return &desiredStateOutcome{
 			Outcome:    DesiredStateAlreadyAbsent,
 			Message:    buildSEMPv2Message(sempErr),
@@ -392,6 +392,12 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 		}
 	}
 	return nil
+}
+
+// isNotFoundOnDelete reports whether err is a NOT_FOUND on a delete operation,
+// the shape that classifies as already_absent.
+func isNotFoundOnDelete(err *sempv2.SEMPError) bool {
+	return isSEMPStatus(err, "NOT_FOUND", 6) && strings.HasPrefix(err.Operation, "delete")
 }
 
 // isSEMPStatus reports whether err's SEMPStatus (or, when the broker omitted
@@ -804,7 +810,7 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 			return translated
 		}
 	}
-	if isSEMPStatus(err, "NOT_FOUND", 6) && strings.HasPrefix(err.Operation, "delete") {
+	if isNotFoundOnDelete(err) {
 		if decoded := decodeNotFoundSubscription(err.Description); decoded != "" {
 			return decoded
 		}
@@ -858,20 +864,23 @@ func translateParentNotFound(description string) string {
 // decodeNotFoundSubscription URL-decodes the topic in the broker's "Could not
 // find match for subscription <topic>" text (see notFoundSubscriptionPattern).
 // Path-unescaping, not query-unescaping: '+' is a literal topic character and
-// must not become a space. Sanitized after decoding so an encoded path or
-// address can't slip past sanitizeBrokerText. Returns "" when description
-// doesn't match or the topic isn't validly escaped — the caller then falls
-// back to the broker's raw (sanitized) text rather than guessing.
+// must not become a space. The topic is the caller's own subscriptionTopic
+// echoed back, not broker-internal data, so it is never redacted: if
+// sanitizeBrokerText would alter the decoded topic (a "/home/" or IP-like
+// segment), truncating it is worse than the encoded text. Returns "" when
+// description doesn't match, the topic isn't validly escaped, or sanitizing
+// would alter it — the caller then falls back to the broker's raw (sanitized)
+// text rather than guessing.
 func decodeNotFoundSubscription(description string) string {
 	match := notFoundSubscriptionPattern.FindStringSubmatch(description)
 	if match == nil {
 		return ""
 	}
 	topic, err := url.PathUnescape(match[2])
-	if err != nil {
+	if err != nil || sanitizeBrokerText(topic) != topic {
 		return ""
 	}
-	return sanitizeBrokerText(match[1] + topic)
+	return match[1] + topic
 }
 
 // isRetryable returns true for errors that represent transient conditions where
