@@ -107,6 +107,9 @@ func validateTool(tool *CompositeTool) error {
 		if err := validateOptionalArgs(step); err != nil {
 			return err
 		}
+		if err := validateBodyChecks(step); err != nil {
+			return err
+		}
 	}
 
 	// A step in the action/ namespace invokes an RPC whose replay safety cannot

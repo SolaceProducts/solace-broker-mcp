@@ -303,3 +303,34 @@ func TestParseSpecs_SpecTypeDerivation(t *testing.T) {
 		}
 	}
 }
+
+// WriteOnlyFields is derived from the spec's own "absent from a GET" marker.
+// Pinned against the embedded config spec: a Kafka receiver's secrets are
+// write-only, its ordinary attributes and a read operation's are not.
+func TestParseSpecs_WriteOnlyFields(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+
+	create, ok := ops["config/createMsgVpnKafkaReceiver"]
+	if !ok {
+		t.Fatal("config/createMsgVpnKafkaReceiver missing from the embedded spec")
+	}
+	for _, secret := range []string{"authenticationBasicPassword", "authenticationOauthClientSecret", "authenticationKerberosKeytabContent"} {
+		if !create.WriteOnlyFields[secret] {
+			t.Errorf("%s should be write-only", secret)
+		}
+	}
+	for _, plain := range []string{"authenticationBasicUsername", "bootstrapAddressList", "enabled", "authenticationScheme"} {
+		if create.WriteOnlyFields[plain] {
+			t.Errorf("%s must not be write-only (it is returned by GET)", plain)
+		}
+	}
+
+	// An operation with no request body has no body schema, so the answer is
+	// "unknown" (nil), never an empty-but-known set.
+	if get := ops["monitor/getMsgVpnKafkaReceiver"]; get != nil && get.WriteOnlyFields != nil {
+		t.Errorf("a GET has no request body; WriteOnlyFields = %v, want nil", get.WriteOnlyFields)
+	}
+}

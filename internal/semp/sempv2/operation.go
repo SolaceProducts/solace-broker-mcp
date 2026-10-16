@@ -29,14 +29,15 @@ import (
 // It holds the HTTP method, path template with parameter placeholders, and the
 // parameter definitions needed to construct a valid request.
 type Operation struct {
-	ID             string            // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
-	Method         string            // HTTP method (GET, POST, PUT, PATCH, DELETE)
-	Path           string            // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
-	Parameters     []Parameter       // path, query, and body parameters
-	Description    string            // human-readable description from the spec
-	BodyFields     map[string]bool   // body attribute names the operation accepts; nil when unknown
-	ResponseFields map[string]string // response item attribute name -> JSON type ("string", "integer", ...); nil when unknown
-	SchemaVersion  string            // spec's info.version (e.g. "10.26.2.9715"); empty if omitted
+	ID              string            // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
+	Method          string            // HTTP method (GET, POST, PUT, PATCH, DELETE)
+	Path            string            // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
+	Parameters      []Parameter       // path, query, and body parameters
+	Description     string            // human-readable description from the spec
+	BodyFields      map[string]bool   // body attribute names the operation accepts; nil when unknown
+	WriteOnlyFields map[string]bool   // body attributes the broker never returns on GET (write-only secrets); nil when unknown
+	ResponseFields  map[string]string // response item attribute name -> JSON type ("string", "integer", ...); nil when unknown
+	SchemaVersion   string            // spec's info.version (e.g. "10.26.2.9715"); empty if omitted
 }
 
 // Parameter describes a single parameter for a SEMPv2 operation.
@@ -124,14 +125,15 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 
 				key := specType + "/" + opDef.OperationID
 				operations[key] = &Operation{
-					ID:             opDef.OperationID,
-					Method:         method,
-					Path:           spec.BasePath + path,
-					Parameters:     params,
-					Description:    description,
-					BodyFields:     extractBodyFields(opDef, spec.Parameters, spec.Definitions),
-					ResponseFields: extractResponseFields(opDef, spec.Definitions),
-					SchemaVersion:  spec.Info.Version,
+					ID:              opDef.OperationID,
+					Method:          method,
+					Path:            spec.BasePath + path,
+					Parameters:      params,
+					Description:     description,
+					BodyFields:      extractBodyFields(opDef, spec.Parameters, spec.Definitions),
+					WriteOnlyFields: extractWriteOnlyFields(opDef, spec.Parameters, spec.Definitions),
+					ResponseFields:  extractResponseFields(opDef, spec.Definitions),
+					SchemaVersion:   spec.Info.Version,
 				}
 			}
 		}
@@ -207,6 +209,46 @@ func extractParameters(opDef *openapi2.Operation, sharedParams map[string]*opena
 // having every field rejected. SEMP config definitions are flat objects (no
 // allOf composition), so the schema's top-level properties are the full set.
 func extractBodyFields(opDef *openapi2.Operation, sharedParams map[string]*openapi2.Parameter, definitions map[string]*openapi2.SchemaRef) map[string]bool {
+	bodySchema := resolveBodySchema(opDef, sharedParams, definitions)
+	if bodySchema == nil {
+		return nil
+	}
+	fields := make(map[string]bool, len(bodySchema.Value.Properties))
+	for name := range bodySchema.Value.Properties {
+		fields[name] = true
+	}
+	return fields
+}
+
+// writeOnlyMarker is the phrase the SEMPv2 specs use, in an attribute's
+// description, for an attribute the broker accepts on write but never returns
+// on GET (passwords, keys, certificate content). It is the spec's own machine-
+// stable statement of "secret", so drift checks key off it rather than a
+// hand-kept name list.
+const writeOnlyMarker = "absent from a GET"
+
+// extractWriteOnlyFields returns the subset of an operation's request-body
+// attributes whose description carries writeOnlyMarker. Like extractBodyFields
+// it returns nil when the body schema can't be resolved (unknown, not "none").
+func extractWriteOnlyFields(opDef *openapi2.Operation, sharedParams map[string]*openapi2.Parameter, definitions map[string]*openapi2.SchemaRef) map[string]bool {
+	bodySchema := resolveBodySchema(opDef, sharedParams, definitions)
+	if bodySchema == nil {
+		return nil
+	}
+	fields := make(map[string]bool)
+	for name, prop := range bodySchema.Value.Properties {
+		if prop != nil && prop.Value != nil && strings.Contains(prop.Value.Description, writeOnlyMarker) {
+			fields[name] = true
+		}
+	}
+	return fields
+}
+
+// resolveBodySchema finds the operation's body parameter schema, following a
+// shared-parameter $ref and then the local definition $ref. It returns nil
+// when the operation has no body parameter or the schema can't be resolved to
+// a concrete property set.
+func resolveBodySchema(opDef *openapi2.Operation, sharedParams map[string]*openapi2.Parameter, definitions map[string]*openapi2.SchemaRef) *openapi2.SchemaRef {
 	// Find the body parameter's schema, resolving a shared-parameter $ref first.
 	var bodySchema *openapi2.SchemaRef
 	for _, param := range opDef.Parameters {
@@ -237,12 +279,7 @@ func extractBodyFields(opDef *openapi2.Operation, sharedParams map[string]*opena
 	if bodySchema.Value == nil || len(bodySchema.Value.Properties) == 0 {
 		return nil
 	}
-
-	fields := make(map[string]bool, len(bodySchema.Value.Properties))
-	for name := range bodySchema.Value.Properties {
-		fields[name] = true
-	}
-	return fields
+	return bodySchema
 }
 
 // resolveSchemaRef follows a single local "#/definitions/..." $ref into
