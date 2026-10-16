@@ -52,6 +52,11 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 		"delete-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
 		"create-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
 		"delete-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
+		"create-kafka-sender":                 {"msgVpnName", "kafkaSenderName"},
+		"update-kafka-sender":                 {"msgVpnName", "kafkaSenderName"},
+		"delete-kafka-sender":                 {"msgVpnName", "kafkaSenderName"},
+		"create-kafka-sender-queue-binding":   {"msgVpnName", "kafkaSenderName", "queueName"},
+		"delete-kafka-sender-queue-binding":   {"msgVpnName", "kafkaSenderName", "queueName"},
 	}
 	// *Config bodies are objects, never strings. update-message-vpn's is
 	// required:true, isolating the type gate from the optional create-* ones.
@@ -64,6 +69,9 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 		"create-kafka-receiver":               "kafkaReceiverConfig",
 		"update-kafka-receiver":               "kafkaReceiverConfig",
 		"create-kafka-receiver-topic-binding": "topicBindingConfig",
+		"create-kafka-sender":                 "kafkaSenderConfig",
+		"update-kafka-sender":                 "kafkaSenderConfig",
+		"create-kafka-sender-queue-binding":   "queueBindingConfig",
 	}
 
 	server := registeredServer(t, true)

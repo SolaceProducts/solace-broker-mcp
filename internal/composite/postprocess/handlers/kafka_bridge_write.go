@@ -52,6 +52,19 @@ var kafkaBridgeKinds = []kafkaBridgeKind{
 		bindingCountField: "topicBindingCount",
 		bindingUpField:    "topicBindingUpCount",
 	},
+	{
+		object:            "kafkaSender",
+		label:             "Kafka Sender",
+		nameField:         "kafkaSenderName",
+		configParam:       "kafkaSenderConfig",
+		createTool:        "create-kafka-sender",
+		updateTool:        "update-kafka-sender",
+		statusTool:        "get-kafka-sender-status",
+		createStepID:      "createKafkaSender",
+		updateStepID:      "updateKafkaSender",
+		bindingCountField: "queueBindingCount",
+		bindingUpField:    "queueBindingUpCount",
+	},
 }
 
 // kafkaSchemeSecretFields lists, per authentication scheme, the attributes the
