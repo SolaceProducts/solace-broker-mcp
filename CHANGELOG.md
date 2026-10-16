@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `delete-queue-subscription`'s `already_absent` message now shows the subscription topic as written (`mcp/ga/test/>`) instead of the broker's URL-encoded echo (`mcp%2Fga%2Ftest%2F%3E`). Tracked under SOL-155428.
+
 ## [1.0.0] - 2026-10-14
 
 ### Added
