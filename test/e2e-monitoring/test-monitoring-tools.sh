@@ -1640,6 +1640,46 @@ test_get_kafka_receiver_status_failing() {
         "get-kafka-receiver-status [$broker]: test-kafka-receiver-failing must report a non-empty failureReason" || return 1
 }
 
+# SOL-156211: the summary names the binding that failed and its reason. The raw
+# bridge status (up/enabled/failureReason) says nothing about which binding is
+# down; the failing fixture's binding is enabled and cannot come up.
+test_get_kafka_receiver_status_bindings_healthy() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-receiver-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaReceiverName:"test-kafka-receiver"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.summary.bindingScannedCount' "1" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver has exactly one topic binding" || return 1
+    assert_json_field "$content" '.topicBindings.data | length' "1" \
+        "get-kafka-receiver-status [$broker]: the raw topicBindings step must still be in the result" || return 1
+    assert_json_field "$content" '(.summary.bindingUpCount + .summary.bindingDownCount + .summary.bindingDisabledCount) == 1' "true" \
+        "get-kafka-receiver-status [$broker]: the binding is counted exactly once" || return 1
+}
+
+test_get_kafka_receiver_status_bindings_failing() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-receiver-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaReceiverName:"test-kafka-receiver-failing"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.summary.bindingDownCount' "1" \
+        "get-kafka-receiver-status [$broker]: the failing receiver's enabled binding is down" || return 1
+    assert_json_field "$content" '.summary.failedBindings | length' "1" \
+        "get-kafka-receiver-status [$broker]: exactly one failed binding is named" || return 1
+    assert_json_field "$content" ".summary.failedBindings[0].name == \"$F9_FAILING_BINDING_TOPIC\"" "true" \
+        "get-kafka-receiver-status [$broker]: the failed binding is named by its Kafka topic" || return 1
+    assert_json_field "$content" '.summary.failedBindings[0].failureReason != ""' "true" \
+        "get-kafka-receiver-status [$broker]: the failed binding reports why" || return 1
+    assert_json_field "$content" '(.summary.byBindingFailureReason | length) == 1' "true" \
+        "get-kafka-receiver-status [$broker]: the reason is counted once in byBindingFailureReason" || return 1
+}
+
+test_get_kafka_receiver_status_bindings_healthy_a() { test_get_kafka_receiver_status_bindings_healthy "broker-a"; }
+test_get_kafka_receiver_status_bindings_healthy_b() { test_get_kafka_receiver_status_bindings_healthy "broker-b"; }
+test_get_kafka_receiver_status_bindings_failing_a() { test_get_kafka_receiver_status_bindings_failing "broker-a"; }
+test_get_kafka_receiver_status_bindings_failing_b() { test_get_kafka_receiver_status_bindings_failing "broker-b"; }
+
 test_get_kafka_receiver_status_healthy_a() { test_get_kafka_receiver_status_healthy "broker-a"; }
 test_get_kafka_receiver_status_healthy_b() { test_get_kafka_receiver_status_healthy "broker-b"; }
 test_get_kafka_receiver_status_failing_a() { test_get_kafka_receiver_status_failing "broker-a"; }
@@ -1749,6 +1789,40 @@ test_get_kafka_sender_status_failing() {
     assert_json_field "$content" '.kafkaSenderStatus.data.failureReason != ""' "true" \
         "get-kafka-sender-status [$broker]: test-kafka-sender-failing must report a non-empty failureReason" || return 1
 }
+
+# SOL-156211: same for the sender's queue bindings.
+test_get_kafka_sender_status_bindings_healthy() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-sender-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaSenderName:"test-kafka-sender"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.summary.bindingScannedCount' "1" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender has exactly one queue binding" || return 1
+    assert_json_field "$content" '.queueBindings.data | length' "1" \
+        "get-kafka-sender-status [$broker]: the raw queueBindings step must still be in the result" || return 1
+    assert_json_field "$content" '(.summary.bindingUpCount + .summary.bindingDownCount + .summary.bindingDisabledCount) == 1' "true" \
+        "get-kafka-sender-status [$broker]: the binding is counted exactly once" || return 1
+}
+
+test_get_kafka_sender_status_bindings_failing() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-sender-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaSenderName:"test-kafka-sender-failing"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.summary.bindingDownCount' "1" \
+        "get-kafka-sender-status [$broker]: the failing sender's enabled binding is down" || return 1
+    assert_json_field "$content" ".summary.failedBindings[0].name == \"$F10_KAFKA_QUEUE\"" "true" \
+        "get-kafka-sender-status [$broker]: the failed binding is named by its queue" || return 1
+    assert_json_field "$content" '.summary.failedBindings[0].failureReason != ""' "true" \
+        "get-kafka-sender-status [$broker]: the failed binding reports why" || return 1
+}
+
+test_get_kafka_sender_status_bindings_healthy_a() { test_get_kafka_sender_status_bindings_healthy "broker-a"; }
+test_get_kafka_sender_status_bindings_healthy_b() { test_get_kafka_sender_status_bindings_healthy "broker-b"; }
+test_get_kafka_sender_status_bindings_failing_a() { test_get_kafka_sender_status_bindings_failing "broker-a"; }
+test_get_kafka_sender_status_bindings_failing_b() { test_get_kafka_sender_status_bindings_failing "broker-b"; }
 
 test_get_kafka_sender_status_healthy_a() { test_get_kafka_sender_status_healthy "broker-a"; }
 test_get_kafka_sender_status_healthy_b() { test_get_kafka_sender_status_healthy "broker-b"; }
@@ -1888,6 +1962,10 @@ run_test "Tool 17 — get-kafka-receiver-status healthy (broker-a)"   test_get_k
 run_test "Tool 17 — get-kafka-receiver-status healthy (broker-b)"   test_get_kafka_receiver_status_healthy_b
 run_test "Tool 17 — get-kafka-receiver-status failing (broker-a)"   test_get_kafka_receiver_status_failing_a
 run_test "Tool 17 — get-kafka-receiver-status failing (broker-b)"   test_get_kafka_receiver_status_failing_b
+run_test "Tool 17 — get-kafka-receiver-status bindings healthy (broker-a)" test_get_kafka_receiver_status_bindings_healthy_a
+run_test "Tool 17 — get-kafka-receiver-status bindings healthy (broker-b)" test_get_kafka_receiver_status_bindings_healthy_b
+run_test "Tool 17 — get-kafka-receiver-status bindings failing (broker-a)" test_get_kafka_receiver_status_bindings_failing_a
+run_test "Tool 17 — get-kafka-receiver-status bindings failing (broker-b)" test_get_kafka_receiver_status_bindings_failing_b
 run_test "Tool 17 — get-kafka-receiver-status not found (broker-a)" test_get_kafka_receiver_status_not_found_a
 run_test "Tool 17 — get-kafka-receiver-status not found (broker-b)" test_get_kafka_receiver_status_not_found_b
 
@@ -1904,6 +1982,10 @@ run_test "Tool 19 — get-kafka-sender-status healthy (broker-a)"     test_get_k
 run_test "Tool 19 — get-kafka-sender-status healthy (broker-b)"     test_get_kafka_sender_status_healthy_b
 run_test "Tool 19 — get-kafka-sender-status failing (broker-a)"     test_get_kafka_sender_status_failing_a
 run_test "Tool 19 — get-kafka-sender-status failing (broker-b)"     test_get_kafka_sender_status_failing_b
+run_test "Tool 19 — get-kafka-sender-status bindings healthy (broker-a)" test_get_kafka_sender_status_bindings_healthy_a
+run_test "Tool 19 — get-kafka-sender-status bindings healthy (broker-b)" test_get_kafka_sender_status_bindings_healthy_b
+run_test "Tool 19 — get-kafka-sender-status bindings failing (broker-a)" test_get_kafka_sender_status_bindings_failing_a
+run_test "Tool 19 — get-kafka-sender-status bindings failing (broker-b)" test_get_kafka_sender_status_bindings_failing_b
 run_test "Tool 19 — get-kafka-sender-status not found (broker-a)"   test_get_kafka_sender_status_not_found_a
 run_test "Tool 19 — get-kafka-sender-status not found (broker-b)"   test_get_kafka_sender_status_not_found_b
 

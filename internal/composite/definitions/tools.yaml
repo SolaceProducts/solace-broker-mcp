@@ -907,7 +907,12 @@ tools:
       state, up/down status, last failure reason, uptime, and topic-binding
       status (topicBindingUpCount out of topicBindingCount — how many of its
       configured Kafka-topic-to-Solace-destination bindings are actually
-      up). Use list-kafka-receivers first to discover which Kafka
+      up). The response also names each unexpectedly-down topic binding and
+      its failureReason (summary.failedBindings, with bindingDownCount and
+      byBindingFailureReason; an administratively disabled binding is counted
+      separately, never as a failure): the receiver itself can read up with
+      its bindings down, so check the bindings before concluding it works.
+      Use list-kafka-receivers first to discover which Kafka
       Receivers exist and identify down ones.
     annotations:
       readOnly: true
@@ -921,14 +926,51 @@ tools:
         required: true
         description: "The name of the Kafka Receiver"
     steps:
+      # Also the existence preflight for the bindings step below: a missing
+      # receiver fails here, before the collection GET, which would otherwise
+      # answer 200 with an empty list.
       - id: kafkaReceiverStatus
         operation: monitor/getMsgVpnKafkaReceiver
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
-          select: "authenticationScheme, bootstrapAddressList, clientName, connectionCount, enabled, failureReason, kafkaReceiverName, lastNotice, lastNoticeTime, msgVpnName, topicBindingCount, topicBindingUpCount, transportTlsEnabled, up, upSinceTime, uptime"
+        select:
+          - authenticationScheme
+          - bootstrapAddressList
+          - clientName
+          - connectionCount
+          - enabled
+          - failureReason
+          - kafkaReceiverName
+          - lastNotice
+          - lastNoticeTime
+          - msgVpnName
+          - topicBindingCount
+          - topicBindingUpCount
+          - transportTlsEnabled
+          - up
+          - upSinceTime
+          - uptime
+      - id: topicBindings
+        operation: monitor/getMsgVpnKafkaReceiverTopicBindings
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+          count: "100"
+        select:
+          - enabled
+          - failureReason
+          - lastNotice
+          - lastNoticeTime
+          - localTopic
+          - rejectedMsgCount
+          - topicName
+          - up
+          - uptime
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: getKafkaReceiverStatus
 
   - name: list-kafka-senders
     description: >
@@ -993,6 +1035,13 @@ tools:
       state, up/down status, last failure reason, uptime, and queue-binding
       status (queueBindingUpCount out of queueBindingCount — how many of its
       configured Solace-queue-to-Kafka-topic bindings are actually up).
+      The response also names each unexpectedly-down queue binding and its
+      failureReason (summary.failedBindings, with bindingDownCount and
+      byBindingFailureReason; an administratively disabled binding is counted
+      separately, never as a failure): the sender itself can read up with an
+      empty failureReason while its bindings are down (for example "Remote
+      topic has no leader on remote-broker" when the Kafka topic does not
+      exist), so check the bindings before concluding it works.
       Use list-kafka-senders first to discover which Kafka Senders exist and
       identify down ones.
     annotations:
@@ -1007,14 +1056,49 @@ tools:
         required: true
         description: "The name of the Kafka Sender"
     steps:
+      # Also the existence preflight for the bindings step below (see
+      # get-kafka-receiver-status).
       - id: kafkaSenderStatus
         operation: monitor/getMsgVpnKafkaSender
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           kafkaSenderName: "{{.Params.kafkaSenderName}}"
-          select: "authenticationScheme, bootstrapAddressList, clientName, connectionCount, enabled, failureReason, kafkaSenderName, lastNotice, lastNoticeTime, msgVpnName, queueBindingCount, queueBindingUpCount, transportTlsEnabled, up, upSinceTime, uptime"
+        select:
+          - authenticationScheme
+          - bootstrapAddressList
+          - clientName
+          - connectionCount
+          - enabled
+          - failureReason
+          - kafkaSenderName
+          - lastNotice
+          - lastNoticeTime
+          - msgVpnName
+          - queueBindingCount
+          - queueBindingUpCount
+          - transportTlsEnabled
+          - up
+          - upSinceTime
+          - uptime
+      - id: queueBindings
+        operation: monitor/getMsgVpnKafkaSenderQueueBindings
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaSenderName: "{{.Params.kafkaSenderName}}"
+          count: "100"
+        select:
+          - enabled
+          - failureReason
+          - lastNotice
+          - lastNoticeTime
+          - queueName
+          - remoteTopic
+          - up
+          - uptime
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: getKafkaSenderStatus
 
   - name: get-replication-status
     description: >
