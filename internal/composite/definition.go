@@ -77,6 +77,13 @@ type Step struct {
 	// entry must be a key of Args (validated at load time). See runSingle.
 	OptionalArgs []string `yaml:"optionalArgs"`
 
+	// BodyChecks names request-body checks (see bodychecks.go) run on the final,
+	// merged request body of a config create/update step, after the unknown-field
+	// check and before the body is attached to the call. A check rejects the call
+	// locally, with no SEMP request. Unknown names, and use on any operation other
+	// than config/create* or config/update*, are rejected at load time.
+	BodyChecks []string `yaml:"bodyChecks"`
+
 	// compiledArgs and compiledForEachIf cache the parsed *template.Template
 	// form of Args and ForEachIf. They are populated once by
 	// compileStepTemplates, called from validateTool during LoadTools —

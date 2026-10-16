@@ -272,7 +272,7 @@ func (ce *CompositeExecutor) runSingle(ctx context.Context, step Step, client se
 		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
-	args, err = ce.constructRequestBody(op, args, execCtx.Params)
+	args, err = ce.constructRequestBody(op, args, execCtx.Params, step.BodyChecks)
 	if err != nil {
 		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
@@ -503,7 +503,7 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
-	baseArgs, err = ce.constructRequestBody(op, baseArgs, execCtx.Params)
+	baseArgs, err = ce.constructRequestBody(op, baseArgs, execCtx.Params, step.BodyChecks)
 	if err != nil {
 		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
@@ -839,7 +839,10 @@ func requestBodyErrorf(format string, args ...any) error {
 //     otherwise leak into the body. Its value must come from the dedicated param
 //     (it identifies the object in the URL), so we reject it here — giving the
 //     same clear, client-side error as the create case above.
-func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) (map[string]any, error) {
+//
+// Finally, the step's named body checks (Step.BodyChecks, bodychecks.go) run
+// against the merged body.
+func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any, checks []string) (map[string]any, error) {
 	hasBody := false
 	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
 	for _, p := range op.Parameters {
@@ -850,6 +853,12 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		}
 	}
 	if !hasBody {
+		// A configured body check must never be skipped silently: with no body
+		// parameter there is nothing for it to inspect, so the step's definition
+		// is wrong. (The loader cannot catch this; it does not see the catalog.)
+		if len(checks) > 0 {
+			return nil, fmt.Errorf("body checks configured on operation %q, which takes no request body", op.ID)
+		}
 		return args, nil
 	}
 
@@ -902,6 +911,15 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 				return nil, requestBodyErrorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", boundedName(field), op.ID)
 			}
 		}
+	}
+
+	// Named body checks run on the final merged body, so they see exactly what
+	// would be sent regardless of which param shape supplied each field — and
+	// they run even when op.BodyFields is nil (the unknown-field check above is
+	// skipped then). Placed before args["body"] is set so a rejected body never
+	// reaches the client.
+	if err := runBodyChecks(checks, op.ID, body); err != nil {
+		return nil, err
 	}
 
 	args["body"] = body
