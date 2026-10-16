@@ -35,3 +35,6 @@ fi
 
 # 2. Config-tool round-trip + cross-cutting tests through the MCP server.
 bash "$SCRIPT_DIR/test-management-tools.sh"
+
+# 3. Kafka bridge write-tool tests (real Kafka; docker-compose.yml's `kafka` service).
+bash "$SCRIPT_DIR/test-kafka-tools.sh"

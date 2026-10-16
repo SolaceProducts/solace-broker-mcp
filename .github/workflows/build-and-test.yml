@@ -446,6 +446,8 @@ jobs:
           docker logs solace-e2e-mgmt-a 2>&1 | tail -100
           echo "=== solace-e2e-mgmt-b ==="
           docker logs solace-e2e-mgmt-b 2>&1 | tail -100
+          echo "=== kafka-e2e-mgmt ==="
+          docker logs kafka-e2e-mgmt 2>&1 | tail -100
 
       - name: MCP server log (on failure)
         if: failure()

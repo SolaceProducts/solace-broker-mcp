@@ -15,7 +15,7 @@ Location-independence contract: a suite sets `SUITE_DIR` (its own directory) bef
 | Suite | Fixtures | Focus |
 |---|---|---|
 | `e2e-monitoring` | F1–F7, created up front + broker-driver traffic | monitoring tools |
-| `e2e-management` | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint) |
+| `e2e-management` | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint, RDP, queue subscription) and the Kafka bridge write tools (against a real Kafka with PLAINTEXT and SASL listeners; needs the broker Kafka-bridge scaling env vars) |
 
 ---
 
