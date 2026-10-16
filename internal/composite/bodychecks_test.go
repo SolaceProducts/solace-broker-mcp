@@ -391,11 +391,10 @@ var knownNonSecretWriteOnly = map[string]string{
 
 // temporaryWriteOnlyExemptions are tools with unguarded write-only secrets that a
 // follow-up story is closing. Each entry must name its ticket; the story that
-// closes it deletes the entry. Remove nothing else.
-var temporaryWriteOnlyExemptions = map[string]string{
-	"create-message-vpn": "SOL-156210: replicationBridgeAuthentication* secrets",
-	"update-message-vpn": "SOL-156210: replicationBridgeAuthentication* secrets",
-}
+// closes it deletes the entry. The mechanism is kept (and the "no longer needed"
+// assertion below with it) so a future spec bump that adds a write-only attribute
+// to a shipped tool can be staged behind a ticketed exemption instead of a red build.
+var temporaryWriteOnlyExemptions = map[string]string{}
 
 // Every write-only attribute of every shipped config create/update step must be
 // covered by that step's body checks, listed as a known non-secret, or belong to
@@ -474,5 +473,94 @@ func TestBodyChecks_ConfiguredOnOperationWithoutBodyFails(t *testing.T) {
 	}
 	if len(recorded) != 0 {
 		t.Errorf("expected no SEMP calls, got %d", len(recorded))
+	}
+}
+
+// The hand-kept MsgVpn secret list must equal the spec's write-only set minus the
+// explicitly allowlisted non-secrets, for both operations create-/update-message-vpn use.
+func TestBodyChecks_MsgVpnSecretFieldsMatchSpec(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	want := append([]string(nil), msgVpnSecretFields...)
+	sort.Strings(want)
+	for _, id := range []string{"config/createMsgVpn", "config/updateMsgVpn"} {
+		op, ok := ops[id]
+		if !ok {
+			t.Fatalf("operation %s missing from the embedded spec", id)
+		}
+		var got []string
+		for _, f := range writeOnlySet(op) {
+			if _, nonSecret := knownNonSecretWriteOnly[f]; !nonSecret {
+				got = append(got, f)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s write-only secrets = %v\nmsgVpnSecretFields = %v", id, got, want)
+		}
+	}
+}
+
+func TestBodyChecks_MsgVpnSecretsAreRedactedInAuditHash(t *testing.T) {
+	for _, s := range msgVpnSecretFields {
+		if got := audit.RedactSensitive(map[string]any{s: secretSentinel}); got[s] == secretSentinel {
+			t.Errorf("audit.RedactSensitive does not mask %q; extend its key lists", s)
+		}
+	}
+}
+
+// The real create-/update-message-vpn definitions, against the real embedded spec:
+// a replication-bridge secret never reaches the client, in any shape, and an
+// ordinary msgVpnConfig still does.
+func TestRealMessageVPNTools_RejectReplicationBridgeSecrets(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	byName := map[string]CompositeTool{}
+	for _, tl := range tools {
+		byName[tl.Name] = tl
+	}
+
+	for _, name := range []string{"create-message-vpn", "update-message-vpn"} {
+		tool, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s missing from the embedded catalog", name)
+		}
+		for _, secret := range msgVpnSecretFields {
+			for shape, params := range map[string]map[string]any{
+				"config object": {"msgVpnName": "v", "msgVpnConfig": map[string]any{secret: secretSentinel}},
+				"top-level":     {"msgVpnName": "v", "msgVpnConfig": map[string]any{}, secret: secretSentinel},
+			} {
+				t.Run(name+"/"+shape+"/"+secret, func(t *testing.T) {
+					var recorded []callRecord
+					var mu sync.Mutex
+					client := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+					_, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, params)
+					assertRejectedBeforeSEMP(t, recorded, err, `"`+secret+`"`)
+				})
+			}
+		}
+
+		t.Run(name+"/ordinary config still goes through", func(t *testing.T) {
+			var recorded []callRecord
+			var mu sync.Mutex
+			client := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+			_, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, map[string]any{
+				"msgVpnName":   "v",
+				"msgVpnConfig": map[string]any{"maxConnectionCount": float64(10), "replicationEnabledQueueBehavior": "fail-on-all-errors"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(recorded) != 1 {
+				t.Errorf("calls = %d, want 1", len(recorded))
+			}
+		})
 	}
 }

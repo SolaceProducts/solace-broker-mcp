@@ -1141,7 +1141,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | Name of the VPN to create. |
-| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take event broker defaults. |
+| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take event broker defaults. The replication-bridge secrets (`replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent`, `replicationBridgeAuthenticationClientCertPassword`) are rejected: set them out of band (Broker Manager, CLI, SEMP or Terraform). |
 
 **Returns:** step-keyed envelope, step `createVpn`.
 
@@ -1162,7 +1162,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to modify. |
-| `msgVpnConfig` | object | yes | MsgVpn attributes to change. Do not include `msgVpnName`. |
+| `msgVpnConfig` | object | yes | MsgVpn attributes to change. Do not include `msgVpnName`. The replication-bridge secrets (`replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent`, `replicationBridgeAuthenticationClientCertPassword`) are rejected: set them out of band (Broker Manager, CLI, SEMP or Terraform). |
 
 **Returns:** step-keyed envelope, step `updateVpn`.
 

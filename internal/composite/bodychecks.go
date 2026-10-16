@@ -81,11 +81,26 @@ var kafkaSecretFields = []string{
 	"authenticationScramPassword",
 }
 
+// msgVpnSecretFields are the write-only secrets of MsgVpn that create-message-vpn
+// and update-message-vpn expose through msgVpnConfig: the replication bridge's
+// credentials. MsgVpn also has replicationEnabledQueueBehavior marked write-only,
+// but it is a behaviour flag, not a credential (see knownNonSecretWriteOnly in
+// the drift test). TestBodyChecks_MsgVpnSecretFieldsMatchSpec pins this list.
+var msgVpnSecretFields = []string{
+	"replicationBridgeAuthenticationBasicPassword",
+	"replicationBridgeAuthenticationClientCertContent",
+	"replicationBridgeAuthenticationClientCertPassword",
+}
+
 // bodyChecks is the registry of check names usable in tools.yaml.
 var bodyChecks = map[string]bodyCheck{
 	"rejectKafkaSecrets": {
 		fn:           rejectSecretFields(kafkaSecretFields, "Then ask me to enable the bridge."),
 		secretFields: kafkaSecretFields,
+	},
+	"rejectMsgVpnSecrets": {
+		fn:           rejectSecretFields(msgVpnSecretFields, "Replication bridge credentials are configured out of band."),
+		secretFields: msgVpnSecretFields,
 	},
 	"createDisabledWhenAuthenticated": {
 		fn: checkAuthenticatedBridgeIsDisabled,
@@ -102,9 +117,11 @@ func rejectSecretFields(fields []string, afterHint string) func(bodyMode, map[st
 		for _, secret := range sorted {
 			for key := range body {
 				if strings.EqualFold(key, secret) {
-					return requestBodyErrorf(
-						"%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. %s If you already shared a secret in this conversation, treat it as exposed and rotate it.",
-						secret, afterHint)
+					msg := "%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat."
+					if afterHint != "" {
+						msg += " " + afterHint
+					}
+					return requestBodyErrorf(msg+" If you already shared a secret in this conversation, treat it as exposed and rotate it.", secret)
 				}
 			}
 		}

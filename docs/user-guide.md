@@ -209,8 +209,8 @@ These tools create, update, and delete event broker configuration objects via th
 
 | Tool | Destructive | Description |
 |---|---|---|
-| `create-message-vpn` | No | Create a Message VPN. |
-| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. |
+| `create-message-vpn` | No | Create a Message VPN. Replication-bridge passwords and certificates are rejected; set them out of band. |
+| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. Replication-bridge passwords and certificates are rejected; set them out of band. |
 | `delete-message-vpn` | **Yes** | Delete a Message VPN. Fails if it still has active client connections or child endpoints. |
 | `create-queue` | No | Create a queue in a VPN. |
 | `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
