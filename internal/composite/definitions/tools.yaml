@@ -166,6 +166,7 @@ tools:
       an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -256,6 +257,7 @@ tools:
       support, use get-vpn-status.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: maxResults
         type: integer
@@ -434,6 +436,7 @@ tools:
       error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -488,6 +491,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -530,6 +534,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -610,6 +615,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -712,6 +718,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -766,6 +773,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -861,6 +869,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -947,6 +956,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1057,6 +1067,7 @@ tools:
       reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1121,6 +1132,7 @@ tools:
       nonexistent VPN is reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1558,6 +1570,7 @@ tools:
       queue is reported as an error rather than an empty list.
     annotations:
       readOnly: true
+    strictParameters: true
     parameters:
       - name: msgVpnName
         type: string
