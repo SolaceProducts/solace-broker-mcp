@@ -9,8 +9,8 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **29 read-only tools** plus **18 write tools** — four action
-tools and 14 Config API management tools. The write tools are gated behind
+The server exposes **29 read-only tools** plus **28 write tools** — four action
+tools and 24 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
 [Action Tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
@@ -105,10 +105,11 @@ annotation, instruct the calling large language model (LLM) to obtain explicit u
 invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
-The 14 Config API management tools (create/update/delete for Message VPNs,
-queues, topic endpoints, and REST Delivery Points, plus create/delete for
-queue subscriptions) are gated behind the same flag and documented under
-[Management](#management-config-api).
+The 24 Config API management tools (create/update/delete for Message VPNs,
+queues, topic endpoints, REST Delivery Points, Kafka Receivers and Kafka Senders,
+plus create/delete for queue subscriptions and for Kafka receiver topic bindings
+and sender queue bindings) are gated behind the same flag and documented under
+[Management](#management-config-api) and [Kafka Bridges (write)](#kafka-bridges-write).
 
 ## Tool Index
 
@@ -127,6 +128,7 @@ queue subscriptions) are gated behind the same flag and documented under
 | Discards | [`get-discard-stats`](#get-discard-stats), [`list-queue-discards`](#list-queue-discards) | — |
 | Actions | [`disconnect-client`](#disconnect-client), [`clear-client-stats`](#clear-client-stats), [`delete-queue-messages`](#delete-queue-messages), [`clear-queue-stats`](#clear-queue-stats) | write |
 | Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-queue-subscription`](#create-queue-subscription), [`delete-queue-subscription`](#delete-queue-subscription), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint), [`create-rdp`](#create-rdp), [`update-rdp`](#update-rdp), [`delete-rdp`](#delete-rdp) | write |
+| Kafka bridges (write) | [`create-kafka-receiver`](#create-kafka-receiver), [`update-kafka-receiver`](#update-kafka-receiver), [`delete-kafka-receiver`](#delete-kafka-receiver), [`create-kafka-receiver-topic-binding`](#create-kafka-receiver-topic-binding), [`delete-kafka-receiver-topic-binding`](#delete-kafka-receiver-topic-binding), [`create-kafka-sender`](#create-kafka-sender), [`update-kafka-sender`](#update-kafka-sender), [`delete-kafka-sender`](#delete-kafka-sender), [`create-kafka-sender-queue-binding`](#create-kafka-sender-queue-binding), [`delete-kafka-sender-queue-binding`](#delete-kafka-sender-queue-binding) | write |
 
 The following example invocations show the `arguments` object of an MCP `tools/call`
 request. A full request wraps it: `{"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}`.
@@ -1440,3 +1442,236 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 ```
 
 **Example request:** "Delete the webhook-rdp RDP from `<your-vpn-name>` on prod-broker." (The tool description instructs the agent to confirm before acting.)
+
+## Kafka Bridges (write)
+
+Ten write tools create, update and delete Kafka Receivers (Kafka into Solace) and Kafka Senders (Solace
+out to Kafka) and their bindings. They are gated behind `enable_write_tools` like the other write tools.
+
+| Object | Tools |
+|---|---|
+| Kafka Receiver | `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver` |
+| Receiver topic binding | `create-kafka-receiver-topic-binding`, `delete-kafka-receiver-topic-binding` |
+| Kafka Sender | `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender` |
+| Sender queue binding | `create-kafka-sender-queue-binding`, `delete-kafka-sender-queue-binding` |
+
+**Two modes.**
+
+- **No authentication.** Create the bridge with `authenticationScheme: "none"` (the default); it can be created
+  `enabled: true` in one call.
+- **Authentication, with the secret set out of band.** Create the bridge with its real scheme and its
+  non-secret settings (for example `authenticationBasicUsername`), `enabled: false`. The result's `summary`
+  names the attributes the user must set on the bridge themselves (Broker Manager, CLI, SEMP or Terraform) and
+  tells the user not to paste them into the chat. When the user confirms, call the update tool with
+  `{"enabled": true}`, then check the status tool.
+
+**Secrets never pass through the LLM.** The server rejects these write-only attributes in any tool argument,
+on create and update, whichever way they are supplied: `authenticationAwsMskIamSecretAccessKey`,
+`authenticationBasicPassword`, `authenticationClientCertContent`, `authenticationClientCertPassword`,
+`authenticationKerberosKeytabContent`, `authenticationOauthClientSecret` and `authenticationScramPassword`. The
+error names the field (never the value) and says to rotate a secret already typed into the chat. The broker
+never returns them on a GET. Attributes that are readable (usernames, the OAuth client id and token endpoint,
+the AWS region and role) are not secret and can be set through the tool. A credential is always set together
+with its identity (a password with its username, a key tab with its principal and file name).
+
+**Enabled and scheme rules.** Create rejects `enabled: true` with a non-none `authenticationScheme`. An update
+that sets a non-none `authenticationScheme` must also set `enabled: false`, so a scheme switch on a live bridge
+stops it and takes the out-of-band path. An update that does not mention the scheme (for example the plain
+`{"enabled": true}`) is not affected.
+
+**The update tools are single-step.** Enabling is asynchronous: a bridge takes 10 to 40 seconds to come up, and
+right after the call it reads `up: false` with a transient `No remote-broker connection`. The update result's
+`summary.nextStep` tells the agent to call `get-kafka-receiver-status` / `get-kafka-sender-status` and retry for
+up to about a minute. `failureReason: "Username or password missing"` means the secret is not set;
+`Authentication failed` in `lastNotice` means it is wrong.
+
+**Ordering, as the broker enforces it.**
+
+- Delete all of a bridge's bindings before the bridge: the broker refuses otherwise (HTTP 400) and does not cascade.
+- A binding is created **disabled** unless `enabled: true` is passed, and there is no tool to enable one later
+  (delete and recreate it).
+- Create the destination queue and its topic subscription before a receiver binding. The broker does not require
+  them, but records published to a topic nobody subscribes to are lost.
+- Create the source queue before a sender binding: the broker silently accepts a binding to a queue that does
+  not exist. The Kafka topic should exist; if it does not, the binding stays down with `Remote topic has no leader
+  on remote-broker` and recovers within seconds of the topic being created. These tools cannot create Kafka topics.
+- Deleting a queue that a sender binding points at succeeds and leaves the binding dangling.
+
+**Broker prerequisite.** Kafka bridges need capacity set when the broker is created:
+`system_scaling_maxkafkabridgecount` (0, 10, 50 or 200) and `system_scaling_maxkafkabrokerconnectioncount` (0, 300,
+2000 or 10000). Both default to 0, and with 0 every create fails `Kafka Bridge limit of 0 reached`.
+
+**Audit.** `create-kafka-receiver` and `create-kafka-sender` carry `destructiveHint`, unlike other `create-*`
+tools, because a bridge opens an outbound connection to a host the caller chooses. They therefore emit an
+`operation` audit record when `OBS_AUDIT_LOG_ENABLED` is on, and the destructive WARN line otherwise. The two
+binding creates do not.
+
+**Outcomes.** A duplicate create returns `outcome: "already_exists"` (the existing bridge is not modified; the
+message tells the agent to check its `authenticationScheme` with the status tool before enabling it). A delete
+of something already gone returns `outcome: "already_absent"`.
+
+**Result.** Create and update return the step-keyed envelope plus a `summary`: `object`, `name`, `msgVpnName`,
+`authenticationScheme`, `enabled`, and `nextStep`. A create also returns `secretRequired`; when it is `true`
+the result adds `secretFields` (the attributes the user must set) and `handoff` (the text to show the user). The binding tools and the deletes return the step-keyed envelope only.
+
+### create-kafka-receiver
+
+Create a Kafka Receiver. **Destructive** (audited; see above).
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaReceiverName` | string | yes | Name of the receiver to create. |
+| `kafkaReceiverConfig` | object | no | `bootstrapAddressList`, `authenticationScheme`, `authenticationBasicUsername`, `transportTlsEnabled`, `enabled`, and other non-secret attributes. Secret attributes are rejected. |
+
+```json
+{ "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "kafkaReceiverConfig": { "authenticationScheme": "none", "bootstrapAddressList": "kafka:9092", "enabled": true } }
+```
+
+**Example request:** "Create a Kafka Receiver orders-in on `<your-vpn-name>` pulling from kafka:9092, no authentication, enabled."
+
+### update-kafka-receiver
+
+Partially update a Kafka Receiver; commonly used to enable it after the secret was set out of band.
+**Destructive.** Changing the bootstrap address, TLS or an authentication setting on an enabled receiver briefly
+disables it.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaReceiverName` | string | yes | The receiver to modify. |
+| `kafkaReceiverConfig` | object | yes | Attributes to change. A non-none `authenticationScheme` must be sent with `enabled: false`. Secret attributes are rejected. |
+
+```json
+{ "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "kafkaReceiverConfig": { "enabled": true } }
+```
+
+### delete-kafka-receiver
+
+**Destructive.** Delete a Kafka Receiver. Delete its topic bindings first. Already gone returns `already_absent`.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaReceiverName` | string | yes | The receiver to delete. |
+
+### create-kafka-receiver-topic-binding
+
+Bind a Kafka topic (or a POSIX.2 regular expression starting with `^`) to a Solace topic. Pass `enabled: true`
+in `topicBindingConfig`: a binding is created disabled by default.
+
+Annotations: `readOnly: false`, `destructive: false`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaReceiverName` | string | yes | The receiver. |
+| `topicName` | string | yes | The Kafka topic, or a regular expression starting with `^`. |
+| `topicBindingConfig` | object | no | `localTopic` (a substitution expression; empty means not operational), `localKey`, `initialOffset` (`beginning` or `end`), `enabled`. |
+
+```json
+{ "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "topicName": "orders", "topicBindingConfig": { "localTopic": "kafka/orders", "initialOffset": "beginning", "enabled": true } }
+```
+
+### delete-kafka-receiver-topic-binding
+
+**Destructive.** Delete a topic binding; `topicName` exactly as created (including a leading `^`). Already gone
+returns `already_absent`.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaReceiverName` | string | yes | The receiver. |
+| `topicName` | string | yes | The binding's Kafka topic or regular expression. |
+
+### create-kafka-sender
+
+Create a Kafka Sender. **Destructive** (audited; see above). Same two modes and rules as the receiver.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaSenderName` | string | yes | Name of the sender to create. |
+| `kafkaSenderConfig` | object | no | `bootstrapAddressList`, `authenticationScheme`, `authenticationBasicUsername`, `transportTlsEnabled`, `idempotenceEnabled`, `enabled`, and other non-secret attributes. Secret attributes are rejected. |
+
+```json
+{ "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-out", "kafkaSenderConfig": { "authenticationScheme": "basic", "authenticationBasicUsername": "svc-orders", "bootstrapAddressList": "kafka:9094" } }
+```
+
+**Example request:** "Create a Kafka Sender orders-out to kafka:9094 using SASL user svc-orders." The result asks the user to
+set `authenticationBasicUsername` and `authenticationBasicPassword` themselves; the password is never sent through the tool.
+
+### update-kafka-sender
+
+**Destructive.** Partially update a Kafka Sender; commonly `{"enabled": true}` once the secret is set. Same
+rules as `update-kafka-receiver`.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaSenderName` | string | yes | The sender to modify. |
+| `kafkaSenderConfig` | object | yes | Attributes to change. A non-none `authenticationScheme` must be sent with `enabled: false`. Secret attributes are rejected. |
+
+### delete-kafka-sender
+
+**Destructive.** Delete a Kafka Sender. Delete its queue bindings first. Already gone returns `already_absent`.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaSenderName` | string | yes | The sender to delete. |
+
+### create-kafka-sender-queue-binding
+
+Bind a queue to a Kafka Sender: messages taken from the queue are sent to the Kafka topic `remoteTopic`. Pass
+`enabled: true` in `queueBindingConfig`: a binding is created disabled by default.
+
+Annotations: `readOnly: false`, `destructive: false`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaSenderName` | string | yes | The sender. |
+| `queueName` | string | yes | The queue whose messages are sent to Kafka. |
+| `queueBindingConfig` | object | no | `remoteTopic` (letters, digits, `.`, `_`, `-`), `remoteKey`, `ackMode` (`none`, `one`, `all`; must be `all` when the sender has `idempotenceEnabled`), `partitionScheme` and related settings, `enabled`. |
+
+```json
+{ "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-out", "queueName": "orders.q", "queueBindingConfig": { "remoteTopic": "orders", "ackMode": "all", "enabled": true } }
+```
+
+### delete-kafka-sender-queue-binding
+
+**Destructive.** Delete a queue binding; the queue and its messages are not touched. Already gone returns
+`already_absent`.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `kafkaSenderName` | string | yes | The sender. |
+| `queueName` | string | yes | The bound queue. |
