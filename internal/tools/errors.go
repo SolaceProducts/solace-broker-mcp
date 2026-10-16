@@ -395,6 +395,7 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 // agent must look before it enables one (SOL-156212).
 var alreadyExistsHints = map[string]string{
 	"create-kafka-receiver": "The existing Kafka Receiver was not modified. Before enabling it, check its authenticationScheme with get-kafka-receiver-status: a scheme other than none needs its secret set out of band first.",
+	"create-kafka-sender":   "The existing Kafka Sender was not modified. Before enabling it, check its authenticationScheme with get-kafka-sender-status: a scheme other than none needs its secret set out of band first.",
 }
 
 // applyAlreadyExistsHint appends the tool's hint, if it has one, to an

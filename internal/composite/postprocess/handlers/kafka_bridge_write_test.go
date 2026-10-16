@@ -153,3 +153,46 @@ func TestKafkaBridgeWrite_RegistrationMatchesTheToolShape(t *testing.T) {
 		t.Error("a renamed step must fail validation")
 	}
 }
+
+func senderStep(stepID string, data map[string]any) map[string]map[string]any {
+	return map[string]map[string]any{stepID: {"data": data}}
+}
+
+func TestKafkaSenderHandlers_UseSenderNamesAndBindingFields(t *testing.T) {
+	data := map[string]any{"msgVpnName": "vpn1", "kafkaSenderName": "tx", "authenticationScheme": "basic", "enabled": false}
+	created := apply(t, "kafkaSenderCreated", senderStep("createKafkaSender", data))
+	if created["object"] != "kafkaSender" || created["name"] != "tx" {
+		t.Errorf("identity wrong: %v", created)
+	}
+	handoff, _ := created["handoff"].(string)
+	if !strings.Contains(handoff, "Kafka Sender") || strings.Contains(handoff, "Receiver") {
+		t.Errorf("handoff should speak of the sender only:\n%s", handoff)
+	}
+	next, _ := created["nextStep"].(string)
+	if !strings.Contains(next, "update-kafka-sender") || !strings.Contains(next, "kafkaSenderConfig") || strings.Contains(next, "kafkaReceiverConfig") {
+		t.Errorf("nextStep = %q", next)
+	}
+
+	data["enabled"] = true
+	updated := apply(t, "kafkaSenderUpdated", senderStep("updateKafkaSender", data))
+	if n, _ := updated["nextStep"].(string); !strings.Contains(n, "get-kafka-sender-status") || !strings.Contains(n, "queueBindingUpCount") || strings.Contains(n, "topicBinding") {
+		t.Errorf("updated nextStep = %q", n)
+	}
+}
+
+// Every registered kind must be fully described: a missing field would produce
+// text that points at a tool or field that does not exist.
+func TestKafkaBridgeKinds_AreFullyDescribed(t *testing.T) {
+	for _, k := range kafkaBridgeKinds {
+		for name, v := range map[string]string{
+			"object": k.object, "label": k.label, "nameField": k.nameField, "configParam": k.configParam,
+			"createTool": k.createTool, "updateTool": k.updateTool, "statusTool": k.statusTool,
+			"createStepID": k.createStepID, "updateStepID": k.updateStepID,
+			"bindingCountField": k.bindingCountField, "bindingUpField": k.bindingUpField,
+		} {
+			if v == "" {
+				t.Errorf("kind %q: %s is empty", k.object, name)
+			}
+		}
+	}
+}

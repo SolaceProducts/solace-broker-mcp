@@ -142,7 +142,7 @@ func listAllTools(t *testing.T, server *mcp.Server) []*mcp.Tool {
 // Kafka bridge write tools. Measured: 47 tools / ~23.9k tokens before; the five
 // Kafka Receiver tools add ~4.2k (~830 each, mostly the generated output schema
 // plus descriptions in line with create-queue's), and the five Kafka Sender tools
-// (SOL-156213) add about as much, ~32k in total. The read-only ceiling is unchanged
+// (SOL-156213) add about as much: 57 tools / ~32.3k tokens in total. The read-only ceiling is unchanged
 // (~10.0k measured). Write tools are off by default, so only deployments that
 // enable them pay this.
 func TestToolListBudget(t *testing.T) {

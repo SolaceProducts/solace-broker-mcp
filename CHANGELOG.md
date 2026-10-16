@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added five Kafka Sender write tools, available when `enable_write_tools: true`: `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding` and `delete-kafka-sender-queue-binding`, with the same secret handling as the Kafka Receiver tools. `create-kafka-sender` is annotated destructive, so it is audited. Tracked under SOL-156213.
 - Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. Passwords, client secrets and other credentials are rejected and must be set out of band; the create result tells the user how. `create-kafka-receiver` is annotated destructive, so it is audited. Kafka bridges need the broker's Kafka bridge scaling settings (`system_scaling_maxkafkabridgecount`) set at creation. Tracked under SOL-156212.
 
 ### Changed

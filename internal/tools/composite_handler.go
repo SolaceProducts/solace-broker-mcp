@@ -44,6 +44,9 @@ var writeToolIdentifierFields = map[string][]string{
 	"create-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
 	"update-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
 	"create-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
+	"create-kafka-sender":                 {"msgVpnName", "kafkaSenderName"},
+	"update-kafka-sender":                 {"msgVpnName", "kafkaSenderName"},
+	"create-kafka-sender-queue-binding":   {"msgVpnName", "kafkaSenderName", "queueName"},
 }
 
 // callsConfigOrActionOperation reports whether any step of tool calls a
