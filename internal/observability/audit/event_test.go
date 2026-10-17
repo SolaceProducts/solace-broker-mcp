@@ -120,18 +120,18 @@ func TestEmittedRecord_carriesTheFrozenLiterals(t *testing.T) {
 	}
 }
 
-// TestEventTypes_closedSetIsSeven pins the discriminator vocabulary.
+// TestEventTypes_closedSetIsEight pins the discriminator vocabulary.
 //
 // The count is asserted against len(EventTypes()) and the members against an
 // explicit list, so adding a type without listing it here fails, and listing
-// one without adding it fails too. The set grew from five to six to seven over
-// three revisions and each revision's prose undercounted it; a hardcoded
-// integer would have gone stale silently every time.
-func TestEventTypes_closedSetIsSeven(t *testing.T) {
+// one without adding it fails too. The set grew from five to six to seven to
+// eight over four revisions and each revision's prose undercounted it; a
+// hardcoded integer would have gone stale silently every time.
+func TestEventTypes_closedSetIsEight(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"audit_drop", "auth_failure", "auth_success", "authz_denied",
-		"broker_auth_retry", "broker_authz_denied", "operation",
+		"broker_auth_retry", "broker_authz_denied", "operation", "owner_validation_rejected",
 	}
 	got := EventTypes()
 	if !reflect.DeepEqual(got, want) {
@@ -205,7 +205,7 @@ func TestErrorTypes_returnsACopy(t *testing.T) {
 // TestNewEvent_commonFieldsOnEveryRecord pins the five fields a SIEM's routing
 // and pinning depend on, on every record type including audit_drop.
 //
-// event is asserted to be the constant "audit" on all seven: a drop record
+// event is asserted to be the constant "audit" on all eight: a drop record
 // that renamed itself would fall outside the one filter customers route on,
 // which is the situation the drop record exists to report.
 func TestNewEvent_commonFieldsOnEveryRecord(t *testing.T) {
@@ -218,6 +218,8 @@ func TestNewEvent_commonFieldsOnEveryRecord(t *testing.T) {
 		EventBrokerAuthzDenied: {Type: EventBrokerAuthzDenied, Reason: "permission_denied", Tool: "delete-queue", Broker: "prod-1"},
 		EventBrokerAuthRetry:   {Type: EventBrokerAuthRetry, Outcome: OutcomeSuccess, Broker: "prod-1"},
 		EventAuditDrop:         {Type: EventAuditDrop},
+
+		EventOwnerValidationRejected: {Type: EventOwnerValidationRejected, Reason: "owner_not_found", Tool: "create-queue", Broker: "prod-1"},
 	}
 	if len(minimal) != len(applicabilityByType) {
 		t.Fatalf("this test covers %d record types, the table has %d", len(minimal), len(applicabilityByType))
@@ -356,6 +358,46 @@ func TestNewEvent_fieldApplicability(t *testing.T) {
 			"arguments_hash must not be set",
 		},
 
+		// owner_validation_rejected (SOL-154703) — the same shape as
+		// broker_authz_denied: a confirmed rejection names the tool and the
+		// broker the write was aimed at, carries a reason, and (like every
+		// denial record) neither an outcome nor an arguments_hash.
+		{
+			"owner_validation_rejected is valid",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_not_found", Tool: "create-queue", Broker: "prod-1"},
+			"",
+		},
+		{
+			"owner_validation_rejected requires broker",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_not_found", Tool: "create-queue"},
+			"broker is required",
+		},
+		{
+			"owner_validation_rejected requires tool",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_not_found", Broker: "prod-1"},
+			"tool is required",
+		},
+		{
+			"owner_validation_rejected requires reason",
+			Fields{Type: EventOwnerValidationRejected, Tool: "create-queue", Broker: "prod-1"},
+			"reason is required",
+		},
+		{
+			"owner_validation_rejected rejects an unknown reason",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_missing", Tool: "create-queue", Broker: "prod-1"},
+			`reason "owner_missing" is not valid on audit_event_type "owner_validation_rejected"`,
+		},
+		{
+			"owner_validation_rejected rejects arguments_hash",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_not_found", Tool: "create-queue", Broker: "prod-1", ArgumentsHash: testHash},
+			"arguments_hash must not be set",
+		},
+		{
+			"owner_validation_rejected rejects outcome",
+			Fields{Type: EventOwnerValidationRejected, Reason: "owner_not_found", Tool: "create-queue", Broker: "prod-1", Outcome: OutcomeError},
+			"outcome must not be set",
+		},
+
 		// broker_auth_retry
 		{"broker_auth_retry is valid", Fields{Type: EventBrokerAuthRetry, Outcome: OutcomeSuccess, Broker: "prod-1"}, ""},
 		{"broker_auth_retry requires broker", Fields{Type: EventBrokerAuthRetry, Outcome: OutcomeSuccess}, "broker is required"},
@@ -477,9 +519,9 @@ func TestNewEvent_errorTypeVocabularyIsClosed(t *testing.T) {
 	}
 }
 
-// TestNewEvent_reasonVocabulariesDoNotBleed is the assertion the three closed
-// reason sets exist for. Authentication, hop-1 authorization, and hop-2
-// authorization each have their own vocabulary, and a reason from one on a
+// TestNewEvent_reasonVocabulariesDoNotBleed is the assertion the four closed
+// reason sets exist for. Authentication, hop-1 authorization, hop-2
+// authorization, and owner validation each have their own vocabulary, and a reason from one on a
 // record of another corrupts the query a reviewer runs to answer "why was this
 // refused". Every cross pairing is rejected.
 func TestNewEvent_reasonVocabulariesDoNotBleed(t *testing.T) {
@@ -488,6 +530,8 @@ func TestNewEvent_reasonVocabulariesDoNotBleed(t *testing.T) {
 		EventAuthFailure:       {"invalid_token", "expired", "audience_mismatch", "signature_invalid", "missing"},
 		EventAuthzDenied:       {"missing_claim", "not_permitted"},
 		EventBrokerAuthzDenied: {"permission_denied"},
+
+		EventOwnerValidationRejected: {"owner_not_found"},
 	}
 	// Fill the non-reason fields each type also requires, so a rejection can
 	// only be about reason.
@@ -495,6 +539,8 @@ func TestNewEvent_reasonVocabulariesDoNotBleed(t *testing.T) {
 		EventAuthFailure:       {Type: EventAuthFailure},
 		EventAuthzDenied:       {Type: EventAuthzDenied, Tool: "delete-queue"},
 		EventBrokerAuthzDenied: {Type: EventBrokerAuthzDenied, Tool: "delete-queue", Broker: "prod-1"},
+
+		EventOwnerValidationRejected: {Type: EventOwnerValidationRejected, Tool: "create-queue", Broker: "prod-1"},
 	}
 
 	for typ, own := range vocab {
@@ -851,6 +897,8 @@ func TestNewEvent_levels(t *testing.T) {
 		EventBrokerAuthzDenied: slog.LevelWarn,
 		EventBrokerAuthRetry:   slog.LevelInfo,
 		EventAuditDrop:         slog.LevelError,
+
+		EventOwnerValidationRejected: slog.LevelWarn,
 	}
 	for typ, level := range want {
 		if got := levelByType[typ]; got != level {
@@ -925,7 +973,7 @@ func renderApplicabilityFingerprint() string {
 // TestApplicabilityByType_isVersioned, read the failure's "got" block, and
 // paste it in here. This test cannot make the additive-vs-breaking judgment
 // for you; it only proves a human made one, by pinning both together.
-const wantApplicabilityFingerprint = `schema_version=1.2
+const wantApplicabilityFingerprint = `schema_version=1.3
 audit_drop: outcome=forbidden error_type=forbidden reason=forbidden tool=optional arguments_hash=forbidden broker=optional timing=forbidden identity=forbidden dropped_event_type=optional
 auth_failure: outcome=forbidden error_type=forbidden reason=required tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
 auth_success: outcome=forbidden error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
@@ -933,6 +981,7 @@ authz_denied: outcome=forbidden error_type=forbidden reason=required tool=requir
 broker_auth_retry: outcome=required error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=required timing=optional identity=optional dropped_event_type=forbidden
 broker_authz_denied: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden
 operation: outcome=required error_type=on_error_only reason=forbidden tool=required arguments_hash=required broker=required timing=required identity=optional dropped_event_type=forbidden
+owner_validation_rejected: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden
 `
 
 // TestApplicabilityByType_isVersioned pins schema.AuditSchemaVersion against
