@@ -434,14 +434,7 @@ type exemptionKey struct{ tool, field string }
 // needed" assertion below with it) so a future spec bump that adds a write-only
 // attribute to a shipped tool can be staged behind a ticketed exemption instead of
 // a red build.
-var temporaryWriteOnlyExemptions = map[exemptionKey]string{
-	{"create-message-vpn", "replicationBridgeAuthenticationBasicPassword"}:      "SOL-156210",
-	{"create-message-vpn", "replicationBridgeAuthenticationClientCertContent"}:  "SOL-156210",
-	{"create-message-vpn", "replicationBridgeAuthenticationClientCertPassword"}: "SOL-156210",
-	{"update-message-vpn", "replicationBridgeAuthenticationBasicPassword"}:      "SOL-156210",
-	{"update-message-vpn", "replicationBridgeAuthenticationClientCertContent"}:  "SOL-156210",
-	{"update-message-vpn", "replicationBridgeAuthenticationClientCertPassword"}: "SOL-156210",
-}
+var temporaryWriteOnlyExemptions = map[exemptionKey]string{}
 
 // Every write-only attribute of every shipped config create, update or replace
 // step must be covered by that step's body checks, listed as a known non-secret, or
@@ -559,6 +552,95 @@ func TestBodyChecks_ConfiguredOnOperationWithoutBodyFails(t *testing.T) {
 	}
 }
 
+// The hand-kept MsgVpn secret list must equal the spec's write-only set minus the
+// explicitly allowlisted non-secrets, for both operations create-/update-message-vpn use.
+func TestBodyChecks_MsgVpnSecretFieldsMatchSpec(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	want := append([]string(nil), msgVpnSecretFields...)
+	sort.Strings(want)
+	for _, id := range []string{"config/createMsgVpn", "config/updateMsgVpn"} {
+		op, ok := ops[id]
+		if !ok {
+			t.Fatalf("operation %s missing from the embedded spec", id)
+		}
+		var got []string
+		for _, f := range writeOnlySet(op) {
+			if _, nonSecret := knownNonSecretWriteOnly[f]; !nonSecret {
+				got = append(got, f)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s write-only secrets = %v\nmsgVpnSecretFields = %v", id, got, want)
+		}
+	}
+}
+
+func TestBodyChecks_MsgVpnSecretsAreRedactedInAuditHash(t *testing.T) {
+	for _, s := range msgVpnSecretFields {
+		if got := audit.RedactSensitive(map[string]any{s: secretSentinel}); got[s] == secretSentinel {
+			t.Errorf("audit.RedactSensitive does not mask %q; extend its key lists", s)
+		}
+	}
+}
+
+// The real create-/update-message-vpn definitions, against the real embedded spec:
+// a replication-bridge secret never reaches the client, in any shape, and an
+// ordinary msgVpnConfig still does.
+func TestRealMessageVPNTools_RejectReplicationBridgeSecrets(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	byName := map[string]CompositeTool{}
+	for _, tl := range tools {
+		byName[tl.Name] = tl
+	}
+
+	for _, name := range []string{"create-message-vpn", "update-message-vpn"} {
+		tool, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s missing from the embedded catalog", name)
+		}
+		for _, secret := range msgVpnSecretFields {
+			for shape, params := range map[string]map[string]any{
+				"config object": {"msgVpnName": "v", "msgVpnConfig": map[string]any{secret: secretSentinel}},
+				"top-level":     {"msgVpnName": "v", "msgVpnConfig": map[string]any{}, secret: secretSentinel},
+			} {
+				t.Run(name+"/"+shape+"/"+secret, func(t *testing.T) {
+					var recorded []callRecord
+					var mu sync.Mutex
+					client := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+					_, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, params)
+					assertRejectedBeforeSEMP(t, recorded, err, `"`+secret+`"`)
+				})
+			}
+		}
+
+		t.Run(name+"/ordinary config still goes through", func(t *testing.T) {
+			var recorded []callRecord
+			var mu sync.Mutex
+			client := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+			_, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, map[string]any{
+				"msgVpnName":   "v",
+				"msgVpnConfig": map[string]any{"maxConnectionCount": float64(10), "replicationEnabledQueueBehavior": "fail-on-all-errors"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(recorded) != 1 {
+				t.Errorf("calls = %d, want 1", len(recorded))
+			}
+		})
+	}
+}
+
 // A caller-supplied authenticationScheme is not a secret field, but it is free
 // text the caller controls: a credential pasted into the wrong field must not be
 // echoed back to the agent and into the log detail by a rejection message.
@@ -579,6 +661,30 @@ func TestBodyChecks_SchemeRejectionNeverEchoesTheSchemeValue(t *testing.T) {
 				"msgVpnName": "v", "kafkaReceiverName": "r", "kafkaReceiverConfig": tc.config,
 			})
 			assertRejectedBeforeSEMP(t, rec, err, "enabled:false")
+		})
+	}
+}
+
+// The hint is caller-visible text, not a format string: a hint containing a
+// percent sign must come out verbatim, and the message must read the same with or
+// without a hint (no double space, no stray verbs).
+func TestRejectSecretFields_HintIsTextNotAFormatString(t *testing.T) {
+	cases := []struct {
+		name, hint, want string
+	}{
+		{"no hint", "", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+		{"plain hint", "Then enable it.", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. Then enable it. If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+		{"hint with percent verbs", "100% sure %s %d", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. 100% sure %s %d If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectSecretFields([]string{"x"}, tc.hint)(bodyModeCreate, map[string]any{"x": secretSentinel})
+			if err == nil {
+				t.Fatal("expected a rejection")
+			}
+			if err.Error() != tc.want {
+				t.Errorf("message =\n%q\nwant\n%q", err.Error(), tc.want)
+			}
 		})
 	}
 }

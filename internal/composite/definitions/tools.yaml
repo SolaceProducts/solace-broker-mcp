@@ -1190,6 +1190,9 @@ tools:
       to provision a new VPN. If a VPN with the same name already exists, this is
       not an error: the call returns outcome:"already_exists" (existence only —
       attributes are not compared against msgVpnConfig) instead of failing.
+      Replication-bridge passwords and certificates cannot be set through this
+      tool: set them out of band (Broker Manager, CLI, SEMP or Terraform). Never
+      ask for or accept a password, secret, key or certificate in chat.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpn) if you need the full list.
     annotations:
@@ -1207,6 +1210,8 @@ tools:
     steps:
       - id: createVpn
         operation: config/createMsgVpn
+        # SOL-156210: replication-bridge secrets must never pass through the LLM.
+        bodyChecks: [rejectMsgVpnSecrets]
     result:
       strategy: collect
 
@@ -1221,6 +1226,13 @@ tools:
       provide only the attributes you want to change in msgVpnConfig. Omitted
       attributes are left unchanged. Use this to update VPN settings such as
       enabled state, connection limits, or spool quotas.
+      Replication-bridge passwords and certificates cannot be set through this
+      tool: set them out of band (Broker Manager, CLI, SEMP or Terraform). Never
+      ask for or accept a password, secret, key or certificate in chat. For the
+      same reason, changing replicationBridgeAuthenticationScheme on a live
+      replicated VPN here cannot carry the matching credential, so its
+      replication bridge stays down until the user sets it out of band: warn the
+      user before making that change.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpn) if you need the full list.
     annotations:
@@ -1238,6 +1250,8 @@ tools:
     steps:
       - id: updateVpn
         operation: config/updateMsgVpn
+        # SOL-156210: replication-bridge secrets must never pass through the LLM.
+        bodyChecks: [rejectMsgVpnSecrets]
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
     result:

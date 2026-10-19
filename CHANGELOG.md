@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
+
 ### Changed
 
 - `describe-semp-schema` tool and `view` parameter descriptions now warn that `view: "raw"` can exceed 100k characters (and a host's token limit) for operations with many attributes, such as `config/createMsgVpn`, and steer callers to the default `"trimmed"` view. Description text only; no behavior change. Tracked under SOL-155427.
