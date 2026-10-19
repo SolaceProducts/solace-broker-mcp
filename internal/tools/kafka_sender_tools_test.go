@@ -293,3 +293,85 @@ func TestKafkaSenderOperations_DeclareTheSelectQueryParameter(t *testing.T) {
 		}
 	}
 }
+
+// A delete of something already gone is a success with outcome already_absent,
+// including when the parent (the sender, or the whole VPN) is gone too: SEMP answers
+// NOT_FOUND in each case, and the descriptions promise exactly this.
+func TestDeleteKafkaSenderTools_AlreadyGone(t *testing.T) {
+	cases := []struct {
+		name        string
+		tool        string
+		operation   string
+		description string
+		params      map[string]any
+	}{
+		{"sender already gone", "delete-kafka-sender", "deleteMsgVpnKafkaSender", "Could not find match for kafkaSender tx",
+			map[string]any{"msgVpnName": "vpn1", "kafkaSenderName": "tx"}},
+		{"sender's VPN already gone", "delete-kafka-sender", "deleteMsgVpnKafkaSender", "Problem with DELETE: Cannot enter message-vpn mode: not found.",
+			map[string]any{"msgVpnName": "vpn1", "kafkaSenderName": "tx"}},
+		{"binding already gone", "delete-kafka-sender-queue-binding", "deleteMsgVpnKafkaSenderQueueBinding", "Could not find match for queueBinding q1",
+			map[string]any{"msgVpnName": "vpn1", "kafkaSenderName": "tx", "queueName": "q1"}},
+		{"binding's sender already gone", "delete-kafka-sender-queue-binding", "deleteMsgVpnKafkaSenderQueueBinding", "Problem with DELETE: Cannot enter kafka-sender mode: not found.",
+			map[string]any{"msgVpnName": "vpn1", "kafkaSenderName": "tx", "queueName": "q1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, client := kafkaBridgeManager(t, false)
+			client.errors[tc.operation] = &sempv2.SEMPError{
+				Operation: tc.operation, StatusCode: 400, SEMPCode: 6, SEMPStatus: "NOT_FOUND", Description: tc.description,
+			}
+			r := callKafka(t, mgr, tc.tool, tc.params)
+			if m := structured(t, r); r.IsError || m["outcome"] != "already_absent" || m["changed"] != false {
+				t.Errorf("result = %v", r.StructuredContent)
+			}
+		})
+	}
+}
+
+// Same retargeting guard as the receiver: an existing sender's stored credentials,
+// and all of its bound queues' traffic, must not be redirected by an update.
+func TestUpdateKafkaSender_CannotRetargetAnExistingSender(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config map[string]any
+		want   string
+	}{
+		{"bootstrap address", map[string]any{"bootstrapAddressList": "elsewhere:9092"}, `"bootstrapAddressList"`},
+		{"oauth token endpoint", map[string]any{"authenticationOauthClientTokenEndpoint": "https://elsewhere/token"}, `"authenticationOauthClientTokenEndpoint"`},
+		{"TLS off", map[string]any{"transportTlsEnabled": false}, "transportTlsEnabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, client := kafkaBridgeManager(t, false)
+			r := callKafka(t, mgr, "update-kafka-sender", map[string]any{
+				"msgVpnName": "vpn1", "kafkaSenderName": "tx", "kafkaSenderConfig": tc.config})
+			if !r.IsError {
+				t.Fatal("expected the update to be rejected")
+			}
+			reply := callToolResultText(t, r, nil)
+			for _, want := range []string{tc.want, "stored credentials", "create it again"} {
+				if !strings.Contains(reply, want) {
+					t.Errorf("reply %q should contain %q", reply, want)
+				}
+			}
+			if len(client.calls) != 0 {
+				t.Errorf("SEMP calls = %v, want none", client.calls)
+			}
+		})
+	}
+
+	mgr, client := kafkaBridgeManager(t, false)
+	client.responses["updateMsgVpnKafkaSender"] = senderResponse("none", true)
+	for _, config := range []map[string]any{{"transportTlsEnabled": true}, {"enabled": true}} {
+		if r := callKafka(t, mgr, "update-kafka-sender", map[string]any{
+			"msgVpnName": "vpn1", "kafkaSenderName": "tx", "kafkaSenderConfig": config}); r.IsError {
+			t.Errorf("update with %v should be accepted: %v", config, r.StructuredContent)
+		}
+	}
+	// Creating a sender is how its destination is chosen.
+	client.responses["createMsgVpnKafkaSender"] = senderResponse("none", false)
+	if r := callKafka(t, mgr, "create-kafka-sender", map[string]any{
+		"msgVpnName": "vpn1", "kafkaSenderName": "tx",
+		"kafkaSenderConfig": map[string]any{"bootstrapAddressList": "kafka:9092"}}); r.IsError {
+		t.Errorf("create should take the bootstrap address: %v", r.StructuredContent)
+	}
+}

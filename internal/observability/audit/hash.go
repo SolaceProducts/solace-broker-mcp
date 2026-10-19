@@ -47,6 +47,11 @@ var sensitiveKeySubstrings = []string{"password", "token", "secret", "authorizat
 // miss is a missing term, not a missing case-fold, so it is fixed by adding
 // terms rather than normalizing separators.
 //
+// The body checks (internal/composite/bodychecks.go) now reject these fields
+// before a call reaches the broker, but the arguments of a rejected call are
+// still hashed for the audit record, so the terms must stay: removing one as
+// "redundant" would put a rejected secret's value back into the digest's pre-image.
+//
 // Kept as a second list rather than folded into sensitiveKeySubstrings so
 // that var stays a byte-identical mirror of cmd/server's redactedKeys —
 // diffing the two files for drift stays meaningful.

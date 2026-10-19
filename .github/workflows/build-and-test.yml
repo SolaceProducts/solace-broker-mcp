@@ -436,7 +436,12 @@ jobs:
       - name: Start Solace brokers
         run: SUITE_DIR=test/e2e-management bash test/e2e-common/setup-brokers.sh
 
+      # A step-level timeout, shorter than the job's: a Kafka or bridge hang then ends
+      # this step as a failure, so the "(on failure)" steps below still run. If the
+      # job-level timeout fired instead, the job would be cancelled and those steps,
+      # including the Kafka log, would be skipped, on exactly the run that needs them.
       - name: Run E2E tests
+        timeout-minutes: 24
         run: bash test/e2e-management/run-all.sh
 
       - name: Broker logs (on failure)

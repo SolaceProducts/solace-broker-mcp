@@ -99,6 +99,37 @@ wait_status() {
     return 1
 }
 
+# Assert the MCP server's log does not contain a value. It first requires the log to
+# be non-empty and to contain a line the server certainly wrote for these calls, so the
+# check cannot pass vacuously (a missing file, an empty capture, a log level that hides
+# the lines it is meant to inspect).
+#   $1 value  $2 description
+assert_server_log_lacks() {
+    local value="$1" desc="$2"
+    if [ ! -s "$MCP_SERVER_LOG" ]; then
+        log_fail "$desc: the MCP server log ($MCP_SERVER_LOG) is missing or empty, so this check would prove nothing"
+        return 1
+    fi
+    if ! grep -q "tool invoked" "$MCP_SERVER_LOG"; then
+        log_fail "$desc: no 'tool invoked' line in the MCP server log, so this check would prove nothing"
+        return 1
+    fi
+    if grep -qF -- "$value" "$MCP_SERVER_LOG"; then
+        log_fail "$desc: the value appears in the MCP server log"
+        return 1
+    fi
+}
+
+# Assert a rejected secret call: it names the field, says to rotate an exposed secret,
+# and never echoes the value. Reads the globals kt_rejected set.
+#   $1 secret field  $2 sentinel value  $3 description
+assert_secret_rejection() {
+    local secret="$1" sentinel="$2" desc="$3"
+    assert_contains "$KT_TEXT" "\"$secret\"" "$desc: the rejection names $secret" || return 1
+    assert_contains "$KT_TEXT" "rotate" "$desc: the rejection says to rotate an exposed secret" || return 1
+    assert_not_contains "$KT_TEXT" "$sentinel" "$desc: the secret value is not echoed" || return 1
+}
+
 mk_queue() { # broker name
     kt_ok "create-queue" "$(jq -nc --arg b "$1" --arg n "$2" \
         '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{accessType:"exclusive",permission:"consume",ingressEnabled:true,egressEnabled:true}}')" \
@@ -113,7 +144,7 @@ test_kafka_receiver_none_roundtrip() {
     local topic="e2e-config-kafka-in-$broker" lt="e2e-config/kafka/in/$broker"
     local burl semp
     burl=$(broker_url_for "$broker"); semp=$(semp_config_for "$broker")
-    kafka_create_topic "$topic"
+    kafka_create_topic "$topic" || { log_fail "could not create Kafka topic $topic [$broker]"; return 1; }
 
     mk_queue "$broker" "$q" || return 1
     kt_ok "create-queue-subscription" "$(jq -nc --arg b "$broker" --arg q "$q" --arg t "$lt/>" \
@@ -149,7 +180,7 @@ test_kafka_receiver_none_roundtrip() {
         "receiver and binding up [$broker]" || return 1
 
     # Records flow Kafka -> Solace queue.
-    kafka_produce "$topic" "k1:v1" "k2:v2"
+    kafka_produce "$topic" "k1:v1" "k2:v2" || { log_fail "none mode [$broker]: could not produce records to Kafka topic $topic"; return 1; }
     verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/queues/$q" 90 '.data.spooledMsgCount >= 2' \
         || { log_fail "none mode [$broker]: records produced to Kafka did not reach $q"; return 1; }
 
@@ -171,7 +202,7 @@ test_kafka_receiver_auth_roundtrip() {
     local rx="e2e-config-kafka-rx-auth-$broker" topic="e2e-config-kafka-in-$broker"
     local burl semp
     burl=$(broker_url_for "$broker"); semp=$(semp_config_for "$broker")
-    kafka_create_topic "$topic"
+    kafka_create_topic "$topic" || { log_fail "could not create Kafka topic $topic [$broker]"; return 1; }
     local status_args
     status_args=$(jq -nc --arg b "$broker" --arg n "$rx" '{broker:$b,msgVpnName:"default",kafkaReceiverName:$n}')
 
@@ -208,12 +239,15 @@ test_kafka_receiver_auth_roundtrip() {
         "authenticated receiver and binding up [$broker]" || return 1
 
     # The broker never returns the secret, and the MCP server never saw it.
-    if [ "$(semp_curl -sf "$semp/msgVpns/$BROKER_VPN/kafkaReceivers/$rx" | jq '.data | has("authenticationBasicPassword")')" = "true" ]; then
+    local config_body
+    config_body=$(semp_curl -sf "$semp/msgVpns/$BROKER_VPN/kafkaReceivers/$rx") \
+        || { log_fail "auth mode [$broker]: could not read $rx back from SEMP"; return 1; }
+    if [ "$(jq '.data | has("authenticationBasicPassword")' <<<"$config_body")" = "true" ]; then
         log_fail "auth mode [$broker]: SEMP returned the write-only password"; return 1
     fi
-    if [ -f "$MCP_SERVER_LOG" ] && grep -qF "$KAFKA_SASL_PASSWORD" "$MCP_SERVER_LOG"; then
-        log_fail "auth mode [$broker]: the secret appears in the MCP server log"; return 1
-    fi
+    # The secret only ever went straight to SEMP, so it must not be in the server's log
+    # (defence in depth; the rejection test below covers secrets sent through the tools).
+    assert_server_log_lacks "$KAFKA_SASL_PASSWORD" "auth mode [$broker]" || return 1
 
     kt_ok "delete-kafka-receiver-topic-binding" "$(jq -nc --arg b "$broker" --arg n "$rx" --arg t "$topic" \
         '{broker:$b,msgVpnName:"default",kafkaReceiverName:$n,topicName:$t}')" "delete binding [$broker]" || return 1
@@ -228,7 +262,7 @@ test_kafka_sender_roundtrip() {
     local topic="e2e-config-kafka-out-$broker" late="e2e-config-kafka-late-$broker"
     local burl
     burl=$(broker_url_for "$broker")
-    kafka_create_topic "$topic"
+    kafka_create_topic "$topic" || { log_fail "could not create Kafka topic $topic [$broker]"; return 1; }
     local sender_args
     sender_args=$(jq -nc --arg b "$broker" --arg n "$tx" '{broker:$b,msgVpnName:"default",kafkaSenderName:$n}')
 
@@ -260,7 +294,7 @@ test_kafka_sender_roundtrip() {
         || { log_fail "sender [$broker]: the binding to a missing topic should be down with 'no leader'"; return 1; }
 
     # The topic appears; the binding recovers by itself.
-    kafka_create_topic "$late"
+    kafka_create_topic "$late" || { log_fail "could not create Kafka topic $late [$broker]"; return 1; }
     verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/kafkaSenders/$tx/queueBindings/$q2" 150 '.data.up == true' \
         || { log_fail "sender [$broker]: the binding did not recover after the topic was created"; return 1; }
 
@@ -296,32 +330,33 @@ test_kafka_secret_rejection() {
             # create, secret inside the config object
             kt_rejected "create-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg cp "$config_param" --arg s "$secret" --arg v "$sentinel" \
                 '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($cp):{($s):$v}}')" "create $kind with $secret in config [$broker]" || return 1
-            assert_contains "$KT_TEXT" "\"$secret\"" "create $kind [$broker]: the rejection names $secret" || return 1
-            assert_contains "$KT_TEXT" "rotate" "create $kind [$broker]: the rejection says to rotate an exposed secret" || return 1
-            assert_not_contains "$KT_TEXT" "$sentinel" "create $kind [$broker]: the secret value is not echoed" || return 1
+            assert_secret_rejection "$secret" "$sentinel" "create $kind, config object [$broker]" || return 1
             # create, secret as an undeclared top-level param
             kt_rejected "create-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg s "$secret" --arg v "$sentinel" \
                 '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($s):$v}')" "create $kind with top-level $secret [$broker]" || return 1
-            assert_contains "$KT_TEXT" "\"$secret\"" "create $kind top-level [$broker]: the rejection names $secret" || return 1
+            assert_secret_rejection "$secret" "$sentinel" "create $kind, top-level [$broker]" || return 1
             # update, secret inside the config object
             kt_rejected "update-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg cp "$config_param" --arg s "$secret" --arg v "$sentinel" \
                 '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($cp):{($s):$v}}')" "update $kind with $secret [$broker]" || return 1
-            assert_contains "$KT_TEXT" "\"$secret\"" "update $kind [$broker]: the rejection names $secret" || return 1
+            assert_secret_rejection "$secret" "$sentinel" "update $kind, config object [$broker]" || return 1
+            # update, secret as an undeclared top-level param
+            kt_rejected "update-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg s "$secret" --arg v "$sentinel" \
+                '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($s):$v}')" "update $kind with top-level $secret [$broker]" || return 1
+            assert_secret_rejection "$secret" "$sentinel" "update $kind, top-level [$broker]" || return 1
         done
     done
 
     # Nothing was created, and the secret value is nowhere in the MCP server's log.
-    local semp name_listed
+    local semp name_listed listing
     semp=$(semp_config_for "$broker")
     for name_listed in kafkaReceivers kafkaSenders; do
-        if semp_curl -sf "$semp/msgVpns/$BROKER_VPN/$name_listed?count=100" | jq -e --arg p "e2e-config-kafka-rej-" \
-            '[.data[]? | (.kafkaReceiverName // .kafkaSenderName) | select(startswith($p))] | length > 0' >/dev/null; then
+        listing=$(semp_curl -sf "$semp/msgVpns/$BROKER_VPN/$name_listed?count=100") \
+            || { log_fail "secret rejection [$broker]: could not list $name_listed from SEMP"; return 1; }
+        if [ "$(jq --arg p "e2e-config-kafka-rej-" '[.data[]? | (.kafkaReceiverName // .kafkaSenderName) | select(startswith($p))] | length > 0' <<<"$listing")" != "false" ]; then
             log_fail "secret rejection [$broker]: a rejected call created a $name_listed object"; return 1
         fi
     done
-    if [ -f "$MCP_SERVER_LOG" ] && grep -qF "$sentinel" "$MCP_SERVER_LOG"; then
-        log_fail "secret rejection [$broker]: the secret value appears in the MCP server log"; return 1
-    fi
+    assert_server_log_lacks "$sentinel" "secret rejection [$broker]" || return 1
 }
 
 # ── The enabled/scheme rules, and outcomes ───────────────────────────────────
@@ -350,6 +385,18 @@ test_kafka_enabled_rules() {
         '{broker:$b,msgVpnName:"default",kafkaReceiverName:$n,kafkaReceiverConfig:{authenticationScheme:"scram",enabled:false}}')" \
         "update scheme and disable [$broker]" || return 1
     assert_json_field "$KT_CONTENT" '.summary.authenticationScheme' "scram" "update scheme [$broker]: scheme changed" || return 1
+    # The switch also hands the user the per-scheme secret attributes to set.
+    assert_json_field "$KT_CONTENT" '.summary.secretFields | index("authenticationScramPassword") != null' "true" \
+        "update scheme [$broker]: the hand-off names the new scheme's password attribute" || return 1
+
+    # An existing bridge cannot be re-pointed: the broker would present its stored
+    # credentials to the new address.
+    local cfg
+    for cfg in '{"bootstrapAddressList":"elsewhere:9092"}' '{"authenticationOauthClientTokenEndpoint":"https://elsewhere/token"}' '{"transportTlsEnabled":false}'; do
+        kt_rejected "update-kafka-receiver" "$(jq -nc --arg b "$broker" --arg n "$rx" --argjson c "$cfg" \
+            '{broker:$b,msgVpnName:"default",kafkaReceiverName:$n,kafkaReceiverConfig:$c}')" "retarget $cfg [$broker]" || return 1
+        assert_contains "$KT_TEXT" "stored credentials" "retarget $cfg [$broker]: the rejection says why" || return 1
+    done
 
     kt_ok "delete-kafka-receiver" "$args" "delete [$broker]" || return 1
     # Deleting what is already gone is a noop, not an error.
