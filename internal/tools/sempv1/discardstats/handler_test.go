@@ -109,6 +109,20 @@ func TestHandler_Metadata(t *testing.T) {
 	if vpnProp["minLength"] != 1 {
 		t.Errorf(`vpnName.minLength = %v, want 1 — empty strings must be rejected upstream`, vpnProp["minLength"])
 	}
+	// additionalProperties: false makes a misspelled vpnName (e.g. vpnname)
+	// fail validation instead of silently returning broker-wide totals
+	// (SOL-155435).
+	if got := meta.InputSchema["additionalProperties"]; got != false {
+		t.Errorf(`InputSchema["additionalProperties"] = %v, want false`, got)
+	}
+	if err := tools.ValidateParams(map[string]any{"vpnname": "x"}, meta.InputSchema); err == nil {
+		t.Error("misspelled vpnname: ValidateParams succeeded, want failure")
+	}
+	for _, ok := range []map[string]any{{"vpnName": "x"}, {}} {
+		if err := tools.ValidateParams(ok, meta.InputSchema); err != nil {
+			t.Errorf("ValidateParams(%v) = %v, want nil", ok, err)
+		}
+	}
 
 	if meta.OutputSchema["type"] != "object" {
 		t.Errorf(`OutputSchema["type"] = %v, want "object"`, meta.OutputSchema["type"])
