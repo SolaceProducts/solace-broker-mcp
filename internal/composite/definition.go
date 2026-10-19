@@ -78,10 +78,11 @@ type Step struct {
 	OptionalArgs []string `yaml:"optionalArgs"`
 
 	// BodyChecks names request-body checks (see bodychecks.go) run on the final,
-	// merged request body of a config create/update step, after the unknown-field
-	// check and before the body is attached to the call. A check rejects the call
-	// locally, with no SEMP request. Unknown names, and use on any operation other
-	// than config/create* or config/update*, are rejected at load time.
+	// merged request body of a config create, update or replace step, before the
+	// unknown-field check and before the body is attached to the call. A check
+	// rejects the call locally, with no SEMP request. Unknown names, and use on any
+	// operation other than config/create*, config/update* or config/replace*, are
+	// rejected at load time.
 	BodyChecks []string `yaml:"bodyChecks"`
 
 	// compiledArgs and compiledForEachIf cache the parsed *template.Template
