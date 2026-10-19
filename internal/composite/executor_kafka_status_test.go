@@ -165,3 +165,51 @@ func TestGetKafkaStatusTools_MissingBridgeFailsBeforeTheBindingsStep(t *testing.
 		})
 	}
 }
+
+// The bindings step has no maxResults parameter, so it stops at the executor's
+// default of 100 rows. On a bridge with more bindings than that, every summary count
+// covers only those 100: bindingDownCount: 0 is not an all-clear, which is what
+// bindingTruncated says. This pins the behaviour the docs describe.
+func TestGetKafkaReceiverStatus_MoreThan100BindingsAreTruncatedAndSaySo(t *testing.T) {
+	mock := newMockClient()
+	mock.responses["getMsgVpnKafkaReceiver"] = &sempv2.Result{StatusCode: 200, Data: map[string]any{"data": map[string]any{
+		"kafkaReceiverName": "rx", "up": true, "enabled": true, "topicBindingCount": float64(150), "topicBindingUpCount": float64(100),
+	}}}
+	var page1, page2 []any
+	for i := 0; i < 100; i++ {
+		page1 = append(page1, map[string]any{"topicName": "t" + string(rune('a'+i%26)) + string(rune('a'+i/26)), "enabled": true, "up": true, "failureReason": ""})
+	}
+	for i := 0; i < 50; i++ {
+		page2 = append(page2, map[string]any{"topicName": "late" + string(rune('a'+i%26)), "enabled": true, "up": false, "failureReason": "boom"})
+	}
+	pages := []*sempv2.Result{pageResult(page1, "next"), pageResult(page2, "")}
+	calls := 0
+	client := clientFunc(func(ctx context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
+		if op.ID == "getMsgVpnKafkaReceiverTopicBindings" {
+			calls++
+			return pages[min(calls-1, len(pages)-1)], nil
+		}
+		return mock.Execute(ctx, op, args)
+	})
+
+	result, err := runKafkaStatus(t, "get-kafka-receiver-status", client, map[string]any{"msgVpnName": "vpn1", "kafkaReceiverName": "rx"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	summary, _ := result["summary"].(map[string]any)
+	if summary["bindingScannedCount"] != 100 || summary["bindingTruncated"] != true {
+		t.Fatalf("summary = %v, want 100 scanned and bindingTruncated:true", summary)
+	}
+	// The 50 failing bindings are on the second page, past the cap: the summary cannot
+	// see them, and says it is truncated instead of reporting an all-clear.
+	if summary["bindingDownCount"] != 0 {
+		t.Errorf("bindingDownCount = %v; the failing rows are beyond the cap, so the counts must not include them", summary["bindingDownCount"])
+	}
+}
+
+// clientFunc adapts a function to sempv2.Client.
+type clientFunc func(context.Context, *sempv2.Operation, map[string]any) (*sempv2.Result, error)
+
+func (f clientFunc) Execute(ctx context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
+	return f(ctx, op, args)
+}
