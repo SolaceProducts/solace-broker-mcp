@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "solace-broker-mcp chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "brokers": {
+      "type": "object",
+      "description": "Broker name -> connection. Names follow the server's alias rule (internal/config/config.go).",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+      },
+      "additionalProperties": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "http(s) SEMP URL. Validated in the template, not here: Helm prints a schema-rejected value in full, and a malformed url may carry credentials."
+          },
+          "insecureSkipVerify": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "envPrefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "basic",
+                  "bearer",
+                  null
+                ]
+              },
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "password": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "existingSecret": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "mcpClientAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "static"
+          ]
+        },
+        "devToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "existingSecret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "server": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "logLevel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listenAddress": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "semp": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrentPerBroker": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "requestTimeoutDuration": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "requestMinInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "maxQueueWait": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "fairScheduling": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "retries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "retryMinInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "retryMaxInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        }
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "goMemLimit": {
+      "type": "string"
+    }
+  }
+}

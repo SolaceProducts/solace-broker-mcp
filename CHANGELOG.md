@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Helm chart for the MCP server at `deploy/charts/solace-broker-mcp/` (`0.1.0`, installed from a repo checkout): Deployment, Service, ConfigMap, and Secret. Credentials come from a chart-managed Secret or your existing Secrets, never the ConfigMap, and missing required inputs fail `helm install` instead of crash-looping the pod. See the chart README. Tracked under SOL-155108.
+
 ### Changed
 
+- `deploy/kubernetes/deployment.yaml` now hardens the pod: `enableServiceLinks: false`, so a Service such as `mcp-server` can no longer inject `MCP_SERVER_PORT` and break config loading; no service account token; a `RuntimeDefault` seccomp profile; no privilege escalation; all capabilities dropped; and a read-only root filesystem. Tracked under SOL-155108.
 - `describe-semp-schema` tool and `view` parameter descriptions now warn that `view: "raw"` can exceed 100k characters (and a host's token limit) for operations with many attributes, such as `config/createMsgVpn`, and steer callers to the default `"trimmed"` view. Description text only; no behavior change. Tracked under SOL-155427.
 - **BREAKING**: The 13 `list-*` tools and `get-discard-stats` now reject parameter names their input schema does not declare, instead of silently ignoring them. A misspelled `maxResults` (e.g. `count`, `maxResult`) or `vpnname` now fails with "parameter validation failed" naming the key, rather than returning the default page size or broker-wide totals. `broker` is still accepted. Migration: send only the parameters each tool's input schema lists. Tracked under SOL-155435.
 

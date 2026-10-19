@@ -1,0 +1,88 @@
+# Default values for solace-broker-mcp.
+#
+# The defaults DO NOT RENDER on their own, by design: the server refuses to
+# start without at least one broker and (under mcp_client_auth.mode: static) a
+# dev token, so `helm install` fails up front instead of "succeeding" into a
+# crash loop. Supply at least `brokers` and `mcpClientAuth.devToken` (or
+# `mcpClientAuth.existingSecret`). See README.md for a complete example.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/solaceproducts/solace-broker-mcp
+  tag: ""                     # defaults to appVersion: a release version without the leading v
+  pullPolicy: IfNotPresent
+
+# Two replicas keep one pod serving through rollouts. Above one replica the
+# Service's sessionAffinity: ClientIP is required (MCP sessions live in one
+# pod's memory).
+replicaCount: 2
+
+# Required, at least one entry. Empty here because Helm deep-merges maps: a
+# populated default would merge into every user's install. Example:
+#
+#  my-broker:                 # broker name, as in the server config's brokers: map
+#    url: "https://broker.example.com:943"
+#    insecureSkipVerify: false
+#    envPrefix: ""            # default: name upper-cased, "-" -> "_"
+#    auth:
+#      mode: basic            # basic | bearer
+#      username: ""           # chart-managed (ignored when existingSecret is set)
+#      password: ""
+#      token: ""              # bearer
+#      existingSecret: ""     # keys: username + password (basic) or token (bearer)
+#
+# Credentials reach the pod as <PREFIX>_USERNAME / <PREFIX>_PASSWORD /
+# <PREFIX>_TOKEN env vars, which the rendered config references as ${...}.
+# They are never written into the ConfigMap.
+brokers: {}
+
+mcpClientAuth:
+  mode: static                # oauth values arrive in SOL-156330
+  # Shared client token: any caller that can reach the Service and presents it
+  # gets full broker-admin-backed access. Treat it like a password and keep the
+  # Service ClusterIP.
+  devToken: ""
+  existingSecret: ""          # key: dev-token
+
+# Server settings. Setting port or logLevel to null leaves it out of the
+# rendered config, so the server's own default applies.
+server:
+  port: 9090                  # not 9091, the metrics port
+  logLevel: info              # debug | info | warn | error
+  # "0.0.0.0" or "::" only: a pod must bind all interfaces or the Service and
+  # the kubelet probes cannot reach it, and its IP is not known at render time.
+  # Under mcp_client_auth.mode static the server's own default is 127.0.0.1, so
+  # null is rejected here.
+  listenAddress: "0.0.0.0"
+
+# Setting any key below to null leaves it out of the rendered config, so the
+# server's own default applies. Durations are strings ("0s", not 0): the server
+# rejects a bare number.
+semp:                         # defaults mirror deploy/kubernetes/configmap.yaml
+  maxConcurrentPerBroker: 10
+  requestTimeoutDuration: 1m
+  requestMinInterval: 100ms
+  maxQueueWait: 30s
+  fairScheduling: true
+  retries: 10
+  retryMinInterval: 3s
+  retryMaxInterval: 30s
+
+# Memory is capped, CPU deliberately is not: CFS throttling stalls the process
+# at burst, which is this workload's normal shape. 512Mi is sized for the
+# default semp.requestMinInterval (docs/observability.md § "Resource requests
+# and limits").
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# GOMEMLIMIT override. Empty derives it as 75% of resources.limits.memory
+# (integer Mi or Gi only), written in Go's MiB form. Go's suffix is MiB, not
+# Kubernetes' Mi — an unparseable value is fatal at startup, so anything but
+# bytes with an optional B/KiB/MiB/GiB/TiB suffix, or off, fails rendering.
+goMemLimit: ""
