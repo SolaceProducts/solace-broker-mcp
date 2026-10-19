@@ -116,9 +116,13 @@ When deploying the Solace Broker MCP Server, follow these security guidelines:
 
 ### Logging Security
 
-- **Credentials are redacted**: The server uses secure logging (see `docs/secure-logging-rules.md`)
+- **Credentials are redacted from logs**: The server uses secure logging (see `docs/secure-logging-rules.md`)
 - **Review logs before sharing**: Always verify no credentials leaked before sharing logs with support
 - **Structured logging**: Use the structured JSON logs for security monitoring and alerting
+
+### What the AI Can See
+
+The server's own broker credentials are never included in tool results or error messages, and passwords stored on the broker are never returned to the AI. The exception is input you supply: write tools (off by default) can accept secret attributes as inputs — for example, a Message VPN's replication-bridge password passed to `update-message-vpn` — and those values pass through the LLM like any other prompt content.
 
 ### Dependency Management
 
