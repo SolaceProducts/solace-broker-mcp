@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. **Upgrade note:** calls that include them now return an error; set them out of band (Broker Manager, CLI, SEMP or Terraform). Tracked under SOL-156210.
+- **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
 
 ## [1.0.0] - 2026-10-14
 

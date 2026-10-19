@@ -664,3 +664,27 @@ func TestBodyChecks_SchemeRejectionNeverEchoesTheSchemeValue(t *testing.T) {
 		})
 	}
 }
+
+// The hint is caller-visible text, not a format string: a hint containing a
+// percent sign must come out verbatim, and the message must read the same with or
+// without a hint (no double space, no stray verbs).
+func TestRejectSecretFields_HintIsTextNotAFormatString(t *testing.T) {
+	cases := []struct {
+		name, hint, want string
+	}{
+		{"no hint", "", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+		{"plain hint", "Then enable it.", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. Then enable it. If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+		{"hint with percent verbs", "100% sure %s %d", `"x" is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. 100% sure %s %d If you already shared a secret in this conversation, treat it as exposed and rotate it.`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectSecretFields([]string{"x"}, tc.hint)(bodyModeCreate, map[string]any{"x": secretSentinel})
+			if err == nil {
+				t.Fatal("expected a rejection")
+			}
+			if err.Error() != tc.want {
+				t.Errorf("message =\n%q\nwant\n%q", err.Error(), tc.want)
+			}
+		})
+	}
+}

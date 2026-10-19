@@ -17,12 +17,15 @@ package tools
 import (
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
@@ -55,9 +58,16 @@ func TestUpdateMessageVPN_RejectedSecret_ReplyLogsAndAuditCarryNoValue(t *testin
 		t.Fatal("update-message-vpn missing from the real catalog")
 	}
 
-	// The call is rejected inside the executor, so the broker client the pool
-	// resolves is never used.
-	mgr := NewToolManager(newTestPool(t), WithAuditLog(true))
+	// The call is rejected inside the executor, before any SEMP request. Prove it:
+	// the pool's only broker is a server that fails the test on any request, so a
+	// regression that let the call through to the broker cannot pass unnoticed.
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to the broker: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	defer broker.Close()
+	pool := semp.NewBrokerPool(writeTestConfig(t, [2]string{"dev", broker.URL}), nil)
+	mgr := NewToolManager(pool, WithAuditLog(true))
 	mgr.Register(NewCompositeToolHandler(tool, composite.NewCompositeExecutor(operations)))
 
 	var reply string

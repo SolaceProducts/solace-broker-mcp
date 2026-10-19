@@ -128,11 +128,15 @@ func rejectSecretFields(fields []string, afterHint string) func(bodyMode, map[st
 		for _, secret := range sorted {
 			for key := range body {
 				if strings.EqualFold(key, secret) {
-					msg := "%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat."
+					// The hint is text, never part of the format string: a hint
+					// containing a percent sign must come out verbatim.
+					hint := ""
 					if afterHint != "" {
-						msg += " " + afterHint
+						hint = " " + afterHint
 					}
-					return requestBodyErrorf(msg+" If you already shared a secret in this conversation, treat it as exposed and rotate it.", secret)
+					return requestBodyErrorf(
+						"%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat.%s If you already shared a secret in this conversation, treat it as exposed and rotate it.",
+						secret, hint)
 				}
 			}
 		}

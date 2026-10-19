@@ -1216,7 +1216,11 @@ tools:
       enabled state, connection limits, or spool quotas.
       Replication-bridge passwords and certificates cannot be set through this
       tool: set them out of band (Broker Manager, CLI, SEMP or Terraform). Never
-      ask for or accept a password, secret, key or certificate in chat.
+      ask for or accept a password, secret, key or certificate in chat. For the
+      same reason, changing replicationBridgeAuthenticationScheme on a live
+      replicated VPN here cannot carry the matching credential, so its
+      replication bridge stays down until the user sets it out of band: warn the
+      user before making that change.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpn) if you need the full list.
     annotations:
