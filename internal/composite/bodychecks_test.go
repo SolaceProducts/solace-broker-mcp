@@ -53,7 +53,7 @@ func bridgeOps(opID, method string, bodyFields map[string]bool) map[string]*semp
 		{Name: "body", In: "body", Type: "object", Required: true},
 	}
 	path := "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/kafkaReceivers"
-	if method == "PATCH" {
+	if method == "PATCH" || method == "PUT" {
 		params = []sempv2.Parameter{
 			{Name: "msgVpnName", In: "path", Type: "string", Required: true},
 			{Name: "kafkaReceiverName", In: "path", Type: "string", Required: true},
@@ -68,7 +68,7 @@ func bridgeOps(opID, method string, bodyFields map[string]bool) map[string]*semp
 
 func bridgeTool(opID string, checks []string, followPages bool) CompositeTool {
 	args := map[string]string{"msgVpnName": "{{.Params.msgVpnName}}"}
-	if strings.HasPrefix(opID, "update") {
+	if strings.HasPrefix(opID, "update") || strings.HasPrefix(opID, "replace") {
 		args["kafkaReceiverName"] = "{{.Params.kafkaReceiverName}}"
 	}
 	return CompositeTool{
@@ -130,7 +130,9 @@ func TestBodyChecks_RejectsEverySecretInEveryShape(t *testing.T) {
 				"config": map[string]any{s: secretSentinel}}
 		},
 	}
-	modes := []struct{ opID, method string }{{"createMsgVpnKafkaReceiver", "POST"}, {"updateMsgVpnKafkaReceiver", "PATCH"}}
+	modes := []struct{ opID, method string }{
+		{"createMsgVpnKafkaReceiver", "POST"}, {"updateMsgVpnKafkaReceiver", "PATCH"}, {"replaceMsgVpnKafkaReceiver", "PUT"},
+	}
 
 	for _, m := range modes {
 		for shape, build := range shapes {
@@ -154,6 +156,20 @@ func TestBodyChecks_SecretMatchIsCaseInsensitiveAndNamesTheCanonicalField(t *tes
 	assertRejectedBeforeSEMP(t, rec, err, `"authenticationBasicPassword"`)
 	if strings.Contains(err.Error(), "AUTHENTICATIONBASICPASSWORD") {
 		t.Errorf("error should name the canonical field, not echo the caller's key: %v", err)
+	}
+}
+
+// The body checks run before the unknown-field check, so a miscased secret key
+// gets the "set it out of band, rotate it" guidance rather than a bare "not a
+// known attribute", even when the operation's body fields are known.
+func TestBodyChecks_MiscasedSecretGetsGuidanceWhenBodyFieldsAreKnown(t *testing.T) {
+	rec, err := runBridge(t, "createMsgVpnKafkaReceiver", "POST", bridgeBodyFields(), kafkaChecks, map[string]any{
+		"msgVpnName": "v", "kafkaReceiverName": "r",
+		"kafkaReceiverConfig": map[string]any{"AuthenticationBasicPassword": secretSentinel},
+	})
+	assertRejectedBeforeSEMP(t, rec, err, `"authenticationBasicPassword"`, "rotate")
+	if strings.Contains(err.Error(), "not a known attribute") {
+		t.Errorf("a miscased secret must get the secret guidance, not the unknown-field message: %v", err)
 	}
 }
 
@@ -196,7 +212,7 @@ func TestBodyChecks_NonSecretBodiesPassAndReachTheClient(t *testing.T) {
 	}
 }
 
-// The enabled/scheme rules, for both modes.
+// The enabled/scheme rules, for all three modes.
 func TestBodyChecks_AuthenticatedBridgeEnabledRules(t *testing.T) {
 	cfg := func(scheme any, enabled any) map[string]any {
 		m := map[string]any{}
@@ -208,39 +224,57 @@ func TestBodyChecks_AuthenticatedBridgeEnabledRules(t *testing.T) {
 		}
 		return m
 	}
+	const (
+		create  = "createMsgVpnKafkaReceiver"
+		update  = "updateMsgVpnKafkaReceiver"
+		replace = "replaceMsgVpnKafkaReceiver"
+	)
+	methodFor := map[string]string{create: "POST", update: "PATCH", replace: "PUT"}
 	cases := []struct {
 		name   string
-		create bool
+		opID   string
 		config map[string]any
 		reject bool
+		want   string // substring of the rejection, when reject
 	}{
 		// create
-		{"create: none + enabled", true, cfg("none", true), false},
-		{"create: scheme omitted + enabled", true, cfg(nil, true), false},
-		{"create: basic + enabled omitted", true, cfg("basic", nil), false},
-		{"create: basic + enabled false", true, cfg("basic", false), false},
-		{"create: basic + enabled true", true, cfg("basic", true), true},
-		{"create: scram + enabled true", true, cfg("scram", true), true},
+		{"create: none + enabled", create, cfg("none", true), false, ""},
+		{"create: scheme omitted + enabled", create, cfg(nil, true), false, ""},
+		{"create: basic + enabled omitted", create, cfg("basic", nil), false, ""},
+		{"create: basic + enabled false", create, cfg("basic", false), false, ""},
+		{"create: basic + enabled true", create, cfg("basic", true), true, "enabled:false"},
+		{"create: scram + enabled true", create, cfg("scram", true), true, "enabled:false"},
+		// replace: the body is the whole object, and an omitted enabled means false
+		{"replace: none + enabled", replace, cfg("none", true), false, ""},
+		{"replace: scheme omitted + enabled", replace, cfg(nil, true), false, ""},
+		{"replace: basic + enabled omitted", replace, cfg("basic", nil), false, ""},
+		{"replace: basic + enabled false", replace, cfg("basic", false), false, ""},
+		{"replace: basic + enabled true", replace, cfg("basic", true), true, "enabled:false"},
 		// update
-		{"update: enable only", false, cfg(nil, true), false},
-		{"update: disable only", false, cfg(nil, false), false},
-		{"update: scheme none + enabled true", false, cfg("none", true), false},
-		{"update: scheme none, enabled omitted", false, cfg("none", nil), false},
-		{"update: basic + enabled omitted", false, cfg("basic", nil), true},
-		{"update: basic + enabled true", false, cfg("basic", true), true},
-		{"update: basic + enabled false", false, cfg("basic", false), false},
+		{"update: enable only", update, cfg(nil, true), false, ""},
+		{"update: disable only", update, cfg(nil, false), false, ""},
+		{"update: scheme none + enabled true", update, cfg("none", true), false, ""},
+		{"update: scheme none, enabled omitted", update, cfg("none", nil), false, ""},
+		{"update: basic + enabled omitted", update, cfg("basic", nil), true, "enabled:false"},
+		{"update: basic + enabled true", update, cfg("basic", true), true, "enabled:false"},
+		{"update: basic + enabled false", update, cfg("basic", false), false, ""},
+		// A wrong-typed value is rejected as such, never treated as absent: an
+		// update with "enabled":"false" must not be told to "set enabled:false".
+		{"update: enabled as a string", update, cfg("basic", "false"), true, "must be true or false"},
+		{"create: enabled as a string", create, cfg("basic", "true"), true, "must be true or false"},
+		{"create: enabled as a number", create, cfg("basic", 1), true, "must be true or false"},
+		{"create: scheme as a number", create, cfg(5, true), true, "must be a string"},
+		{"update: scheme as an object", update, cfg(map[string]any{"x": "y"}, false), true, "must be a string"},
+		// With no scheme in the body the enabled value is the broker's to type-check.
+		{"update: no scheme, enabled as a string", update, cfg(nil, "yes"), false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opID, method := "updateMsgVpnKafkaReceiver", "PATCH"
-			if tc.create {
-				opID, method = "createMsgVpnKafkaReceiver", "POST"
-			}
-			rec, err := runBridge(t, opID, method, bridgeBodyFields(), kafkaChecks, map[string]any{
+			rec, err := runBridge(t, tc.opID, methodFor[tc.opID], bridgeBodyFields(), kafkaChecks, map[string]any{
 				"msgVpnName": "v", "kafkaReceiverName": "r", "kafkaReceiverConfig": tc.config,
 			})
 			if tc.reject {
-				assertRejectedBeforeSEMP(t, rec, err, "enabled:false")
+				assertRejectedBeforeSEMP(t, rec, err, tc.want)
 				return
 			}
 			if err != nil {
@@ -314,10 +348,11 @@ func TestLoader_BodyChecksValidation(t *testing.T) {
 	}{
 		{"valid create", "config/createMsgVpnKafkaReceiver", "[rejectKafkaSecrets]", ""},
 		{"valid update", "config/updateMsgVpnKafkaReceiver", "[rejectKafkaSecrets, createDisabledWhenAuthenticated]", ""},
+		{"valid replace", "config/replaceMsgVpnKafkaReceiver", "[rejectKafkaSecrets, createDisabledWhenAuthenticated]", ""},
 		{"unknown name", "config/createMsgVpnKafkaReceiver", "[noSuchCheck]", `unknown bodyCheck "noSuchCheck"`},
-		{"on a delete", "config/deleteMsgVpnKafkaReceiver", "[rejectKafkaSecrets]", "bodyChecks require a config/create* or config/update*"},
-		{"on a monitor op", "monitor/getMsgVpnKafkaReceiver", "[rejectKafkaSecrets]", "bodyChecks require a config/create* or config/update*"},
-		{"on an action op", "action/doMsgVpnQueueDeleteMsgs", "[rejectKafkaSecrets]", "bodyChecks require a config/create* or config/update*"},
+		{"on a delete", "config/deleteMsgVpnKafkaReceiver", "[rejectKafkaSecrets]", "bodyChecks require a config/create*, config/update* or config/replace*"},
+		{"on a monitor op", "monitor/getMsgVpnKafkaReceiver", "[rejectKafkaSecrets]", "bodyChecks require a config/create*, config/update* or config/replace*"},
+		{"on an action op", "action/doMsgVpnQueueDeleteMsgs", "[rejectKafkaSecrets]", "bodyChecks require a config/create*, config/update* or config/replace*"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -357,8 +392,8 @@ func TestBodyChecks_KafkaSecretFieldsMatchSpec(t *testing.T) {
 	want := append([]string(nil), kafkaSecretFields...)
 	sort.Strings(want)
 	for _, id := range []string{
-		"config/createMsgVpnKafkaReceiver", "config/updateMsgVpnKafkaReceiver",
-		"config/createMsgVpnKafkaSender", "config/updateMsgVpnKafkaSender",
+		"config/createMsgVpnKafkaReceiver", "config/updateMsgVpnKafkaReceiver", "config/replaceMsgVpnKafkaReceiver",
+		"config/createMsgVpnKafkaSender", "config/updateMsgVpnKafkaSender", "config/replaceMsgVpnKafkaSender",
 	} {
 		op, ok := ops[id]
 		if !ok {
@@ -389,17 +424,25 @@ var knownNonSecretWriteOnly = map[string]string{
 	"replicationEnabledQueueBehavior": "MsgVpn: a one-shot behaviour flag, not a credential",
 }
 
-// temporaryWriteOnlyExemptions are tools with unguarded write-only secrets that a
-// follow-up story is closing. Each entry must name its ticket; the story that
-// closes it deletes the entry. The mechanism is kept (and the "no longer needed"
-// assertion below with it) so a future spec bump that adds a write-only attribute
-// to a shipped tool can be staged behind a ticketed exemption instead of a red build.
-var temporaryWriteOnlyExemptions = map[string]string{}
+// exemptionKey names one unguarded write-only field of one tool.
+type exemptionKey struct{ tool, field string }
 
-// Every write-only attribute of every shipped config create/update step must be
-// covered by that step's body checks, listed as a known non-secret, or belong to
-// a tool with a ticketed temporary exemption. And every secret a check forbids
-// must still be write-only in the spec (no stale entries).
+// temporaryWriteOnlyExemptions are unguarded write-only fields that a follow-up
+// story is closing, keyed by (tool, field) so an entry hides exactly the field it
+// names and nothing else on that tool. Each entry must name its ticket; the story
+// that closes it deletes the entry. The mechanism is kept (and the "no longer
+// needed" assertion below with it) so a future spec bump that adds a write-only
+// attribute to a shipped tool can be staged behind a ticketed exemption instead of
+// a red build.
+var temporaryWriteOnlyExemptions = map[exemptionKey]string{}
+
+// Every write-only attribute of every shipped config create, update or replace
+// step must be covered by that step's body checks, listed as a known non-secret, or
+// carry a ticketed temporary exemption for exactly that (tool, field). And every
+// secret a check forbids must still be write-only in the spec (no stale entries).
+//
+// "Unknown" must never pass as "none": a step whose operation is missing from the
+// catalog, or whose body schema did not resolve (nil WriteOnlyFields), fails here.
 func TestBodyChecks_EveryWriteOnlyFieldIsGuarded(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -409,14 +452,23 @@ func TestBodyChecks_EveryWriteOnlyFieldIsGuarded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTools: %v", err)
 	}
-	exemptionUsed := map[string]bool{}
+	exemptionUsed := map[exemptionKey]bool{}
 	for _, tool := range tools {
 		for _, step := range tool.Steps {
-			op, ok := ops[step.Operation]
-			if !ok {
+			opID, isConfig := strings.CutPrefix(step.Operation, "config/")
+			if !isConfig {
 				continue
 			}
-			if _, isWrite := bodyModeFor(op.ID); !isWrite || !strings.HasPrefix(step.Operation, "config/") {
+			if _, isWrite := bodyModeFor(opID); !isWrite {
+				continue // a delete takes no body
+			}
+			op, ok := ops[step.Operation]
+			if !ok {
+				t.Errorf("tool %q step %q: operation %q is not in the embedded catalog, so its write-only fields cannot be checked", tool.Name, step.ID, step.Operation)
+				continue
+			}
+			if op.WriteOnlyFields == nil {
+				t.Errorf("tool %q step %q (%s): the body schema did not resolve, so its write-only fields are unknown; unknown must not pass as none", tool.Name, step.ID, op.ID)
 				continue
 			}
 			covered := map[string]bool{}
@@ -435,17 +487,41 @@ func TestBodyChecks_EveryWriteOnlyFieldIsGuarded(t *testing.T) {
 				if _, ok := knownNonSecretWriteOnly[f]; ok {
 					continue
 				}
-				if _, ok := temporaryWriteOnlyExemptions[tool.Name]; ok {
-					exemptionUsed[tool.Name] = true
+				key := exemptionKey{tool.Name, f}
+				if _, ok := temporaryWriteOnlyExemptions[key]; ok {
+					exemptionUsed[key] = true
 					continue
 				}
 				t.Errorf("tool %q step %q (%s): write-only attribute %q is not guarded by any bodyChecks entry. Add a check that rejects it, or, if it is not a secret, add it to knownNonSecretWriteOnly with a reason.", tool.Name, step.ID, op.ID, f)
 			}
 		}
 	}
-	for name, why := range temporaryWriteOnlyExemptions {
-		if !exemptionUsed[name] {
-			t.Errorf("temporary exemption for %q (%s) is no longer needed; delete it", name, why)
+	for key, ticket := range temporaryWriteOnlyExemptions {
+		if !exemptionUsed[key] {
+			t.Errorf("temporary exemption for %s.%s (%s) is no longer needed; delete it", key.tool, key.field, ticket)
+		}
+	}
+}
+
+// Replace (PUT) operations take the same body as a create, including every
+// write-only secret, so a future tool built on one must be guardable. This pins
+// that the loader accepts bodyChecks on a replace step and the drift test above
+// walks it: a replace step carrying write-only fields with no check fails there.
+func TestBodyChecks_ReplaceStepsAreCoveredByTheDriftWalk(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	for _, id := range []string{"config/replaceMsgVpnKafkaReceiver", "config/replaceMsgVpnKafkaSender"} {
+		op, ok := ops[id]
+		if !ok {
+			t.Fatalf("%s missing from the embedded spec", id)
+		}
+		if len(op.WriteOnlyFields) == 0 {
+			t.Errorf("%s should carry write-only fields; the replace guard would be moot", id)
+		}
+		if _, ok := bodyModeFor(op.ID); !ok {
+			t.Errorf("bodyModeFor(%q) does not recognise a replace operation", op.ID)
 		}
 	}
 }
@@ -561,6 +637,30 @@ func TestRealMessageVPNTools_RejectReplicationBridgeSecrets(t *testing.T) {
 			if len(recorded) != 1 {
 				t.Errorf("calls = %d, want 1", len(recorded))
 			}
+		})
+	}
+}
+
+// A caller-supplied authenticationScheme is not a secret field, but it is free
+// text the caller controls: a credential pasted into the wrong field must not be
+// echoed back to the agent and into the log detail by a rejection message.
+func TestBodyChecks_SchemeRejectionNeverEchoesTheSchemeValue(t *testing.T) {
+	cases := []struct {
+		name         string
+		opID, method string
+		config       map[string]any
+	}{
+		{"create enabled", "createMsgVpnKafkaReceiver", "POST", map[string]any{"authenticationScheme": secretSentinel, "enabled": true}},
+		{"replace enabled", "replaceMsgVpnKafkaReceiver", "PUT", map[string]any{"authenticationScheme": secretSentinel, "enabled": true}},
+		{"update without enabled:false", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"authenticationScheme": secretSentinel}},
+		{"update enabled", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"authenticationScheme": secretSentinel, "enabled": true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := runBridge(t, tc.opID, tc.method, bridgeBodyFields(), kafkaChecks, map[string]any{
+				"msgVpnName": "v", "kafkaReceiverName": "r", "kafkaReceiverConfig": tc.config,
+			})
+			assertRejectedBeforeSEMP(t, rec, err, "enabled:false")
 		})
 	}
 }

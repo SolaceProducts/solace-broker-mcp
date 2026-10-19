@@ -840,8 +840,8 @@ func requestBodyErrorf(format string, args ...any) error {
 //     (it identifies the object in the URL), so we reject it here — giving the
 //     same clear, client-side error as the create case above.
 //
-// Finally, the step's named body checks (Step.BodyChecks, bodychecks.go) run
-// against the merged body.
+// The step's named body checks (Step.BodyChecks, bodychecks.go) run against the
+// merged body first, then the unknown-field check.
 func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any, checks []string) (map[string]any, error) {
 	hasBody := false
 	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
@@ -890,6 +890,17 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		}
 	}
 
+	// Named body checks run on the final merged body, so they see exactly what
+	// would be sent regardless of which param shape supplied each field. They run
+	// before the unknown-field check below, which is skipped when op.BodyFields is
+	// nil but would otherwise answer a miscased secret key ("AuthenticationBasicPassword")
+	// with "not a known attribute" instead of the "set it out of band, rotate it"
+	// guidance; they are pure, so the order is safe. Either way a rejected body
+	// never reaches the client: args["body"] is set only after both.
+	if err := runBodyChecks(checks, op.ID, body); err != nil {
+		return nil, err
+	}
+
 	// Reject any field the operation's body schema doesn't declare. This catches
 	// a tool-only param (e.g. a dryRun flag) that would otherwise be spread into
 	// the body and rejected by the broker with an opaque "unknown attribute" 400.
@@ -911,15 +922,6 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 				return nil, requestBodyErrorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", boundedName(field), op.ID)
 			}
 		}
-	}
-
-	// Named body checks run on the final merged body, so they see exactly what
-	// would be sent regardless of which param shape supplied each field — and
-	// they run even when op.BodyFields is nil (the unknown-field check above is
-	// skipped then). Placed before args["body"] is set so a rejected body never
-	// reaches the client.
-	if err := runBodyChecks(checks, op.ID, body); err != nil {
-		return nil, err
 	}
 
 	args["body"] = body
