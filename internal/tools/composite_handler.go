@@ -118,7 +118,7 @@ func (h *CompositeToolHandler) Metadata() Metadata {
 	return Metadata{
 		Name:         h.tool.Name,
 		Description:  h.tool.Description,
-		InputSchema:  buildCompositeInputSchema(h.tool.Parameters),
+		InputSchema:  buildCompositeInputSchema(h.tool.Parameters, h.tool.StrictParameters),
 		OutputSchema: h.outputSchema(),
 		Annotations:  toolAnnotations(h.tool.Annotations),
 	}
@@ -186,8 +186,10 @@ func (h *CompositeToolHandler) Executor() *composite.CompositeExecutor {
 
 // buildCompositeInputSchema builds a JSON Schema object from the composite
 // tool's parameter definitions. The broker parameter is injected later by
-// register.go — handlers do not declare it.
-func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
+// register.go — handlers do not declare it. When strict is set, undeclared
+// keys are rejected (additionalProperties: false); broker survives this
+// because CallTool strips it before validation.
+func buildCompositeInputSchema(params []composite.ParameterDef, strict bool) map[string]any {
 	properties := make(map[string]any, len(params))
 	var required []string
 
@@ -216,6 +218,9 @@ func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
 	}
 	if len(required) > 0 {
 		schema["required"] = required
+	}
+	if strict {
+		schema["additionalProperties"] = false
 	}
 	return schema
 }

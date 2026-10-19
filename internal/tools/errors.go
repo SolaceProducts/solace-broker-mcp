@@ -17,6 +17,7 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -93,6 +94,13 @@ var translatedErrorCodes = map[int]codeInfo{
 // VPN uses the second — so both alternatives must always be tried for every
 // parent type, never dispatched on the mode word first.
 var parentModePattern = regexp.MustCompile(`^Problem with \w+: Cannot enter (?:mode for (?P<modeNamed>[a-z-]+) (?P<instance>.+)|(?P<modeBare>[a-z-]+) mode): not found\.$`)
+
+// notFoundSubscriptionPattern matches the broker's NOT_FOUND text for a
+// delete of a queue subscription that doesn't exist, e.g. "Could not find
+// match for subscription mcp%2Fga%2Ftest%2F%3E". The broker echoes the topic
+// as it appeared, URL-encoded, in the request path (SOL-155428), so it is
+// decoded before reaching the agent (see decodeNotFoundSubscription).
+var notFoundSubscriptionPattern = regexp.MustCompile(`^(Could not find match for subscription )(.+)$`)
 
 // parentModeFriendlyNames translates the CLI "mode" word captured by
 // parentModePattern to the human-readable object type AC3 asks for. Every
@@ -373,7 +381,7 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 			Operation:  sempErr.Operation,
 			Detail:     sempErr.Error(),
 		}
-	case isSEMPStatus(sempErr, "NOT_FOUND", 6) && strings.HasPrefix(sempErr.Operation, "delete"):
+	case isNotFoundOnDelete(sempErr):
 		return &desiredStateOutcome{
 			Outcome:    DesiredStateAlreadyAbsent,
 			Message:    buildSEMPv2Message(sempErr),
@@ -406,6 +414,12 @@ func applyAlreadyExistsHint(tool string, outcome *desiredStateOutcome) {
 	if hint, ok := alreadyExistsHints[tool]; ok {
 		outcome.Message += " " + hint
 	}
+}
+
+// isNotFoundOnDelete reports whether err is a NOT_FOUND on a delete operation,
+// the shape that classifies as already_absent.
+func isNotFoundOnDelete(err *sempv2.SEMPError) bool {
+	return isSEMPStatus(err, "NOT_FOUND", 6) && strings.HasPrefix(err.Operation, "delete")
 }
 
 // isSEMPStatus reports whether err's SEMPStatus (or, when the broker omitted
@@ -818,6 +832,11 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 			return translated
 		}
 	}
+	if isNotFoundOnDelete(err) {
+		if decoded := decodeNotFoundSubscription(err.Description); decoded != "" {
+			return decoded
+		}
+	}
 	if err.Description != "" {
 		return sanitizeBrokerText(err.Description)
 	}
@@ -862,6 +881,28 @@ func translateParentNotFound(description string) string {
 		return fmt.Sprintf("%s %q does not exist.", capitalized, sanitizeBrokerText(instance))
 	}
 	return fmt.Sprintf("%s does not exist.", capitalized)
+}
+
+// decodeNotFoundSubscription URL-decodes the topic in the broker's "Could not
+// find match for subscription <topic>" text (see notFoundSubscriptionPattern).
+// Path-unescaping, not query-unescaping: '+' is a literal topic character and
+// must not become a space. The topic is the caller's own subscriptionTopic
+// echoed back, not broker-internal data, so it is never redacted: if
+// sanitizeBrokerText would alter the decoded topic (a "/home/" or IP-like
+// segment), truncating it is worse than the encoded text. Returns "" when
+// description doesn't match, the topic isn't validly escaped, or sanitizing
+// would alter it — the caller then falls back to the broker's raw (sanitized)
+// text rather than guessing.
+func decodeNotFoundSubscription(description string) string {
+	match := notFoundSubscriptionPattern.FindStringSubmatch(description)
+	if match == nil {
+		return ""
+	}
+	topic, err := url.PathUnescape(match[2])
+	if err != nil || sanitizeBrokerText(topic) != topic {
+		return ""
+	}
+	return match[1] + topic
 }
 
 // isRetryable returns true for errors that represent transient conditions where
