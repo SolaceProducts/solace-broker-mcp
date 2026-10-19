@@ -126,7 +126,7 @@ func (k kafkaBridgeKind) created(stepResults map[string]map[string]any) (map[str
 
 	switch {
 	case needsSecret:
-		k.addHandoff(out, f, "was created disabled with")
+		k.addHandoff(out, f)
 	case f.enabled:
 		out["nextStep"] = k.pollText()
 	default:
@@ -146,13 +146,21 @@ func (k kafkaBridgeKind) updated(stepResults map[string]map[string]any) (map[str
 		out["nextStep"] = k.pollText()
 		return out, nil
 	}
-	// An update that switches to an authenticated scheme leaves the bridge disabled
-	// until the new secret is set out of band (the body check requires enabled:false
-	// with it), so it needs the same per-scheme hand-off a create gets: a Kerberos
-	// switch needs three attributes set together, not a generic "set its secret".
+	// A disabled bridge with an authenticated scheme is two different calls: a scheme
+	// switch (the body check requires enabled:false with it, so the new secret must
+	// be set out of band before it can run), or a plain {"enabled": false} on a
+	// credentialed bridge, where the stored secret is untouched and the user asked
+	// for it to stay off. The handler sees only the resulting state, so it cannot
+	// tell them apart: the text covers both and lets the agent, which knows what it
+	// just asked for, pick. It must never tell the agent to re-enable a bridge the
+	// user may have just shut down, so secretRequired is not set here.
 	if needsSecret(f.scheme) {
-		out["secretRequired"] = true
-		k.addHandoff(out, f, "now uses")
+		fields := k.secretFields(f.scheme)
+		out["secretFields"] = fields
+		out["handoff"] = k.disabledHandoff(f, fields)
+		out["nextStep"] = fmt.Sprintf(
+			"Only if the bridge should run again, and the user confirms its secret is set: call %s for %s %q with %s {\"enabled\": true}, then %s",
+			k.updateTool, k.label, f.name, k.configParam, k.pollText())
 		return out, nil
 	}
 	out["nextStep"] = fmt.Sprintf(
@@ -182,29 +190,36 @@ func (k kafkaBridgeKind) secretFields(scheme string) []string {
 // of band before it can connect.
 func needsSecret(scheme string) bool { return scheme != "" && scheme != "none" }
 
-// addHandoff adds the secret hand-off to a summary: which attributes the user must
-// set, the text to show them, and what to do once they confirm. intro completes
-// "<label> <name> ... authenticationScheme X": "was created disabled with" for a
-// create, "now uses" for an update that switched scheme (the bridge is disabled).
-func (k kafkaBridgeKind) addHandoff(out map[string]any, f bridgeFacts, intro string) {
+// addHandoff adds the secret hand-off for a bridge just created disabled: which
+// attributes the user must set, the text to show them, and what to do once they
+// confirm.
+func (k kafkaBridgeKind) addHandoff(out map[string]any, f bridgeFacts) {
 	fields := k.secretFields(f.scheme)
 	out["secretFields"] = fields
-	out["handoff"] = k.handoff(f, fields, intro)
+	out["handoff"] = k.handoff(f, fields)
 	out["nextStep"] = fmt.Sprintf(
 		"When the user confirms the secret is set, call %s for %s %q with %s {\"enabled\": true}, then %s",
 		k.updateTool, k.label, f.name, k.configParam, k.pollText())
 }
 
-func (k kafkaBridgeKind) handoff(f bridgeFacts, fields []string, intro string) string {
-	disabled := ""
-	if intro != "was created disabled with" {
-		disabled = " and is disabled"
-	}
+// disabledHandoff is the text for an update that left an authenticated bridge
+// disabled. It covers a scheme switch (secret to set) and an intentional disable
+// (nothing to do) without assuming which one the agent just made.
+func (k kafkaBridgeKind) disabledHandoff(f bridgeFacts, fields []string) string {
 	return fmt.Sprintf(
-		"%s %q %s authenticationScheme %q%s. It cannot connect until its secret is set, and I must not handle that secret. "+
+		"%s %q (Message VPN %q) is disabled and uses authenticationScheme %q. "+
+			"If this call changed the scheme, or the user has not set its secret yet, it cannot connect until the user sets %s together out of band "+
+			"(Broker Manager, the CLI, SEMP or Terraform); I must not handle that secret, so do not ask for it in this chat. "+
+			"If the call only disabled the bridge, nothing more is needed: its stored credentials are kept and it stays off until enabled again.",
+		k.label, f.name, f.vpn, f.scheme, strings.Join(fields, ", "))
+}
+
+func (k kafkaBridgeKind) handoff(f bridgeFacts, fields []string) string {
+	return fmt.Sprintf(
+		"%s %q was created disabled with authenticationScheme %q. It cannot connect until its secret is set, and I must not handle that secret. "+
 			"Please set %s together on %s %q (Message VPN %q) yourself, using Broker Manager, the CLI, SEMP or Terraform. "+
 			"Do not paste the secret into this chat. Tell me when it is done and I will enable the bridge and check its status.",
-		k.label, f.name, intro, f.scheme, disabled, strings.Join(fields, ", "), k.label, f.name, f.vpn)
+		k.label, f.name, f.scheme, strings.Join(fields, ", "), k.label, f.name, f.vpn)
 }
 
 // pollText tells the agent how to confirm a bridge came up. Enabling is
