@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `delete-queue-subscription`'s `already_absent` message now shows the subscription topic as written (`mcp/ga/test/>`) instead of the broker's URL-encoded echo (`mcp%2Fga%2Ftest%2F%3E`). Tracked under SOL-155428.
 
+### Security
+
+- `get-rdp-status` now replaces the query string, fragment, and `user:password@` of each `queueBindings` entry's `postRequestTarget` with `<redacted>`, keeping the path — webhook keys such as `?code=` or `?sig=` reached the LLM verbatim. `/api/orders?code=abc` is now returned as `/api/orders?<redacted>`. Tracked under SOL-156295.
+
 ## [1.0.0] - 2026-10-14
 
 ### Added
