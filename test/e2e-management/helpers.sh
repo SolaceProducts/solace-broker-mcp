@@ -13,6 +13,15 @@ SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../e2e-common/lib.sh
 source "$SUITE_DIR/../e2e-common/lib.sh"
 
+# Run the MCP server at debug level. The secret-handling tests assert that no secret
+# value reaches the server's log; at debug the server logs strictly more (retries,
+# rate limiter, rejected body fields), so a leak on any of those paths would be seen.
+# Debug lines carry no request bodies. _lib_write_config is the shared base config.
+write_config() {
+    _lib_write_config "$1"
+    printf '\nlog_level: debug\n' >> "$1"
+}
+
 # ── Config fixtures ──────────────────────────────────────────────────────────
 # Disposable objects owned per-test (create → act → assert → delete). Names are
 # broker-suffixed so the two brokers never collide, plus one shared-name queue
