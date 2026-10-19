@@ -860,10 +860,19 @@ receiver's topic bindings, up to 100): `topicName`, `enabled`, `up`,
 that are not up, the unexpectedly-down set), `bindingDisabledCount`
 (administratively disabled, never counted as a failure),
 `byBindingFailureReason` (counts of unexpectedly-down bindings by reason; a
-recovered binding's stale reason is not counted), and `failedBindings` — for
-each unexpectedly-down binding its `name`, `failureReason` and `lastNotice`,
-capped at 20 (`failedBindingsTruncated` is set when cut). `bindingSkipped` and
-`bindingTruncated` appear only when non-zero or true.
+recovered binding's stale reason is not counted, and a down binding that has no
+reason yet is counted in `bindingDownCount` but has no entry here), and
+`failedBindings` — for each unexpectedly-down binding its `name`,
+`failureReason`, and `lastNotice` when the broker has one (the key is omitted
+when it is empty), capped at 20 (`failedBindingsTruncated` is set when cut).
+`bindingSkipped` appears only when non-zero.
+
+**Only the first 100 bindings are read.** The binding list stops at the default
+result cap of 100 and these tools take no `maxResults`, so on a bridge with more
+bindings than that every count above covers only those 100: `bindingDownCount: 0`
+is not an all-clear. `bindingTruncated: true` says the list was cut; compare
+`bindingScannedCount` with the bridge's own `topicBindingCount` /
+`queueBindingCount` to see how many were not examined.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-ingest" }

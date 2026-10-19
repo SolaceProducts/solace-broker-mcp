@@ -1669,7 +1669,7 @@ test_get_kafka_receiver_status_bindings_failing() {
         "get-kafka-receiver-status [$broker]: exactly one failed binding is named" || return 1
     assert_json_field "$content" ".summary.failedBindings[0].name == \"$F9_FAILING_BINDING_TOPIC\"" "true" \
         "get-kafka-receiver-status [$broker]: the failed binding is named by its Kafka topic" || return 1
-    assert_json_field "$content" '.summary.failedBindings[0].failureReason != ""' "true" \
+    assert_json_field "$content" '(.summary.failedBindings[0].failureReason // "") != ""' "true" \
         "get-kafka-receiver-status [$broker]: the failed binding reports why" || return 1
     assert_json_field "$content" '(.summary.byBindingFailureReason | length) == 1' "true" \
         "get-kafka-receiver-status [$broker]: the reason is counted once in byBindingFailureReason" || return 1
@@ -1813,10 +1813,14 @@ test_get_kafka_sender_status_bindings_failing() {
     content=$(extract_content "$response")
     assert_json_field "$content" '.summary.bindingDownCount' "1" \
         "get-kafka-sender-status [$broker]: the failing sender's enabled binding is down" || return 1
+    assert_json_field "$content" '.summary.failedBindings | length' "1" \
+        "get-kafka-sender-status [$broker]: exactly one failed binding is named" || return 1
     assert_json_field "$content" ".summary.failedBindings[0].name == \"$F10_KAFKA_QUEUE\"" "true" \
         "get-kafka-sender-status [$broker]: the failed binding is named by its queue" || return 1
-    assert_json_field "$content" '.summary.failedBindings[0].failureReason != ""' "true" \
+    assert_json_field "$content" '(.summary.failedBindings[0].failureReason // "") != ""' "true" \
         "get-kafka-sender-status [$broker]: the failed binding reports why" || return 1
+    assert_json_field "$content" '(.summary.byBindingFailureReason | length) == 1' "true" \
+        "get-kafka-sender-status [$broker]: the reason is counted once in byBindingFailureReason" || return 1
 }
 
 test_get_kafka_sender_status_bindings_healthy_a() { test_get_kafka_sender_status_bindings_healthy "broker-a"; }

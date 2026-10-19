@@ -444,9 +444,9 @@ verify_kafka_receivers_on() {
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver" \
         60 '.data.up == true'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing" \
-        30 '.data.failureReason != ""'
+        30 '(.data.failureReason // "") != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing/topicBindings/$F9_FAILING_BINDING_TOPIC" \
-        30 '.data.up == false and .data.failureReason != ""'
+        30 '.data.up == false and (.data.failureReason // "") != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-disabled" \
         15 '.data.enabled == false'
 }
@@ -509,9 +509,9 @@ verify_kafka_senders_on() {
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender" \
         60 '.data.up == true'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing" \
-        30 '.data.failureReason != ""'
+        30 '(.data.failureReason // "") != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing/queueBindings/$F10_KAFKA_QUEUE" \
-        30 '.data.up == false and .data.failureReason != ""'
+        30 '.data.up == false and (.data.failureReason // "") != ""'
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-disabled" \
         15 '.data.enabled == false'
 }

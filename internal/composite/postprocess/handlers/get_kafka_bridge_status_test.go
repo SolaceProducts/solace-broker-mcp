@@ -158,17 +158,47 @@ func TestGetKafkaBindingStatus_StructuralErrorsFail(t *testing.T) {
 }
 
 // The loader runs ValidateTool at startup: the handler must declare the step and
-// the select fields the YAML provides, per kind.
+// the select fields the YAML provides, per kind. The bridge step's real select is
+// included in every case so that a missing binding field cannot be masked by it.
 func TestGetKafkaBindingStatus_RegistrationMatchesTheToolShape(t *testing.T) {
-	good := map[string][]string{"topicBindings": {"topicName", "enabled", "up", "failureReason", "lastNotice"}}
-	if err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", []string{"kafkaReceiverStatus", "topicBindings"}, good); err != nil {
+	bridge := []string{"enabled", "up", "failureReason", "kafkaReceiverName", "topicBindingCount", "topicBindingUpCount"}
+	steps := []string{"kafkaReceiverStatus", "topicBindings"}
+	good := map[string][]string{"kafkaReceiverStatus": bridge, "topicBindings": {"topicName", "enabled", "up", "failureReason", "lastNotice"}}
+	if err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", steps, good); err != nil {
 		t.Errorf("receiver: %v", err)
 	}
-	bad := map[string][]string{"topicBindings": {"topicName", "enabled", "up"}}
-	if err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", []string{"kafkaReceiverStatus", "topicBindings"}, bad); err == nil {
-		t.Error("a select missing failureReason must fail validation")
+	bad := map[string][]string{"kafkaReceiverStatus": bridge, "topicBindings": {"topicName", "enabled", "up"}}
+	if err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", steps, bad); err == nil {
+		t.Error("a bindings select missing failureReason must fail validation, even though the bridge step selects it")
 	}
 	if err := postprocess.ValidateTool("get-kafka-sender-status", "getKafkaSenderStatus", []string{"kafkaSenderStatus"}, map[string][]string{}); err == nil {
 		t.Error("a missing bindings step must fail validation")
+	}
+}
+
+// Required fields are checked per step. The bridge-status step also selects
+// enabled, up and failureReason, so a union-of-all-steps check would let the
+// bindings step drop them unnoticed; the summary would then skip every binding as
+// malformed and report zero down.
+func TestGetKafkaBindingStatus_RequiredFieldsAreCheckedPerStep(t *testing.T) {
+	bridgeSelect := []string{"enabled", "up", "failureReason", "kafkaReceiverName", "topicBindingCount"}
+	for _, field := range []string{"enabled", "up", "failureReason", "topicName"} {
+		t.Run("bindings step without "+field, func(t *testing.T) {
+			var bindings []string
+			for _, f := range []string{"topicName", "enabled", "up", "failureReason", "lastNotice"} {
+				if f != field {
+					bindings = append(bindings, f)
+				}
+			}
+			selects := map[string][]string{"kafkaReceiverStatus": bridgeSelect, "topicBindings": bindings}
+			err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", []string{"kafkaReceiverStatus", "topicBindings"}, selects)
+			if err == nil {
+				t.Errorf("a bindings select without %q must fail validation even though the bridge step selects it", field)
+			}
+		})
+	}
+	good := map[string][]string{"kafkaReceiverStatus": {"kafkaReceiverName"}, "topicBindings": {"topicName", "enabled", "up", "failureReason"}}
+	if err := postprocess.ValidateTool("get-kafka-receiver-status", "getKafkaReceiverStatus", []string{"kafkaReceiverStatus", "topicBindings"}, good); err != nil {
+		t.Errorf("a complete bindings select must pass even when the bridge step selects none of the fields: %v", err)
 	}
 }

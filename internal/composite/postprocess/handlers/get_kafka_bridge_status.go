@@ -42,10 +42,16 @@ var kafkaBindingStatusKinds = []kafkaBindingStatusKind{
 
 func init() {
 	for _, k := range kafkaBindingStatusKinds {
+		// Per step, not the flat form: the bridge-status step also selects enabled,
+		// up and failureReason, so a union-of-all-steps check would pass even if
+		// the bindings step dropped them, and the summary would then skip every
+		// binding as malformed and report zero down.
 		postprocess.Register(k.handlerName, postprocess.Handler{
-			Fn:             k.summarize,
-			RequiredSteps:  []string{k.stepID},
-			RequiredFields: []string{k.nameField, "enabled", "up", "failureReason"},
+			Fn:            k.summarize,
+			RequiredSteps: []string{k.stepID},
+			RequiredFieldsPerStep: map[string][]string{
+				k.stepID: {k.nameField, "enabled", "up", "failureReason"},
+			},
 		})
 	}
 }
