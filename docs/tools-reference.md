@@ -1095,7 +1095,8 @@ topic endpoints, and REST Delivery Points. Gated behind `enable_write_tools`
 (off by default), the same as the preceding action tools.
 
 - `create-*` is **additive** (not destructive); configuration attributes you omit take
-  the event broker default.
+  the event broker default. The exceptions are `create-kafka-receiver` and `create-kafka-sender`, which are
+  annotated destructive (and therefore audited) on purpose; see [Kafka Bridges (write)](#kafka-bridges-write).
 - `update-*` applies a **partial (PATCH)** update — only the attributes you
   supply change — and is marked **destructive** because it can be
   service-affecting (for example, disabling a VPN drops its client connections).
@@ -1536,8 +1537,11 @@ Annotations: `readOnly: false`, `destructive: true`.
 ### update-kafka-receiver
 
 Partially update a Kafka Receiver; commonly used to enable it after the secret was set out of band.
-**Destructive.** Changing the bootstrap address, TLS or an authentication setting on an enabled receiver briefly
-disables it.
+**Destructive.** Changing an authentication setting on an enabled receiver briefly disables it, so the tool requires
+`enabled: false` in the same call when `authenticationScheme` is set to anything other than `none`. A receiver
+cannot be re-pointed: `bootstrapAddressList`, `authenticationOauthClientTokenEndpoint` and `transportTlsEnabled: false`
+are rejected on update, because the broker would present the stored credentials to the new address. To point a
+receiver somewhere else, delete it and create it again (and set the secret out of band again).
 
 Annotations: `readOnly: false`, `destructive: true`.
 
@@ -1620,7 +1624,7 @@ set `authenticationBasicUsername` and `authenticationBasicPassword` themselves; 
 ### update-kafka-sender
 
 **Destructive.** Partially update a Kafka Sender; commonly `{"enabled": true}` once the secret is set. Same
-rules as `update-kafka-receiver`.
+rules as `update-kafka-receiver`, including that a sender cannot be re-pointed (delete and create it again).
 
 Annotations: `readOnly: false`, `destructive: true`.
 

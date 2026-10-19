@@ -1125,11 +1125,14 @@ Events](#authentication-events)). The stream is enabled with `OBS_AUDIT_LOG_ENAB
 > **The trigger is the `destructiveHint` annotation, not "did this change state".** Know the
 > gap before you rely on this stream as your complete record of change. The emitter branches
 > on a tool's `destructive` annotation (`internal/tools/manager.go`), and the `create-*` tools
-> are annotated `destructive: false` because creating an object is additive. So these seven
+> are annotated `destructive: false` because creating an object is additive, with two deliberate
+> exceptions: `create-kafka-receiver` and `create-kafka-sender` are annotated destructive because a
+> bridge opens an outbound connection to a host the caller chooses, so they are audited. These nine
 > tools change broker state and emit **no** `operation` record:
 >
 > `create-message-vpn`, `create-queue`, `create-queue-subscription`, `create-topic-endpoint`,
-> `create-rdp`, `clear-queue-stats`, `clear-client-stats`.
+> `create-rdp`, `create-kafka-receiver-topic-binding`, `create-kafka-sender-queue-binding`,
+> `clear-queue-stats`, `clear-client-stats`.
 >
 > An access review that needs object *creation* covered cannot get it from the audit stream
 > today; join to the `tool invoked` operational log line for those tools instead. Widening the
