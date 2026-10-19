@@ -1216,7 +1216,11 @@ tools:
       enabled state, connection limits, or spool quotas.
       Replication-bridge passwords and certificates cannot be set through this
       tool: set them out of band (Broker Manager, CLI, SEMP or Terraform). Never
-      ask for or accept a password, secret, key or certificate in chat.
+      ask for or accept a password, secret, key or certificate in chat. For the
+      same reason, changing replicationBridgeAuthenticationScheme on a live
+      replicated VPN here cannot carry the matching credential, so its
+      replication bridge stays down until the user sets it out of band: warn the
+      user before making that change.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpn) if you need the full list.
     annotations:
@@ -1963,9 +1967,15 @@ tools:
       kafkaReceiverConfig change. The common use is enabling a receiver after
       the user has set its secret out of band: kafkaReceiverConfig
       {"enabled": true} — do this only after the user confirms the secret is
-      set. Changing bootstrapAddressList, transportTlsEnabled or an
-      authentication setting on an enabled receiver briefly disables it to apply
-      the change.
+      set. Changing an authentication setting on an enabled receiver briefly
+      disables it to apply the change.
+      The server rejects changing bootstrapAddressList or
+      authenticationOauthClientTokenEndpoint, and turning transportTlsEnabled
+      off, on an existing receiver: the broker would send the receiver's stored
+      credentials to the new address or without encryption, without the secret
+      being supplied again. To point a receiver elsewhere, delete its bindings
+      and the receiver, then create it again (its secret is set out of band
+      again).
       If kafkaReceiverConfig sets a non-none authenticationScheme it MUST also
       set enabled:false (the server rejects it otherwise): the receiver then
       stays down until the user sets the new secret and you enable it with a
@@ -1991,11 +2001,11 @@ tools:
       - name: kafkaReceiverConfig
         type: object
         required: true
-        description: "KafkaReceiver attributes to update (enabled, bootstrapAddressList, authenticationScheme, transportTlsEnabled, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. Do not include msgVpnName or kafkaReceiverName here."
+        description: "KafkaReceiver attributes to update (enabled, authenticationScheme, batch and group settings, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. bootstrapAddressList, authenticationOauthClientTokenEndpoint and transportTlsEnabled:false are rejected on an existing receiver (delete and create it again). Do not include msgVpnName or kafkaReceiverName here."
     steps:
       - id: updateKafkaReceiver
         operation: config/updateMsgVpnKafkaReceiver
-        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated]
+        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated, rejectKafkaRetarget]
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
@@ -2224,9 +2234,15 @@ tools:
       Update an existing Kafka Sender; only the attributes in kafkaSenderConfig
       change. The common use is enabling a sender after the user has set its
       secret out of band: kafkaSenderConfig {"enabled": true} — do this only
-      after the user confirms the secret is set. Changing bootstrapAddressList,
-      transportTlsEnabled or an authentication setting on an enabled sender
-      briefly disables it to apply the change.
+      after the user confirms the secret is set. Changing an authentication
+      setting on an enabled sender briefly disables it to apply the change.
+      The server rejects changing bootstrapAddressList or
+      authenticationOauthClientTokenEndpoint, and turning transportTlsEnabled
+      off, on an existing sender: the broker would send the sender's stored
+      credentials, and all of its bound queues' traffic, to the new address or
+      without encryption, without the secret being supplied again. To point a
+      sender elsewhere, delete its queue bindings and the sender, then create it
+      again (its secret is set out of band again).
       If kafkaSenderConfig sets a non-none authenticationScheme it MUST also set
       enabled:false (the server rejects it otherwise): the sender then stays
       down until the user sets the new secret and you enable it with a separate
@@ -2252,11 +2268,11 @@ tools:
       - name: kafkaSenderConfig
         type: object
         required: true
-        description: "KafkaSender attributes to update (enabled, bootstrapAddressList, authenticationScheme, transportTlsEnabled, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. Do not include msgVpnName or kafkaSenderName here."
+        description: "KafkaSender attributes to update (enabled, authenticationScheme, batch and compression settings, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. bootstrapAddressList, authenticationOauthClientTokenEndpoint and transportTlsEnabled:false are rejected on an existing sender (delete and create it again). Do not include msgVpnName or kafkaSenderName here."
     steps:
       - id: updateKafkaSender
         operation: config/updateMsgVpnKafkaSender
-        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated]
+        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated, rejectKafkaRetarget]
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           kafkaSenderName: "{{.Params.kafkaSenderName}}"
@@ -2306,6 +2322,14 @@ tools:
     result:
       strategy: collect
 
+  # destructive:false on purpose, like the receiver topic-binding create. Even
+  # though a binding is the step that makes a queue's messages start leaving for
+  # Kafka, it picks no remote host: the destination (the sender's bootstrap
+  # address and credentials) is fixed when the sender is created, which is audited
+  # (create-kafka-sender is destructive), cannot be changed by update-kafka-sender,
+  # and the sender's enablement is audited too. The binding only chooses which
+  # local queue feeds an already-audited connection, so it keeps the create-*
+  # convention.
   - name: create-kafka-sender-queue-binding
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
