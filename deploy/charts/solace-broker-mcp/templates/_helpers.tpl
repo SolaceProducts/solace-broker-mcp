@@ -7,7 +7,9 @@ Chart name, truncated to the 63-character label limit.
 
 {{/*
 Fully qualified app name: names the Deployment, Service, ConfigMap and
-chart-managed Secret.
+chart-managed Secret. Unquoted, because NOTES.txt uses it in shell commands:
+quote it at every YAML call site, or a name such as "true" or "123" renders as
+a boolean or number.
 */}}
 {{- define "solace-broker-mcp.fullname" -}}
 {{- if .Values.fullnameOverride }}
@@ -28,8 +30,8 @@ these breaks `helm upgrade`. `instance` keeps two releases in one namespace from
 selecting each other's pods. Used by every selector the chart renders.
 */}}
 {{- define "solace-broker-mcp.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "solace-broker-mcp.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/name: {{ include "solace-broker-mcp.name" . | quote }}
+app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- end }}
 
 {{/*
