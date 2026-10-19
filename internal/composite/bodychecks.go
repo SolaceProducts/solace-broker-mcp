@@ -116,6 +116,59 @@ var bodyChecks = map[string]bodyCheck{
 	"createDisabledWhenAuthenticated": {
 		fn: checkAuthenticatedBridgeIsDisabled,
 	},
+	"rejectKafkaRetarget": {
+		fn: rejectKafkaRetarget,
+	},
+}
+
+// kafkaRetargetFields are the attributes that decide where a Kafka bridge sends
+// the credentials it has stored. On an existing bridge, changing any of them
+// redirects those credentials without the secret ever being re-supplied:
+// bootstrapAddressList moves the connection (the broker presents the stored
+// username/password, SCRAM response or access token to the new host), and
+// authenticationOauthClientTokenEndpoint moves the client-credentials request,
+// which carries the client id and secret.
+var kafkaRetargetFields = []string{
+	"bootstrapAddressList",
+	"authenticationOauthClientTokenEndpoint",
+}
+
+// rejectKafkaRetarget stops an update or replace from re-pointing an existing
+// bridge, so an agent that was never given a bridge's secret cannot make the
+// broker deliver it to a host the agent picks. Verified against a real broker: a
+// bare PATCH of bootstrapAddressList (no password sent) brought a credentialed
+// receiver up against a different host. Retargeting goes through delete and create
+// instead, and a create must have its secret set out of band again.
+//
+// It also rejects transportTlsEnabled:false, which would send the stored
+// credentials in the clear. Turning TLS on is safe and is allowed. A create is not
+// affected: a new bridge has no stored credential yet. A replace is treated like an
+// update, since a PUT keeps a write-only secret it does not mention.
+//
+// Messages never repeat a caller-supplied value.
+func rejectKafkaRetarget(mode bodyMode, body map[string]any) error {
+	if mode == bodyModeCreate {
+		return nil
+	}
+	for _, field := range kafkaRetargetFields {
+		for key := range body {
+			if strings.EqualFold(key, field) {
+				return requestBodyErrorf(
+					"%q cannot be changed on an existing Kafka bridge: the broker would send the bridge's stored credentials to the new address. To point a bridge elsewhere, delete its bindings and the bridge, then create it again; the new bridge's secret is then set out of band.",
+					field)
+			}
+		}
+	}
+	for key, value := range body {
+		if !strings.EqualFold(key, "transportTlsEnabled") {
+			continue
+		}
+		if tls, isBool := value.(bool); isBool && !tls {
+			return requestBodyErrorf(
+				"\"transportTlsEnabled\" cannot be turned off on an existing Kafka bridge: its stored credentials would then be sent unencrypted. To change it, delete the bridge and create it again.")
+		}
+	}
+	return nil
 }
 
 // rejectSecretFields builds a check that rejects any body field whose name equals

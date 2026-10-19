@@ -1967,9 +1967,15 @@ tools:
       kafkaReceiverConfig change. The common use is enabling a receiver after
       the user has set its secret out of band: kafkaReceiverConfig
       {"enabled": true} — do this only after the user confirms the secret is
-      set. Changing bootstrapAddressList, transportTlsEnabled or an
-      authentication setting on an enabled receiver briefly disables it to apply
-      the change.
+      set. Changing an authentication setting on an enabled receiver briefly
+      disables it to apply the change.
+      The server rejects changing bootstrapAddressList or
+      authenticationOauthClientTokenEndpoint, and turning transportTlsEnabled
+      off, on an existing receiver: the broker would send the receiver's stored
+      credentials to the new address or without encryption, without the secret
+      being supplied again. To point a receiver elsewhere, delete its bindings
+      and the receiver, then create it again (its secret is set out of band
+      again).
       If kafkaReceiverConfig sets a non-none authenticationScheme it MUST also
       set enabled:false (the server rejects it otherwise): the receiver then
       stays down until the user sets the new secret and you enable it with a
@@ -1995,11 +2001,11 @@ tools:
       - name: kafkaReceiverConfig
         type: object
         required: true
-        description: "KafkaReceiver attributes to update (enabled, bootstrapAddressList, authenticationScheme, transportTlsEnabled, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. Do not include msgVpnName or kafkaReceiverName here."
+        description: "KafkaReceiver attributes to update (enabled, authenticationScheme, batch and group settings, etc.). Only provided attributes are changed. A non-none authenticationScheme must be sent with enabled:false. Secret attributes are rejected; set them out of band. bootstrapAddressList, authenticationOauthClientTokenEndpoint and transportTlsEnabled:false are rejected on an existing receiver (delete and create it again). Do not include msgVpnName or kafkaReceiverName here."
     steps:
       - id: updateKafkaReceiver
         operation: config/updateMsgVpnKafkaReceiver
-        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated]
+        bodyChecks: [rejectKafkaSecrets, createDisabledWhenAuthenticated, rejectKafkaRetarget]
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           kafkaReceiverName: "{{.Params.kafkaReceiverName}}"

@@ -100,13 +100,16 @@ func (k kafkaBridgeKind) facts(stepResults map[string]map[string]any, stepID str
 	if !ok {
 		return bridgeFacts{}, fmt.Errorf("%s.data: want object, got %T", stepID, step["data"])
 	}
+	// authenticationScheme and enabled are what the hand-off turns on: a missing or
+	// mistyped scheme would read as "no secret needed" and drop the hand-off exactly
+	// when it matters, so they are required like the identifiers.
 	name, ok1 := stringField(data, k.nameField)
 	vpn, ok2 := stringField(data, "msgVpnName")
-	if !ok1 || !ok2 {
-		return bridgeFacts{}, fmt.Errorf("%s.data: missing %s or msgVpnName", stepID, k.nameField)
+	scheme, ok3 := stringField(data, "authenticationScheme")
+	enabled, ok4 := boolField(data, "enabled")
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return bridgeFacts{}, fmt.Errorf("%s.data: want %s, msgVpnName, authenticationScheme (string) and enabled (boolean)", stepID, k.nameField)
 	}
-	scheme, _ := stringField(data, "authenticationScheme")
-	enabled, _ := boolField(data, "enabled")
 	return bridgeFacts{name: name, vpn: vpn, scheme: scheme, enabled: enabled}, nil
 }
 
@@ -118,17 +121,12 @@ func (k kafkaBridgeKind) created(stepResults map[string]map[string]any) (map[str
 		return nil, err
 	}
 	out := k.base(f)
-	needsSecret := f.scheme != "" && f.scheme != "none"
+	needsSecret := needsSecret(f.scheme)
 	out["secretRequired"] = needsSecret
 
 	switch {
 	case needsSecret:
-		fields := k.secretFields(f.scheme)
-		out["secretFields"] = fields
-		out["handoff"] = k.handoff(f, fields)
-		out["nextStep"] = fmt.Sprintf(
-			"When the user confirms the secret is set, call %s for %s %q with %s {\"enabled\": true}, then %s",
-			k.updateTool, k.label, f.name, k.configParam, k.pollText())
+		k.addHandoff(out, f, "was created disabled with")
 	case f.enabled:
 		out["nextStep"] = k.pollText()
 	default:
@@ -146,6 +144,15 @@ func (k kafkaBridgeKind) updated(stepResults map[string]map[string]any) (map[str
 	out := k.base(f)
 	if f.enabled {
 		out["nextStep"] = k.pollText()
+		return out, nil
+	}
+	// An update that switches to an authenticated scheme leaves the bridge disabled
+	// until the new secret is set out of band (the body check requires enabled:false
+	// with it), so it needs the same per-scheme hand-off a create gets: a Kerberos
+	// switch needs three attributes set together, not a generic "set its secret".
+	if needsSecret(f.scheme) {
+		out["secretRequired"] = true
+		k.addHandoff(out, f, "now uses")
 		return out, nil
 	}
 	out["nextStep"] = fmt.Sprintf(
@@ -171,12 +178,33 @@ func (k kafkaBridgeKind) secretFields(scheme string) []string {
 	return []string{"the authentication secret for scheme " + fmt.Sprintf("%q", scheme)}
 }
 
-func (k kafkaBridgeKind) handoff(f bridgeFacts, fields []string) string {
+// needsSecret reports whether a bridge with this scheme needs a credential set out
+// of band before it can connect.
+func needsSecret(scheme string) bool { return scheme != "" && scheme != "none" }
+
+// addHandoff adds the secret hand-off to a summary: which attributes the user must
+// set, the text to show them, and what to do once they confirm. intro completes
+// "<label> <name> ... authenticationScheme X": "was created disabled with" for a
+// create, "now uses" for an update that switched scheme (the bridge is disabled).
+func (k kafkaBridgeKind) addHandoff(out map[string]any, f bridgeFacts, intro string) {
+	fields := k.secretFields(f.scheme)
+	out["secretFields"] = fields
+	out["handoff"] = k.handoff(f, fields, intro)
+	out["nextStep"] = fmt.Sprintf(
+		"When the user confirms the secret is set, call %s for %s %q with %s {\"enabled\": true}, then %s",
+		k.updateTool, k.label, f.name, k.configParam, k.pollText())
+}
+
+func (k kafkaBridgeKind) handoff(f bridgeFacts, fields []string, intro string) string {
+	disabled := ""
+	if intro != "was created disabled with" {
+		disabled = " and is disabled"
+	}
 	return fmt.Sprintf(
-		"%s %q was created disabled with authenticationScheme %q. It cannot connect until its secret is set, and I must not handle that secret. "+
+		"%s %q %s authenticationScheme %q%s. It cannot connect until its secret is set, and I must not handle that secret. "+
 			"Please set %s together on %s %q (Message VPN %q) yourself, using Broker Manager, the CLI, SEMP or Terraform. "+
 			"Do not paste the secret into this chat. Tell me when it is done and I will enable the bridge and check its status.",
-		k.label, f.name, f.scheme, strings.Join(fields, ", "), k.label, f.name, f.vpn)
+		k.label, f.name, intro, f.scheme, disabled, strings.Join(fields, ", "), k.label, f.name, f.vpn)
 }
 
 // pollText tells the agent how to confirm a bridge came up. Enabling is

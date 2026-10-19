@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. Passwords, client secrets and other credentials are rejected and must be set out of band; the create result tells the user how. `create-kafka-receiver` is annotated destructive, so it is audited. Kafka bridges need the broker's Kafka bridge scaling settings (`system_scaling_maxkafkabridgecount`) set at creation. Tracked under SOL-156212.
+- Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. The server rejects passwords and other credentials (set them out of band; the create result says how), requires `enabled:false` when an authentication scheme is created or changed, and rejects changing a receiver's bootstrap address or token endpoint (delete and create it again). `create-kafka-receiver` is annotated destructive, so it is audited. The event broker itself must have Kafka bridge capacity (`system_scaling_maxkafkabridgecount`, a broker startup setting). Tracked under SOL-156212.
 
 ### Changed
 
