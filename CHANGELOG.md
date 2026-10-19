@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added five Kafka Sender write tools, available when `enable_write_tools: true`: `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding` and `delete-kafka-sender-queue-binding`, with the same secret handling as the Kafka Receiver tools. `create-kafka-sender` is annotated destructive, so it is audited. Tracked under SOL-156213.
-- Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. Passwords, client secrets and other credentials are rejected and must be set out of band; the create result tells the user how. `create-kafka-receiver` is annotated destructive, so it is audited. Kafka bridges need the broker's Kafka bridge scaling settings (`system_scaling_maxkafkabridgecount`) set at creation. Tracked under SOL-156212.
+- Added five Kafka Sender write tools, available when `enable_write_tools: true`: `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding` and `delete-kafka-sender-queue-binding`, with the same secret handling, `enabled:false` rule and no-retargeting rule as the Kafka Receiver tools. `create-kafka-sender` is annotated destructive, so it is audited. Tracked under SOL-156213.
+- Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. The server rejects passwords and other credentials (set them out of band; the create result says how), requires `enabled:false` when an authentication scheme is created or changed, and rejects changing a receiver's bootstrap address or token endpoint (delete and create it again). `create-kafka-receiver` is annotated destructive, so it is audited. The event broker itself must have Kafka bridge capacity (`system_scaling_maxkafkabridgecount`, a broker startup setting). Tracked under SOL-156212.
 
 ### Changed
 
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. **Upgrade note:** calls that include them now return an error; set them out of band (Broker Manager, CLI, SEMP or Terraform). Tracked under SOL-156210.
+- **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
 
 ## [1.0.0] - 2026-10-14
 

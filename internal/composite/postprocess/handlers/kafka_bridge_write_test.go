@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
@@ -110,14 +112,50 @@ func TestKafkaReceiverUpdated(t *testing.T) {
 	if next, _ := enabled["nextStep"].(string); !strings.Contains(next, "get-kafka-receiver-status") || !strings.Contains(next, "Username or password missing") {
 		t.Errorf("enabled nextStep = %q", next)
 	}
-	disabled := apply(t, "kafkaReceiverUpdated", receiverStep("updateKafkaReceiver", receiverData("basic", false)))
-	if next, _ := disabled["nextStep"].(string); !strings.Contains(next, "is disabled") || !strings.Contains(next, "out of band first") {
+	if _, has := enabled["handoff"]; has {
+		t.Error("enabling a bridge is not a hand-off: the secret is already set")
+	}
+
+	// Disabled with no secret needed: just how to enable it later.
+	plain := apply(t, "kafkaReceiverUpdated", receiverStep("updateKafkaReceiver", receiverData("none", false)))
+	if next, _ := plain["nextStep"].(string); !strings.Contains(next, "is disabled") {
 		t.Errorf("disabled nextStep = %q", next)
 	}
-	for _, out := range []map[string]any{enabled, disabled} {
-		if _, has := out["handoff"]; has {
-			t.Error("an update result must not carry a hand-off block")
-		}
+	if _, has := plain["handoff"]; has {
+		t.Error("a disabled bridge with scheme none needs no hand-off")
+	}
+}
+
+// An update that switches to an authenticated scheme leaves the bridge disabled
+// until the new secret is set, so it gets the same per-scheme hand-off a create
+// gets: a Kerberos switch needs three attributes set together, not a generic text.
+func TestKafkaReceiverUpdated_SchemeSwitchGetsThePerSchemeHandoff(t *testing.T) {
+	for scheme, wantFields := range kafkaSchemeSecretFields {
+		t.Run(scheme, func(t *testing.T) {
+			out := apply(t, "kafkaReceiverUpdated", receiverStep("updateKafkaReceiver", receiverData(scheme, false)))
+			if out["secretRequired"] != true {
+				t.Fatalf("secretRequired = %v, want true", out["secretRequired"])
+			}
+			fields, _ := out["secretFields"].([]string)
+			if strings.Join(fields, ",") != strings.Join(wantFields, ",") {
+				t.Errorf("secretFields = %v, want %v", fields, wantFields)
+			}
+			handoff, _ := out["handoff"].(string)
+			for _, want := range []string{`"rx"`, `"vpn1"`, `"` + scheme + `"`, "now uses", "is disabled", "Do not paste the secret into this chat", "together"} {
+				if !strings.Contains(handoff, want) {
+					t.Errorf("handoff should contain %q:\n%s", want, handoff)
+				}
+			}
+			if strings.Contains(handoff, "was created") {
+				t.Errorf("an update's hand-off must not say the bridge was created:\n%s", handoff)
+			}
+			next, _ := out["nextStep"].(string)
+			for _, want := range []string{"update-kafka-receiver", `"enabled": true`, "get-kafka-receiver-status"} {
+				if !strings.Contains(next, want) {
+					t.Errorf("nextStep should contain %q:\n%s", want, next)
+				}
+			}
+		})
 	}
 }
 
@@ -127,6 +165,12 @@ func TestKafkaBridgeWrite_MalformedResultsAreErrors(t *testing.T) {
 		"data not an object": {"createKafkaReceiver": {"data": "oops"}},
 		"missing name":       {"createKafkaReceiver": {"data": map[string]any{"msgVpnName": "v"}}},
 		"missing vpn":        {"createKafkaReceiver": {"data": map[string]any{"kafkaReceiverName": "r"}}},
+		// The hand-off depends on the scheme and on enabled: a missing or mistyped
+		// one must be an error, not "no secret needed".
+		"missing scheme":      {"createKafkaReceiver": {"data": map[string]any{"msgVpnName": "v", "kafkaReceiverName": "r", "enabled": false}}},
+		"scheme not a string": {"createKafkaReceiver": {"data": map[string]any{"msgVpnName": "v", "kafkaReceiverName": "r", "authenticationScheme": 5, "enabled": false}}},
+		"missing enabled":     {"createKafkaReceiver": {"data": map[string]any{"msgVpnName": "v", "kafkaReceiverName": "r", "authenticationScheme": "basic"}}},
+		"enabled not a bool":  {"createKafkaReceiver": {"data": map[string]any{"msgVpnName": "v", "kafkaReceiverName": "r", "authenticationScheme": "basic", "enabled": "false"}}},
 	}
 	for name, steps := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -194,5 +238,62 @@ func TestKafkaBridgeKinds_AreFullyDescribed(t *testing.T) {
 				t.Errorf("kind %q: %s is empty", k.object, name)
 			}
 		}
+	}
+}
+
+// The hand-off text names tools and the YAML names handlers and step IDs. All of
+// that is free text on one side, so a rename on the other would leave an agent
+// pointed at a tool that does not exist. Resolve every name a kind carries
+// against the real embedded catalog.
+func TestKafkaBridgeKinds_NamesResolveAgainstTheCatalog(t *testing.T) {
+	loaded, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	byName := map[string]composite.CompositeTool{}
+	for _, tl := range loaded {
+		byName[tl.Name] = tl
+	}
+	readOnly := func(tl composite.CompositeTool) bool {
+		return tl.Annotations.ReadOnly != nil && *tl.Annotations.ReadOnly
+	}
+
+	for _, k := range kafkaBridgeKinds {
+		t.Run(k.object, func(t *testing.T) {
+			for _, name := range []string{k.createTool, k.updateTool, k.statusTool} {
+				if _, ok := byName[name]; !ok {
+					t.Errorf("%q is named in the hand-off text but is not a tool in the catalog", name)
+				}
+			}
+			if tl, ok := byName[k.statusTool]; ok && !readOnly(tl) {
+				t.Errorf("%s should be a read-only tool", k.statusTool)
+			}
+			for _, w := range []struct{ tool, step, handler string }{
+				{k.createTool, k.createStepID, k.object + "Created"},
+				{k.updateTool, k.updateStepID, k.object + "Updated"},
+			} {
+				tl, ok := byName[w.tool]
+				if !ok {
+					continue
+				}
+				if readOnly(tl) {
+					t.Errorf("%s should be a write tool", w.tool)
+				}
+				if len(tl.Steps) != 1 || tl.Steps[0].ID != w.step {
+					t.Errorf("%s: step IDs = %v, the handler reads step %q", w.tool, tl.Steps, w.step)
+				}
+				if tl.Result.PostProcess != w.handler {
+					t.Errorf("%s: postProcess = %q, want %q", w.tool, tl.Result.PostProcess, w.handler)
+				}
+			}
+			update := byName[k.updateTool]
+			found := false
+			for _, p := range update.Parameters {
+				found = found || p.Name == k.configParam
+			}
+			if !found {
+				t.Errorf("%s has no %q parameter, which the hand-off text tells the agent to send", k.updateTool, k.configParam)
+			}
+		})
 	}
 }

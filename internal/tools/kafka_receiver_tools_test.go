@@ -466,3 +466,92 @@ func TestKafkaReceiverOperations_DeclareTheSelectQueryParameter(t *testing.T) {
 		}
 	}
 }
+
+// A receiver that already holds credentials must not be re-pointed by an update:
+// the broker would present them to the new destination. Through the real manager,
+// the call is rejected before any broker call and says how to do it properly.
+func TestUpdateKafkaReceiver_CannotRetargetAnExistingReceiver(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config map[string]any
+		want   string
+	}{
+		{"bootstrap address", map[string]any{"bootstrapAddressList": "elsewhere:9092"}, `"bootstrapAddressList"`},
+		{"oauth token endpoint", map[string]any{"authenticationOauthClientTokenEndpoint": "https://elsewhere/token"}, `"authenticationOauthClientTokenEndpoint"`},
+		{"TLS off", map[string]any{"transportTlsEnabled": false}, "transportTlsEnabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, client := kafkaBridgeManager(t, false)
+			r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
+				"msgVpnName": "vpn1", "kafkaReceiverName": "rx", "kafkaReceiverConfig": tc.config})
+			if !r.IsError {
+				t.Fatal("expected the update to be rejected")
+			}
+			reply := callToolResultText(t, r, nil)
+			for _, want := range []string{tc.want, "stored credentials", "create it again"} {
+				if !strings.Contains(reply, want) {
+					t.Errorf("reply %q should contain %q", reply, want)
+				}
+			}
+			if len(client.calls) != 0 {
+				t.Errorf("SEMP calls = %v, want none", client.calls)
+			}
+		})
+	}
+
+	// TLS on, and the plain enable step, are still fine.
+	mgr, client := kafkaBridgeManager(t, false)
+	client.responses["updateMsgVpnKafkaReceiver"] = receiverResponse("none", true)
+	for _, config := range []map[string]any{{"transportTlsEnabled": true}, {"enabled": true}} {
+		if r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
+			"msgVpnName": "vpn1", "kafkaReceiverName": "rx", "kafkaReceiverConfig": config}); r.IsError {
+			t.Errorf("update with %v should be accepted: %v", config, r.StructuredContent)
+		}
+	}
+}
+
+// Creating a receiver is how a new destination is chosen, so the create tool still takes it.
+func TestCreateKafkaReceiver_StillTakesTheBootstrapAddress(t *testing.T) {
+	mgr, client := kafkaBridgeManager(t, false)
+	client.responses["createMsgVpnKafkaReceiver"] = receiverResponse("none", false)
+	r := callKafka(t, mgr, "create-kafka-receiver", map[string]any{
+		"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
+		"kafkaReceiverConfig": map[string]any{"bootstrapAddressList": "kafka:9092", "transportTlsEnabled": false}})
+	if r.IsError {
+		t.Fatalf("create should be accepted: %v", r.StructuredContent)
+	}
+}
+
+// alreadyExistsHints is keyed by tool name. A rename would silently drop the hint
+// the agent relies on after a duplicate create (the postProcess handler is skipped
+// then), so every key must be a real create tool whose step can produce
+// already_exists, and every Kafka bridge create tool must have a hint.
+func TestAlreadyExistsHints_AreKeyedByRealKafkaCreateTools(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	catalog, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	byName := map[string]composite.CompositeTool{}
+	for _, tl := range catalog {
+		byName[tl.Name] = tl
+	}
+	for name := range alreadyExistsHints {
+		tl, ok := byName[name]
+		if !ok {
+			t.Errorf("alreadyExistsHints key %q is not a tool in the catalog", name)
+			continue
+		}
+		if len(tl.Steps) == 0 || !strings.HasPrefix(operations[tl.Steps[0].Operation].ID, "create") {
+			t.Errorf("%s: its first step is not a create operation, so it can never produce already_exists", name)
+		}
+	}
+	for _, tl := range catalog {
+		if (tl.Name == "create-kafka-receiver" || tl.Name == "create-kafka-sender") && alreadyExistsHints[tl.Name] == "" {
+			t.Errorf("%s has no alreadyExistsHints entry; a duplicate create would lose its hand-off guidance", tl.Name)
+		}
+	}
+}

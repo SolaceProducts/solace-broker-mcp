@@ -22,8 +22,8 @@ import (
 
 // Named request-body checks (Step.BodyChecks).
 //
-// A body check inspects the final merged request body of a config create/update
-// step and rejects the call locally, before any SEMP request, with a
+// A body check inspects the final merged request body of a config create, update
+// or replace step and rejects the call locally, before any SEMP request, with a
 // RequestBodyError (shown to the agent verbatim and carried in the log detail).
 //
 // Why this lives in the executor and not in a tools-layer wrapper such as
@@ -36,7 +36,9 @@ import (
 // second sensitive field appears. Checking the merged body is shape-independent:
 // whatever route a field took into the body, the check sees it.
 //
-// Errors must name a field, never echo a value: a rejected value may be a secret.
+// Errors must name a field, never echo a value: a rejected value may be a secret,
+// and that includes values of attributes that are not themselves secret fields
+// (a credential pasted into the wrong field is still a credential).
 
 // bodyMode is the kind of write a step performs, derived from its operation ID.
 type bodyMode int
@@ -44,17 +46,26 @@ type bodyMode int
 const (
 	bodyModeCreate bodyMode = iota
 	bodyModeUpdate
+	// bodyModeReplace is a PUT: the body states the whole object. An omitted
+	// attribute is reset to its default (an omitted enabled means false), but a
+	// write-only secret that is omitted is kept, not cleared. The broker accepts
+	// every attribute a create does, including the write-only ones, so a replace
+	// step needs the same secret guard as a create.
+	bodyModeReplace
 )
 
-// bodyModeFor maps a SEMPv2 operation ID to its mode. Only create* and update*
-// operations carry a request body worth checking; validateBodyChecks rejects the
-// others at load time, so the fallthrough here is never reached from a loaded tool.
+// bodyModeFor maps a SEMPv2 operation ID to its mode. Only create*, update* and
+// replace* operations carry a request body worth checking; validateBodyChecks
+// rejects the others at load time, so the fallthrough here is never reached from a
+// loaded tool.
 func bodyModeFor(opID string) (bodyMode, bool) {
 	switch {
 	case strings.HasPrefix(opID, "create"):
 		return bodyModeCreate, true
 	case strings.HasPrefix(opID, "update"):
 		return bodyModeUpdate, true
+	case strings.HasPrefix(opID, "replace"):
+		return bodyModeReplace, true
 	}
 	return 0, false
 }
@@ -105,6 +116,59 @@ var bodyChecks = map[string]bodyCheck{
 	"createDisabledWhenAuthenticated": {
 		fn: checkAuthenticatedBridgeIsDisabled,
 	},
+	"rejectKafkaRetarget": {
+		fn: rejectKafkaRetarget,
+	},
+}
+
+// kafkaRetargetFields are the attributes that decide where a Kafka bridge sends
+// the credentials it has stored. On an existing bridge, changing any of them
+// redirects those credentials without the secret ever being re-supplied:
+// bootstrapAddressList moves the connection (the broker presents the stored
+// username/password, SCRAM response or access token to the new host), and
+// authenticationOauthClientTokenEndpoint moves the client-credentials request,
+// which carries the client id and secret.
+var kafkaRetargetFields = []string{
+	"bootstrapAddressList",
+	"authenticationOauthClientTokenEndpoint",
+}
+
+// rejectKafkaRetarget stops an update or replace from re-pointing an existing
+// bridge, so an agent that was never given a bridge's secret cannot make the
+// broker deliver it to a host the agent picks. Verified against a real broker: a
+// bare PATCH of bootstrapAddressList (no password sent) brought a credentialed
+// receiver up against a different host. Retargeting goes through delete and create
+// instead, and a create must have its secret set out of band again.
+//
+// It also rejects transportTlsEnabled:false, which would send the stored
+// credentials in the clear. Turning TLS on is safe and is allowed. A create is not
+// affected: a new bridge has no stored credential yet. A replace is treated like an
+// update, since a PUT keeps a write-only secret it does not mention.
+//
+// Messages never repeat a caller-supplied value.
+func rejectKafkaRetarget(mode bodyMode, body map[string]any) error {
+	if mode == bodyModeCreate {
+		return nil
+	}
+	for _, field := range kafkaRetargetFields {
+		for key := range body {
+			if strings.EqualFold(key, field) {
+				return requestBodyErrorf(
+					"%q cannot be changed on an existing Kafka bridge: the broker would send the bridge's stored credentials to the new address. To point a bridge elsewhere, delete its bindings and the bridge, then create it again; the new bridge's secret is then set out of band.",
+					field)
+			}
+		}
+	}
+	for key, value := range body {
+		if !strings.EqualFold(key, "transportTlsEnabled") {
+			continue
+		}
+		if tls, isBool := value.(bool); isBool && !tls {
+			return requestBodyErrorf(
+				"\"transportTlsEnabled\" cannot be turned off on an existing Kafka bridge: its stored credentials would then be sent unencrypted. To change it, delete the bridge and create it again.")
+		}
+	}
+	return nil
 }
 
 // rejectSecretFields builds a check that rejects any body field whose name equals
@@ -117,11 +181,15 @@ func rejectSecretFields(fields []string, afterHint string) func(bodyMode, map[st
 		for _, secret := range sorted {
 			for key := range body {
 				if strings.EqualFold(key, secret) {
-					msg := "%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat."
+					// The hint is text, never part of the format string: a hint
+					// containing a percent sign must come out verbatim.
+					hint := ""
 					if afterHint != "" {
-						msg += " " + afterHint
+						hint = " " + afterHint
 					}
-					return requestBodyErrorf(msg+" If you already shared a secret in this conversation, treat it as exposed and rotate it.", secret)
+					return requestBodyErrorf(
+						"%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat.%s If you already shared a secret in this conversation, treat it as exposed and rotate it.",
+						secret, hint)
 				}
 			}
 		}
@@ -133,31 +201,58 @@ func rejectSecretFields(fields []string, afterHint string) func(bodyMode, map[st
 // being enabled by the same call that selects its authentication scheme, since
 // that call cannot carry the secret.
 //
-//   - create: a body with a non-none authenticationScheme must not set enabled:true.
+//   - create and replace: a body with a non-none authenticationScheme must not set
+//     enabled:true. (An omitted enabled is false in both: the create default, and
+//     the PUT reset.)
 //   - update: a body that sets a non-none authenticationScheme must also set
 //     enabled:false, so a scheme switch on a live bridge disables it and takes the
 //     out-of-band secret path instead of failing at the broker.
 //
 // An update that does not mention authenticationScheme is never affected, so the
 // plain {"enabled": true} step that enables a bridge after its secret is set passes.
+//
+// The values are read strictly. The broker would reject a wrong-typed enabled or
+// authenticationScheme itself, but a free-form config object lets one through to
+// this check, where silently treating it as absent would apply the wrong rule (an
+// update with "enabled":"false" would be told to "set enabled:false"). A present
+// but wrong-typed value is rejected here with a message that says so.
+//
+// No message repeats a caller-supplied value; see the package note above.
 func checkAuthenticatedBridgeIsDisabled(mode bodyMode, body map[string]any) error {
-	scheme, _ := body["authenticationScheme"].(string)
+	rawScheme, hasScheme := body["authenticationScheme"]
+	if !hasScheme {
+		return nil
+	}
+	scheme, isString := rawScheme.(string)
+	if !isString {
+		return requestBodyErrorf("authenticationScheme must be a string (for example \"none\" or \"basic\").")
+	}
 	if scheme == "" || scheme == "none" {
 		return nil
 	}
-	enabled, hasEnabled := body["enabled"].(bool)
+	rawEnabled, hasEnabled := body["enabled"]
+	enabled := false
+	if hasEnabled {
+		var isBool bool
+		if enabled, isBool = rawEnabled.(bool); !isBool {
+			return requestBodyErrorf("enabled must be true or false (a boolean).")
+		}
+	}
 	switch mode {
 	case bodyModeCreate:
-		if hasEnabled && enabled {
+		if enabled {
 			return requestBodyErrorf(
-				"A bridge with authenticationScheme %q must be created with enabled:false. Set its secret out of band, then enable it with the update tool.",
-				boundedName(scheme))
+				"A bridge with a non-none authenticationScheme must be created with enabled:false. Set its secret out of band, then enable it with the update tool.")
+		}
+	case bodyModeReplace:
+		if enabled {
+			return requestBodyErrorf(
+				"A bridge replaced with a non-none authenticationScheme must set enabled:false (an omitted enabled also means false). Set its secret out of band, then enable it with an update.")
 		}
 	case bodyModeUpdate:
 		if !hasEnabled || enabled {
 			return requestBodyErrorf(
-				"Changing authenticationScheme to %q must also set enabled:false, so the bridge stays down until its new secret is set out of band. Enable it with a separate update afterwards.",
-				boundedName(scheme))
+				"Changing authenticationScheme to a non-none value must also set enabled:false, so the bridge stays down until its new secret is set out of band. Enable it with a separate update afterwards.")
 		}
 	}
 	return nil
@@ -173,7 +268,7 @@ func runBodyChecks(names []string, opID string, body map[string]any) error {
 	}
 	mode, ok := bodyModeFor(opID)
 	if !ok {
-		return fmt.Errorf("body checks configured on operation %q, which is neither a create nor an update", opID)
+		return fmt.Errorf("body checks configured on operation %q, which is not a create, update or replace", opID)
 	}
 	for _, name := range names {
 		check, ok := bodyChecks[name]
@@ -195,7 +290,7 @@ func validateBodyChecks(step Step) error {
 	}
 	opID, isConfig := strings.CutPrefix(step.Operation, "config/")
 	if _, ok := bodyModeFor(opID); !isConfig || !ok {
-		return fmt.Errorf("step %s: bodyChecks require a config/create* or config/update* operation, got %q", step.ID, step.Operation)
+		return fmt.Errorf("step %s: bodyChecks require a config/create*, config/update* or config/replace* operation, got %q", step.ID, step.Operation)
 	}
 	for _, name := range step.BodyChecks {
 		if _, ok := bodyChecks[name]; !ok {
