@@ -688,3 +688,61 @@ func TestRejectSecretFields_HintIsTextNotAFormatString(t *testing.T) {
 		})
 	}
 }
+
+// rejectKafkaRetarget: an existing bridge cannot be re-pointed, because the broker
+// would present its stored credentials to the new destination (verified against a
+// real broker: a bare PATCH of bootstrapAddressList brought a credentialed receiver
+// up against another host). A create is a new bridge with no stored credential.
+func TestBodyChecks_RejectKafkaRetarget(t *testing.T) {
+	retargetChecks := []string{"rejectKafkaRetarget"}
+	cases := []struct {
+		name   string
+		opID   string
+		method string
+		config map[string]any
+		reject bool
+		want   string
+	}{
+		{"update: bootstrap address", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"bootstrapAddressList": "attacker:9092"}, true, `"bootstrapAddressList"`},
+		{"update: bootstrap address, miscased", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"BootstrapAddressList": "attacker:9092"}, true, `"bootstrapAddressList"`},
+		{"update: oauth token endpoint", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"authenticationOauthClientTokenEndpoint": "https://attacker/token"}, true, `"authenticationOauthClientTokenEndpoint"`},
+		{"update: TLS off", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"transportTlsEnabled": false}, true, "transportTlsEnabled"},
+		{"update: TLS on is safe", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"transportTlsEnabled": true}, false, ""},
+		{"update: TLS wrong type is the broker's to reject", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"transportTlsEnabled": "false"}, false, ""},
+		{"update: enable only", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"enabled": true}, false, ""},
+		{"update: unrelated settings", "updateMsgVpnKafkaReceiver", "PATCH", map[string]any{"batchDelay": 100, "groupId": "g"}, false, ""},
+		{"replace keeps a write-only secret it omits, so it retargets too", "replaceMsgVpnKafkaReceiver", "PUT", map[string]any{"bootstrapAddressList": "attacker:9092"}, true, `"bootstrapAddressList"`},
+		{"replace: TLS off", "replaceMsgVpnKafkaReceiver", "PUT", map[string]any{"transportTlsEnabled": false}, true, "transportTlsEnabled"},
+		{"create: a new bridge has no stored credential", "createMsgVpnKafkaReceiver", "POST", map[string]any{"bootstrapAddressList": "kafka:9092", "authenticationOauthClientTokenEndpoint": "https://idp/token", "transportTlsEnabled": false}, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := bridgeBodyFields()
+			fields["bootstrapAddressList"], fields["authenticationOauthClientTokenEndpoint"], fields["transportTlsEnabled"] = true, true, true
+			fields["batchDelay"], fields["groupId"] = true, true
+			rec, err := runBridge(t, tc.opID, tc.method, fields, retargetChecks, map[string]any{
+				"msgVpnName": "v", "kafkaReceiverName": "r", "kafkaReceiverConfig": tc.config,
+			})
+			if tc.reject {
+				assertRejectedBeforeSEMP(t, rec, err, tc.want, "delete")
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected rejection: %v", err)
+			}
+			if len(rec) != 1 {
+				t.Errorf("calls = %d, want 1", len(rec))
+			}
+		})
+	}
+}
+
+// The rejection never repeats the address the caller supplied.
+func TestBodyChecks_RejectKafkaRetargetNeverEchoesTheValue(t *testing.T) {
+	fields := bridgeBodyFields()
+	fields["bootstrapAddressList"] = true
+	rec, err := runBridge(t, "updateMsgVpnKafkaReceiver", "PATCH", fields, []string{"rejectKafkaRetarget"}, map[string]any{
+		"msgVpnName": "v", "kafkaReceiverName": "r", "kafkaReceiverConfig": map[string]any{"bootstrapAddressList": secretSentinel},
+	})
+	assertRejectedBeforeSEMP(t, rec, err, `"bootstrapAddressList"`)
+}

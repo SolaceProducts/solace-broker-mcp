@@ -547,6 +547,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// SOL-152086's per-tool metrics) and errorType is simply never
 		// touched, staying at its zero value.
 		if outcome := classifyDesiredStateOutcome(handleErr); outcome != nil {
+			applyAlreadyExistsHint(name, outcome)
 			desiredOutcome = outcome
 			toolErr = nil
 			result, valErr := m.buildValidatedResult(rt, name, desiredStateStructuredContent(outcome), false)
