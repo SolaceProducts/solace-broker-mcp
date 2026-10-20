@@ -206,12 +206,50 @@ tests:
             name: MY_BROKER_TOKEN
             valueFrom: {secretKeyRef: {name: semp-tok, key: token}}
 
-  - it: carries config and Secret checksum annotations
+  # The checksums roll the pods on a config or credential change (AC 10). An
+  # exists-only check passes even for a constant, so pin the hashes for the
+  # default values and assert that one changed value moves each of them.
+  # Any change to the rendered config or the credential set changes these
+  # pinned values; regenerate with:
+  #   helm template rel . -f ci/default-values.yaml -s templates/deployment.yaml | grep checksum
+  - it: pins the config and Secret checksums for the default values
     asserts:
-      - exists:
+      - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-      - exists:
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - equal:
           path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: changes only the config checksum when the config changes
+    set:
+      server.logLevel: debug
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: changes only the Secret checksum when a broker credential changes
+    set:
+      brokers.my-broker.auth.password: rotated
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: changes the Secret checksum when the dev token changes
+    set:
+      mcpClientAuth.devToken: rotated
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
 
   - it: quotes a numeric-looking existing Secret name
     set:

@@ -360,6 +360,23 @@ tests:
       - failedTemplate:
           errorPattern: "brokers.my-broker.url must not include credentials"
 
+  - it: fails on a broker url with a query string, without echoing it
+    set:
+      brokers.my-broker.url: "https://broker:943/?access_token=QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include a query string or fragment"
+      - failedTemplate:
+          # the token never appears in the error
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a broker url with a fragment
+    set:
+      brokers.my-broker.url: "https://broker:943#QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include a query string or fragment"
+
   - it: accepts an @ in the url path
     set:
       brokers.my-broker.url: "https://broker:943/a@b"

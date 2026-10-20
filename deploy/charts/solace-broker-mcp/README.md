@@ -57,6 +57,11 @@ broker and a dev token, so the chart fails `helm install` instead of starting a
 pod that would crash-loop. The same applies to an empty broker `url`, an
 unsupported `auth.mode`, and a chart-managed credential left empty.
 
+A broker `url` is stored in the ConfigMap in plain text, so it must not hold
+any secret. The chart rejects credentials before the host (`user:pass@`) and
+any query string or fragment, but it cannot detect a secret in the path. Put
+credentials in the broker's `auth` block or `auth.existingSecret`.
+
 The dev token is a single shared credential, sent in cleartext to anything in
 the cluster that can reach the Service. Keep the Service `ClusterIP`.
 

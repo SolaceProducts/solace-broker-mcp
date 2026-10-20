@@ -107,6 +107,13 @@ the server too, but by then it would already sit in the ConfigMap. */}}
 {{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $url }}
 {{- fail (printf "brokers.%s.url must not include credentials: put them in brokers.%s.auth (or auth.existingSecret)" $name $name) }}
 {{- end }}
+{{- /* The server appends SEMP paths to the url (sempv1/sempv2 client.go), so
+a query string or fragment can never work. Rejecting both outright also keeps
+a token passed that way out of the ConfigMap, without guessing parameter names.
+A secret in the path cannot be detected; README.md says the url must hold none. */}}
+{{- if regexMatch "[?#]" $url }}
+{{- fail (printf "brokers.%s.url must not include a query string or fragment: the server appends SEMP paths to it; put credentials in brokers.%s.auth (or auth.existingSecret)" $name $name) }}
+{{- end }}
 {{- if or (not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#]+" $url)) (regexMatch "\\s" $url) }}
 {{- fail (printf "brokers.%s.url must be http(s)://<host>[:port][/path] with no whitespace" $name) }}
 {{- end }}
