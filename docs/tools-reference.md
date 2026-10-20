@@ -729,7 +729,10 @@ bindings, and its REST consumers.
 - `rdpStatus` — `enabled`, `up`, `clientName`, `clientProfileName`,
   `lastFailureReason`, `lastFailureTime`, `timeConnectionsBlocked`.
 - `queueBindings` — per binding: `queueBindingName`, `postRequestTarget`, `up`,
-  `uptime`, `lastFailureReason`, `lastFailureTime`.
+  `uptime`, `lastFailureReason`, `lastFailureTime`. `postRequestTarget` keeps
+  its path but has any query string, fragment, and `user:password@` replaced
+  with `<redacted>` (for example, `/api/orders?code=abc` is returned as
+  `/api/orders?<redacted>`), because webhook endpoints often carry their key there.
 - `restConsumers` — per consumer: `restConsumerName`, `enabled`, `up`,
   `remoteHost`, `remotePort`, `authenticationScheme`, HTTP request/response
   counters, and last-failure fields.

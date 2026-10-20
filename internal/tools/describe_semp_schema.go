@@ -435,7 +435,10 @@ per-attribute {name, type, description, enum, default, pattern, maxLength,
 minimum, maximum, writableOnCreate, writableOnUpdate, requiredForCreate,
 identifying, writeOnly, sensitive, deprecated, autoDisable, requiresDisable};
 object-typed attributes that are $ref-backed carry a nested properties list
-instead of writability flags) and 'raw' (the definition verbatim, larger).
+instead of writability flags) and 'raw' (the definition verbatim). Prefer
+'trimmed': 'raw' can run to over 100k characters for objects with many
+attributes (e.g. config/createMsgVpn) and can exceed the host's token limit.
+Use 'raw' only when the verbatim OpenAPI definition is required.
 `)
 
 	return Metadata{
@@ -452,7 +455,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 					"type":        "string",
 					"enum":        []string{"trimmed", "raw"},
 					"default":     "trimmed",
-					"description": "Response shape. 'trimmed' is an attribute list with just the fields an agent needs to plan a write. 'raw' returns the OpenAPI definition object verbatim (larger; includes every SEMP x-* extension).",
+					"description": "Response shape. 'trimmed' is an attribute list with just the fields an agent needs to plan a write. 'raw' returns the OpenAPI definition object verbatim, including every SEMP x-* extension; it can be very large for operations with many attributes (e.g. config/createMsgVpn) and can exceed the host's token limit, so use 'trimmed' unless the verbatim definition is required.",
 				},
 			},
 			"required": []string{"operation"},
