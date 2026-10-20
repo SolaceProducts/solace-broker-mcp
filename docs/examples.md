@@ -211,9 +211,11 @@ create or are left unchanged on update:
 
 ### Kafka bridges
 
-Create a Kafka Receiver with no authentication (created and enabled in one call), bind a topic, and check it came up:
+Create the destination queue and its subscription first (the broker does not require them, but records published to a topic nobody subscribes to are lost), then a Kafka Receiver with no authentication (created and enabled in one call), bind a topic, and check it came up:
 
 ```json
+{ "name": "create-queue", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "create-queue-subscription", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "kafka/orders" } }
 { "name": "create-kafka-receiver", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "kafkaReceiverConfig": { "authenticationScheme": "none", "bootstrapAddressList": "kafka:9092", "enabled": true } } }
 { "name": "create-kafka-receiver-topic-binding", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "topicName": "orders", "topicBindingConfig": { "localTopic": "kafka/orders", "enabled": true } } }
 { "name": "get-kafka-receiver-status", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in" } }
