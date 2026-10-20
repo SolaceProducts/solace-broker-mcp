@@ -86,6 +86,8 @@ tools:
         select:
           - lastFailureReason
           - lastFailureTime
+          # Masked by the getRdpStatus postprocessor (query, fragment, userinfo
+          # can hold a webhook key). Don't select it in a tool without that mask.
           - postRequestTarget
           - queueBindingName
           - restDeliveryPointName

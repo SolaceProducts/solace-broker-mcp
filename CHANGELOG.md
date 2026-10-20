@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added five Kafka Sender write tools, available when `enable_write_tools: true`: `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding` and `delete-kafka-sender-queue-binding`, with the same secret handling, `enabled:false` rule and no-retargeting rule as the Kafka Receiver tools. `create-kafka-sender` is annotated destructive, so it is audited. Tracked under SOL-156213.
 - Added five Kafka Receiver write tools, available when `enable_write_tools: true`: `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding` and `delete-kafka-receiver-topic-binding`. The server rejects passwords and other credentials (set them out of band; the create result says how), requires `enabled:false` when an authentication scheme is created or changed, and rejects changing a receiver's bootstrap address or token endpoint (delete and create it again). `create-kafka-receiver` is annotated destructive, so it is audited. The event broker itself must have Kafka bridge capacity (`system_scaling_maxkafkabridgecount`, a broker startup setting). Tracked under SOL-156212.
+- Added five Kafka Sender write tools, available when `enable_write_tools: true`: `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding` and `delete-kafka-sender-queue-binding`, with the same secret handling, `enabled:false` rule and no-retargeting rule as the Kafka Receiver tools. `create-kafka-sender` is annotated destructive, so it is audited. Tracked under SOL-156213.
 
 ### Changed
 
@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `delete-queue-subscription`'s `already_absent` message now shows the subscription topic as written (`mcp/ga/test/>`) instead of the broker's URL-encoded echo (`mcp%2Fga%2Ftest%2F%3E`). Tracked under SOL-155428.
+
+### Security
+
+- `get-rdp-status` now replaces the query string, fragment, and `user:password@` of each `queueBindings` entry's `postRequestTarget` with `<redacted>`, keeping the path — webhook keys such as `?code=` or `?sig=` reached the LLM verbatim. `/api/orders?code=abc` is now returned as `/api/orders?<redacted>`. Tracked under SOL-156295.
 
 ## [1.0.0] - 2026-10-14
 

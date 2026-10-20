@@ -351,3 +351,80 @@ func TestGetRdpStatus_ValidateTool(t *testing.T) {
 		}
 	})
 }
+
+// TestRedactRequestTarget pins the masking contract for a queue binding's
+// postRequestTarget (SOL-156295): the path survives, every query, fragment
+// and absolute-form userinfo value is replaced, and an empty component has
+// nothing to hide so it stays as-is.
+func TestRedactRequestTarget(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"query", "/api/orders?code=abc", "/api/orders?<redacted>"},
+		{"no query", "/api/health", "/api/health"},
+		{"absolute form with query", "https://hooks.example.com/ingest?sig=s&exp=1", "https://hooks.example.com/ingest?<redacted>"},
+		{"fragment", "/callback#token=t", "/callback#<redacted>"},
+		{"query and fragment", "/p?a=1#f", "/p?<redacted>#<redacted>"},
+		{"fragment containing ?", "/p#f?a=1", "/p#<redacted>"},
+		{"absolute form userinfo", "https://svc:pw@hooks.example.com/push", "https://<redacted>@hooks.example.com/push"},
+		{"absolute form userinfo and query", "http://u:p@h:8080/p?k=v", "http://<redacted>@h:8080/p?<redacted>"},
+		{"absolute form no path", "https://h?k=v", "https://h?<redacted>"},
+		{"raw @ inside the password", "https://u:p@ss@h/x", "https://<redacted>@h/x"},
+		{"@ in query of a path-less URL", "https://h?u=a@b", "https://h?<redacted>"},
+		{"@ in path is not userinfo", "/users/a@b.com", "/users/a@b.com"},
+		{"scheme-like text in query", "/p?next=http://u:p@h/", "/p?<redacted>"},
+		{"absolute URL embedded in path", "/fwd/https://u:p@h/x", "/fwd/https://<redacted>@h/x"},
+		{"empty query", "/p?", "/p?"},
+		{"empty fragment", "/p#", "/p#"},
+		{"encoded path kept byte-for-byte", "/a%2Fb?x", "/a%2Fb?<redacted>"},
+		{"root", "/", "/"},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := redactRequestTarget(c.in); got != c.want {
+				t.Errorf("redactRequestTarget(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestGetRdpStatus_RedactsPostRequestTarget checks the handler masks the raw
+// queueBindings rows in place — they are the same maps the executor returns
+// to the caller — and leaves rows without a string target untouched.
+func TestGetRdpStatus_RedactsPostRequestTarget(t *testing.T) {
+	withTarget := func(target any) map[string]any {
+		r := row(true, "")
+		r["postRequestTarget"] = target
+		return r
+	}
+	bindings := []any{
+		withTarget("/api/orders?code=AZURE-FUNC-KEY-123"),
+		withTarget("/api/health"),
+		withTarget("https://svc:USERINFO-PASS-000@hooks.example.com/push#FRAGMENT-TOKEN-789"),
+		row(true, ""),  // no postRequestTarget selected
+		withTarget(42), // wrong type
+	}
+	in := steps(bindings, []any{})
+	got, err := GetRdpStatus(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := []any{
+		"/api/orders?<redacted>",
+		"/api/health",
+		"https://<redacted>@hooks.example.com/push#<redacted>",
+		nil,
+		42,
+	}
+	data := in[rdpStatusBindingsStepID]["data"].([]any)
+	for i, want := range wants {
+		if got := data[i].(map[string]any)["postRequestTarget"]; got != want {
+			t.Errorf("binding %d postRequestTarget = %v, want %v", i, got, want)
+		}
+	}
+	if _, present := data[3].(map[string]any)["postRequestTarget"]; present {
+		t.Error("redaction must not add postRequestTarget to a row that lacks it")
+	}
+	if got["bindingUpCount"] != 5 {
+		t.Errorf("redaction must not change counts: bindingUpCount = %v, want 5", got["bindingUpCount"])
+	}
+}
