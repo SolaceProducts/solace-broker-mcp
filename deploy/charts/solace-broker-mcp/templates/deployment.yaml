@@ -1,5 +1,13 @@
 {{- $creds := include "solace-broker-mcp.credentials" . | fromJsonArray }}
 {{- $managedSecret := include "solace-broker-mcp.hasManagedSecret" . }}
+{{- /* Hash only what secret.yaml renders: a value set alongside existingSecret is
+ignored by the chart, so hashing it would expose it and roll pods for nothing. */}}
+{{- $managedCreds := list }}
+{{- range $creds }}
+{{- if not .existingSecret }}
+{{- $managedCreds = append $managedCreds . }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,7 +38,7 @@ spec:
       annotations:
         checksum/config: {{ include "solace-broker-mcp.serverConfig" . | sha256sum }}
         {{- if $managedSecret }}
-        checksum/secret: {{ toJson $creds | sha256sum }}
+        checksum/secret: {{ toJson $managedCreds | sha256sum }}
         {{- end }}
     spec:
       # Kubernetes injects <SVC>_PORT / <SVC>_SERVICE_HOST for every Service in

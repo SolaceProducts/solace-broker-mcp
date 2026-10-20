@@ -243,6 +243,26 @@ tests:
           path: spec.template.metadata.annotations["checksum/secret"]
           value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
 
+  # A value set alongside existingSecret is not rendered into the Secret, so it
+  # must not reach the (unsalted, readable) hash either.
+  - it: ignores a broker password that existingSecret overrides
+    set:
+      brokers.other:
+        url: "https://other.example.com:943"
+        auth: {mode: basic, existingSecret: other-semp, password: ignored}
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: ignores a dev token that existingSecret overrides
+    set:
+      mcpClientAuth.existingSecret: dev-tok
+      mcpClientAuth.devToken: ignored
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 0d1a36d7a1304d32eb3ff9f7f75fa01b257e0b9a23bdf939d1bb9127960d1ce6
   - it: changes the Secret checksum when the dev token changes
     set:
       mcpClientAuth.devToken: rotated
