@@ -1,0 +1,11 @@
+# Server config. Credentials appear only as ${<ENV VAR>} references, resolved
+# at startup from the chart Secret or the existing Secrets named in values.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- include "solace-broker-mcp.serverConfig" . | trim | nindent 4 }}

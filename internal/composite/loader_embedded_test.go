@@ -72,6 +72,13 @@ var createOrUpdateWriteTools = map[string]bool{
 	"update-topic-endpoint":     true,
 	"create-rdp":                true,
 	"update-rdp":                true,
+
+	"create-kafka-receiver":               true,
+	"update-kafka-receiver":               true,
+	"create-kafka-receiver-topic-binding": true,
+	"create-kafka-sender":                 true,
+	"update-kafka-sender":                 true,
+	"create-kafka-sender-queue-binding":   true,
 }
 
 func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
@@ -82,7 +89,7 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 
 	t.Run("count", func(t *testing.T) {
 		// Exact count guards against silent drops and accidental additions — update deliberately.
-		const wantToolCount = 41
+		const wantToolCount = 51
 		if len(tools) != wantToolCount {
 			t.Errorf("tool count: got %d, want %d", len(tools), wantToolCount)
 		}

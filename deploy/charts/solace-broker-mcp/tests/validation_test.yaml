@@ -1,0 +1,410 @@
+# Required inputs fail rendering, not the pod: the server refuses to start in
+# each of these cases, so `helm install` must not "succeed" into a crash loop.
+# Every case other than the one under test is valid, so each asserts the exact
+# error it expects rather than any failure.
+suite: required inputs fail rendering
+templates:
+  - configmap.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: fails when a broker's url is empty
+    set:
+      brokers.my-broker.url: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url is required"
+
+  - it: fails when a broker's url is whitespace
+    set:
+      brokers.my-broker.url: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url is required"
+
+  - it: fails when mode static has neither devToken nor existingSecret
+    set:
+      mcpClientAuth.devToken: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required"
+
+  - it: fails on a whitespace-only dev token
+    set:
+      mcpClientAuth.devToken: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required"
+
+  - it: renders when the dev token comes from an existing Secret
+    set:
+      mcpClientAuth.devToken: ""
+      mcpClientAuth.existingSecret: tok
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: rejects an unsupported broker auth mode (schema)
+    set:
+      brokers.my-broker.auth.mode: oauth
+    asserts:
+      - failedTemplate:
+          errorPattern: "value must be one of 'basic', 'bearer'"
+
+  - it: fails when a broker has no auth.mode
+    set:
+      brokers.my-broker.auth.mode: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.mode must be basic or bearer"
+
+  - it: fails on chart-managed basic auth with no password
+    set:
+      brokers.my-broker.auth.password: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.password is required"
+
+  - it: fails on a whitespace-only chart-managed password
+    set:
+      brokers.my-broker.auth.password: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.password is required"
+
+  - it: fails on chart-managed bearer auth with no token
+    set:
+      brokers.my-broker.auth:
+        mode: bearer
+        username: null
+        password: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.token is required"
+
+  - it: does not require chart-managed credentials when existingSecret is set
+    set:
+      brokers.my-broker.auth:
+        username: null
+        password: null
+        existingSecret: s
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails on an envPrefix the server would not substitute
+    set:
+      brokers.my-broker.envPrefix: myBroker
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.envPrefix \"myBroker\" must match"
+
+  - it: fails when a default prefix would start with a digit
+    set:
+      brokers:
+        my-broker: null
+        1prod:
+          url: https://b1:943
+          auth: {mode: basic, username: u, password: p}
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.1prod.envPrefix \"1PROD\" must match"
+
+  - it: fails when two brokers share an envPrefix
+    set:
+      brokers.my-broker.envPrefix: BROKER
+      brokers.b2:
+        url: https://b2:943
+        envPrefix: BROKER
+        auth: {mode: basic, username: u, password: p}
+    asserts:
+      - failedTemplate:
+          errorPattern: "env var BROKER_USERNAME is produced twice"
+
+  - it: fails when a bearer prefix collides with DEV_TOKEN
+    set:
+      brokers.dev:
+        url: https://b1:943
+        auth: {mode: bearer, token: x}
+    asserts:
+      - failedTemplate:
+          errorPattern: "env var DEV_TOKEN is produced twice"
+
+  - it: rejects an mcpClientAuth mode this chart does not support (schema)
+    set:
+      mcpClientAuth.mode: oauth
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/mcpClientAuth/mode': value must be 'static'"
+
+  - it: rejects a broker name the server would refuse (schema)
+    set:
+      brokers.bad_name:
+        url: https://b1:943
+        auth: {mode: basic, username: u, password: p}
+    asserts:
+      - failedTemplate:
+          errorPattern: "'bad_name' does not match pattern"
+
+  - it: rejects a misspelt top-level key (schema)
+    set:
+      replicaCont: 3
+    asserts:
+      - failedTemplate:
+          errorPattern: "additional properties 'replicaCont' not allowed"
+
+  # yaml.v3 will not decode an integer into time.Duration, so the server
+  # would refuse the config.
+  - it: rejects an integer duration (schema)
+    set:
+      semp.maxQueueWait: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/semp/maxQueueWait'"
+
+  - it: fails when listenAddress is unset (the server would bind loopback)
+    set:
+      server.listenAddress: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when server is null (listenAddress would be unset)
+    set:
+      server: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when listenAddress is loopback
+    set:
+      server.listenAddress: 127.0.0.1
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when listenAddress is localhost
+    set:
+      server.listenAddress: localhost
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when server.port collides with the metrics port
+    set:
+      server.port: 9091
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.port 9091 collides with the metrics port"
+
+  - it: fails on a log level the server rejects
+    set:
+      server.logLevel: verbose
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.logLevel \"verbose\" must be one of debug, info, warn, error"
+
+  - it: accepts a log level in any case, as the server does
+    set:
+      server.logLevel: DEBUG
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails on broker names that differ only by case, as the server does
+    set:
+      brokers.MY-BROKER:
+        url: https://b2:943
+        envPrefix: OTHER
+        auth: {mode: basic, username: u, password: p}
+    asserts:
+      - failedTemplate:
+          errorPattern: "broker names \"MY-BROKER\" and \"my-broker\" collide: names are compared case-insensitively"
+
+  - it: fails on a broker given as an empty map instead of dropping it
+    set:
+      brokers.empty: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.empty.url is required"
+
+  - it: fails on a broker url without an http(s) scheme
+    set:
+      brokers.my-broker.url: broker.example.com:943
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>"
+
+  - it: accepts an upper-case scheme, as the server does
+    set:
+      brokers.my-broker.url: HTTPS://broker.example.com:943
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: rejects a duration Go cannot parse (schema)
+    set:
+      semp.requestTimeoutDuration: "10"
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/semp/requestTimeoutDuration'"
+
+  - it: accepts compound and zero durations
+    set:
+      semp.requestTimeoutDuration: 1m30s
+      semp.maxQueueWait: "0"
+      semp.requestMinInterval: 1.5ms
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails when listenAddress is LOCALHOST in any case
+    set:
+      server.listenAddress: LOCALHOST
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when listenAddress is a hostname (the server needs an IP)
+    set:
+      server.listenAddress: mcp.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails when listenAddress carries a port
+    set:
+      server.listenAddress: "0.0.0.0:9090"
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails on long-form and IPv4-mapped IPv6 loopback
+    set:
+      server.listenAddress: "::ffff:127.0.0.1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails on expanded IPv6 loopback
+    set:
+      server.listenAddress: "0:0:0:0:0:0:0:1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: accepts the IPv6 wildcard
+    set:
+      server.listenAddress: "::"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: rejects a negative duration (schema)
+    set:
+      semp.requestMinInterval: "-1s"
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/semp/requestMinInterval'"
+
+  - it: rejects maxConcurrentPerBroker above the server's 1024 ceiling (schema)
+    set:
+      semp.maxConcurrentPerBroker: 100000
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/semp/maxConcurrentPerBroker'"
+
+  - it: fails on a url with no host
+    set:
+      brokers.my-broker.url: "https://"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>"
+
+  - it: fails on a url with whitespace in the host
+    set:
+      brokers.my-broker.url: "https:// broker"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>"
+
+  - it: fails on a whitespace-only dev-token existingSecret
+    set:
+      mcpClientAuth.devToken: ""
+      mcpClientAuth.existingSecret: "  "
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required"
+
+  - it: fails when listenAddress is a specific IP (the pod IP is not known at render time)
+    set:
+      server.listenAddress: 10.254.254.254
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.listenAddress must be \"0.0.0.0\" or \"::\""
+
+  - it: fails on a broker url carrying credentials, without echoing them
+    set:
+      brokers.my-broker.url: "https://admin:QQQ@broker:943"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include credentials"
+      - failedTemplate:
+          # the password never appears in the error
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a broker url carrying a username only
+    set:
+      brokers.my-broker.url: "https://admin@broker:943"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include credentials"
+
+  - it: fails on a broker url with a query string, without echoing it
+    set:
+      brokers.my-broker.url: "https://broker:943/?access_token=QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include a query string or fragment"
+      - failedTemplate:
+          # the token never appears in the error
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a broker url with a fragment
+    set:
+      brokers.my-broker.url: "https://broker:943#QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include a query string or fragment"
+
+  - it: accepts an @ in the url path
+    set:
+      brokers.my-broker.url: "https://broker:943/a@b"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # Helm prints a schema-rejected value in full, so no url check may live in
+  # the schema: a malformed url carrying credentials would be echoed.
+  - it: never echoes a credentialed url with a trailing space
+    set:
+      brokers.my-broker.url: "https://admin:QQQ@broker:943 "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must not include credentials"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: never echoes a credentialed url with a non-http scheme
+    set:
+      brokers.my-broker.url: "ftp://admin:QQQ@broker"
+    asserts:
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: never echoes a schemeless credentialed url
+    set:
+      brokers.my-broker.url: "admin:QQQ@broker:943"
+    asserts:
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"

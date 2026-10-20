@@ -729,7 +729,10 @@ bindings, and its REST consumers.
 - `rdpStatus` — `enabled`, `up`, `clientName`, `clientProfileName`,
   `lastFailureReason`, `lastFailureTime`, `timeConnectionsBlocked`.
 - `queueBindings` — per binding: `queueBindingName`, `postRequestTarget`, `up`,
-  `uptime`, `lastFailureReason`, `lastFailureTime`.
+  `uptime`, `lastFailureReason`, `lastFailureTime`. `postRequestTarget` keeps
+  its path but has any query string, fragment, and `user:password@` replaced
+  with `<redacted>` (for example, `/api/orders?code=abc` is returned as
+  `/api/orders?<redacted>`), because webhook endpoints often carry their key there.
 - `restConsumers` — per consumer: `restConsumerName`, `enabled`, `up`,
   `remoteHost`, `remotePort`, `authenticationScheme`, HTTP request/response
   counters, and last-failure fields.
@@ -833,7 +836,9 @@ error rather than an empty list.
 
 Detailed status for a single Kafka Receiver, including topic-binding status
 (`topicBindingUpCount` out of `topicBindingCount` — how many of its configured
-Kafka-topic-to-Solace-destination bindings are actually up).
+Kafka-topic-to-Solace-destination bindings are actually up) and, for any
+unexpectedly-down binding, which one and why. A receiver can read `up` while its
+bindings are down, so check the bindings before concluding it works.
 
 **Parameters:**
 
@@ -847,7 +852,30 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 `kafkaReceiverName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
 `upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
 `topicBindingCount`, `topicBindingUpCount`, `bootstrapAddressList`,
-`authenticationScheme`, `transportTlsEnabled`.
+`authenticationScheme`, `transportTlsEnabled`. Step `topicBindings` (the
+receiver's topic bindings, up to 100): `topicName`, `enabled`, `up`,
+`failureReason`, `lastNotice`, `lastNoticeTime`, `localTopic`,
+`rejectedMsgCount`, `uptime`. Plus a `summary` block (below).
+
+**Summary block** (shared by `get-kafka-receiver-status` and
+`get-kafka-sender-status`, which names its bindings by `queueName`):
+`bindingScannedCount`, `bindingUpCount`, `bindingDownCount` (enabled bindings
+that are not up, the unexpectedly-down set), `bindingDisabledCount`
+(administratively disabled, never counted as a failure),
+`byBindingFailureReason` (counts of unexpectedly-down bindings by reason; a
+recovered binding's stale reason is not counted, and a down binding that has no
+reason yet is counted in `bindingDownCount` but has no entry here), and
+`failedBindings` — for each unexpectedly-down binding its `name`,
+`failureReason`, and `lastNotice` when the broker has one (the key is omitted
+when it is empty), capped at 20 (`failedBindingsTruncated` is set when cut).
+`bindingSkipped` appears only when non-zero.
+
+**Only the first 100 bindings are read.** The binding list stops at the default
+result cap of 100 and these tools take no `maxResults`, so on a bridge with more
+bindings than that every count above covers only those 100: `bindingDownCount: 0`
+is not an all-clear. `bindingTruncated: true` says the list was cut; compare
+`bindingScannedCount` with the bridge's own `topicBindingCount` /
+`queueBindingCount` to see how many were not examined.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-ingest" }
@@ -887,7 +915,10 @@ error rather than an empty list.
 
 Detailed status for a single Kafka Sender, including queue-binding status
 (`queueBindingUpCount` out of `queueBindingCount` — how many of its configured
-Solace-queue-to-Kafka-topic bindings are actually up).
+Solace-queue-to-Kafka-topic bindings are actually up) and, for any
+unexpectedly-down binding, which one and why. A sender can read `up` with an
+empty `failureReason` while its bindings are down (for example "Remote topic has
+no leader on remote-broker" when the Kafka topic does not exist).
 
 **Parameters:**
 
@@ -901,7 +932,10 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 `kafkaSenderName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
 `upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
 `queueBindingCount`, `queueBindingUpCount`, `bootstrapAddressList`,
-`authenticationScheme`, `transportTlsEnabled`.
+`authenticationScheme`, `transportTlsEnabled`. Step `queueBindings` (the
+sender's queue bindings, up to 100): `queueName`, `enabled`, `up`,
+`failureReason`, `lastNotice`, `lastNoticeTime`, `remoteTopic`, `uptime`. Plus a
+`summary` block, described under `get-kafka-receiver-status`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-export" }
@@ -1141,7 +1175,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | Name of the VPN to create. |
-| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take event broker defaults. |
+| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take event broker defaults. The replication-bridge secrets (`replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent`, `replicationBridgeAuthenticationClientCertPassword`) are rejected: set them out of band (Broker Manager, CLI, SEMP or Terraform). |
 
 **Returns:** step-keyed envelope, step `createVpn`.
 
@@ -1162,7 +1196,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 |---|---|---|---|
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to modify. |
-| `msgVpnConfig` | object | yes | MsgVpn attributes to change. Do not include `msgVpnName`. |
+| `msgVpnConfig` | object | yes | MsgVpn attributes to change. Do not include `msgVpnName`. The replication-bridge secrets (`replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent`, `replicationBridgeAuthenticationClientCertPassword`) are rejected: set them out of band (Broker Manager, CLI, SEMP or Terraform). |
 
 **Returns:** step-keyed envelope, step `updateVpn`.
 

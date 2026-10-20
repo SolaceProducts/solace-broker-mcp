@@ -173,9 +173,9 @@ These read the provisioned client-username and client-profile configuration obje
 | Tool | Description |
 |---|---|
 | `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`). |
+| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`), plus which topic binding is down and its failure reason. |
 | `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`). |
+| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`), plus which queue binding is down and its failure reason. |
 
 ### Discards
 
@@ -209,8 +209,8 @@ These tools create, update, and delete event broker configuration objects via th
 
 | Tool | Destructive | Description |
 |---|---|---|
-| `create-message-vpn` | No | Create a Message VPN. |
-| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. |
+| `create-message-vpn` | No | Create a Message VPN. Replication-bridge passwords and certificates are rejected; set them out of band. |
+| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. Replication-bridge passwords and certificates are rejected; set them out of band. |
 | `delete-message-vpn` | **Yes** | Delete a Message VPN. Fails if it still has active client connections or child endpoints. |
 | `create-queue` | No | Create a queue in a VPN. |
 | `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |

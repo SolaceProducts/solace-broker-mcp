@@ -14,6 +14,10 @@ They are a starting point to copy and edit, not a turnkey install. Applied
 unmodified the pod will not start: `DEV_TOKEN` ships empty and the server
 refuses to run without it. That is deliberate — see the table below.
 
+To install with Helm instead, see the chart in
+[`deploy/charts/solace-broker-mcp/`](../charts/solace-broker-mcp/README.md).
+It is `0.x` and does not yet cover every file here.
+
 ## Edit these before applying
 
 | Where | What | Why |

@@ -1,0 +1,167 @@
+suite: configmap
+templates:
+  - configmap.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders the raw manifest's uncommented keys by default
+    asserts:
+      - equal:
+          path: data["config.yaml"]
+          value: |
+            port: 9090
+            log_level: "info"
+            listen_address: "0.0.0.0"
+            mcp_client_auth:
+              mode: "static"
+              dev_token: "${DEV_TOKEN}"
+            semp:
+              max_concurrent_per_broker: 10
+              request_timeout_duration: "1m"
+              request_min_interval: "100ms"
+              max_queue_wait: "30s"
+              fair_scheduling: true
+              retries: 10
+              retry_min_interval: "3s"
+              retry_max_interval: "30s"
+            brokers:
+              "my-broker":
+                url: "https://broker.example.com:943"
+                auth:
+                  mode: "basic"
+                  username: "${MY_BROKER_USERNAME}"
+                  password: "${MY_BROKER_PASSWORD}"
+
+  - it: renders insecure_skip_verify only when set
+    set:
+      brokers.my-broker.insecureSkipVerify: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    insecure_skip_verify: false$"
+
+  - it: omits a block whose keys are all null
+    set:
+      semp: null
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "semp:"
+
+  - it: leaves a null-valued key out of config.yaml
+    set:
+      semp.retries: null
+      server.logLevel: null
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^\\s*retries:"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^log_level:"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  retry_min_interval: \"3s\"$"
+
+  - it: keeps falsy-but-set values (false, 0)
+    set:
+      semp.fairScheduling: false
+      semp.retries: 0
+      semp.maxQueueWait: "0s"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  fair_scheduling: false$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  retries: 0$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  max_queue_wait: \"0s\"$"
+
+  - it: renders two brokers, each with its own credential references
+    set:
+      brokers.other-broker:
+        url: https://other:943
+        envPrefix: WEST
+        auth: {mode: bearer, token: t}
+    asserts:
+      - equal:
+          path: data["config.yaml"]
+          value: |
+            port: 9090
+            log_level: "info"
+            listen_address: "0.0.0.0"
+            mcp_client_auth:
+              mode: "static"
+              dev_token: "${DEV_TOKEN}"
+            semp:
+              max_concurrent_per_broker: 10
+              request_timeout_duration: "1m"
+              request_min_interval: "100ms"
+              max_queue_wait: "30s"
+              fair_scheduling: true
+              retries: 10
+              retry_min_interval: "3s"
+              retry_max_interval: "30s"
+            brokers:
+              "my-broker":
+                url: "https://broker.example.com:943"
+                auth:
+                  mode: "basic"
+                  username: "${MY_BROKER_USERNAME}"
+                  password: "${MY_BROKER_PASSWORD}"
+              "other-broker":
+                url: "https://other:943"
+                auth:
+                  mode: "bearer"
+                  token: "${WEST_TOKEN}"
+
+  - it: renders only the user's brokers
+    set:
+      brokers:
+        my-broker: null
+        only-mine:
+          url: https://mine:943
+          auth: {mode: basic, username: u, password: p}
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "my-broker"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  \"only-mine\":$"
+
+  - it: references credentials by env var, never by value
+    set:
+      mcpClientAuth.devToken: s3cr3t-dev
+      brokers.my-broker.auth.password: s3cr3t-pw
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "s3cr3t"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "password: \"\\$\\{MY_BROKER_PASSWORD\\}\""
+
+  - it: renders a token reference for bearer auth
+    set:
+      brokers:
+        my-broker:
+          url: https://b:943
+          auth: {mode: bearer, token: t, username: null, password: null}
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "token: \"\\$\\{MY_BROKER_TOKEN\\}\""
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "username:|password:"
+
+  - it: uses the explicit envPrefix in references
+    set:
+      brokers.my-broker.envPrefix: BROKER
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "username: \"\\$\\{BROKER_USERNAME\\}\""

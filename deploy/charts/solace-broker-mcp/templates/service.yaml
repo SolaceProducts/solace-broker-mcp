@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  # MCP sessions live in one pod's memory, so a session ID sent to any other
+  # pod gets a 404. ClientIP affinity pins each client to its own pod, and is
+  # required above one replica. timeoutSeconds must stay above the 2h session
+  # idle timeout. kube-proxy applies this on the ClusterIP path only — an
+  # Ingress, Gateway, or service mesh bypasses it; see
+  # deploy/kubernetes/service.yaml.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  ports:
+    - name: http
+      port: {{ (.Values.server | default dict).port | default 9090 }}
+      targetPort: http
+      protocol: TCP
+    # Prometheus scrape target. Resolves to `connection refused` until
+    # OBS_METRICS_SCRAPE_ENABLED is set.
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "solace-broker-mcp.selectorLabels" . | nindent 4 }}

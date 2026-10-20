@@ -16,6 +16,7 @@ package handlers
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
@@ -48,6 +49,9 @@ func init() {
 // single object and is left untouched — the executor merges it into the raw
 // result as-is; a single flat object needs no folding.
 //
+// Before counting, it masks each queue binding's postRequestTarget in place
+// (redactBindingTargets) so webhook keys in the target never reach the caller.
+//
 // Per array (queueBindings, restConsumers):
 //   - <array>UpCount / <array>DownCount:     count by up == true/false
 //   - by<Array>LastFailureReason:            count grouped by lastFailureReason,
@@ -70,6 +74,7 @@ func init() {
 // missing, data not a list, item not an object) still hard-fail since the
 // whole array is unusable.
 func GetRdpStatus(stepResults map[string]map[string]any) (map[string]any, error) {
+	redactBindingTargets(stepResults)
 	bindings, err := aggregateRdpArray(stepResults, rdpStatusBindingsStepID)
 	if err != nil {
 		return nil, err
@@ -154,4 +159,83 @@ func aggregateRdpArray(stepResults map[string]map[string]any, stepID string) (rd
 		out.truncated = true
 	}
 	return out, nil
+}
+
+// redactedComponent replaces a masked URL component's value. Angle brackets,
+// not the "[REDACTED]" used in logs: square brackets are URI syntax (IPv6
+// hosts), so this marker can't be misread as part of the target.
+const redactedComponent = "<redacted>"
+
+// redactBindingTargets masks the credential-bearing parts of every queue
+// binding's postRequestTarget, in place (SOL-156295). The broker returns the
+// attribute verbatim, and webhook endpoints commonly carry their key in it
+// (Azure Functions ?code=, signed-URL ?sig=, https://user:pass@host/...).
+// In place because collectSteps hands the caller these same row maps — this
+// is the only point between the SEMP response and the LLM. A row with no
+// string target is left alone: there is nothing to mask, and the counting
+// pass decides separately whether the row is usable. Structural problems
+// (missing step, non-list data) are left for aggregateRdpArray to report.
+func redactBindingTargets(stepResults map[string]map[string]any) {
+	items, _ := stepResults[rdpStatusBindingsStepID]["data"].([]any)
+	for _, raw := range items {
+		r, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if target, ok := stringField(r, "postRequestTarget"); ok {
+			r["postRequestTarget"] = redactRequestTarget(target)
+		}
+	}
+}
+
+// redactRequestTarget returns an HTTP request-target with its query,
+// fragment and (absolute form only) userinfo values replaced by
+// redactedComponent; the scheme, host, port and path are kept byte-for-byte
+// so an operator can still tell which endpoint is failing. String scanning,
+// not url.Parse: re-serializing would re-encode the path and alter the value
+// the broker reported. An empty component ("/p?") has nothing to hide and is
+// kept as-is.
+func redactRequestTarget(s string) string {
+	// Absolute form: userinfo is whatever precedes the last '@' in the
+	// authority, which runs from "://" to the first '/', '?' or '#'. Taking
+	// the first "://" anywhere also masks a URL embedded in the path
+	// ("/fwd/https://user:pw@h/") — still a credential, so masking it is the
+	// safe reading; one embedded in the query is masked with the query anyway.
+	if i := strings.Index(s, "://"); i >= 0 {
+		authStart := i + len("://")
+		authEnd := len(s)
+		if j := strings.IndexAny(s[authStart:], "/?#"); j >= 0 {
+			authEnd = authStart + j
+		}
+		if at := strings.LastIndex(s[authStart:authEnd], "@"); at >= 0 {
+			s = s[:authStart] + redactedComponent + s[authStart+at:]
+		}
+	}
+
+	// The first '?' or '#' ends the path. A '?' after '#' is fragment text.
+	i := strings.IndexAny(s, "?#")
+	if i < 0 {
+		return s
+	}
+	path, rest := s[:i], s[i:]
+	var query, fragment string
+	hasFragment := true
+	if rest[0] == '?' {
+		query, fragment, hasFragment = strings.Cut(rest[1:], "#")
+		query = "?" + mask(query)
+	} else {
+		fragment = rest[1:]
+	}
+	if hasFragment {
+		return path + query + "#" + mask(fragment)
+	}
+	return path + query
+}
+
+// mask hides a non-empty URL component value.
+func mask(v string) string {
+	if v == "" {
+		return ""
+	}
+	return redactedComponent
 }

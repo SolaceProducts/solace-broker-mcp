@@ -1,0 +1,22 @@
+# Production-shaped values: two brokers (one from an existing Secret, one
+# chart-managed), the dev token from an existing Secret, non-default resources.
+brokers:
+  prod-east:
+    url: "https://prod-east.example.com:943"
+    auth:
+      mode: basic
+      existingSecret: prod-east-semp
+  prod-west:
+    url: "https://prod-west.example.com:943"
+    envPrefix: WEST
+    auth:
+      mode: bearer
+      token: ci-only-placeholder
+mcpClientAuth:
+  existingSecret: mcp-dev-token
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
