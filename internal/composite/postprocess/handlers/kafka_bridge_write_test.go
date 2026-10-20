@@ -126,22 +126,24 @@ func TestKafkaReceiverUpdated(t *testing.T) {
 	}
 }
 
-// An update that switches to an authenticated scheme leaves the bridge disabled
-// until the new secret is set, so it gets the same per-scheme hand-off a create
-// gets: a Kerberos switch needs three attributes set together, not a generic text.
-func TestKafkaReceiverUpdated_SchemeSwitchGetsThePerSchemeHandoff(t *testing.T) {
+// A disabled authenticated bridge after an update is either a scheme switch (the
+// new secret must be set out of band) or a plain disable of a credentialed bridge.
+// The handler cannot tell which, so the hand-off lists the per-scheme attributes and
+// covers both outcomes, and never claims a secret is required (SOL-156212 review).
+func TestKafkaReceiverUpdated_DisabledAuthenticatedBridgeCoversSwitchAndPlainDisable(t *testing.T) {
 	for scheme, wantFields := range kafkaSchemeSecretFields {
 		t.Run(scheme, func(t *testing.T) {
 			out := apply(t, "kafkaReceiverUpdated", receiverStep("updateKafkaReceiver", receiverData(scheme, false)))
-			if out["secretRequired"] != true {
-				t.Fatalf("secretRequired = %v, want true", out["secretRequired"])
+			if v, has := out["secretRequired"]; has {
+				t.Fatalf("secretRequired = %v: an update cannot know whether a secret is missing, so it must not be asserted", v)
 			}
 			fields, _ := out["secretFields"].([]string)
 			if strings.Join(fields, ",") != strings.Join(wantFields, ",") {
 				t.Errorf("secretFields = %v, want %v", fields, wantFields)
 			}
 			handoff, _ := out["handoff"].(string)
-			for _, want := range []string{`"rx"`, `"vpn1"`, `"` + scheme + `"`, "now uses", "is disabled", "Do not paste the secret into this chat", "together"} {
+			for _, want := range []string{`"rx"`, `"vpn1"`, `"` + scheme + `"`, "is disabled", "If this call changed the scheme",
+				"together", "do not ask for it in this chat", "only disabled the bridge, nothing more is needed", "stored credentials are kept"} {
 				if !strings.Contains(handoff, want) {
 					t.Errorf("handoff should contain %q:\n%s", want, handoff)
 				}
@@ -149,8 +151,9 @@ func TestKafkaReceiverUpdated_SchemeSwitchGetsThePerSchemeHandoff(t *testing.T) 
 			if strings.Contains(handoff, "was created") {
 				t.Errorf("an update's hand-off must not say the bridge was created:\n%s", handoff)
 			}
+			// The next step is conditional: an intentional disable must not be undone.
 			next, _ := out["nextStep"].(string)
-			for _, want := range []string{"update-kafka-receiver", `"enabled": true`, "get-kafka-receiver-status"} {
+			for _, want := range []string{"Only if the bridge should run again", "update-kafka-receiver", `"enabled": true`, "get-kafka-receiver-status"} {
 				if !strings.Contains(next, want) {
 					t.Errorf("nextStep should contain %q:\n%s", want, next)
 				}
