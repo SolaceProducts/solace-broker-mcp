@@ -126,9 +126,30 @@ kafka_produce() {
         --property parse.key=true --property key.separator=: >/dev/null
 }
 
+# Delete the Kafka topics whose name starts with $1 (default: every topic the tests
+# create, e2e-config-kafka-*) and wait until the
+# broker no longer lists them: deletion is asynchronous, and re-creating a topic that
+# is still marked for deletion fails. Fixed topic names would otherwise survive a run
+# and break the next one (a sender binding that must start with a missing topic).
+kafka_delete_fixture_topics() {
+    local prefix="${1:-e2e-config-kafka-}" topics t deadline=$((SECONDS + 30))
+    topics=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --list \
+        --bootstrap-server localhost:9092 2>/dev/null | grep "^$prefix" || true)
+    for t in $topics; do
+        docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --delete --if-exists \
+            --topic "$t" --bootstrap-server localhost:9092 >/dev/null 2>&1 || return 1
+    done
+    while [ $SECONDS -lt $deadline ]; do
+        docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --list \
+            --bootstrap-server localhost:9092 2>/dev/null | grep -q "^$prefix" || return 0
+        sleep 1
+    done
+    return 1
+}
+
 # Delete every Kafka bridge fixture on both brokers: bindings first (the broker
 # refuses to delete a bridge that still has bindings and does not cascade), then
-# the bridge. Idempotent; safe before a run and from a cleanup trap.
+# the bridge, then the Kafka fixture topics. Idempotent; safe before a run and from a cleanup trap.
 sweep_kafka_fixtures() {
     local semp_config kind binding_kind key name binding
     for semp_config in "$BROKER_A_SEMP_CONFIG" "$BROKER_B_SEMP_CONFIG"; do
@@ -144,4 +165,6 @@ sweep_kafka_fixtures() {
             done
         done
     done
+    # Best effort: Kafka may already be gone when the exit sweep runs.
+    kafka_delete_fixture_topics || true
 }
