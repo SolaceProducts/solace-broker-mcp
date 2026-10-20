@@ -92,15 +92,83 @@ var kafkaSecretFields = []string{
 	"authenticationScramPassword",
 }
 
+// msgVpnSecretFields are the write-only secrets of MsgVpn that create-message-vpn
+// and update-message-vpn expose through msgVpnConfig: the replication bridge's
+// credentials. MsgVpn also has replicationEnabledQueueBehavior marked write-only,
+// but it is a behaviour flag, not a credential (see knownNonSecretWriteOnly in
+// the drift test). TestBodyChecks_MsgVpnSecretFieldsMatchSpec pins this list.
+var msgVpnSecretFields = []string{
+	"replicationBridgeAuthenticationBasicPassword",
+	"replicationBridgeAuthenticationClientCertContent",
+	"replicationBridgeAuthenticationClientCertPassword",
+}
+
 // bodyChecks is the registry of check names usable in tools.yaml.
 var bodyChecks = map[string]bodyCheck{
 	"rejectKafkaSecrets": {
 		fn:           rejectSecretFields(kafkaSecretFields, "Then ask me to enable the bridge."),
 		secretFields: kafkaSecretFields,
 	},
+	"rejectMsgVpnSecrets": {
+		fn:           rejectSecretFields(msgVpnSecretFields, "Replication bridge credentials are configured out of band."),
+		secretFields: msgVpnSecretFields,
+	},
 	"createDisabledWhenAuthenticated": {
 		fn: checkAuthenticatedBridgeIsDisabled,
 	},
+	"rejectKafkaRetarget": {
+		fn: rejectKafkaRetarget,
+	},
+}
+
+// kafkaRetargetFields are the attributes that decide where a Kafka bridge sends
+// the credentials it has stored. On an existing bridge, changing any of them
+// redirects those credentials without the secret ever being re-supplied:
+// bootstrapAddressList moves the connection (the broker presents the stored
+// username/password, SCRAM response or access token to the new host), and
+// authenticationOauthClientTokenEndpoint moves the client-credentials request,
+// which carries the client id and secret.
+var kafkaRetargetFields = []string{
+	"bootstrapAddressList",
+	"authenticationOauthClientTokenEndpoint",
+}
+
+// rejectKafkaRetarget stops an update or replace from re-pointing an existing
+// bridge, so an agent that was never given a bridge's secret cannot make the
+// broker deliver it to a host the agent picks. Verified against a real broker: a
+// bare PATCH of bootstrapAddressList (no password sent) brought a credentialed
+// receiver up against a different host. Retargeting goes through delete and create
+// instead, and a create must have its secret set out of band again.
+//
+// It also rejects transportTlsEnabled:false, which would send the stored
+// credentials in the clear. Turning TLS on is safe and is allowed. A create is not
+// affected: a new bridge has no stored credential yet. A replace is treated like an
+// update, since a PUT keeps a write-only secret it does not mention.
+//
+// Messages never repeat a caller-supplied value.
+func rejectKafkaRetarget(mode bodyMode, body map[string]any) error {
+	if mode == bodyModeCreate {
+		return nil
+	}
+	for _, field := range kafkaRetargetFields {
+		for key := range body {
+			if strings.EqualFold(key, field) {
+				return requestBodyErrorf(
+					"%q cannot be changed on an existing Kafka bridge: the broker would send the bridge's stored credentials to the new address. To point a bridge elsewhere, delete its bindings and the bridge, then create it again; the new bridge's secret is then set out of band.",
+					field)
+			}
+		}
+	}
+	for key, value := range body {
+		if !strings.EqualFold(key, "transportTlsEnabled") {
+			continue
+		}
+		if tls, isBool := value.(bool); isBool && !tls {
+			return requestBodyErrorf(
+				"\"transportTlsEnabled\" cannot be turned off on an existing Kafka bridge: its stored credentials would then be sent unencrypted. To change it, delete the bridge and create it again.")
+		}
+	}
+	return nil
 }
 
 // rejectSecretFields builds a check that rejects any body field whose name equals
@@ -113,9 +181,15 @@ func rejectSecretFields(fields []string, afterHint string) func(bodyMode, map[st
 		for _, secret := range sorted {
 			for key := range body {
 				if strings.EqualFold(key, secret) {
+					// The hint is text, never part of the format string: a hint
+					// containing a percent sign must come out verbatim.
+					hint := ""
+					if afterHint != "" {
+						hint = " " + afterHint
+					}
 					return requestBodyErrorf(
-						"%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat. %s If you already shared a secret in this conversation, treat it as exposed and rotate it.",
-						secret, afterHint)
+						"%q is a secret and cannot be sent through this tool. Set it yourself (Broker Manager, CLI, SEMP or Terraform) and never paste it into this chat.%s If you already shared a secret in this conversation, treat it as exposed and rotate it.",
+						secret, hint)
 				}
 			}
 		}

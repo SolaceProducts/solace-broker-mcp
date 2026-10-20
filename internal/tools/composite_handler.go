@@ -40,6 +40,10 @@ var writeToolIdentifierFields = map[string][]string{
 	"update-topic-endpoint":     {"msgVpnName", "topicEndpointName"},
 	"create-rdp":                {"msgVpnName", "restDeliveryPointName"},
 	"update-rdp":                {"msgVpnName", "restDeliveryPointName"},
+
+	"create-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
+	"update-kafka-receiver":               {"msgVpnName", "kafkaReceiverName"},
+	"create-kafka-receiver-topic-binding": {"msgVpnName", "kafkaReceiverName", "topicName"},
 }
 
 // callsConfigOrActionOperation reports whether any step of tool calls a
