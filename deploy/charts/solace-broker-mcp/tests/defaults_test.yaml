@@ -1,0 +1,25 @@
+# The chart defaults alone, with no ci values: they must fail rendering.
+suite: default values fail rendering
+templates:
+  - configmap.yaml
+tests:
+  - it: fails on the default values (no brokers, no dev token)
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers: at least one broker is required"
+
+  - it: fails on an empty brokers map even with a dev token
+    set:
+      mcpClientAuth.devToken: t
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers: at least one broker is required"
+
+  - it: fails on a broker with no dev token
+    set:
+      brokers.b1:
+        url: https://b1:943
+        auth: {mode: basic, username: u, password: p}
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required"

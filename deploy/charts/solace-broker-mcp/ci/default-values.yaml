@@ -1,0 +1,11 @@
+# The chart defaults plus the minimum they need to render: one broker and a
+# dev token. Used by `ct lint` and the kubeconform step.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: ci-only-placeholder
+mcpClientAuth:
+  devToken: ci-only-placeholder

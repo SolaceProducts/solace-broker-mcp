@@ -10,5 +10,5 @@
 #
 # Go test files are excluded via SURFACE_TEST_EXCLUDE — a test-only change is not
 # user- or operator-visible. Usage: grep -E "$SURFACE_RE" | grep -v "$SURFACE_TEST_EXCLUDE"
-SURFACE_RE='^(internal/config/|internal/tools/|internal/composite/definitions/tools\.yaml)'
+SURFACE_RE='^(internal/config/|internal/tools/|internal/composite/definitions/tools\.yaml|deploy/charts/|deploy/kubernetes/)'
 SURFACE_TEST_EXCLUDE='_test\.go$'
