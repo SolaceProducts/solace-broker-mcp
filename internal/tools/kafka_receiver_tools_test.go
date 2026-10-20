@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
@@ -49,30 +50,64 @@ func (h fixedClientHandler) Handle(ctx context.Context, tc *ToolContext, params 
 	return h.ToolHandler.Handle(ctx, &ToolContext{SEMPv1Client: tc.SEMPv1Client, SEMPv2Client: h.client}, params)
 }
 
-func kafkaReceiverManager(t *testing.T, auditOn bool) (*ToolManager, *mockClient) {
+// kafkaBridgeManager registers every Kafka Receiver and Kafka Sender write tool
+// (create/update/delete for the bridge, create/delete for its binding) behind one
+// mock SEMP client.
+// kafkaBridgeFixture is the parsed embedded spec and tool catalog, shared by every
+// test in this file: parsing the 3 MB spec per sub-test makes the secret-rejection
+// tables far slower than the behaviour they check. Both are read-only after load.
+var (
+	kafkaFixtureOnce       sync.Once
+	kafkaFixtureOperations map[string]*sempv2.Operation
+	kafkaFixtureCatalog    []composite.CompositeTool
+	kafkaFixtureErr        error
+)
+
+func kafkaBridgeFixture(t *testing.T) (map[string]*sempv2.Operation, []composite.CompositeTool) {
 	t.Helper()
-	operations, err := sempv2.ParseSpecs(specs.FS)
-	if err != nil {
-		t.Fatalf("ParseSpecs: %v", err)
+	kafkaFixtureOnce.Do(func() {
+		kafkaFixtureOperations, kafkaFixtureErr = sempv2.ParseSpecs(specs.FS)
+		if kafkaFixtureErr == nil {
+			kafkaFixtureCatalog, kafkaFixtureErr = composite.LoadTools(definitions.FS, "tools.yaml")
+		}
+	})
+	if kafkaFixtureErr != nil {
+		t.Fatalf("loading the embedded spec and catalog: %v", kafkaFixtureErr)
 	}
-	catalog, err := composite.LoadTools(definitions.FS, "tools.yaml")
-	if err != nil {
-		t.Fatalf("LoadTools: %v", err)
-	}
+	return kafkaFixtureOperations, kafkaFixtureCatalog
+}
+
+// kafkaBridgeManager registers every Kafka Receiver and Kafka Sender write tool
+// (create/update/delete for the bridge, create/delete for its binding) behind one
+// mock SEMP client.
+func kafkaBridgeManager(t *testing.T, auditOn bool) (*ToolManager, *mockClient) {
+	t.Helper()
+	operations, catalog := kafkaBridgeFixture(t)
 	executor := composite.NewCompositeExecutor(operations)
 	client := newMockClient()
 	mgr := NewToolManager(newTestPool(t), WithAuditLog(auditOn))
 	registered := 0
 	for _, tl := range catalog {
-		if strings.HasSuffix(tl.Name, "-kafka-receiver") || strings.HasSuffix(tl.Name, "-kafka-receiver-topic-binding") {
+		if isKafkaWriteTool(tl.Name) {
 			mgr.Register(fixedClientHandler{NewCompositeToolHandler(tl, executor), client})
 			registered++
 		}
 	}
-	if registered != 5 {
-		t.Fatalf("registered %d Kafka Receiver tools, want 5", registered)
+	if registered != 10 {
+		t.Fatalf("registered %d Kafka bridge write tools, want 10", registered)
 	}
 	return mgr, client
+}
+
+func isKafkaWriteTool(name string) bool {
+	for _, verb := range []string{"create-", "update-", "delete-"} {
+		for _, obj := range []string{"kafka-receiver", "kafka-receiver-topic-binding", "kafka-sender", "kafka-sender-queue-binding"} {
+			if name == verb+obj {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func structured(t *testing.T, r *mcp.CallToolResult) map[string]any {
@@ -120,7 +155,7 @@ func callKafka(t *testing.T, mgr *ToolManager, tool string, params map[string]an
 }
 
 func TestCreateKafkaReceiver_NoAuthMode_CreatesEnabledAndPointsAtStatus(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.responses["createMsgVpnKafkaReceiver"] = receiverResponse("none", true)
 
 	r := callKafka(t, mgr, "create-kafka-receiver", map[string]any{
@@ -153,7 +188,7 @@ func TestCreateKafkaReceiver_NoAuthMode_CreatesEnabledAndPointsAtStatus(t *testi
 }
 
 func TestCreateKafkaReceiver_AuthenticatedMode_CreatedDisabledWithHandoff(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.responses["createMsgVpnKafkaReceiver"] = receiverResponse("basic", false)
 
 	r := callKafka(t, mgr, "create-kafka-receiver", map[string]any{
@@ -193,7 +228,7 @@ func TestKafkaReceiverTools_RejectSecretsBeforeAnyBrokerCall(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr, client := kafkaReceiverManager(t, false)
+			mgr, client := kafkaBridgeManager(t, false)
 			var r *mcp.CallToolResult
 			records := captureAudit(t, slog.LevelDebug, func() { r = callKafka(t, mgr, tc.tool, tc.params) })
 			if !r.IsError {
@@ -216,7 +251,7 @@ func TestKafkaReceiverTools_RejectSecretsBeforeAnyBrokerCall(t *testing.T) {
 
 func TestKafkaReceiverTools_EnabledWithAuthenticationRules(t *testing.T) {
 	t.Run("create enabled with a scheme is rejected", func(t *testing.T) {
-		mgr, client := kafkaReceiverManager(t, false)
+		mgr, client := kafkaBridgeManager(t, false)
 		r := callKafka(t, mgr, "create-kafka-receiver", map[string]any{
 			"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
 			"kafkaReceiverConfig": map[string]any{"authenticationScheme": "basic", "enabled": true}})
@@ -228,7 +263,7 @@ func TestKafkaReceiverTools_EnabledWithAuthenticationRules(t *testing.T) {
 		}
 	})
 	t.Run("update that switches scheme without disabling is rejected", func(t *testing.T) {
-		mgr, client := kafkaReceiverManager(t, false)
+		mgr, client := kafkaBridgeManager(t, false)
 		r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
 			"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
 			"kafkaReceiverConfig": map[string]any{"authenticationScheme": "scram"}})
@@ -240,7 +275,7 @@ func TestKafkaReceiverTools_EnabledWithAuthenticationRules(t *testing.T) {
 		}
 	})
 	t.Run("update that switches scheme and disables is accepted", func(t *testing.T) {
-		mgr, client := kafkaReceiverManager(t, false)
+		mgr, client := kafkaBridgeManager(t, false)
 		client.responses["updateMsgVpnKafkaReceiver"] = receiverResponse("scram", false)
 		r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
 			"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
@@ -251,7 +286,7 @@ func TestKafkaReceiverTools_EnabledWithAuthenticationRules(t *testing.T) {
 		}
 	})
 	t.Run("the plain enable step is accepted and tells the agent how to verify", func(t *testing.T) {
-		mgr, client := kafkaReceiverManager(t, false)
+		mgr, client := kafkaBridgeManager(t, false)
 		client.responses["updateMsgVpnKafkaReceiver"] = receiverResponse("basic", true)
 		r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
 			"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
@@ -270,7 +305,7 @@ func TestKafkaReceiverTools_EnabledWithAuthenticationRules(t *testing.T) {
 // A duplicate create skips the postProcess handler, so the already_exists outcome
 // itself must carry the "check the scheme before enabling" guidance (D3).
 func TestCreateKafkaReceiver_AlreadyExists_CarriesTheSchemeHint(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.errors["createMsgVpnKafkaReceiver"] = &sempv2.SEMPError{
 		Operation: "createMsgVpnKafkaReceiver", StatusCode: 400, SEMPCode: 10, SEMPStatus: "ALREADY_EXISTS",
 		Description: "Problem with POST: Kafka Receiver rx already exists.",
@@ -305,7 +340,7 @@ func TestAlreadyExistsHint_OnlyForToolsThatHaveOne(t *testing.T) {
 }
 
 func TestKafkaReceiverBinding_CreateAndDelete(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.responses["createMsgVpnKafkaReceiverTopicBinding"] = &sempv2.Result{StatusCode: 200, Data: map[string]any{
 		"data": map[string]any{"msgVpnName": "vpn1", "kafkaReceiverName": "rx", "topicName": "^orders.*", "localTopic": "kafka/orders", "enabled": true},
 		"meta": map[string]any{"responseCode": float64(200)},
@@ -338,7 +373,7 @@ func TestKafkaReceiverBinding_CreateAndDelete(t *testing.T) {
 }
 
 func TestDeleteKafkaReceiver_BindingsPresent_BrokerRefusalReachesTheAgent(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.errors["deleteMsgVpnKafkaReceiver"] = &sempv2.SEMPError{
 		Operation: "deleteMsgVpnKafkaReceiver", StatusCode: 400, SEMPCode: 2, SEMPStatus: "FAIL",
 		Description: "Problem with DELETE: Cannot delete Kafka Receiver when there are Kafka Receiver Topic Bindings present.",
@@ -353,7 +388,7 @@ func TestDeleteKafkaReceiver_BindingsPresent_BrokerRefusalReachesTheAgent(t *tes
 }
 
 func TestDeleteKafkaReceiver_AlreadyGone(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.errors["deleteMsgVpnKafkaReceiver"] = &sempv2.SEMPError{
 		Operation: "deleteMsgVpnKafkaReceiver", StatusCode: 400, SEMPCode: 6, SEMPStatus: "NOT_FOUND",
 		Description: "Could not find match for kafkaReceiver rx",
@@ -367,7 +402,7 @@ func TestDeleteKafkaReceiver_AlreadyGone(t *testing.T) {
 // D2: create-kafka-receiver is deliberately destructive so it is audited; the
 // topic-binding create keeps the create-* convention.
 func TestKafkaReceiverTools_Annotations(t *testing.T) {
-	mgr, _ := kafkaReceiverManager(t, false)
+	mgr, _ := kafkaBridgeManager(t, false)
 	want := map[string]bool{
 		"create-kafka-receiver":               true,
 		"update-kafka-receiver":               true,
@@ -391,7 +426,7 @@ func TestKafkaReceiverTools_Annotations(t *testing.T) {
 }
 
 func TestCreateKafkaReceiver_IsAudited_BindingCreateIsNot(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, true)
+	mgr, client := kafkaBridgeManager(t, true)
 	client.responses["createMsgVpnKafkaReceiver"] = receiverResponse("none", false)
 	client.responses["createMsgVpnKafkaReceiverTopicBinding"] = &sempv2.Result{StatusCode: 200, Data: map[string]any{
 		"data": map[string]any{"msgVpnName": "vpn1", "kafkaReceiverName": "rx", "topicName": "t"},
@@ -414,10 +449,7 @@ func TestCreateKafkaReceiver_IsAudited_BindingCreateIsNot(t *testing.T) {
 // operation we send `select` to declares it as a query parameter; otherwise the
 // postProcess handler would silently receive the full echo (or nothing useful).
 func TestKafkaReceiverOperations_DeclareTheSelectQueryParameter(t *testing.T) {
-	operations, err := sempv2.ParseSpecs(specs.FS)
-	if err != nil {
-		t.Fatalf("ParseSpecs: %v", err)
-	}
+	operations, _ := kafkaBridgeFixture(t)
 	for _, id := range []string{"config/createMsgVpnKafkaReceiver", "config/updateMsgVpnKafkaReceiver"} {
 		op, ok := operations[id]
 		if !ok {
@@ -449,7 +481,7 @@ func TestUpdateKafkaReceiver_CannotRetargetAnExistingReceiver(t *testing.T) {
 		{"TLS off", map[string]any{"transportTlsEnabled": false}, "transportTlsEnabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr, client := kafkaReceiverManager(t, false)
+			mgr, client := kafkaBridgeManager(t, false)
 			r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
 				"msgVpnName": "vpn1", "kafkaReceiverName": "rx", "kafkaReceiverConfig": tc.config})
 			if !r.IsError {
@@ -468,7 +500,7 @@ func TestUpdateKafkaReceiver_CannotRetargetAnExistingReceiver(t *testing.T) {
 	}
 
 	// TLS on, and the plain enable step, are still fine.
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.responses["updateMsgVpnKafkaReceiver"] = receiverResponse("none", true)
 	for _, config := range []map[string]any{{"transportTlsEnabled": true}, {"enabled": true}} {
 		if r := callKafka(t, mgr, "update-kafka-receiver", map[string]any{
@@ -480,7 +512,7 @@ func TestUpdateKafkaReceiver_CannotRetargetAnExistingReceiver(t *testing.T) {
 
 // Creating a receiver is how a new destination is chosen, so the create tool still takes it.
 func TestCreateKafkaReceiver_StillTakesTheBootstrapAddress(t *testing.T) {
-	mgr, client := kafkaReceiverManager(t, false)
+	mgr, client := kafkaBridgeManager(t, false)
 	client.responses["createMsgVpnKafkaReceiver"] = receiverResponse("none", false)
 	r := callKafka(t, mgr, "create-kafka-receiver", map[string]any{
 		"msgVpnName": "vpn1", "kafkaReceiverName": "rx",
