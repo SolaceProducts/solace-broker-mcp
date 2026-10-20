@@ -40,7 +40,7 @@ services:
       start_period: 15s
 
   solace-a:
-    image: solace/solace-pubsub-standard:latest
+    image: solace/solace-pubsub-standard:${SOLACE_TAG:-latest}
     container_name: solace-e2e-oauth-a
     hostname: solace-e2e-oauth-a
     environment:
@@ -62,7 +62,7 @@ services:
       start_period: 30s
 
   solace-b:
-    image: solace/solace-pubsub-standard:latest
+    image: solace/solace-pubsub-standard:${SOLACE_TAG:-latest}
     container_name: solace-e2e-oauth-b
     hostname: solace-e2e-oauth-b
     environment:

@@ -1,6 +1,6 @@
 services:
   solace:
-    image: solace/solace-pubsub-standard:latest
+    image: solace/solace-pubsub-standard:${SOLACE_TAG:-latest}
     container_name: solace-e2e-dashboard
     hostname: solace-e2e-dashboard
     environment:
