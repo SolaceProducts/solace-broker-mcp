@@ -1,0 +1,11 @@
+# chart-testing (ct) settings. The single source for both the `helm-chart` job in
+# .github/workflows/build-and-test.yml and `make helm-check`; every ct call
+# passes `--config deploy/charts/ct.yaml`, so local and CI runs are identical.
+chart-dirs:
+  - deploy/charts
+target-branch: main
+# Off deliberately: ct lint fails a chart with no maintainers, and with
+# maintainers set it is believed to look each name up on the git host — a
+# network dependency in a required check. Chart.yaml may still list maintainers
+# for information.
+validate-maintainers: false

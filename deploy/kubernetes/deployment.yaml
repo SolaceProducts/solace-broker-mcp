@@ -29,6 +29,13 @@ spec:
       labels:
         app.kubernetes.io/name: solace-broker-mcp
     spec:
+      # Kubernetes injects <SVC>_PORT, <SVC>_SERVICE_HOST, ... for every Service
+      # in the namespace into every pod. A Service named mcp-server yields
+      # MCP_SERVER_PORT="tcp://...", which collides with the server's own port
+      # override and fails config loading. The server uses none of these.
+      enableServiceLinks: false
+      # The server never calls the Kubernetes API, so the pod gets no token.
+      automountServiceAccountToken: false
       # Without this both replicas can land on one node, where node failure —
       # involuntary, so the PDB does not help — is still a full outage.
       # ScheduleAnyway keeps single-node dev clusters schedulable; swap
@@ -64,9 +71,20 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532  # distroless nonroot UID (gcr.io/distroless/static-debian12:nonroot)
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: solace-broker-mcp
           image: ghcr.io/solaceproducts/solace-broker-mcp:latest
+          # Kept identical to the Helm chart (deploy/charts/solace-broker-mcp),
+          # which SOL-156330 checks for drift. The server writes nothing to
+          # disk; if that changes, mount an emptyDir for the path rather than
+          # dropping readOnlyRootFilesystem.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
           ports:
             - name: http
               containerPort: 9090
