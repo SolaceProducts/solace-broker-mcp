@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-10-16; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-10-20; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -200,19 +200,19 @@ All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `38c37f0` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `38c37f0` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `38c37f0` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `38c37f0` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `38c37f0` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `38c37f0` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `62f160f` | Solace |
 
-`38c37f0` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-10-16 by the Dependabot
-`internal-reusable-workflows` group update (#503); the prior pin was `c689e87`.
+`62f160f` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-10-20 by the Dependabot
+`internal-reusable-workflows` group update (#521); the prior pin was `38c37f0`.
 
 This update collapsed `update-manifest.yaml` into the shared pin: all six now
-agree on `38c37f0`, so the separate-pin note that once stood here no longer
+agree on `62f160f`, so the separate-pin note that once stood here no longer
 applies.
 
 Two entries have been dropped from this table, both by the reverse-direction
