@@ -1,0 +1,113 @@
+name: E2E broker matrix
+
+# Runs four E2E suites against the oldest supported LTS broker and against
+# :latest, once a day on main's tip (SOL-156292). The release notes claim
+# "10.8.1 LTS and later"; build-and-test.yml only ever tests :latest, so this
+# is what backs the lower bound. The broker image comes from SOLACE_TAG, which
+# every test/*/docker-compose.yml reads as ${SOLACE_TAG:-latest}.
+#
+# Informational: it gates nothing, is not a required check, and makes no LLM
+# calls. e2e-oauth is out of scope (broker OAuth profile setup varies across
+# 10.x), as is a broker axis on llm-eval.yml.
+#
+# Failures have no owner and raise no issue (ticket decision; revisit once it
+# has run for a while). GitHub itself still emails a scheduled run's failure
+# to whoever last edited the cron line; that is GitHub's behavior, not an
+# ownership assignment.
+#
+# Failure logs are printed to the job log, the same steps as the matching
+# build-and-test.yml jobs. Nothing is uploaded.
+on:
+  schedule:
+    # 03:47 UTC, 30 minutes after dev-build.yaml's 03:17, so both nightlies sit
+    # together. Off the hour: GitHub delays or drops scheduled runs under load.
+    # A schedule only fires from the default branch.
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+
+# One nightly at a time; a manual dispatch queues behind it rather than
+# cancelling a run that is part-way through bringing brokers up.
+concurrency:
+  group: e2e-broker-matrix
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ${{ matrix.suite }} (${{ matrix.solace_tag }})
+    runs-on: ubuntu-latest
+    # No `needs: build`: each suite builds the server itself
+    # (test/e2e-common/lib.sh).
+    timeout-minutes: 30
+    strategy:
+      # Every cell is independent evidence; one red suite must not cancel the rest.
+      fail-fast: false
+      matrix:
+        suite: [e2e-basic-mcp, e2e-monitoring, e2e-action, e2e-management]
+        solace_tag: ['10.8.1.594', latest]
+        # Container name prefix per suite, from each suite's docker-compose.yml.
+        include:
+          - suite: e2e-basic-mcp
+            container: solace-e2e
+          - suite: e2e-monitoring
+            container: solace-e2e-mon
+          - suite: e2e-action
+            container: solace-e2e-act
+          - suite: e2e-management
+            container: solace-e2e-mgmt
+    env:
+      SUITE: ${{ matrix.suite }}
+      SOLACE_TAG: ${{ matrix.solace_tag }}
+      CONTAINER: ${{ matrix.container }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Start Solace brokers
+        run: SUITE_DIR="test/$SUITE" bash test/e2e-common/setup-brokers.sh
+
+      - name: Run E2E tests
+        run: bash "test/$SUITE/run-all.sh"
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: |
+          echo "=== $CONTAINER-a ==="
+          docker logs "$CONTAINER-a" 2>&1 | tail -100
+          echo "=== $CONTAINER-b ==="
+          docker logs "$CONTAINER-b" 2>&1 | tail -100
+
+      # Same evidence as build-and-test.yml's e2e-basic-mcp job; see the comment
+      # there for why it is these files and not the MCP server log.
+      - name: Restart-scenario evidence (on failure)
+        if: failure() && matrix.suite == 'e2e-basic-mcp'
+        run: |
+          for f in test/e2e-basic-mcp/bin/throttle-record-*.csv; do
+            [ -e "$f" ] || continue
+            echo "=== $f ($(wc -l < "$f") requests) ==="
+            cat "$f"
+          done
+          for f in test/e2e-basic-mcp/bin/mcp-config-*.yaml; do
+            [ -e "$f" ] || continue
+            echo "=== $f ==="
+            cat "$f"
+          done
+          echo "=== semp-tap log ==="
+          tail -100 test/e2e-basic-mcp/bin/semp-tap.log 2>/dev/null || echo "no tap log"
+
+      - name: MCP server log (on failure)
+        if: failure() && matrix.suite != 'e2e-basic-mcp'
+        run: cat "test/$SUITE/bin/mcp-server.log" 2>/dev/null || echo "No server log found"
+
+      - name: Tear down brokers
+        if: always()
+        run: docker compose -f "test/$SUITE/docker-compose.yml" down -v
