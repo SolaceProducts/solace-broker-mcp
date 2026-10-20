@@ -95,20 +95,3 @@ Presence/absence is verified through the monitoring tools (`list-vpns`/`list-que
 attributes are verified via the monitoring tool where one exposes them (RDP `enabled` through
 `list-rdps`) or via SEMP-direct monitor GET otherwise; topic-endpoints have no monitoring tool,
 so all of their verification is SEMP-direct.
-
-## Manual check against Nisshi (not run in CI)
-
-CI uses Apache Kafka. To check the none-authentication mode against [Nisshi](https://github.com/SolaceDev/2026-hackathon6-nisshi)
-by hand (heavy images; Nisshi has no authentication, so the authenticated mode cannot be checked this way):
-
-1. Start the Nisshi stack from its `compose/` directory with its advertised address set to a name the
-   broker can resolve, for example `NISSHI_ADVERTISED_HOST=nisshi-kafka NISSHI_PORT=9092`, and a
-   compose override that gives the `nisshi` service that network alias (add `ports: !override []` if
-   host port 9092 is taken). Attach the Solace container to the same compose network.
-2. Create topics with the Kafka CLI from a container on that network (auto-creation is off in Nisshi's
-   default setup too; a missing topic leaves a sender binding down with `Remote topic has no leader`).
-3. Drive the tools: `create-queue`, `create-queue-subscription`, `create-kafka-receiver`
-   (`authenticationScheme: none`, `enabled: true`, bootstrap `<alias>:9092`),
-   `create-kafka-receiver-topic-binding` (`enabled: true`), then poll `get-kafka-receiver-status`.
-   Measured 2026-10-16: receiver and binding up in about 35 s (consumer-group join is slower on Nisshi
-   than on Apache Kafka), and records produced to the topic reached the queue.
