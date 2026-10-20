@@ -518,6 +518,8 @@ See [SUPPORT.md](.github/SUPPORT.md) for details.
 
 ## Security
 
+The server's own broker credentials are never included in tool results or error messages, and passwords stored on the broker are never returned to the AI. Write tools (off by default) reject known secret attributes such as the Message VPN replication-bridge password — set those out of band. Any other value you type into a prompt passes through the LLM like any other prompt content.
+
 For security vulnerability reporting, see [SECURITY.md](.github/SECURITY.md).
 
 ## Disclaimer
