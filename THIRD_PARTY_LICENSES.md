@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-10-08 with
+**Generated** 2026-10-20 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -57,11 +57,11 @@ under MPL-2.0.
 | `github.com/go-jose/go-jose/v4/json` | v4.1.5 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.5/json/LICENSE) |
 | `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 | [license](https://github.com/go-logr/logr/blob/v1.4.4/LICENSE) |
 | `github.com/go-logr/stdr` | v1.2.2 | Apache-2.0 | [license](https://github.com/go-logr/stdr/blob/v1.2.2/LICENSE) |
-| `github.com/go-openapi/jsonpointer` | v1.0.0 | Apache-2.0 | [license](https://github.com/go-openapi/jsonpointer/blob/v1.0.0/LICENSE) |
+| `github.com/go-openapi/jsonpointer` | v1.0.1 | Apache-2.0 | [license](https://github.com/go-openapi/jsonpointer/blob/v1.0.1/LICENSE) |
 | `github.com/google/jsonschema-go/jsonschema` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [license](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/gowebpki/jcs` | v1.0.2 | Apache-2.0 | [license](https://github.com/gowebpki/jcs/blob/v1.0.2/LICENSE) |
-| `github.com/grpc-ecosystem/grpc-gateway/v2` | v2.30.0 | BSD-3-Clause | [license](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.30.0/LICENSE) |
+| `github.com/grpc-ecosystem/grpc-gateway/v2` | v2.31.0 | BSD-3-Clause | [license](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.31.0/LICENSE) |
 | `github.com/maypok86/otter/v2` | v2.3.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.3.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/LICENSE) |
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
@@ -69,10 +69,10 @@ under MPL-2.0.
 | `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
 | `github.com/prometheus/client_golang` | v1.24.1 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.24.1/LICENSE) |
 | `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.24.1 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.24.1/internal/github.com/golang/gddo/LICENSE) |
-| `github.com/prometheus/client_model` | v0.6.2 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.2/LICENSE) |
-| `github.com/prometheus/common` | v0.71.0 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.71.0/LICENSE) |
+| `github.com/prometheus/client_model` | v0.6.3 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.3/LICENSE) |
+| `github.com/prometheus/common` | v0.72.0 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.72.0/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |
-| `github.com/prometheus/procfs` | v0.21.1 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.21.1/LICENSE) |
+| `github.com/prometheus/procfs` | v0.22.0 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.22.0/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.3 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
@@ -83,26 +83,27 @@ under MPL-2.0.
 | `github.com/xeipuuv/gojsonschema` | v1.2.0 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonschema/blob/v1.2.0/LICENSE-APACHE-2.0.txt) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
 | `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE) |
-| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.71.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-contrib/blob/instrumentation/net/http/otelhttp/v0.71.0/instrumentation/net/http/otelhttp/LICENSE) |
-| `go.opentelemetry.io/otel` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/v1.46.0/LICENSE) |
-| `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlpmetric/otlpmetricgrpc/v1.46.0/exporters/otlp/otlpmetric/otlpmetricgrpc/LICENSE) |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/v1.46.0/exporters/otlp/otlptrace/LICENSE) |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/otlptracegrpc/v1.46.0/exporters/otlp/otlptrace/otlptracegrpc/LICENSE) |
-| `go.opentelemetry.io/otel/exporters/prometheus` | v0.68.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/prometheus/v0.68.0/LICENSE) |
-| `go.opentelemetry.io/otel/metric` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/metric/v1.46.0/LICENSE) |
-| `go.opentelemetry.io/otel/sdk` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/v1.46.0/LICENSE) |
-| `go.opentelemetry.io/otel/sdk/metric` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/metric/v1.46.0/LICENSE) |
-| `go.opentelemetry.io/otel/trace` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.46.0/LICENSE) |
-| `go.opentelemetry.io/proto/otlp` | v1.11.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.0/otlp/LICENSE) |
+| `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` | v0.72.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-contrib/blob/instrumentation/net/http/otelhttp/v0.72.0/instrumentation/net/http/otelhttp/LICENSE) |
+| `go.opentelemetry.io/otel/log` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/log/v1.47.0/log/LICENSE) |
+| `go.opentelemetry.io/otel` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/v1.47.0/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlpmetric/otlpmetricgrpc/v1.47.0/exporters/otlp/otlpmetric/otlpmetricgrpc/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/v1.47.0/exporters/otlp/otlptrace/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/otlptracegrpc/v1.47.0/exporters/otlp/otlptrace/otlptracegrpc/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/prometheus` | v0.69.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/prometheus/v0.69.0/LICENSE) |
+| `go.opentelemetry.io/otel/metric` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/metric/v1.47.0/LICENSE) |
+| `go.opentelemetry.io/otel/sdk` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/v1.47.0/LICENSE) |
+| `go.opentelemetry.io/otel/sdk/metric` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/metric/v1.47.0/LICENSE) |
+| `go.opentelemetry.io/otel/trace` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.47.0/LICENSE) |
+| `go.opentelemetry.io/proto/otlp` | v1.11.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.1/otlp/LICENSE) |
 | `go.yaml.in/yaml/v3` | v3.0.5 | MIT | [license](https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE) |
 | `golang.org/x/net` | v0.60.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.60.0:LICENSE) |
-| `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
-| `golang.org/x/sync` | v0.23.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.23.0:LICENSE) |
+| `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
+| `golang.org/x/sync` | v0.24.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.24.0:LICENSE) |
 | `golang.org/x/sys/cpu` | v0.48.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.48.0:LICENSE) |
 | `golang.org/x/text` | v0.42.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.42.0:LICENSE) |
 | `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
-| `google.golang.org/genproto/googleapis/api` | 08b0e4226688 | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/08b0e4226688/googleapis/api/LICENSE) |
-| `google.golang.org/genproto/googleapis/rpc` | 08b0e4226688 | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/08b0e4226688/googleapis/rpc/LICENSE) |
+| `google.golang.org/genproto/googleapis/api` | 8a89bd6388cc | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/8a89bd6388cc/googleapis/api/LICENSE) |
+| `google.golang.org/genproto/googleapis/rpc` | 8a89bd6388cc | Apache-2.0 | [license](https://github.com/googleapis/go-genproto/blob/8a89bd6388cc/googleapis/rpc/LICENSE) |
 | `google.golang.org/grpc` | v1.84.0 | Apache-2.0 | [license](https://github.com/grpc/grpc-go/blob/v1.84.0/LICENSE) |
 | `google.golang.org/protobuf` | v1.36.12 | BSD-3-Clause | [license](https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE) |
 | `gopkg.in/yaml.v3` | v3.0.1 | MIT | [license](https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE) |

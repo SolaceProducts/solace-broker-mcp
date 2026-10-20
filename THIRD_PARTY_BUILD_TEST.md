@@ -250,6 +250,32 @@ container image is a stack of filesystem layers, and the layers carry operating
 system packages under their own licenses, which is not the same question. That
 distinction matters for exactly one row, addressed in the following section.
 
+## CI Tools
+
+Command-line tools that the `helm-chart` job in `build-and-test.yml` downloads in a
+`run:` step and that `make helm-check` runs locally. None reaches a published
+artifact. Helm, helm-unittest, and chart-testing are fetched as release tarballs
+checked against pinned SHA-256 digests; kubeconform with `go install`; yamllint
+and yamale with `pipx install` at a pinned version.
+
+- `helm/helm` `v3.22.1`: rendering and linting the Helm chart.
+  [Apache-2.0](https://github.com/helm/helm/blob/v3.22.1/LICENSE)
+- `helm-unittest/helm-unittest` `1.2.1`: Helm chart template unit tests.
+  [MIT](https://github.com/helm-unittest/helm-unittest/blob/v1.2.1/LICENSE)
+- `helm/chart-testing` (`ct`) `3.15.0`: Helm chart lint and version-bump check.
+  [Apache-2.0](https://github.com/helm/chart-testing/blob/v3.15.0/LICENSE)
+- `yannh/kubeconform` `v0.6.7`: validating rendered and raw Kubernetes manifests.
+  [Apache-2.0](https://github.com/yannh/kubeconform/blob/v0.6.7/LICENSE)
+- `yamllint` (PyPI) `1.38.0`: YAML lint, run by `ct lint`.
+  [GPL-3.0-or-later](https://github.com/adrienverge/yamllint/blob/v1.38.0/LICENSE)
+- `yamale` (PyPI) `6.1.0`: Chart.yaml schema check, run by `ct lint`.
+  [MIT](https://github.com/23andMe/Yamale/blob/6.1.0/LICENSE)
+
+This list is maintained by hand, and deliberately not a table: `build-test-licenses-check.sh`
+parses every table row in this file but does not discover tools installed by `run:` steps
+(see [Drift](#drift)). `actionlint` and `zizmor`,
+which `workflow-lint.yaml` installs the same way, are not yet listed.
+
 ## Scope
 
 Two boundaries, stated so that a reader does not mistake this file for covering
@@ -356,3 +382,5 @@ What it does not enforce:
   documented there for the same reason. When you bump a version, open the license
   link.
 - **Image layers.** See [Scope](#scope).
+- **CI tools installed by `run:` steps.** The [CI Tools](#ci-tools) list is
+  maintained by hand.

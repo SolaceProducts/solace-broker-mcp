@@ -1,0 +1,9 @@
+# Not part of the packaged chart: CI values and helm-unittest suites.
+ci/
+tests/
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*.orig
+*~

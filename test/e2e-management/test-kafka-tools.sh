@@ -53,10 +53,15 @@ semp_config_for() {
 #   KT_ERR      "true" if the tool result is flagged isError
 #   KT_TEXT     the result's text content (the error message when KT_ERR is true)
 #   KT_CONTENT  the structured result (empty when KT_ERR is true)
-# Returns non-zero only on a transport failure.
+# Returns non-zero on a transport or JSON-RPC failure: an error envelope has no
+# result, so it must not be read as a tool success.
 kt() {
     local tool="$1" args="$2"
     KT_RESP=$(mcp_call_tool "$tool" "$args") || { log_fail "transport failure calling $tool"; return 1; }
+    if [ "$(jq -r '.error != null' <<<"$KT_RESP")" = "true" ]; then
+        log_fail "JSON-RPC error calling $tool: $(jq -r '.error.message // "unknown"' <<<"$KT_RESP")"
+        return 1
+    fi
     KT_ERR=$(jq -r '.result.isError // false' <<<"$KT_RESP")
     KT_TEXT=$(jq -r '.result.content[0].text // ""' <<<"$KT_RESP")
     KT_CONTENT=""
@@ -280,6 +285,9 @@ test_kafka_sender_roundtrip() {
     kt_ok "create-kafka-sender-queue-binding" "$(jq -nc --arg b "$broker" --arg n "$tx" --arg q "$q" --arg t "$topic" \
         '{broker:$b,msgVpnName:"default",kafkaSenderName:$n,queueName:$q,queueBindingConfig:{remoteTopic:$t,ackMode:"all",enabled:true}}')" \
         "binding to an existing topic [$broker]" || return 1
+    # The point of this binding is a topic that does not exist yet, so make sure a
+    # leftover from an earlier run (or an aborted one) is really gone first.
+    kafka_delete_fixture_topics "$late" || { log_fail "could not clear a leftover Kafka topic $late [$broker]"; return 1; }
     kt_ok "create-kafka-sender-queue-binding" "$(jq -nc --arg b "$broker" --arg n "$tx" --arg q "$q2" --arg t "$late" \
         '{broker:$b,msgVpnName:"default",kafkaSenderName:$n,queueName:$q,queueBindingConfig:{remoteTopic:$t,enabled:true}}')" \
         "binding to a missing topic [$broker]" || return 1
@@ -340,8 +348,10 @@ test_kafka_secret_rejection() {
                 '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($cp):{($s):$v}}')" "update $kind with $secret [$broker]" || return 1
             assert_secret_rejection "$secret" "$sentinel" "update $kind, config object [$broker]" || return 1
             # update, secret as an undeclared top-level param
-            kt_rejected "update-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg s "$secret" --arg v "$sentinel" \
-                '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($s):$v}')" "update $kind with top-level $secret [$broker]" || return 1
+            # The update tools require the config object, so send it (empty): without it
+            # schema validation rejects the call first and never reaches the secret check.
+            kt_rejected "update-$tool_noun" "$(jq -nc --arg b "$broker" --arg n "$name" --arg np "$name_param" --arg cp "$config_param" --arg s "$secret" --arg v "$sentinel" \
+                '{broker:$b,msgVpnName:"default"} + {($np):$n} + {($cp):{}} + {($s):$v}')" "update $kind with top-level $secret [$broker]" || return 1
             assert_secret_rejection "$secret" "$sentinel" "update $kind, top-level [$broker]" || return 1
         done
     done
@@ -424,7 +434,7 @@ test_kafka_annotations() {
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "true" "annotations: $t destructiveHint=true" || return 1
     done
     for t in create-kafka-receiver-topic-binding create-kafka-sender-queue-binding; do
-        assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "false" "annotations: $t destructiveHint=false" || return 1
+        assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint)" "false" "annotations: $t destructiveHint=false" || return 1
     done
 }
 

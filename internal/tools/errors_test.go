@@ -208,6 +208,80 @@ func TestBuildSEMPv2Message(t *testing.T) {
 			"Could not find match for queue lkiri-does-not-exist-q",
 		},
 		{
+			// SOL-155428: the broker echoes the subscription topic as it
+			// appeared, URL-encoded, in the request path. Ticket's own repro.
+			"NOT_FOUND on delete, encoded subscription topic is decoded",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription mcp%2Fga%2Ftest%2F%3E"},
+			"Could not find match for subscription mcp/ga/test/>",
+		},
+		{
+			// '+' is a literal topic character, not an encoded space.
+			"NOT_FOUND on delete, literal + in subscription topic is preserved",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription a%2Fb+c%2F%2A"},
+			"Could not find match for subscription a/b+c/*",
+		},
+		{
+			// Sanitizing the decoded topic would truncate it (a[path]); the
+			// caller's own topic is never redacted, so fall back to the raw text.
+			"NOT_FOUND on delete, topic that sanitizing would alter falls back to raw encoded text",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription a%2Fetc%2Fpasswd"},
+			"Could not find match for subscription a%2Fetc%2Fpasswd",
+		},
+		{
+			"NOT_FOUND on delete, /home/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription fleet%2Fhome%2F%3E"},
+			"Could not find match for subscription fleet%2Fhome%2F%3E",
+		},
+		{
+			"NOT_FOUND on delete, /tmp/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription acme%2Ftmp%2Forders"},
+			"Could not find match for subscription acme%2Ftmp%2Forders",
+		},
+		{
+			"NOT_FOUND on delete, /var/ segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription plant%2Fvar%2Fsensor%2F%3E"},
+			"Could not find match for subscription plant%2Fvar%2Fsensor%2F%3E",
+		},
+		{
+			"NOT_FOUND on delete, IP-like segment in topic is not redacted",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription devices%2F10.0.0.1%2Fstatus"},
+			"Could not find match for subscription devices%2F10.0.0.1%2Fstatus",
+		},
+		{
+			"NOT_FOUND on delete, plain subscription topic is unchanged",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription plain-topic"},
+			"Could not find match for subscription plain-topic",
+		},
+		{
+			// Malformed escape: falls back to the raw text, never guesses.
+			"NOT_FOUND on delete, malformed escape in subscription topic falls back to raw text",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription a%ZZb"},
+			"Could not find match for subscription a%ZZb",
+		},
+		{
+			// Only the subscription shape is decoded (SOL-155428 scope).
+			"NOT_FOUND on delete, non-subscription object name is not decoded",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for queue a%2Fb"},
+			"Could not find match for queue a%2Fb",
+		},
+		{
+			// Only delete-prefixed ops (the already_absent path) are decoded.
+			"NOT_FOUND on a get, subscription topic is not decoded",
+			&sempv2.SEMPError{Operation: "getMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription a%2Fb"},
+			"Could not find match for subscription a%2Fb",
+		},
+		{
 			// A mode word this codebase hasn't seen live (parentModeFriendlyNames
 			// has no entry) falls back to the raw broker text unchanged, rather
 			// than guessing a translation.
@@ -257,6 +331,15 @@ func TestClassifyDesiredStateOutcome(t *testing.T) {
 				Description: "Problem with DELETE: Cannot enter mode for message-vpn no-such-vpn: not found."},
 			wantOutcome: DesiredStateAlreadyAbsent,
 			wantMessage: `The Message VPN "no-such-vpn" does not exist.`,
+		},
+		{
+			// SOL-155428: delete-queue-subscription's already_absent message
+			// shows the human-readable topic, not the URL-encoded path segment.
+			name: "NOT_FOUND on delete, subscription missing -> already_absent with decoded topic",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for subscription mcp%2Fga%2Ftest%2F%3E"},
+			wantOutcome: DesiredStateAlreadyAbsent,
+			wantMessage: "Could not find match for subscription mcp/ga/test/>",
 		},
 		{
 			name: "ALREADY_EXISTS on create, SEMPStatus omitted, falls back to SEMPCode 10",

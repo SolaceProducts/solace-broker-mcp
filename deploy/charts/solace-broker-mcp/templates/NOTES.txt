@@ -1,0 +1,17 @@
+{{ include "solace-broker-mcp.fullname" . }} is deploying {{ .Values.replicaCount }} replica(s).
+
+Check it is ready:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "solace-broker-mcp.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "solace-broker-mcp.fullname" . }} {{ (.Values.server | default dict).port | default 9090 }}:{{ (.Values.server | default dict).port | default 9090 }}
+  curl -s http://127.0.0.1:{{ (.Values.server | default dict).port | default 9090 }}/readyz
+
+MCP clients connect to http://<service>:{{ (.Values.server | default dict).port | default 9090 }}/mcp with the dev token as a
+Bearer token. Keep the Service ClusterIP: under mcp_client_auth.mode static the
+token crosses the cluster network in cleartext.
+{{- if include "solace-broker-mcp.hasManagedSecret" . }}
+
+The pod template's checksum/secret annotation is a hash of the chart-managed
+credentials, readable by anyone who can read the Deployment. Use long random
+values, or supply credentials through existing Secrets, which it does not cover.
+{{- end }}

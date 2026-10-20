@@ -170,7 +170,31 @@ lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
 .PHONY: check
-check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; E2E runs separately)
+check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
+
+# ── Helm chart ───────────────────────────────────────────────────────────────
+
+# Tiers 1-2 of the chart's checks, the same steps as the `helm-chart` job in
+# build-and-test.yml and with the same ct.yaml. Kept out of `make check` so a
+# Go-only change never needs the Helm tool set; CI runs the job on every PR.
+# Prerequisites and pinned versions: deploy/charts/solace-broker-mcp/README.md.
+# Each chart is rendered to a file and fed to kubeconform on stdin: piped
+# straight from helm, a failed render would hand kubeconform empty input, which
+# it passes; and kubeconform silently skips a file path without a .yaml suffix.
+CHART_DIR := deploy/charts/solace-broker-mcp
+CT_CONFIG := deploy/charts/ct.yaml
+
+.PHONY: helm-check
+helm-check: ## Helm chart lint, kubeconform and helm-unittest (matches CI helm-chart job; needs helm, helm-unittest, ct, yamllint, yamale, kubeconform)
+	ct lint --config $(CT_CONFIG) --all
+	ct lint --config $(CT_CONFIG) --check-version-increment
+	@set -e; out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	for f in $(CHART_DIR)/ci/*-values.yaml; do \
+		echo "kubeconform: $$f"; \
+		helm template ci $(CHART_DIR) -f "$$f" >"$$out"; \
+		kubeconform -strict -summary <"$$out"; \
+	done
+	helm unittest $(CHART_DIR)
 
 # ── Compliance ───────────────────────────────────────────────────────────────
 

@@ -1,0 +1,35 @@
+suite: service
+templates:
+  - service.yaml
+values:
+  - ../ci/default-values.yaml
+release:
+  name: rel
+tests:
+  - it: pins clients to a pod with ClientIP affinity for 10800s
+    asserts:
+      - equal:
+          path: spec.sessionAffinity
+          value: ClientIP
+      - equal:
+          path: spec.sessionAffinityConfig.clientIP.timeoutSeconds
+          value: 10800
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: selects on name + instance only
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: solace-broker-mcp
+            app.kubernetes.io/instance: rel
+
+  - it: follows server.port
+    set:
+      server.port: 8080
+    asserts:
+      - contains:
+          path: spec.ports
+          content: {name: http, port: 8080, targetPort: http, protocol: TCP}

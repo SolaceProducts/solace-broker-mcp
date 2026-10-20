@@ -16,6 +16,8 @@ package tools
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -590,5 +592,121 @@ func TestCloneBoolPtr(t *testing.T) {
 	}
 	if got == &src {
 		t.Error("cloneBoolPtr returned the same pointer as input; must be a fresh allocation")
+	}
+}
+
+// realCatalog loads the embedded tools.yaml and an executor over the embedded
+// SEMPv2 specs.
+func realCatalog(t *testing.T) ([]composite.CompositeTool, *composite.CompositeExecutor) {
+	t.Helper()
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	return realTools, composite.NewCompositeExecutor(operations)
+}
+
+// TestBuildCompositeInputSchema_StrictParameters pins SOL-155435: a tool with
+// StrictParameters advertises additionalProperties:false; any other tool
+// leaves the key absent so undeclared keys stay accepted.
+func TestBuildCompositeInputSchema_StrictParameters(t *testing.T) {
+	executor := composite.NewCompositeExecutor(testOperations())
+
+	strict := testTool()
+	strict.StrictParameters = true
+	if got := NewCompositeToolHandler(strict, executor).Metadata().InputSchema["additionalProperties"]; got != false {
+		t.Errorf("strict tool: additionalProperties = %v, want false", got)
+	}
+
+	if _, ok := NewCompositeToolHandler(testTool(), executor).Metadata().InputSchema["additionalProperties"]; ok {
+		t.Error("non-strict tool: additionalProperties should be absent")
+	}
+}
+
+// TestCallTool_ListQueuesRejectsMisspelledParams drives the real list-queues
+// input schema through ToolManager.CallTool's validation (SOL-155435): a
+// misspelled maxResults must fail rather than be silently ignored.
+func TestCallTool_ListQueuesRejectsMisspelledParams(t *testing.T) {
+	realTools, executor := realCatalog(t)
+	var schema map[string]any
+	for _, tool := range realTools {
+		if tool.Name == "list-queues" {
+			schema = NewCompositeToolHandler(tool, executor).Metadata().InputSchema
+		}
+	}
+	if schema == nil {
+		t.Fatal("list-queues not found in the real catalog")
+	}
+
+	mgr := NewToolManager(newTestPool(t))
+	handler := newStubHandler("list-queues")
+	handler.schema = schema
+	mgr.Register(handler)
+
+	for _, bad := range []string{"count", "maxResult"} {
+		result, err := mgr.CallTool(context.Background(), "list-queues", map[string]any{
+			"broker":     "dev",
+			"msgVpnName": "default",
+			bad:          20,
+		}, Identity{})
+		text := callToolResultText(t, result, err)
+		if !strings.Contains(text, "parameter validation failed") || !strings.Contains(text, bad) {
+			t.Errorf("%s: text = %q, want a parameter validation failure naming it", bad, text)
+		}
+	}
+
+	result, err := mgr.CallTool(context.Background(), "list-queues", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+		"maxResults": 20,
+	}, Identity{})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("valid params: err = %v, result = %+v, want success", err, result)
+	}
+}
+
+// TestRealCatalog_StrictParametersSet guards which tools opt into
+// StrictParameters (SOL-155435): every paginated list tool (has maxResults)
+// must, and no tool taking an object parameter (create-*/update-*, whose
+// owner extraction reads keys from object params) may.
+func TestRealCatalog_StrictParametersSet(t *testing.T) {
+	realTools, executor := realCatalog(t)
+	want := []string{
+		"list-bridges", "list-client-profiles", "list-client-subscriptions",
+		"list-client-usernames", "list-clients", "list-kafka-receivers",
+		"list-kafka-senders", "list-queue-discards", "list-queue-subscriptions",
+		"list-queues", "list-rdps", "list-slow-subscribers", "list-vpns",
+	}
+
+	var got []string
+	for _, tool := range realTools {
+		if tool.StrictParameters {
+			got = append(got, tool.Name)
+		}
+		for _, p := range tool.Parameters {
+			if p.Name == "maxResults" && !tool.StrictParameters {
+				t.Errorf("%s has maxResults but not strictParameters", tool.Name)
+			}
+			if p.Type == "object" && tool.StrictParameters {
+				t.Errorf("%s has object parameter %q and must not set strictParameters", tool.Name, p.Name)
+			}
+		}
+		if tool.Name == "list-queues" {
+			advertised := injectBrokerParam(NewCompositeToolHandler(tool, executor).Metadata().InputSchema, newTestPool(t))
+			if advertised["additionalProperties"] != false {
+				t.Errorf("list-queues advertised schema: additionalProperties = %v, want false", advertised["additionalProperties"])
+			}
+			if _, ok := advertised["properties"].(map[string]any)["broker"]; !ok {
+				t.Error("list-queues advertised schema is missing the injected broker property")
+			}
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("strictParameters tools = %v, want %v", got, want)
 	}
 }

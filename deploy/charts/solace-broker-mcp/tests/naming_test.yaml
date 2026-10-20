@@ -1,0 +1,54 @@
+# Names and labels must render as YAML strings whatever they look like:
+# Kubernetes rejects a numeric label value or a boolean resource name.
+suite: names and labels stay strings
+templates:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+  - secret.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: keeps a numeric release name a string in labels and selectors
+    release:
+      name: "123"
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: "123"
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: "123"
+        template: deployment.yaml
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: "123"
+        template: service.yaml
+
+  - it: keeps a numeric nameOverride a string in the name label
+    set:
+      nameOverride: "123"
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: "123"
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: "123"
+        template: deployment.yaml
+
+  - it: keeps a boolean-looking fullnameOverride a string everywhere it is used
+    set:
+      fullnameOverride: "true"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: "true"
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: "true"
+        template: deployment.yaml
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: "true"
+        template: deployment.yaml
