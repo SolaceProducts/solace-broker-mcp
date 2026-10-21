@@ -182,7 +182,27 @@ the configuration above. For contributors running from source, see
 
 Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64.
 
-Download the checksums file, verify the checksum, and extract:
+On macOS, download from the command line, not a browser. A browser marks the file as downloaded, and Gatekeeper then blocks the unsigned binary (see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary)). With the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`, fetch the latest release:
+
+```bash
+gh release download --repo SolaceProducts/solace-broker-mcp \
+  --pattern 'solace-broker-mcp-*-darwin-arm64.tar.gz' \
+  --pattern checksums-sha256.txt
+```
+
+Without the GitHub CLI, use `curl`. The first line looks up the latest release tag; to install a specific release, set `VERSION` to its tag instead:
+
+```bash
+VERSION=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/SolaceProducts/solace-broker-mcp/releases/latest | sed 's#.*/##')
+curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/solace-broker-mcp-${VERSION}-darwin-arm64.tar.gz"
+curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/checksums-sha256.txt"
+```
+
+On an Intel Mac, replace `darwin-arm64` with `darwin-amd64`.
+
+On other platforms, download the archive and `checksums-sha256.txt` from the release page.
+
+Verify the checksum and extract:
 
 ```bash
 # Verify checksum
@@ -203,8 +223,6 @@ To verify the checksum on Windows, compare the hash against the matching line in
 ```powershell
 Get-FileHash solace-broker-mcp-v*-windows-amd64.zip -Algorithm SHA256
 ```
-
-macOS: if Gatekeeper blocks the binary after a browser download, see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary).
 
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
