@@ -184,6 +184,7 @@ note spells out.
 | `github/codeql-action/analyze` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
 | `github/codeql-action/init` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
+| `helm/kind-action` | `1544676` | v1.15.1 | Apache-2.0 | [license](https://github.com/helm/kind-action/blob/v1.15.1/LICENSE) |
 | `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
 
 `actions/github-script` names its license file `LICENSE.md` rather than
@@ -253,12 +254,14 @@ distinction matters for exactly one row, addressed in the following section.
 ## CI Tools
 
 Command-line tools that the `helm-chart` job in `build-and-test.yml` downloads in a
-`run:` step and that `make helm-check` runs locally. None reaches a published
+`run:` step and that `make helm-check` runs locally, plus what `helm-chart-e2e.yml`
+and `make e2e-helm-all` use beyond them. None reaches a published
 artifact. Helm, helm-unittest, and chart-testing are fetched as release tarballs
 checked against pinned SHA-256 digests; kubeconform with `go install`; yamllint
 and yamale with `pipx install` at a pinned version.
 
-- `helm/helm` `v3.22.1`: rendering and linting the Helm chart.
+- `helm/helm` `v3.22.1`: rendering and linting the Helm chart, and installing it
+  in `helm-chart-e2e.yml` (the pin is duplicated there; bump both).
   [Apache-2.0](https://github.com/helm/helm/blob/v3.22.1/LICENSE)
 - `helm-unittest/helm-unittest` `1.2.1`: Helm chart template unit tests.
   [MIT](https://github.com/helm-unittest/helm-unittest/blob/v1.2.1/LICENSE)
@@ -270,6 +273,18 @@ and yamale with `pipx install` at a pinned version.
   [GPL-3.0-or-later](https://github.com/adrienverge/yamllint/blob/v1.38.0/LICENSE)
 - `yamale` (PyPI) `6.1.0`: Chart.yaml schema check, run by `ct lint`.
   [MIT](https://github.com/23andMe/Yamale/blob/6.1.0/LICENSE)
+- `kubernetes-sigs/kind` `v0.33.0`: the throwaway cluster for the Helm chart E2E
+  suite, installed by `helm/kind-action` (its own row is in the actions table).
+  Pinned in `test/e2e-helm/.env`, with the `kindest/node:v1.37.0` node image by
+  digest; neither is a compose `image:`, so check 4 does not see them.
+  [Apache-2.0](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/LICENSE)
+- `kubernetes/kubectl` `v1.37.1`: driving the Helm chart E2E suite's cluster,
+  installed by `helm/kind-action` (pinned in `helm-chart-e2e.yml`).
+  [Apache-2.0](https://github.com/kubernetes/kubernetes/blob/v1.37.1/LICENSE)
+
+`helm/kind-action` checks kind and kubectl against the `.sha256sum`/`.sha256` file
+published beside each download, not against a digest pinned in this repository as
+Helm's is.
 
 This list is maintained by hand, and deliberately not a table: `build-test-licenses-check.sh`
 parses every table row in this file but does not discover tools installed by `run:` steps

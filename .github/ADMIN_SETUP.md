@@ -395,8 +395,8 @@ review.
 2026 — the merge queue supersedes it, and leaving both on is redundant friction.
 See [Merge queue](#merge-queue) for why that is safe rather than a loosening.
 
-Seventeen contexts are documented in the following table; **fourteen of them are
-registered** in the ruleset. The three that are not carry **Not yet registered** in
+Seventeen contexts are documented in the following table; **fifteen of them are
+registered** in the ruleset. The two that are not carry **Not yet registered** in
 their own row — they are listed here because they run on every pull request and are
 candidates for registration, not because they gate anything today. This table is the
 single authoritative copy of both sets.
@@ -405,6 +405,8 @@ The count dropped from fourteen to thirteen on 20 August 2026 when `CodeQL` was
 removed as part of the advanced-setup migration (SOL-153411), and returned to
 fourteen the same day when `CodeQL gate` was registered — see
 [Security Settings](#security-settings) for why the removal had to come first.
+It rose to fifteen on 20 October 2026 when `helm-chart` was registered
+(SOL-155108), after its first green runs on `main`.
 
 Read the live list rather than trusting the table:
 
@@ -423,7 +425,7 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `e2e-monitoring` | `build-and-test.yml` | E2E suite (known flaky fixture; rerun the job before investigating) |
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
-| `helm-chart` | `build-and-test.yml` job `helm-chart` | The Helm chart under `deploy/charts/`: `ct lint`, a chart version bump on pull requests that change it, kubeconform on the rendered chart, and helm-unittest. **Not yet registered** — register it after its first green run on `main` |
+| `helm-chart` | `build-and-test.yml` job `helm-chart` | The Helm chart under `deploy/charts/`: `ct lint`, a chart version bump on pull requests that change it, kubeconform on the rendered chart, and helm-unittest. Registered 20 October 2026, after its first green runs on `main` |
 | `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the following warning |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
@@ -1091,9 +1093,10 @@ writing; re-check, do not assume.
 - ✅ No sensitive data in issues or PRs
 - ✅ **Required status checks corrected** per the preceding Branch Protection
   section — this document corrected 2026-08-17 (SOL-153190) to match the live
-  ruleset, which was itself updated 2026-08-12, and again 2026-08-20 for the
-  merge queue and the CodeQL migration. The `main-protection` ruleset now
-  requires all fourteen registered contexts in the preceding table, including
+  ruleset, which was itself updated 2026-08-12, again 2026-08-20 for the
+  merge queue and the CodeQL migration, and 2026-10-20 when `helm-chart` was
+  registered. The `main-protection` ruleset now
+  requires all fifteen registered contexts in the preceding table, including
   `Guardian scan gate` (from `guardian-scan.yaml`) in place of the retired
   `FOSSA Scan` / `FOSSA Scan / SCA Scan` contexts, with a **merge queue** on
   `main`, `strict_required_status_checks_policy: false` (superseded by the
@@ -1115,7 +1118,7 @@ writing; re-check, do not assume.
   > the scan itself was broken would have turned "scanning is broken" into "no
   > pull request can merge." That precondition was met before registration.
   > **There is no "branch protection holds zero required contexts" state
-  > anymore** — every one of the fourteen contexts, `Guardian scan gate`
+  > anymore** — every one of the fifteen contexts, `Guardian scan gate`
   > included, now blocks a merge if it is red or never reports, with nothing to
   > bypass it. One exception, added later: `CodeQL` can conclude `neutral`, which
   > GitHub counts as passing. Its replacement `CodeQL gate` cannot — it fails on a
