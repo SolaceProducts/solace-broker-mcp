@@ -190,10 +190,10 @@ gh release download --repo SolaceProducts/solace-broker-mcp \
   --pattern checksums-sha256.txt
 ```
 
-Without the GitHub CLI, use `curl` and set `VERSION` to the release tag:
+Without the GitHub CLI, use `curl`. The first line looks up the latest release tag; to install a specific release, set `VERSION` to its tag instead:
 
 ```bash
-VERSION=v1.0.0
+VERSION=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/SolaceProducts/solace-broker-mcp/releases/latest | sed 's#.*/##')
 curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/solace-broker-mcp-${VERSION}-darwin-arm64.tar.gz"
 curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/checksums-sha256.txt"
 ```

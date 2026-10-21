@@ -418,14 +418,14 @@ Before overriding the block, confirm the archive is genuine. Run both checks fro
 ```bash
 shasum -a 256 -c checksums-sha256.txt --ignore-missing
 
-gh attestation verify solace-broker-mcp-v0.10.0-darwin-arm64.tar.gz \
+gh attestation verify solace-broker-mcp-v1.0.0-darwin-arm64.tar.gz \
   --repo SolaceProducts/solace-broker-mcp \
   --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
 ```
 
 Both must succeed. The attestation check needs the [GitHub CLI](https://cli.github.com/) signed in with `gh auth login`; [Binary Deployment](../README.md#binary-deployment) explains what each check proves. Then use either workaround:
 
-- **System Settings** — Launch the binary from Finder or Terminal and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Allow Anyway** next to "solace-broker-mcp" was blocked to protect your Mac. The button stays for about an hour after the blocked launch. Launch the binary again from Finder or Terminal: a second dialog, **Open "solace-broker-mcp"?**, offers **Open Anyway**. Click it and authenticate with your password or Touch ID. Later launches run without a dialog.
+- **System Settings** — Launch the binary from Finder or Terminal and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Allow Anyway** next to "solace-broker-mcp" was blocked to protect your Mac. The button stays for a limited time after the blocked launch (about an hour, per Apple). Launch the binary again from Finder or Terminal: a second dialog, **Open "solace-broker-mcp"?**, offers **Open Anyway**. Click it and authenticate with your password or Touch ID. Later launches run without a dialog.
 - **Terminal** — Remove the quarantine attribute: `xattr -d com.apple.quarantine solace-broker-mcp`
 
 Either workaround clears the block for Finder and Terminal launches, and so for MCP clients connecting to a server started either way.

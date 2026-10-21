@@ -143,7 +143,12 @@ Allow Anyway flow, run by hand in Terminal.app:
 1. `./solace-broker-mcp --version` shows "Not Opened"; click **Done**.
 2. System Settings → Privacy & Security → Security lists "solace-broker-mcp"
    was blocked to protect your Mac, with an **Allow Anyway** button. The
-   SOL-154663 Finder test above recorded this button as Open Anyway.
+   SOL-154663 Finder test above recorded this button as Open Anyway; a manual
+   re-test confirmed Settings shows **Allow Anyway** and only the step 3
+   dialog shows **Open Anyway**. Apple's
+   [Open a Mac app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)
+   says the button "is available for about an hour after you try to open the
+   app"; neither test here timed it.
 3. The next launch shows **Open "solace-broker-mcp"?** (Apple is not able to
    verify that it is free from malware…), with **Move to Trash**,
    **Open Anyway** and **Done**. Open Anyway, then authentication, runs it and
