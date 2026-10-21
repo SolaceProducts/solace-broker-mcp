@@ -1,0 +1,144 @@
+name: Helm chart E2E
+
+# Tier 3 of the Helm chart's checks (SOL-156328; Tiers 1-2 are the helm-chart
+# job in build-and-test.yml). Installs deploy/charts/solace-broker-mcp from
+# this checkout into an ephemeral kind cluster against two real brokers and
+# drives live MCP tool calls through it, including the env-var collision
+# regression and its negative control. test/e2e-helm/run-all.sh does all of
+# it; `make e2e-helm-all` runs the same script locally.
+#
+# Not a PR check. The chart under test comes from the checkout, but the server
+# is the dev image (ghcr.io/solaceproducts/solace-broker-mcp-dev:dev), not the
+# commit under test, so it cannot gate a PR. A server-only change that breaks
+# the chart is caught by the next dev build's run, after merge.
+#
+# Trigger: workflow_run on "Dev build (unstable)", the same as observability.yml,
+# so every run tests the newest :dev image — just published, or unchanged when
+# the dev build found main's HEAD already built — and a failed dev build skips
+# the run rather than re-testing the previous image. The dev build is nightly,
+# so this is too; a manual dev build triggers it as well.
+#
+# Failure notification: for the nightly, none that reaches a person. A
+# workflow_run run is attributed to the triggering run's actor, and for the
+# scheduled dev build that is github-merge-queue[bot] (it makes every commit on
+# main, including the dev build's cron line) — checked on dev-build.yaml and
+# observability.yml runs. So a red nightly is visible only in the Actions tab;
+# there is no Slack or channel alert. Revisit if a red run goes unnoticed. A run
+# started by hand — this workflow's workflow_dispatch, or one following a
+# manually dispatched dev build — is attributed to, and notifies, whoever
+# started it.
+
+# zizmor flags workflow_run as a dangerous trigger. It is safe here for the
+# reasons observability.yml gives: "Dev build (unstable)" is schedule +
+# workflow_dispatch only, so no untrusted code can start it; this job checks
+# out the default branch (not an event ref), downloads no artifact, writes no
+# cache, uses no secrets and has contents: read only. That depends on
+# dev-build.yaml's triggers staying free of pull_request; its trigger comment
+# names this workflow.
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ["Dev build (unstable)"]
+    types: [completed]
+  workflow_dispatch:
+
+# One run at a time; a manual run queues behind a dev-build-triggered one
+# rather than cancelling it.
+concurrency:
+  group: helm-chart-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  helm-chart-e2e:
+    # On workflow_run: only after a successful dev build. On workflow_dispatch:
+    # always.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Same pin and digest as the helm-chart job in build-and-test.yml; bump
+      # both together (nothing automates it, and the inventory lists one Helm).
+      HELM_VERSION: v3.22.1
+      HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Default checkout: main's HEAD on workflow_run, the chosen ref on a
+          # manual run. The dev build also runs from main, so on workflow_run
+          # this matches the image's commit in practice.
+          persist-credentials: false
+
+      # The kind version and node image are pinned in test/e2e-helm/.env, the
+      # suite's single source of truth; read here so CI and local runs match.
+      - name: Read kind pins
+        id: pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source test/e2e-helm/.env
+          echo "kind-version=${KIND_VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Installs kind and kubectl only, each checked against the sha256 file
+      # published next to its download. run-all.sh creates the cluster with
+      # the node image from .env, the same code path as a local run.
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: ${{ steps.pins.outputs.kind-version }}
+          kubectl_version: v1.37.1
+          install_only: true
+
+      # Into /usr/local/bin, which is already on PATH, rather than via
+      # GITHUB_PATH: under workflow_run, zizmor's github-env audit rejects
+      # writes to the environment files. The next step fails if a different
+      # Helm still wins on PATH.
+      - name: Install Helm
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/helm"
+          mkdir -p "$tmp"
+          curl -fsSLo "$tmp/helm.tgz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $tmp/helm.tgz" | sha256sum -c -
+          tar -xzf "$tmp/helm.tgz" -C "$tmp" linux-amd64/helm
+          sudo install -m 0755 "$tmp/linux-amd64/helm" /usr/local/bin/helm
+
+      - name: Tool versions
+        run: |
+          kind version
+          kubectl version --client
+          helm version
+          test "$(helm version --template '{{.Version}}')" = "$HELM_VERSION"
+
+      # On failure run-all.sh dumps kubectl describe and logs for the MCP pods
+      # and both brokers' container logs before it tears down. The script
+      # itself, not `make e2e-helm-all` (which runs it): exec makes it the
+      # step's entry process, the only process the runner signals on a cancel
+      # (SIGINT, SIGTERM 7.5s later, then a kill 2.5s after that). Behind a
+      # shell and make, SIGTERM killed the step's shell and left run-all.sh
+      # running and holding the host lock, so Tear down was refused.
+      - name: Run Helm chart E2E
+        run: exec bash test/e2e-helm/run-all.sh
+
+      # Covers a run killed before its trap fired (a cancel or the job
+      # timeout, which GitHub treats as a cancel, so failure() alone would
+      # skip this step): bash runs a signal trap only after the foreground
+      # command, e.g. helm install --wait, returns, and the runner kills the
+      # script before that. After a normal failure the trap has already
+      # dumped and torn down, so this finds little beyond the port-forward log.
+      - name: Diagnostics (on failure)
+        if: failure() || cancelled()
+        run: bash -c '. test/e2e-helm/helpers.sh && dump_diagnostics'
+
+      # run-all.sh tears down on every exit; this covers a run killed before
+      # its trap fired (e.g. the job timeout). The killed script's long-running
+      # children (helm, kind, the port-forward) never held the lock (9>&-); if
+      # the kill landed during the script's own teardown, whose children do
+      # hold it, e2e-helm-down waits for that teardown to finish.
+      - name: Tear down
+        if: always()
+        run: make e2e-helm-down

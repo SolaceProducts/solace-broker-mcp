@@ -21,6 +21,7 @@ E2E_ACT_DIR := test/e2e-action
 COMPOSE_E2E_ACT := docker compose -f $(E2E_ACT_DIR)/docker-compose.yml
 E2E_OAUTH_DIR := test/e2e-oauth
 COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
+E2E_HELM_DIR := test/e2e-helm
 
 .DEFAULT_GOAL := help
 
@@ -322,6 +323,18 @@ e2e-oauth-all: ## Full e2e-oauth cycle: certs, Keycloak+brokers up, configure OA
 	&& bash $(E2E_OAUTH_DIR)/configure-oauth-profiles.sh && bash $(E2E_OAUTH_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_OAUTH) down -v || echo "WARN: e2e-oauth-all teardown failed"; \
 	exit $$t
+
+# The Helm chart suite owns its whole lifecycle in run-all.sh (kind cluster,
+# brokers, chart install, tests, teardown on every exit), because the same
+# script is what helm-chart-e2e.yml runs. Needs kind, kubectl, helm and an
+# x86_64 host (the dev image is linux/amd64 only).
+.PHONY: e2e-helm-all
+e2e-helm-all: ## Full e2e-helm cycle: kind cluster up, brokers up, install the chart, run suite, tear down (tears down even on failure)
+	bash $(E2E_HELM_DIR)/run-all.sh
+
+.PHONY: e2e-helm-down
+e2e-helm-down: ## Remove the e2e-helm kind cluster and brokers left behind by an interrupted run
+	@bash -c '. $(E2E_HELM_DIR)/helpers.sh && acquire_run_lock 120 && teardown'
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 

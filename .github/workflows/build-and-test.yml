@@ -247,7 +247,8 @@ jobs:
   # `pipx install`s whose own dependencies are not pinned. All six are listed in
   # THIRD_PARTY_BUILD_TEST.md § CI Tools. Helm and helm-unittest are pinned
   # together: helm-unittest 1.1+ uses a `platformHooks` plugin field that older
-  # Helm rejects.
+  # Helm rejects. HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml;
+  # bump both together.
   helm-chart:
     runs-on: ubuntu-latest
     timeout-minutes: 30
