@@ -1,8 +1,8 @@
 name: E2E broker matrix
 
 # Runs four E2E suites against the oldest supported LTS broker and against
-# :latest, once a day on main's tip (SOL-156292). The release notes claim
-# "10.8.1 LTS and later"; build-and-test.yml only ever tests :latest, so this
+# :latest, once a day on main's tip (SOL-156292). CHANGELOG.md and README.md
+# state "10.8.1 LTS and later"; build-and-test.yml only ever tests :latest, so this
 # is what backs the lower bound. The broker image comes from SOLACE_TAG, which
 # every test/*/docker-compose.yml reads as ${SOLACE_TAG:-latest}.
 #
