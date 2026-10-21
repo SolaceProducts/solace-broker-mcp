@@ -321,3 +321,89 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[fd00:0:0:0:0:0:0:5]:4317"}
+
+  # IPv6 forms url.Parse accepts must render; malformed ones must not.
+
+  - it: accepts trailing compression after seven groups as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[fd00:1:2:3:4:5:6::]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[fd00:1:2:3:4:5:6::]:4317"}
+
+  - it: accepts leading compression before seven groups as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::1:2:3:4:5:6:7]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[::1:2:3:4:5:6:7]:4317"}
+
+  - it: accepts an IPv4-mapped literal as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::ffff:10.0.0.5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[::ffff:10.0.0.5]:4317"}
+
+  - it: accepts six groups and an IPv4 suffix as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1:2:3:4:5:6:10.0.0.5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[1:2:3:4:5:6:10.0.0.5]:4317"}
+
+  - it: fails on eight groups and a compression as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1:2:3:4:5:6:7:8::]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv4 suffix with an octet over 255 as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::ffff:10.0.0.256]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv4 suffix with a leading zero as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::ffff:10.0.0.05]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv4 part that is not last as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::1.2.3.4:5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on seven groups and an IPv4 suffix as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1:2:3:4:5:6:7:10.0.0.5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on a group longer than four digits as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1:2:3:4:5:6:7:12345]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"

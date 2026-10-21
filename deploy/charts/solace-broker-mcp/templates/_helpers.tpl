@@ -293,6 +293,41 @@ loopback or pod-specific host would be a target that never answers.
 {{- end }}
 
 {{/*
+"true" when the text between an IPv6 literal's brackets is an address
+netip.ParseAddr accepts (zone IDs aside): 1-4 hex digits per group, at most one
+"::" standing for at least one group, and an optional dotted IPv4 tail that
+counts as two groups. Eight groups without "::", seven at most with it.
+*/}}
+{{- define "solace-broker-mcp.isIPv6" -}}
+{{- $ok := not (or (contains ":::" .) (gt (len (regexFindAll "::" . -1)) 1)) }}
+{{- $compressed := contains "::" . }}
+{{- $head := list }}
+{{- $tail := list }}
+{{- if $compressed }}
+{{- $halves := splitList "::" . }}
+{{- if index $halves 0 }}{{ $head = splitList ":" (index $halves 0) }}{{ end }}
+{{- if index $halves 1 }}{{ $tail = splitList ":" (index $halves 1) }}{{ end }}
+{{- else }}
+{{- $tail = splitList ":" . }}
+{{- end }}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])" }}
+{{- $ipv4 := printf "^%s(\\.%s){3}$" $octet $octet }}
+{{- $groups := 0 }}
+{{- range $head }}
+{{- if regexMatch "^[0-9A-Fa-f]{1,4}$" . }}{{ $groups = add1 $groups }}{{ else }}{{ $ok = false }}{{ end }}
+{{- end }}
+{{- $last := sub (len $tail) 1 }}
+{{- range $i, $g := $tail }}
+{{- if regexMatch "^[0-9A-Fa-f]{1,4}$" $g }}{{ $groups = add1 $groups }}
+{{- else if and (eq $i $last) (regexMatch $ipv4 $g) }}{{ $groups = add $groups 2 }}
+{{- else }}{{ $ok = false }}
+{{- end }}
+{{- end }}
+{{- if or (and $compressed (gt $groups 7)) (and (not $compressed) (ne $groups 8)) }}{{ $ok = false }}{{ end }}
+{{- if $ok }}true{{ end }}
+{{- end }}
+
+{{/*
 The OBS_* switches and the OTLP endpoint as a list of {name, value}. A var is
 rendered only when it differs from the server's default
 (internal/config/observability.go), so the defaults render none. Also enforces
@@ -317,20 +352,16 @@ it may carry credentials. */}}
 {{- end }}
 {{- /* The host is DNS labels or a bracketed IPv6 literal. url.Parse rejects a
 malformed literal, which again leaves the exporter on localhost, so the
-literal's shape is checked below too: one "::" at most, a leading or trailing
-colon only as part of it, and eight groups when it is absent. */}}
+literal is checked group by group in isIPv6. */}}
 {{- $label := "[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?" }}
-{{- $endpointRe := printf "^[Hh][Tt][Tt][Pp][Ss]?://(%s(\\.%s)*|\\[(?P<v6>[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7})\\])(?P<port>:[0-9]{1,5})?/?$" $label $label }}
+{{- $endpointRe := printf "^[Hh][Tt][Tt][Pp][Ss]?://(%s(\\.%s)*|\\[(?P<v6>[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*)\\])(?P<port>:[0-9]{1,5})?/?$" $label $label }}
 {{- $badEndpoint := "observability.otlpEndpoint must be http(s)://<host>[:port] with no path, query or whitespace" }}
 {{- if not (regexMatch $endpointRe $endpoint) }}
 {{- fail $badEndpoint }}
 {{- end }}
 {{- $v6 := regexReplaceAll $endpointRe $endpoint "${v6}" }}
-{{- if $v6 }}
-{{- $compressions := len (regexFindAll "::" $v6 -1) }}
-{{- if or (contains ":::" $v6) (gt $compressions 1) (and (hasPrefix ":" $v6) (not (hasPrefix "::" $v6))) (and (hasSuffix ":" $v6) (not (hasSuffix "::" $v6))) (and (eq $compressions 0) (ne (len (regexFindAll ":" $v6 -1)) 7)) }}
+{{- if and $v6 (not (include "solace-broker-mcp.isIPv6" $v6)) }}
 {{- fail $badEndpoint }}
-{{- end }}
 {{- end }}
 {{- $endpointPort := regexReplaceAll $endpointRe $endpoint "${port}" | trimPrefix ":" }}
 {{- if and $endpointPort (or (lt (atoi $endpointPort) 1) (gt (atoi $endpointPort) 65535)) }}
