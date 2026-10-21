@@ -86,3 +86,86 @@ resources:
 # Kubernetes' Mi — an unparseable value is fatal at startup, so anything but
 # bytes with an optional B/KiB/MiB/GiB/TiB suffix, or off, fails rendering.
 goMemLimit: ""
+
+# Observability (docs/observability.md). The server's on/off switches are OBS_*
+# env vars, one named value each below. An env var is rendered only when its
+# value differs from the server's default, so these defaults render none. The
+# chart deploys no Prometheus, Grafana or OTel collector: point it at yours.
+observability:
+  # OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC), e.g.
+  # http://otel-collector.observability.svc:4317. Setting it with neither
+  # tracing nor metrics.otlp on fails rendering: nothing would use it. It
+  # must be http(s)://<host>[:port], with no credentials, path or query.
+  otlpEndpoint: ""
+  correlationId:
+    enabled: true             # OBS_CORRELATION_ID_ENABLED (server default: on)
+  tracing:
+    # OBS_TRACING_ENABLED. With no otlpEndpoint, traces go to localhost:4317
+    # and the server does not warn; NOTES.txt does.
+    enabled: false
+  auditLog:
+    enabled: false            # OBS_AUDIT_LOG_ENABLED
+  saturationEvents:
+    enabled: false            # OBS_SATURATION_EVENTS_ENABLED
+  authFailureCounter:
+    # OBS_AUTH_FAILURE_COUNTER_ENABLED. null = unset: follows the metrics
+    # switches. An explicit false forces it off.
+    enabled: null
+  metrics:
+    # observability.metrics_bind_address; null = the server default ":9091".
+    # The metrics containerPort, Service port and NetworkPolicy port follow it.
+    # Must bind all interfaces (":N", "0.0.0.0:N" or "[::]:N").
+    bindAddress: null
+    scrape:
+      enabled: false          # OBS_METRICS_SCRAPE_ENABLED: the /metrics listener
+    otlp:
+      enabled: false          # OBS_METRICS_OTLP_ENABLED: OTLP metrics push
+  # Prometheus Operator ServiceMonitor (monitoring.coreos.com/v1; the CRD must
+  # be installed). Implies metrics.scrape.enabled.
+  serviceMonitor:
+    enabled: false
+    # kube-prometheus-stack selects only ServiceMonitors labelled
+    # release: <its Helm release> by default.
+    additionalLabels: {}
+
+# Ingress-only policy: the MCP port from anywhere, the metrics port from one
+# namespace. Enforced only by a CNI that implements NetworkPolicy (README.md).
+networkPolicy:
+  enabled: false
+  metricsNamespace: monitoring  # namespace allowed to scrape the metrics port
+
+# maxUnavailable: 1 — evicts one pod at a time during drains.
+podDisruptionBudget:
+  enabled: false
+
+# Publishes the server. Under mcp_client_auth.mode static its only credential
+# is the shared dev token, and oauth is not yet available in this chart
+# (SOL-156330): keep it on a trusted network (README.md § Ingress).
+ingress:
+  enabled: false
+  className: nginx            # "" = the cluster's default IngressClass
+  host: ""                    # required when enabled
+  tls:
+    secretName: ""            # "" renders no tls block
+  # ingress-nginx-specific, and required above one replica: an Ingress bypasses
+  # the Service's ClientIP affinity, and MCP sessions live in one pod's memory.
+  # Other controllers ignore these silently and the Ingress then 404s on
+  # session routing: set each key to null and use that controller's
+  # consistent hashing on the client source address, or replicaCount: 1.
+  # Cookie affinity and hashing on Mcp-Session-Id do not work (README.md
+  # § Ingress).
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    # 7200 matches the server's 2h session idle timeout, so the SSE stream on
+    # GET /mcp outlives the session that owns it.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+# Full EnvVar entries (value or valueFrom), appended to the container env.
+# Other OTEL_* settings: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+# OTEL_EXPORTER_OTLP_INSECURE, OTEL_TRACES_SAMPLER(_ARG),
+# OTEL_METRICS_EXEMPLAR_FILTER; HTTP(S)_PROXY, NO_PROXY (README.md § Egress
+# proxy). Certificate file vars need a mounted file: see SOL-156417. Rendering
+# fails on OBS_*, MCP_SERVER_PORT, or any name the chart already sets.
+extraEnv: []

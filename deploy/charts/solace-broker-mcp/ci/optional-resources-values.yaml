@@ -1,0 +1,51 @@
+# Every optional resource and observability setting on, so `ct lint` and both
+# kubeconform passes render the ServiceMonitor, NetworkPolicy, PDB and
+# Ingress. The ServiceMonitor validates only against the CRD catalog, in
+# ci-pr.yaml's "Kubernetes manifests valid" job; the helm-chart job skips it.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: ci-only-placeholder
+mcpClientAuth:
+  devToken: ci-only-placeholder
+observability:
+  otlpEndpoint: http://otel-collector.observability.svc:4317
+  correlationId:
+    enabled: false
+  tracing:
+    enabled: true
+  auditLog:
+    enabled: true
+  saturationEvents:
+    enabled: true
+  authFailureCounter:
+    enabled: false
+  metrics:
+    bindAddress: ":9191"
+    otlp:
+      enabled: true
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+networkPolicy:
+  enabled: true
+  metricsNamespace: observability
+podDisruptionBudget:
+  enabled: true
+ingress:
+  enabled: true
+  host: mcp.example.com
+  tls:
+    secretName: mcp-example-tls
+extraEnv:
+  - name: HTTPS_PROXY
+    valueFrom:
+      secretKeyRef:
+        name: egress-proxy
+        key: https-proxy-url
+  - name: NO_PROXY
+    value: ".svc,.cluster.local,otel-collector.observability.svc"

@@ -182,6 +182,9 @@ check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled t
 # Each chart is rendered to a file and fed to kubeconform on stdin: piped
 # straight from helm, a failed render would hand kubeconform empty input, which
 # it passes; and kubeconform silently skips a file path without a .yaml suffix.
+# Built-in schemas only, which carry no CRDs, and kubeconform fails a kind it has
+# no schema for: so the ServiceMonitor is skipped here, and ci-pr.yaml validates
+# it against the CRD catalog.
 CHART_DIR := deploy/charts/solace-broker-mcp
 CT_CONFIG := deploy/charts/ct.yaml
 
@@ -193,7 +196,7 @@ helm-check: ## Helm chart lint, kubeconform and helm-unittest (matches CI helm-c
 	for f in $(CHART_DIR)/ci/*-values.yaml; do \
 		echo "kubeconform: $$f"; \
 		helm template ci $(CHART_DIR) -f "$$f" >"$$out"; \
-		kubeconform -strict -summary <"$$out"; \
+		kubeconform -strict -summary -skip ServiceMonitor <"$$out"; \
 	done
 	helm unittest $(CHART_DIR)
 

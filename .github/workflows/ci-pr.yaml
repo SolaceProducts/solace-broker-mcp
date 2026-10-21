@@ -349,9 +349,10 @@ jobs:
   # request, before a tag ever exists, rather than only at release time. It
   # also doesn't depend on release.yml's matrix leg names at all, so it can't
   # go quiet just because a leg is renamed or reordered there.
-  # Validates the example Kubernetes manifests in deploy/kubernetes/ against the
-  # upstream API schemas. `kubectl apply` reports success for a manifest full of
-  # misspelt keys — the API server silently drops fields it does not know — so
+  # Validates the example Kubernetes manifests in deploy/kubernetes/, and the
+  # Helm chart's rendered ServiceMonitor, against the upstream API schemas.
+  # `kubectl apply` reports success for a manifest full of misspelt keys — the
+  # API server silently drops fields it does not know — so
   # -strict is the point of this check, not a nicety.
   #
   # DELIBERATELY NOT IN build-and-test.yml's required `build` job, and this is
@@ -364,12 +365,18 @@ jobs:
   # ruleset action (.github/ADMIN_SETUP.md), the same as every other job here.
   #
   # The manifests are copy-and-edit examples, not a shipped product surface, so
-  # an advisory verdict is the right weight for them.
+  # an advisory verdict is the right weight for them. The chart is shipped, but
+  # its required gate is build-and-test.yml's helm-chart job; only its
+  # ServiceMonitor, which needs the catalog, is validated here.
   manifests:
     name: Kubernetes manifests valid
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # datreeio/CRDs-catalog @ 2026-09-08. Pinned, not `main`. Shared by the
+      # deploy/kubernetes/ pass and the Helm chart's ServiceMonitor pass.
+      CRD_CATALOG_SHA: ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -402,9 +409,6 @@ jobs:
         # The catalog is pinned to a commit SHA rather than `main` so the
         # verdict is reproducible and a catalog change cannot alter it
         # silently. Bump the SHA deliberately when a newer CRD schema is needed.
-        env:
-          # datreeio/CRDs-catalog @ 2026-09-08. Pinned, not `main`.
-          CRD_CATALOG_SHA: ad3b08c5045129d7bb1eeffd8e61719b2c8dd1e2
         run: |
           set -euo pipefail
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
@@ -424,6 +428,44 @@ jobs:
             -schema-location default \
             -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRD_CATALOG_SHA}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
             "$examples"
+
+      - name: Validate the Helm chart's ServiceMonitor against the CRD catalog
+        # The helm-chart job in build-and-test.yml validates the rendered chart
+        # with built-in schemas only and skips the ServiceMonitor, so that
+        # required check never depends on the catalog. This pass covers it,
+        # with the same pinned catalog SHA as above. Helm is pinned to the
+        # helm-chart job's version and checked against the same digest; bump
+        # them together. Each render goes to a file first (a failed render
+        # piped into kubeconform would be a vacuous pass), and the step fails
+        # if no ServiceMonitor was rendered at all.
+        env:
+          HELM_VERSION: v3.22.1
+          HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/helm"
+          mkdir -p "$tmp"
+          curl -fsSLo "$tmp/helm.tgz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $tmp/helm.tgz" | sha256sum -c -
+          tar -xzf "$tmp/helm.tgz" -C "$tmp" linux-amd64/helm
+          helm="$tmp/linux-amd64/helm"
+
+          rendered=0
+          for f in deploy/charts/solace-broker-mcp/ci/*-values.yaml; do
+            out="$tmp/$(basename "$f" -values.yaml).yaml"
+            "$helm" template ci deploy/charts/solace-broker-mcp -f "$f" >"$out"
+            if grep -q '^kind: ServiceMonitor$' "$out"; then
+              rendered=$((rendered + 1))
+            fi
+          done
+          if [ "$rendered" -eq 0 ]; then
+            echo "::error::no ci/*-values.yaml renders a ServiceMonitor — this pass validated nothing"
+            exit 1
+          fi
+          kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRD_CATALOG_SHA}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
+            "$tmp"/*.yaml
 
   smoke_test_selftest:
     name: Smoke-test script self-test

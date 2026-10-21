@@ -3,7 +3,7 @@ name: solace-broker-mcp
 description: Solace Broker MCP server — monitor and manage Solace brokers over SEMP from AI agents
 type: application
 # 0.x until the chart reaches parity with deploy/kubernetes/ (SOL-156330).
-version: 0.1.0
+version: 0.2.0
 # The latest published release, without the leading v — the form release
 # images are tagged with. Kept current on each release by SOL-156336.
 appVersion: "1.0.0"

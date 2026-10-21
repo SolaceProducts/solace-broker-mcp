@@ -15,3 +15,34 @@ The pod template's checksum/secret annotation is a hash of the chart-managed
 credentials, readable by anyone who can read the Deployment. Use long random
 values, or supply credentials through existing Secrets, which it does not cover.
 {{- end }}
+{{- $obs := .Values.observability | default dict }}
+{{- $extraNames := list }}
+{{- range (.Values.extraEnv | default list) }}{{ $extraNames = append $extraNames (toString .name) }}{{ end }}
+{{- if and (dig "tracing" "enabled" false $obs) (not ($obs.otlpEndpoint | default "" | toString | trim)) (not (has "OTEL_EXPORTER_OTLP_ENDPOINT" $extraNames)) (not (has "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" $extraNames)) }}
+
+WARNING: observability.tracing.enabled is true but observability.otlpEndpoint is
+empty. Traces go to the OTel SDK default, localhost:4317, and the server logs
+no warning for it: that works only with a collector sidecar or an injected
+OTEL_EXPORTER_OTLP_ENDPOINT. Otherwise set observability.otlpEndpoint.
+{{- end }}
+{{- if and (.Values.ingress | default dict).enabled (eq ((.Values.mcpClientAuth | default dict).mode | default "" | toString) "static") }}
+
+WARNING: ingress.enabled publishes the server under mcp_client_auth.mode static,
+whose only credential is the shared dev token: anyone who can reach
+{{ .Values.ingress.host }}/mcp with it gets broker-admin-backed access.
+OAuth is not yet available in this chart (SOL-156330): until it is, keep the
+Ingress on a trusted network, or use deploy/kubernetes/ with oauth
+(README.md § Ingress).
+{{- end }}
+{{- if and (.Values.ingress | default dict).enabled (not (dig "tls" "secretName" "" (.Values.ingress | default dict) | toString | trim)) }}
+
+WARNING: ingress.tls.secretName is empty, so the Ingress serves plain HTTP
+unless TLS terminates in front of it, and clients send their bearer token in
+cleartext. Set ingress.tls.secretName.
+{{- end }}
+{{- if and (or (dig "metrics" "scrape" "enabled" false $obs) (dig "serviceMonitor" "enabled" false $obs)) (not (.Values.networkPolicy | default dict).enabled) }}
+
+WARNING: /metrics is unauthenticated and networkPolicy.enabled is false, so any
+pod that can route to this one can read it. Set networkPolicy.enabled and
+networkPolicy.metricsNamespace (README.md § NetworkPolicy).
+{{- end }}

@@ -1,0 +1,122 @@
+suite: ingress
+templates:
+  - ingress.yaml
+values:
+  - ../ci/default-values.yaml
+release:
+  name: rel
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when explicitly disabled
+    set:
+      ingress.enabled: false
+      ingress.host: mcp.example.com
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: routes /mcp and /.well-known to the http port
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules
+          value:
+            - host: mcp.example.com
+              http:
+                paths:
+                  - path: /mcp
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: rel-solace-broker-mcp
+                        port:
+                          name: http
+                  - path: /.well-known
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: rel-solace-broker-mcp
+                        port:
+                          name: http
+
+  - it: carries the ingress-nginx affinity, timeout and buffering annotations by default
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "7200"
+            nginx.ingress.kubernetes.io/proxy-send-timeout: "7200"
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+  - it: lets another controller drop the nginx annotations and add its own
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.className: traefik
+      ingress.annotations:
+        nginx.ingress.kubernetes.io/upstream-hash-by: null
+        nginx.ingress.kubernetes.io/proxy-read-timeout: null
+        nginx.ingress.kubernetes.io/proxy-send-timeout: null
+        nginx.ingress.kubernetes.io/proxy-buffering: null
+        example.com/route-by: source-address
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            example.com/route-by: source-address
+      - equal:
+          path: spec.ingressClassName
+          value: traefik
+
+  - it: renders TLS from the secret name for the host
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-tls
+    asserts:
+      - equal:
+          path: spec.tls
+          value:
+            - hosts: [mcp.example.com]
+              secretName: mcp-tls
+
+  - it: renders no tls block without a secret name
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: omits ingressClassName when className is empty (cluster default class)
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.className: ""
+    asserts:
+      - notExists:
+          path: spec.ingressClassName
+
+  - it: fails without a host
+    set:
+      ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.host is required when ingress.enabled is true"

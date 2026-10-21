@@ -1,0 +1,43 @@
+{{- if (.Values.networkPolicy | default dict).enabled }}
+{{- $_ := include "solace-broker-mcp.credentials" . }}
+{{- $ns := .Values.networkPolicy.metricsNamespace | default "" | toString | trim }}
+{{- if not $ns }}
+{{- fail "networkPolicy.metricsNamespace is required when networkPolicy.enabled is true (the namespace Prometheus scrapes from)" }}
+{{- end }}
+{{- /* A namespace name is a lowercase DNS-1123 label; anything else is a selector
+that matches no namespace and silently blocks every scrape. */}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $ns) }}
+{{- fail (printf "networkPolicy.metricsNamespace %q is not a valid namespace name (lowercase letters, digits and -, at most 63 characters)" $ns) }}
+{{- end }}
+# Who may reach the pod, adapted from deploy/kubernetes/networkpolicy.yaml.
+# Ingress only, so egress (broker SEMP, IdP, DNS, OTLP push) is untouched.
+# Enforced only by a CNI that implements NetworkPolicy, and policies are
+# additive: another policy selecting these pods can re-open the metrics port.
+# Ports are numeric because named-port support varies by CNI.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "solace-broker-mcp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # MCP, /livez and /readyz from any source: the kubelet's probes come from
+    # the node's own address, which no selector can name.
+    - ports:
+        - protocol: TCP
+          port: {{ (.Values.server | default dict).port | default 9090 }}
+    # /metrics from the Prometheus namespace only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ include "solace-broker-mcp.metricsPort" . }}
+{{- end }}

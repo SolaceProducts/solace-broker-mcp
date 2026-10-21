@@ -247,8 +247,8 @@ jobs:
   # `pipx install`s whose own dependencies are not pinned. All six are listed in
   # THIRD_PARTY_BUILD_TEST.md § CI Tools. Helm and helm-unittest are pinned
   # together: helm-unittest 1.1+ uses a `platformHooks` plugin field that older
-  # Helm rejects. HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml;
-  # bump both together.
+  # Helm rejects. HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml
+  # and ci-pr.yaml; bump all three together.
   helm-chart:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -332,7 +332,10 @@ jobs:
       - name: Validate rendered manifests with kubeconform (Tier 1)
         # helm lint and helm-unittest do not validate against the Kubernetes
         # API. Rendered to a file and fed on stdin: a failed render piped into
-        # kubeconform would be a vacuous pass. Built-in schemas only.
+        # kubeconform would be a vacuous pass. Built-in schemas only, so the
+        # ServiceMonitor (a CRD kind) is skipped: it is validated against the
+        # CRD catalog in ci-pr.yaml's "Kubernetes manifests valid" job, which
+        # keeps that network dependency out of this required check.
         shell: bash
         run: |
           set -euo pipefail
@@ -340,7 +343,7 @@ jobs:
           for f in deploy/charts/solace-broker-mcp/ci/*-values.yaml; do
             echo "kubeconform: $f"
             helm template ci deploy/charts/solace-broker-mcp -f "$f" >"$out"
-            kubeconform -strict -summary <"$out"
+            kubeconform -strict -summary -skip ServiceMonitor <"$out"
           done
 
       - name: Template unit tests (Tier 2)

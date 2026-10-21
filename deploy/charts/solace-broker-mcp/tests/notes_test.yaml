@@ -1,0 +1,92 @@
+suite: NOTES.txt warnings
+templates:
+  - NOTES.txt
+values:
+  - ../ci/default-values.yaml
+tests:
+  # The server warns at startup only for OTLP metrics with no endpoint
+  # (warnIfOTLPEndpointUnset); for tracing these notes are the only signal.
+  - it: warns about tracing with no OTLP endpoint
+    set:
+      observability.tracing.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: observability.tracing.enabled is true but observability.otlpEndpoint is\\s+empty"
+
+  - it: does not warn about tracing when the endpoint is set
+    set:
+      observability.tracing.enabled: true
+      observability.otlpEndpoint: http://c:4317
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "tracing.enabled is true but"
+
+  - it: does not warn about tracing when extraEnv supplies a traces endpoint
+    set:
+      observability.tracing.enabled: true
+      extraEnv:
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: http://c:4317
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "tracing.enabled is true but"
+
+  - it: does not warn by default
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "WARNING"
+
+  - it: warns that an Ingress publishes the shared dev token
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: ingress.enabled publishes the server under mcp_client_auth.mode static"
+
+  - it: says OAuth is not yet available in this chart
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: "OAuth is not yet available in this chart"
+
+  - it: warns about an Ingress with no TLS secret
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: ingress.tls.secretName is empty"
+
+  - it: does not warn about TLS when a TLS secret is set
+    set:
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-tls
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "ingress.tls.secretName is empty"
+
+  - it: warns that a ServiceMonitor opens /metrics without a NetworkPolicy
+    set:
+      observability.serviceMonitor.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: /metrics is unauthenticated and networkPolicy.enabled is false"
+
+  - it: warns that scraping opens /metrics without a NetworkPolicy
+    set:
+      observability.metrics.scrape.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: /metrics is unauthenticated and networkPolicy.enabled is false"
+
+  - it: does not warn about /metrics with a NetworkPolicy
+    set:
+      observability.metrics.scrape.enabled: true
+      networkPolicy.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "/metrics is unauthenticated"
