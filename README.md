@@ -115,7 +115,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 ## Prerequisites
 
-- Access to one or more Solace event brokers with SEMP management enabled
+- Access to one or more Solace event brokers, version 10.8.1 LTS or later, with SEMP management enabled
 - [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
 - **For Development / Building from Source:**
   - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
