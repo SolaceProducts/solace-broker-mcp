@@ -16,6 +16,7 @@ package composite
 
 import (
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -28,13 +29,22 @@ import (
 // ltsSpecDir holds the SEMPv2 specs of the oldest supported LTS broker (10.8.1).
 const ltsSpecDir = "../semp/sempv2/specs/testdata/10.8.1.599"
 
-// ltsSpecViolations returns one message per operation, query parameter or
-// select attribute a tool step uses that the LTS spec lacks. cur is the
-// embedded spec; it decides which step args are sent as query parameters
-// (the client drops the rest, see buildRequest).
+// itemFieldRE matches the parent-row fields a forEach step's templates read:
+// .Item.name and index .Item "name".
+var itemFieldRE = regexp.MustCompile(`\.Item\.(\w+)|index \.Item "(\w+)"`)
+
+// ltsSpecViolations returns one message per operation, query parameter,
+// select attribute, where attribute or forEach parent-row field a tool step
+// uses that the LTS spec lacks. cur is the embedded spec; it decides which
+// step args are sent as query parameters (the client drops the rest, see
+// buildRequest). postProcess handlers are Go code and are not checked here.
 func ltsSpecViolations(tools []CompositeTool, cur, lts map[string]*sempv2.Operation) []string {
 	var out []string
 	for _, tool := range tools {
+		stepOps := map[string]string{}
+		for _, step := range tool.Steps {
+			stepOps[step.ID] = step.Operation
+		}
 		for _, step := range tool.Steps {
 			where := "tool " + tool.Name + " step " + step.ID + ": "
 			op := lts[step.Operation]
@@ -74,14 +84,50 @@ func ltsSpecViolations(tools []CompositeTool, cur, lts map[string]*sempv2.Operat
 					out = append(out, where+"select attribute "+f+" missing from "+step.Operation)
 				}
 			}
+
+			// A where clause is attribute, operator, value; clauses are
+			// comma-separated.
+			if filter, ok := step.Args["where"]; ok {
+				for _, clause := range strings.Split(filter, ",") {
+					attr := clause
+					if i := strings.IndexAny(clause, "=!<>"); i >= 0 {
+						attr = clause[:i]
+					}
+					attr = strings.TrimSpace(attr)
+					if _, ok := op.ResponseFields[attr]; !ok {
+						out = append(out, where+"where attribute "+attr+" missing from "+step.Operation)
+					}
+				}
+			}
+
+			// A forEach step reads fields from its parent step's rows. A
+			// parent operation missing from the LTS spec is reported on the
+			// parent's own step.
+			if parent := lts[stepOps[step.ForEach]]; step.ForEach != "" && parent != nil {
+				itemFields := []string{step.ForEachKey}
+				templates := []string{step.ForEachIf}
+				for _, v := range step.Args {
+					templates = append(templates, v)
+				}
+				for _, tmpl := range templates {
+					for _, m := range itemFieldRE.FindAllStringSubmatch(tmpl, -1) {
+						itemFields = append(itemFields, m[1]+m[2])
+					}
+				}
+				for _, f := range itemFields {
+					if _, ok := parent.ResponseFields[f]; f != "" && !ok {
+						out = append(out, where+"forEach field "+f+" missing from "+stepOps[step.ForEach])
+					}
+				}
+			}
 		}
 	}
 	return out
 }
 
 // TestLoadTools_LTSSpecCompat fails when a tool in tools.yaml uses an
-// operation, query parameter or select attribute the 10.8.1 LTS broker does
-// not support. Write-body attributes newer than 10.8.1 are only logged: the
+// operation, query parameter, select attribute, where attribute or forEach
+// parent-row field the 10.8.1 LTS broker does not support. Write-body attributes newer than 10.8.1 are only logged: the
 // LLM supplies them, and the broker rejects them at call time.
 func TestLoadTools_LTSSpecCompat(t *testing.T) {
 	tools, err := LoadTools(definitions.FS, "tools.yaml")
@@ -127,6 +173,81 @@ func TestLoadTools_LTSSpecCompat(t *testing.T) {
 		}}}
 		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
 			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("rejects-newer-where", func(t *testing.T) {
+		tool := CompositeTool{Name: "probe", Steps: []Step{{
+			ID: "s", Operation: "monitor/getMsgVpnQueues",
+			Args: map[string]string{"msgVpnName": "v", "where": "respectDmqEligibleEnabled==true"},
+		}}}
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("rejects-newer-where-second-clause", func(t *testing.T) {
+		tool := CompositeTool{Name: "probe", Steps: []Step{{
+			ID: "s", Operation: "monitor/getMsgVpnQueues",
+			Args: map[string]string{"msgVpnName": "v", "where": "queueName!=#*,respectDmqEligibleEnabled==true"},
+		}}}
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("accepts-where-operators", func(t *testing.T) {
+		for _, w := range []string{"queueName!=#*", "msgSpoolUsage<=5", "msgSpoolUsage<5", "msgSpoolUsage>=5", "msgSpoolUsage>5", "queueName==a=b"} {
+			tool := CompositeTool{Name: "probe", Steps: []Step{{
+				ID: "s", Operation: "monitor/getMsgVpnQueues",
+				Args: map[string]string{"msgVpnName": "v", "where": w},
+			}}}
+			if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 0 {
+				t.Errorf("where %q: violations = %q, want none", w, got)
+			}
+		}
+	})
+	// forEach steps read their parent step's rows, so the fields they name are
+	// checked against the parent's operation.
+	forEachTool := func(child Step) CompositeTool {
+		parent := Step{ID: "queues", Operation: "monitor/getMsgVpnQueues", Args: map[string]string{"msgVpnName": "v"}}
+		child.ID, child.Operation, child.ForEach = "subs", "monitor/getMsgVpnQueueSubscriptions", "queues"
+		if child.ForEachKey == "" {
+			child.ForEachKey = "queueName"
+		}
+		if child.Args == nil {
+			child.Args = map[string]string{"msgVpnName": "v", "queueName": "{{.Item.queueName}}"}
+		}
+		return CompositeTool{Name: "probe", Steps: []Step{parent, child}}
+	}
+	t.Run("accepts-foreach-fields", func(t *testing.T) {
+		tool := forEachTool(Step{ForEachIf: `{{and .Item.egressEnabled (ne (index .Item "msgSpoolUsage") 0.0)}}`})
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 0 {
+			t.Errorf("violations = %q, want none", got)
+		}
+	})
+	t.Run("rejects-newer-foreach-item-field", func(t *testing.T) {
+		tool := forEachTool(Step{ForEachIf: "{{.Item.respectDmqEligibleEnabled}}"})
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("rejects-newer-foreach-index-field", func(t *testing.T) {
+		tool := forEachTool(Step{Args: map[string]string{
+			"msgVpnName": "v", "queueName": `{{index .Item "respectDmqEligibleEnabled"}}`,
+		}})
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("rejects-newer-foreach-key", func(t *testing.T) {
+		tool := forEachTool(Step{ForEachKey: "respectDmqEligibleEnabled"})
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for respectDmqEligibleEnabled", got)
+		}
+	})
+	t.Run("foreach-parent-missing-reports-once", func(t *testing.T) {
+		tool := forEachTool(Step{})
+		tool.Steps[0].Operation = "monitor/getMsgVpnDmrExportFilters"
+		if got := ltsSpecViolations([]CompositeTool{tool}, cur, lts); len(got) != 1 {
+			t.Errorf("violations = %q, want one for the parent operation", got)
 		}
 	})
 
