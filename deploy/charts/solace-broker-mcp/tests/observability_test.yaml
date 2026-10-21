@@ -171,13 +171,21 @@ tests:
       - failedTemplate:
           errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
 
+  # The username and password are distinctive strings so the negative matches
+  # can't hit the message's own words.
   - it: fails on an OTLP endpoint with credentials, without echoing them
     set:
-      observability.otlpEndpoint: http://u:s3cret@otel:4317
+      observability.otlpEndpoint: http://otlpuser:s3cret@otel:4317
       observability.tracing.enabled: true
     asserts:
       - failedTemplate:
           errorPattern: "^[^@]*observability.otlpEndpoint must not include credentials[^@]*$"
+      - failedTemplate:
+          errorPattern: "s3cret"
+        not: true
+      - failedTemplate:
+          errorPattern: "otlpuser"
+        not: true
 
   - it: fails on an OTLP endpoint with a path or query
     set:
