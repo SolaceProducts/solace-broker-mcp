@@ -178,13 +178,15 @@ Two Solace PubSub+ Standard Edition containers are used for E2E tests, configure
 
 | Setting | broker-a | broker-b |
 |---|---|---|
-| Image | `solace/solace-pubsub-standard:latest` | `solace/solace-pubsub-standard:latest` |
+| Image | `solace/solace-pubsub-standard:${SOLACE_TAG:-latest}` | `solace/solace-pubsub-standard:${SOLACE_TAG:-latest}` |
 | Container | `solace-e2e-a` | `solace-e2e-b` |
 | SEMP port | `8080` (configurable via `.env`) | `8082` (configurable via `.env`) |
 | Credentials | `admin` / `admin` (from `.env`) | `admin` / `admin` (from `.env`) |
 | Default VPN | `default` (pre-created) | `default` (pre-created) |
 | Shared memory | 1 GB | 1 GB |
 | File descriptors | 1,048,576 (nofile ulimit) | 1,048,576 (nofile ulimit) |
+
+The image tag defaults to `latest`. Set `SOLACE_TAG` to run any suite against another broker release, for example the oldest supported LTS: `SOLACE_TAG=10.8.1.594 make e2e-all`. The nightly `e2e-broker-matrix.yml` workflow runs the basic-mcp, monitoring, action and management suites against `10.8.1.594` and `latest`.
 
 The broker readiness check has two phases:
 1. SEMP API responds to config requests

@@ -30,7 +30,7 @@ The Solace Broker MCP Server requires:
 
 | Requirement | Details |
 |---|---|
-| **Solace event broker** | One or more event brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
+| **Solace event broker** | One or more event brokers, version 10.8.1 LTS or later, with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
 | **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each event broker's SEMP management port. |
 | **Event broker credentials** | Per-event-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64), or Kubernetes. |
