@@ -1254,6 +1254,68 @@ brokers:
 	}
 }
 
+func TestLoadConfig_TransportStateless(t *testing.T) {
+	const yaml = `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	tests := []struct {
+		name    string
+		value   string
+		unset   bool
+		want    bool
+		wantErr string
+	}{
+		{name: "unset", unset: true, want: false},
+		{name: "empty", value: "", want: false},
+		{name: "true", value: "true", want: true},
+		{name: "false", value: "false", want: false},
+		{name: "one", value: "1", want: true},
+		{name: "zero", value: "0", want: false},
+		{name: "not a boolean", value: "banana", wantErr: `invalid MCP_TRANSPORT_STATELESS "banana"`},
+		{name: "leading space", value: " true", wantErr: `invalid MCP_TRANSPORT_STATELESS " true"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// t.Setenv registers the restore; Unsetenv then makes "unset"
+			// distinct from "set to empty" even if the CI shell exports it.
+			t.Setenv("MCP_TRANSPORT_STATELESS", tt.value)
+			if tt.unset {
+				if err := os.Unsetenv("MCP_TRANSPORT_STATELESS"); err != nil {
+					t.Fatalf("unsetting env: %v", err)
+				}
+			}
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got none", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+				}
+				if cfg != nil {
+					t.Errorf("expected nil config on error, got %+v", cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.TransportStateless != tt.want {
+				t.Errorf("TransportStateless = %v, want %v", cfg.TransportStateless, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_BearerAuth(t *testing.T) {
 	t.Setenv("BEARER_TOKEN", "my-secret-token")
 
