@@ -75,7 +75,10 @@ jobs:
       - name: Start Solace brokers
         run: SUITE_DIR="test/$SUITE" bash test/e2e-common/setup-brokers.sh
 
+      # Shorter than the job's timeout, as in build-and-test.yml's e2e-management
+      # job: a hang then fails this step, so the "(on failure)" steps still run.
       - name: Run E2E tests
+        timeout-minutes: 24
         run: bash "test/$SUITE/run-all.sh"
 
       - name: Broker logs (on failure)
