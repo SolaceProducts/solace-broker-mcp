@@ -115,7 +115,55 @@ Why each result came out as it did, and why the docs say what they say.
   attestation steps so the digests match the shipped file). Bare Mach-O
   binaries cannot be stapled, so notarization is checked online on first run.
 
+## Launch paths (SOL-156319)
+
+The tests above launched only from Finder. SOL-156319 added Terminal and
+MCP-client launches.
+
+| Item | Value |
+|---|---|
+| Release | v1.0.0, `solace-broker-mcp-v1.0.0-darwin-arm64.tar.gz` |
+| macOS | 26.7.1, arm64, managed by a Jamf profile (App Store & Known Developers) |
+| Quarantine | Set by hand on the `gh release download` archive (`0083;…;Safari;…`), then `tar xzf`. The extracted files inherit it and `spctl -a -t exec` reports `rejected`. |
+
+| Launch path | Quarantined result | `xattr -d` | Allow Anyway |
+|---|---|---|---|
+| Terminal, `--version` | "Not Opened" dialog. The command blocks until **Done**, then exits 137 (SIGKILL) with no output. | Prints `v1.0.0`, exit 0 | Works (below) |
+| Terminal, `--config` | Same dialog on every launch; a repeat launch is not silent. | Server starts | Not run separately |
+| MCP client (Claude Code, `claude mcp add` + `claude mcp list`) | Same dialog. The client reports `Failed to connect — CONNECTION_CLOSED`. | Still `CONNECTION_CLOSED`: the server has no stdio transport | Not applicable |
+
+The MCP-client row is a misconfiguration test. The server is HTTP-only
+(user guide, Limitations and Considerations), so a client never launches it
+in a correct setup. A user starts it from Terminal and the Terminal rows
+apply. The dialog still appears if a client is pointed at the binary, so the
+silent failure the ticket feared does not occur.
+
+Allow Anyway flow, run by hand in Terminal.app:
+
+1. `./solace-broker-mcp --version` shows "Not Opened"; click **Done**.
+2. System Settings → Privacy & Security → Security lists "solace-broker-mcp"
+   was blocked to protect your Mac, with an **Allow Anyway** button. The
+   SOL-154663 Finder test above recorded this button as Open Anyway.
+3. The next launch shows **Open "solace-broker-mcp"?** (Apple is not able to
+   verify that it is free from malware…), with **Move to Trash**,
+   **Open Anyway** and **Done**. Open Anyway, then authentication, runs it and
+   prints `v1.0.0`.
+4. A further launch runs with no dialog. The quarantine flags change from
+   `0083` to `00c3`.
+
+The Jamf profile does not set `DisableOverride`, so it does not stop the
+override.
+
+Approval did not take once when the blocked launch and the re-launch came
+from Claude Code's shell rather than Terminal.app. After Allow Anyway, the
+re-launch showed "Not Opened" again. The cause was not isolated. The user
+guide therefore tells users to launch from Finder or Terminal.
+
+Not tested: Claude Desktop and Cursor (not installed; the HTTP-only finding
+makes them equivalent to the Claude Code test), Intel hardware, other macOS
+versions.
+
 ## Follow-up
 
 Developer ID signing and notarization of the macOS binaries is out of scope
-here and is the fix that removes the dialog. A follow-up ticket is still to be raised.
+here and is the fix that removes the dialog. It is tracked in SOL-155375.

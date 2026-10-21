@@ -399,11 +399,19 @@ If the health check fails, the probe prints the reason to stderr — Docker keep
 
 ### macOS Blocks the Downloaded Binary
 
-Opening `solace-broker-mcp` from Finder on macOS shows:
+Launching `solace-broker-mcp` on macOS shows:
 
-> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac.
+> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac or compromise your privacy.
 
-The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and open normally.
+The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and run normally; [Binary Deployment](../README.md#binary-deployment) shows both commands.
+
+What you see after the dialog depends on how you launched the binary:
+
+| Launch path | Symptom |
+|---|---|
+| Finder (double-click) | The binary does not open. |
+| Terminal (`./solace-broker-mcp`) | The command waits until you dismiss the dialog. After **Done**, the shell reports the process as killed (exit status 137) with no other output. |
+| MCP client | The server is an HTTP service you start yourself, not a subprocess the client launches (see [Limitations and Considerations](#limitations-and-considerations)). Start it from Terminal; the Terminal row applies. A client configured to launch the binary directly shows the same dialog and reports that the connection closed. |
 
 Before overriding the block, confirm the archive is genuine. Run both checks from the directory holding the archive and `checksums-sha256.txt`, using the exact archive filename (replace the version and architecture with yours):
 
@@ -417,7 +425,9 @@ gh attestation verify solace-broker-mcp-v0.10.0-darwin-arm64.tar.gz \
 
 Both must succeed. The attestation check needs the [GitHub CLI](https://cli.github.com/) signed in with `gh auth login`; [Binary Deployment](../README.md#binary-deployment) explains what each check proves. Then use either workaround:
 
-- **System Settings** — Double-click the binary and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to "solace-broker-mcp", click **Open Anyway** again in the confirmation, and authenticate with your password or Touch ID.
+- **System Settings** — Launch the binary from Finder or Terminal and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Allow Anyway** next to "solace-broker-mcp" was blocked to protect your Mac. The button stays for about an hour after the blocked launch. Launch the binary again from Finder or Terminal: a second dialog, **Open "solace-broker-mcp"?**, offers **Open Anyway**. Click it and authenticate with your password or Touch ID. Later launches run without a dialog.
 - **Terminal** — Remove the quarantine attribute: `xattr -d com.apple.quarantine solace-broker-mcp`
+
+Either workaround clears the block for Finder and Terminal launches, and so for MCP clients connecting to a server started either way.
 
 Right-click → **Open** does not work for this binary on macOS 26; it shows the same dialog.
