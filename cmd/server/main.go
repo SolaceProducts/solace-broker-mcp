@@ -431,19 +431,39 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	})
 }
 
+// logConfigLoaded emits the one startup line that confirms which settings took
+// effect. It is a function, not inline in main(), so a test can read the line.
+func logConfigLoaded(cfg *config.ServerConfig) {
+	slog.Info("config loaded",
+		slog.Int("broker_count", len(cfg.BrokerAliases())),
+		slog.Int("port", cfg.Port),
+		slog.String("log_level", cfg.LogLevel),
+		slog.Bool("fair_scheduling", *cfg.SEMP.FairScheduling),
+		slog.Bool("transport_stateless", cfg.TransportStateless))
+}
+
 // newMCPStreamableOptions builds the options for the SDK's streamable-HTTP
 // handler. Passing nil here would leave every field at its zero value, which
 // for SessionTimeout means "never close an idle session" — see
 // defaults.DefaultMCPSessionIdleTimeout for why that leaks and why the value
 // is what it is.
 //
+// stateless is MCP_TRANSPORT_STATELESS. It defaults to false because the
+// stateful transport is the only mode we have exercised against real clients.
+// SDK v1.8.0 serves protocol 2026-07-28 only when it is true. SessionTimeout
+// stays set: it does nothing in stateless mode and is still needed otherwise.
+// PropagateRequestCancellation cancels a tool handler when its client drops the
+// request; the SDK applies it only to 2026-07-28 requests, so it is inert for
+// older clients and in stateful mode.
+//
 // Deliberately NOT set here: CrossOriginProtection (deprecated; we wrap
-// instead — see crossOriginProtection), MaxRequestBodyBytes (we bound the
-// body ourselves in limitRequestBody, ahead of the SDK), and Stateless (the
-// stateful default is the only mode we have exercised against real clients).
-func newMCPStreamableOptions() *mcp.StreamableHTTPOptions {
+// instead — see crossOriginProtection) and MaxRequestBodyBytes (we bound the
+// body ourselves in limitRequestBody, ahead of the SDK).
+func newMCPStreamableOptions(stateless bool) *mcp.StreamableHTTPOptions {
 	return &mcp.StreamableHTTPOptions{
-		SessionTimeout: defaults.DefaultMCPSessionIdleTimeout,
+		Stateless:                    stateless,
+		SessionTimeout:               defaults.DefaultMCPSessionIdleTimeout,
+		PropagateRequestCancellation: true,
 	}
 }
 
@@ -1190,11 +1210,7 @@ func main() {
 	// so an operator who throws it needs to confirm it took effect, and anyone
 	// reading logs afterwards needs to know which mode the pod ran in. Safe to
 	// dereference — applyDefaults fills it (SOL-153441).
-	slog.Info("config loaded",
-		slog.Int("broker_count", len(cfg.BrokerAliases())),
-		slog.Int("port", cfg.Port),
-		slog.String("log_level", cfg.LogLevel),
-		slog.Bool("fair_scheduling", *cfg.SEMP.FairScheduling))
+	logConfigLoaded(cfg)
 
 	// One-line summary of which observability capabilities are enabled, so
 	// operators can confirm the door-closing defaults and any OBS_* overrides
@@ -1487,7 +1503,7 @@ func main() {
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
-	}, newMCPStreamableOptions())
+	}, newMCPStreamableOptions(cfg.TransportStateless))
 
 	// Wrap MCP handler with auth middleware. Cross-origin protection wraps
 	// this from the OUTSIDE, in buildMCPEndpoint — see that function for why

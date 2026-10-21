@@ -167,6 +167,9 @@ const MaxMCPRequestBytes = 4 * 1024 * 1024
 // the user sees nothing; a client that does not will surface an error. Do NOT
 // shorten this without weighing that — the value is chosen for client
 // tolerance, not for how fast memory is reclaimed.
+//
+// Applies to the stateful transport only. With MCP_TRANSPORT_STATELESS=true no
+// session exists to time out, so the SDK never reads this value.
 const DefaultMCPSessionIdleTimeout = 2 * time.Hour
 
 // DefaultMaxConcurrentPerBroker is the maximum number of in-flight SEMP

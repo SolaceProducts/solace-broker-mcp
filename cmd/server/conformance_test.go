@@ -143,7 +143,7 @@ func conformanceHandler(t *testing.T) *mcp.StreamableHTTPHandler {
 	}
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return conformanceServer
-	}, newMCPStreamableOptions())
+	}, newMCPStreamableOptions(false))
 }
 
 // conformanceRequest builds a POST /mcp request with the headers the SDK
