@@ -233,6 +233,14 @@ add_port_registry_image() { # <tmp> — a colon before the last '/' is a registr
     printf '\n# fixture\n    image: localhost:5000/testonly/thing\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 
+add_defaulted_tag_image() { # <tmp> — a compose `${VAR:-default}` tag holds a
+    # colon of its own. Splitting on it names the component
+    # `testonly/thing:${TESTONLY_TAG` at tag `-v9}`, which no row can match.
+    unlink_workflows "$1"
+    # shellcheck disable=SC2016 # the fixture must carry the literal `${...}`
+    printf '\n# fixture\n    image: testonly/thing:${TESTONLY_TAG:-v9}\n' >>"$1/.github/workflows/ci-pr.yaml"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> [mutation function + args]
@@ -412,6 +420,12 @@ unset EXPECT_STDERR
 EXPECT_STDERR="localhost:5000/testonly/thing" \
     assert_check "a registry port is not mistaken for a tag" 1 \
     add_port_registry_image
+unset EXPECT_STDERR
+
+# shellcheck disable=SC2016 # literal backticks, as the gate prints them
+EXPECT_STDERR='`testonly/thing` (v9)' \
+    assert_check "a \${VAR:-default} tag resolves to its default" 1 \
+    add_defaulted_tag_image
 unset EXPECT_STDERR
 
 # --- parser integrity --------------------------------------------------------

@@ -277,6 +277,10 @@ done < <(
 # --- check 4: container images ----------------------------------------------
 while read -r ref; do
     [ -n "$ref" ] || continue
+    # A compose `${VAR:-default}` (or `${VAR-default}`) resolves to its default
+    # first: its own colon would otherwise be taken as the tag separator. GitHub
+    # `${{ }}` expressions do not match (`{` is not a name character).
+    ref="$(sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}/\1/g' <<<"$ref")"
     # Split on the LAST path segment only. A colon before the final `/` is a
     # registry port (`localhost:5000/foo`), not a tag separator, and treating it
     # as one silently renames the component to `localhost` — a compliance gate
