@@ -197,6 +197,49 @@ tests:
       - failedTemplate:
           errorPattern: "server.port 9091 collides with the metrics port"
 
+  - it: fails on a loopback bindAddress the Service cannot reach
+    set:
+      observability.metrics.bindAddress: "127.0.0.1:9091"
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.metrics.bindAddress \"127.0.0.1:9091\" must bind all interfaces"
+
+  - it: fails on a bindAddress with no port
+    set:
+      observability.metrics.bindAddress: "0.0.0.0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.metrics.bindAddress \"0.0.0.0\" must be"
+
+  - it: fails on a bindAddress port out of range
+    set:
+      observability.metrics.bindAddress: ":70000"
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.metrics.bindAddress \":70000\" must be"
+
+  - it: fails when server.port collides with a moved metrics port
+    set:
+      observability.metrics.bindAddress: ":8080"
+      server.port: 8080
+    asserts:
+      - failedTemplate:
+          errorPattern: "server.port 8080 collides with the metrics port \\(8080"
+
+  - it: rejects an unknown observability key (schema)
+    set:
+      observability.metrics.scrapeEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "additional properties 'scrapeEnabled' not allowed"
+
+  - it: rejects a non-boolean switch (schema)
+    set:
+      observability.tracing.enabled: "yes"
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/tracing/enabled': got string, want boolean"
+
   - it: fails on a log level the server rejects
     set:
       server.logLevel: verbose

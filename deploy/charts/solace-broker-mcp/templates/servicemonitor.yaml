@@ -1,0 +1,28 @@
+{{- if (.Values.observability | default dict).serviceMonitor | default dict | dig "enabled" false }}
+{{- $_ := include "solace-broker-mcp.credentials" . }}
+# Prometheus Operator discovery, adapted from
+# deploy/kubernetes/servicemonitor.yaml.example. Not gated on the CRD being
+# present: without it the install fails loudly instead of skipping the target.
+# The chart turns OBS_METRICS_SCRAPE_ENABLED on with it, and selects only its
+# own release's Service; README.md § Prometheus Operator lists what else must hold
+# before a target appears.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+    {{- with .Values.observability.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "solace-broker-mcp.selectorLabels" . | nindent 6 }}
+  endpoints:
+    # A Service port name, not a container port.
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+{{- end }}

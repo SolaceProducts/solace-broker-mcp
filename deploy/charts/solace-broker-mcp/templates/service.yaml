@@ -22,9 +22,9 @@ spec:
       targetPort: http
       protocol: TCP
     # Prometheus scrape target. Resolves to `connection refused` until
-    # OBS_METRICS_SCRAPE_ENABLED is set.
+    # OBS_METRICS_SCRAPE_ENABLED is set. Follows observability.metrics.bindAddress.
     - name: metrics
-      port: 9091
+      port: {{ include "solace-broker-mcp.metricsPort" . }}
       targetPort: metrics
       protocol: TCP
   selector:

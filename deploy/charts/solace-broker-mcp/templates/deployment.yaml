@@ -1,4 +1,11 @@
 {{- $creds := include "solace-broker-mcp.credentials" . | fromJsonArray }}
+{{- $obsEnv := include "solace-broker-mcp.obsEnv" . | fromJsonArray }}
+{{- $metricsPort := include "solace-broker-mcp.metricsPort" . | atoi }}
+{{- $reserved := list "CONFIG_FILE" "POD_NAME" "GOMEMLIMIT" }}
+{{- range (concat $creds $obsEnv) }}
+{{- $reserved = append $reserved .name }}
+{{- end }}
+{{- include "solace-broker-mcp.validateExtraEnv" (dict "extraEnv" .Values.extraEnv "reserved" $reserved) }}
 {{- $managedSecret := include "solace-broker-mcp.hasManagedSecret" . }}
 {{- /* Hash only what secret.yaml renders: a value set alongside existingSecret is
 ignored by the chart, so hashing it would expose it and roll pods for nothing. */}}
@@ -85,8 +92,9 @@ spec:
               containerPort: {{ (.Values.server | default dict).port | default 9090 }}
               protocol: TCP
             # /metrics; the listener exists only with OBS_METRICS_SCRAPE_ENABLED.
+            # Follows observability.metrics.bindAddress.
             - name: metrics
-              containerPort: 9091
+              containerPort: {{ $metricsPort }}
               protocol: TCP
           env:
             - name: CONFIG_FILE
@@ -100,6 +108,10 @@ spec:
             # has no ceiling below limits.memory.
             - name: GOMEMLIMIT
               value: {{ include "solace-broker-mcp.goMemLimit" . | quote }}
+            {{- range $obsEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
             {{- range $creds }}
             {{- if .existingSecret }}
             - name: {{ .name }}
@@ -108,6 +120,9 @@ spec:
                   name: {{ .existingSecret | quote }}
                   key: {{ .key }}
             {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if $managedSecret }}
           envFrom:

@@ -1,0 +1,323 @@
+# The seven OBS_* switches and the OTLP endpoint. The rendering rule: an
+# OBS_* env var appears only when its value differs from the server's default
+# (internal/config/observability.go), so the defaults render none, exactly like
+# deploy/kubernetes/deployment.yaml with its env entry commented.
+suite: observability env
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders no OBS_* or OTEL_* env vars by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /^OBS_/)]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /^OTEL_/)]
+
+  # Positive control for the filter above: without it, a broken jsonpath
+  # filter would let the default-values case pass vacuously.
+  - it: finds an OBS_* env var with the same filter when one is set
+    set:
+      observability.auditLog.enabled: true
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /^OBS_/)]
+
+  - it: renders OBS_CORRELATION_ID_ENABLED only when turned off
+    set:
+      observability.correlationId.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_CORRELATION_ID_ENABLED, value: "false"}
+
+  - it: renders each off-by-default switch as "true" when turned on
+    set:
+      observability.tracing.enabled: true
+      observability.auditLog.enabled: true
+      observability.saturationEvents.enabled: true
+      observability.metrics.scrape.enabled: true
+      observability.metrics.otlp.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_TRACING_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_AUDIT_LOG_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_SATURATION_EVENTS_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_METRICS_SCRAPE_ENABLED, value: "true"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_METRICS_OTLP_ENABLED, value: "true"}
+
+  - it: turns scraping on for a ServiceMonitor even with metrics.scrape.enabled false
+    set:
+      observability.serviceMonitor.enabled: true
+      observability.metrics.scrape.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_METRICS_SCRAPE_ENABLED, value: "true"}
+
+  - it: renders OBS_METRICS_SCRAPE_ENABLED once when both scrape and ServiceMonitor are on
+    set:
+      observability.serviceMonitor.enabled: true
+      observability.metrics.scrape.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_METRICS_SCRAPE_ENABLED, value: "true"}
+          count: 1
+
+  - it: leaves OBS_AUTH_FAILURE_COUNTER_ENABLED unset when null
+    set:
+      observability.authFailureCounter.enabled: null
+      observability.metrics.scrape.enabled: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "OBS_AUTH_FAILURE_COUNTER_ENABLED")]
+
+  - it: renders an explicit false auth-failure counter as "false"
+    set:
+      observability.authFailureCounter.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_AUTH_FAILURE_COUNTER_ENABLED, value: "false"}
+
+  - it: renders an explicit true auth-failure counter as "true"
+    set:
+      observability.authFailureCounter.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_AUTH_FAILURE_COUNTER_ENABLED, value: "true"}
+
+  - it: renders the OTLP endpoint when tracing consumes it
+    set:
+      observability.otlpEndpoint: http://otel-collector.observability.svc:4317
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc:4317"}
+
+  - it: renders the OTLP endpoint when OTLP metrics consumes it
+    set:
+      observability.otlpEndpoint: http://otel-collector.observability.svc:4317
+      observability.metrics.otlp.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc:4317"}
+
+  - it: fails on an OTLP endpoint with no OTLP consumer, naming both switches
+    set:
+      observability.otlpEndpoint: http://otel-collector.observability.svc:4317
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint is set but neither observability.tracing.enabled nor observability.metrics.otlp.enabled is true"
+
+  - it: renders OTLP metrics with no endpoint (the server warns at startup)
+    set:
+      observability.metrics.otlp.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_METRICS_OTLP_ENABLED, value: "true"}
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "OTEL_EXPORTER_OTLP_ENDPOINT")]
+
+  - it: renders tracing with no endpoint
+    set:
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OBS_TRACING_ENABLED, value: "true"}
+
+  # Go's url.Parse reads "host:4317" as scheme "host" and fails on a bare
+  # "10.0.0.5:4317", so the SDK silently exports somewhere else. Userinfo
+  # would sit in plain text in the Deployment spec. The message never echoes
+  # the value, as for broker urls.
+  - it: accepts an https OTLP endpoint with a trailing slash
+    set:
+      observability.otlpEndpoint: https://otel-collector.observability.svc:4317/
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "https://otel-collector.observability.svc:4317/"}
+
+  - it: fails on an OTLP endpoint with no scheme
+    set:
+      observability.otlpEndpoint: otel-collector.observability.svc:4317
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on a bare IP:port OTLP endpoint
+    set:
+      observability.otlpEndpoint: 10.0.0.5:4317
+      observability.metrics.otlp.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an OTLP endpoint with credentials, without echoing them
+    set:
+      observability.otlpEndpoint: http://u:s3cret@otel:4317
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "^[^@]*observability.otlpEndpoint must not include credentials[^@]*$"
+
+  - it: fails on an OTLP endpoint with a path or query
+    set:
+      observability.otlpEndpoint: http://otel:4317/v1/traces?x=1
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  # Hosts and ports that pass the scheme check but that url.Parse rejects, or
+  # that cannot be dialled: each would also leave the exporter on localhost.
+  - it: fails on a non-numeric OTLP port
+    set:
+      observability.otlpEndpoint: http://otel:abc
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an unclosed IPv6 OTLP host
+    set:
+      observability.otlpEndpoint: "http://[::1"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on a percent-escape in the OTLP host
+    set:
+      observability.otlpEndpoint: http://otel%20x:4317
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an OTLP endpoint with no host
+    set:
+      observability.otlpEndpoint: http://:4317
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an out-of-range OTLP port
+    set:
+      observability.otlpEndpoint: http://otel:99999
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint port must be from 1 to 65535"
+
+  - it: fails on OTLP port 0
+    set:
+      observability.otlpEndpoint: http://otel:0
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint port must be from 1 to 65535"
+
+  - it: accepts an IPv4 OTLP host with no port
+    set:
+      observability.otlpEndpoint: http://10.0.0.5
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://10.0.0.5"}
+
+  - it: accepts a bracketed IPv6 OTLP host with a port
+    set:
+      observability.otlpEndpoint: "http://[fd00::5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[fd00::5]:4317"}
+
+
+  - it: fails on an IPv6 literal with one colon as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[:]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv4 address in brackets as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1.2.3.4]"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv6 literal that compresses twice as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1::2::3]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv6 literal with a single leading colon as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[:1:2::3]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on an IPv6 literal with too few groups as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://[1:2:3]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: fails on a host label starting with a hyphen as the OTLP host
+    set:
+      observability.otlpEndpoint: "http://a.-b:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpEndpoint must be http\\(s\\)://<host>\\[:port\\]"
+
+  - it: accepts the IPv6 loopback with a port
+    set:
+      observability.otlpEndpoint: "http://[::1]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[::1]:4317"}
+
+  - it: accepts a full eight-group IPv6 literal
+    set:
+      observability.otlpEndpoint: "http://[fd00:0:0:0:0:0:0:5]:4317"
+      observability.tracing.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://[fd00:0:0:0:0:0:0:5]:4317"}

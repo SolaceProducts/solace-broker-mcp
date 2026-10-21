@@ -1,0 +1,123 @@
+# extraEnv: full EnvVar entries passed through unchanged, but it cannot set a
+# variable the chart already owns — the OBS_* switches, MCP_SERVER_PORT, or a
+# name the chart renders itself. Kubernetes keeps the last of two same-named
+# entries, so a duplicate would silently override the chart's value.
+suite: extraEnv
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders a valueFrom.secretKeyRef entry unchanged
+    set:
+      extraEnv:
+        - name: HTTPS_PROXY
+          valueFrom:
+            secretKeyRef:
+              name: egress-proxy
+              key: url
+              optional: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: HTTPS_PROXY
+            valueFrom:
+              secretKeyRef:
+                name: egress-proxy
+                key: url
+                optional: false
+
+  - it: renders a plain value entry unchanged
+    set:
+      extraEnv:
+        - name: NO_PROXY
+          value: ".svc,.cluster.local,10.0.0.0/8"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: NO_PROXY, value: ".svc,.cluster.local,10.0.0.0/8"}
+
+  - it: fails on an OBS_* name
+    set:
+      extraEnv:
+        - name: OBS_TRACING_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: OBS_TRACING_ENABLED is set by the chart's observability values"
+
+  - it: fails on an OBS_* name that is not one of the seven switches
+    set:
+      extraEnv:
+        - name: OBS_SOMETHING_NEW
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: OBS_SOMETHING_NEW is set by the chart's observability values"
+
+  - it: fails on MCP_SERVER_PORT
+    set:
+      extraEnv:
+        - name: MCP_SERVER_PORT
+          value: "8080"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: MCP_SERVER_PORT overrides server.port"
+
+  - it: fails on a name the chart renders itself
+    set:
+      extraEnv:
+        - name: GOMEMLIMIT
+          value: 100MiB
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: GOMEMLIMIT is already set by the chart"
+
+  - it: fails on a broker credential name
+    set:
+      extraEnv:
+        - name: MY_BROKER_PASSWORD
+          value: x
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: MY_BROKER_PASSWORD is already set by the chart"
+
+  - it: fails on OTEL_EXPORTER_OTLP_ENDPOINT when otlpEndpoint is set
+    set:
+      observability.otlpEndpoint: http://c:4317
+      observability.tracing.enabled: true
+      extraEnv:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://other:4317
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: OTEL_EXPORTER_OTLP_ENDPOINT is already set by the chart"
+
+  - it: accepts OTEL_EXPORTER_OTLP_ENDPOINT when otlpEndpoint is empty
+    set:
+      observability.tracing.enabled: true
+      extraEnv:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://other:4317
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://other:4317"}
+
+  - it: fails on the same name twice
+    set:
+      extraEnv:
+        - {name: NO_PROXY, value: a}
+        - {name: NO_PROXY, value: b}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: NO_PROXY appears more than once"
+
+  - it: fails on an entry with no name
+    set:
+      extraEnv:
+        - value: x
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/extraEnv/0': missing property 'name'"

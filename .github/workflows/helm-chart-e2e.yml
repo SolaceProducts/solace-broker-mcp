@@ -58,8 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Same pin and digest as the helm-chart job in build-and-test.yml; bump
-      # both together (nothing automates it, and the inventory lists one Helm).
+      # Same pin and digest as the helm-chart job in build-and-test.yml and
+      # ci-pr.yaml's ServiceMonitor step; bump all three together (nothing
+      # automates it, and the inventory lists one Helm).
       HELM_VERSION: v3.22.1
       HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
     steps:

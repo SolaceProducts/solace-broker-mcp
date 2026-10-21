@@ -234,6 +234,196 @@
     },
     "goMemLimit": {
       "type": "string"
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cross-field rules (an otlpEndpoint with no OTLP consumer, the metrics port) are enforced in the templates, not here.",
+      "properties": {
+        "otlpEndpoint": {
+          "type": "string",
+          "description": "OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC)."
+        },
+        "correlationId": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_CORRELATION_ID_ENABLED"
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_TRACING_ENABLED"
+            }
+          }
+        },
+        "auditLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_AUDIT_LOG_ENABLED"
+            }
+          }
+        },
+        "saturationEvents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_SATURATION_EVENTS_ENABLED"
+            }
+          }
+        },
+        "authFailureCounter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "OBS_AUTH_FAILURE_COUNTER_ENABLED; null follows the metrics switches."
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bindAddress": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "observability.metrics_bind_address; null = the server default \":9091\". Format checked in the template."
+            },
+            "scrape": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "OBS_METRICS_SCRAPE_ENABLED"
+                }
+              }
+            },
+            "otlp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "OBS_METRICS_OTLP_ENABLED"
+                }
+              }
+            }
+          }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "additionalLabels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "metricsNamespace": {
+          "type": "string"
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Set a default key to null to remove it."
+        }
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "description": "Full Kubernetes EnvVar entries (value or valueFrom).",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string"
+          },
+          "valueFrom": {
+            "type": "object"
+          }
+        }
+      }
     }
   }
 }

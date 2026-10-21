@@ -261,7 +261,10 @@ checked against pinned SHA-256 digests; kubeconform with `go install`; yamllint
 and yamale with `pipx install` at a pinned version.
 
 - `helm/helm` `v3.22.1`: rendering and linting the Helm chart, and installing it
-  in `helm-chart-e2e.yml` (the pin is duplicated there; bump both).
+  in `helm-chart-e2e.yml`. Also fetched, same tarball and digest, by `ci-pr.yaml`'s
+  "Kubernetes manifests valid" job, which renders the chart to validate its
+  ServiceMonitor against the CRD catalog. The pin is duplicated in all three
+  workflows; bump them together.
   [Apache-2.0](https://github.com/helm/helm/blob/v3.22.1/LICENSE)
 - `helm-unittest/helm-unittest` `1.2.1`: Helm chart template unit tests.
   [MIT](https://github.com/helm-unittest/helm-unittest/blob/v1.2.1/LICENSE)

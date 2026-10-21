@@ -78,8 +78,12 @@ time, and under mcp_client_auth.mode static the server's own default is
 {{- if not (has $listen (list "0.0.0.0" "::")) }}
 {{- fail (printf "server.listenAddress must be \"0.0.0.0\" or \"::\" (a wildcard bind; the pod IP is not known at render time), got %q" ($server.listenAddress | default "" | toString)) }}
 {{- end }}
-{{- if eq (toString ($server.port | default 9090)) "9091" }}
-{{- fail "server.port 9091 collides with the metrics port (9091); choose another port" }}
+{{- /* The server refuses the same clash at config load, but only with scraping
+on; the chart refuses it always, as the Service and the container cannot carry
+two ports with one number either way. */}}
+{{- $metricsPort := include "solace-broker-mcp.metricsPort" . }}
+{{- if eq (toString ($server.port | default 9090)) $metricsPort }}
+{{- fail (printf "server.port %s collides with the metrics port (%s, from observability.metrics.bindAddress); choose another port" $metricsPort $metricsPort) }}
 {{- end }}
 {{- if not (kindIs "invalid" $server.logLevel) }}
 {{- if not (has (lower (toString $server.logLevel)) (list "debug" "info" "warn" "error")) }}
@@ -192,6 +196,7 @@ only as ${<ENV VAR>} references; the values live in a Secret.
 {{- define "solace-broker-mcp.serverConfig" -}}
 {{- $_ := include "solace-broker-mcp.credentials" . }}
 {{- $server := .Values.server | default dict }}
+{{- $metrics := (.Values.observability | default dict).metrics | default dict }}
 {{- $semp := .Values.semp | default dict }}
 {{- $mca := .Values.mcpClientAuth | default dict }}
 {{- include "solace-broker-mcp.kv" (list "" "port" $server.port) }}
@@ -225,6 +230,11 @@ brokers:
       token: {{ printf "${%s_TOKEN}" $prefix | toJson }}
 {{- end }}
 {{- end }}
+{{- $obsLines := include "solace-broker-mcp.kv" (list "  " "metrics_bind_address" $metrics.bindAddress) }}
+{{- if $obsLines }}
+observability:
+{{- $obsLines }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -254,5 +264,135 @@ anything else fails rendering instead.
 {{- fail (printf "cannot derive GOMEMLIMIT from resources.limits.memory %q: 75%% is under 1MiB" $limit) }}
 {{- end }}
 {{- printf "%dMiB" $mib }}
+{{- end }}
+{{- end }}
+
+{{/*
+The metrics port, from observability.metrics.bindAddress (null: the server
+default ":9091"). Only an all-interfaces bind is accepted: the Service,
+ServiceMonitor and NetworkPolicy reach the listener through the pod IP, so a
+loopback or pod-specific host would be a target that never answers.
+*/}}
+{{- define "solace-broker-mcp.metricsPort" -}}
+{{- $metrics := (.Values.observability | default dict).metrics | default dict }}
+{{- if kindIs "invalid" $metrics.bindAddress }}
+{{- "9091" }}
+{{- else }}
+{{- $addr := toString $metrics.bindAddress }}
+{{- $port := 0 }}
+{{- if regexMatch "^(|0\\.0\\.0\\.0|\\[::\\]):[0-9]{1,5}$" $addr }}
+{{- $port = regexReplaceAll "^.*:" $addr "" | atoi }}
+{{- else if regexMatch "^.+:[0-9]{1,5}$" $addr }}
+{{- fail (printf "observability.metrics.bindAddress %q must bind all interfaces (\":N\", \"0.0.0.0:N\" or \"[::]:N\"): the Service and Prometheus reach it through the pod IP" $addr) }}
+{{- end }}
+{{- if or (lt $port 1) (gt $port 65535) }}
+{{- fail (printf "observability.metrics.bindAddress %q must be \":N\", \"0.0.0.0:N\" or \"[::]:N\" with N from 1 to 65535" $addr) }}
+{{- end }}
+{{- $port }}
+{{- end }}
+{{- end }}
+
+{{/*
+The OBS_* switches and the OTLP endpoint as a list of {name, value}. A var is
+rendered only when it differs from the server's default
+(internal/config/observability.go), so the defaults render none. Also enforces
+the cross-field rules. Output: JSON, read back with fromJsonArray.
+*/}}
+{{- define "solace-broker-mcp.obsEnv" -}}
+{{- $obs := .Values.observability | default dict }}
+{{- $env := list }}
+{{- $endpoint := $obs.otlpEndpoint | default "" | toString | trim }}
+{{- $tracing := dig "tracing" "enabled" false $obs }}
+{{- $metricsOTLP := dig "metrics" "otlp" "enabled" false $obs }}
+{{- if and $endpoint (not (or $tracing $metricsOTLP)) }}
+{{- fail "observability.otlpEndpoint is set but neither observability.tracing.enabled nor observability.metrics.otlp.enabled is true: nothing would use it" }}
+{{- end }}
+{{- /* Go's url.Parse reads "host:4317" as scheme "host", so the SDK dials it
+over TLS, and rejects a bare "10.0.0.5:4317", so the SDK stays on
+localhost:4317 with no error. As for broker urls, no message echoes the value:
+it may carry credentials. */}}
+{{- if $endpoint }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $endpoint }}
+{{- fail "observability.otlpEndpoint must not include credentials: they would sit in plain text in the Deployment spec" }}
+{{- end }}
+{{- /* The host is DNS labels or a bracketed IPv6 literal. url.Parse rejects a
+malformed literal, which again leaves the exporter on localhost, so the
+literal's shape is checked below too: one "::" at most, a leading or trailing
+colon only as part of it, and eight groups when it is absent. */}}
+{{- $label := "[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?" }}
+{{- $endpointRe := printf "^[Hh][Tt][Tt][Pp][Ss]?://(%s(\\.%s)*|\\[(?P<v6>[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7})\\])(?P<port>:[0-9]{1,5})?/?$" $label $label }}
+{{- $badEndpoint := "observability.otlpEndpoint must be http(s)://<host>[:port] with no path, query or whitespace" }}
+{{- if not (regexMatch $endpointRe $endpoint) }}
+{{- fail $badEndpoint }}
+{{- end }}
+{{- $v6 := regexReplaceAll $endpointRe $endpoint "${v6}" }}
+{{- if $v6 }}
+{{- $compressions := len (regexFindAll "::" $v6 -1) }}
+{{- if or (contains ":::" $v6) (gt $compressions 1) (and (hasPrefix ":" $v6) (not (hasPrefix "::" $v6))) (and (hasSuffix ":" $v6) (not (hasSuffix "::" $v6))) (and (eq $compressions 0) (ne (len (regexFindAll ":" $v6 -1)) 7)) }}
+{{- fail $badEndpoint }}
+{{- end }}
+{{- end }}
+{{- $endpointPort := regexReplaceAll $endpointRe $endpoint "${port}" | trimPrefix ":" }}
+{{- if and $endpointPort (or (lt (atoi $endpointPort) 1) (gt (atoi $endpointPort) 65535)) }}
+{{- fail "observability.otlpEndpoint port must be from 1 to 65535" }}
+{{- end }}
+{{- $env = append $env (dict "name" "OTEL_EXPORTER_OTLP_ENDPOINT" "value" $endpoint) }}
+{{- end }}
+{{- if not (dig "correlationId" "enabled" true $obs) }}
+{{- $env = append $env (dict "name" "OBS_CORRELATION_ID_ENABLED" "value" "false") }}
+{{- end }}
+{{- /* A ServiceMonitor with no listener is a target that never appears. */}}
+{{- if or (dig "metrics" "scrape" "enabled" false $obs) (dig "serviceMonitor" "enabled" false $obs) }}
+{{- $env = append $env (dict "name" "OBS_METRICS_SCRAPE_ENABLED" "value" "true") }}
+{{- end }}
+{{- if dig "auditLog" "enabled" false $obs }}
+{{- $env = append $env (dict "name" "OBS_AUDIT_LOG_ENABLED" "value" "true") }}
+{{- end }}
+{{- if $tracing }}
+{{- $env = append $env (dict "name" "OBS_TRACING_ENABLED" "value" "true") }}
+{{- end }}
+{{- if dig "saturationEvents" "enabled" false $obs }}
+{{- $env = append $env (dict "name" "OBS_SATURATION_EVENTS_ENABLED" "value" "true") }}
+{{- end }}
+{{- /* null leaves it unset, following the metrics switches; an explicit value,
+true or false, pins it. */}}
+{{- $afc := dig "authFailureCounter" "enabled" nil $obs }}
+{{- if not (kindIs "invalid" $afc) }}
+{{- $env = append $env (dict "name" "OBS_AUTH_FAILURE_COUNTER_ENABLED" "value" (toString $afc)) }}
+{{- end }}
+{{- if $metricsOTLP }}
+{{- $env = append $env (dict "name" "OBS_METRICS_OTLP_ENABLED" "value" "true") }}
+{{- end }}
+{{- toJson $env }}
+{{- end }}
+
+{{/*
+Validates extraEnv. It cannot set an OBS_* switch or MCP_SERVER_PORT (each has
+a named value), nor any name the chart already renders: Kubernetes keeps the
+last of two same-named entries, and an env entry overrides envFrom, so a
+duplicate would silently replace the chart's value. No message echoes a value,
+which may be a secret.
+Call with (dict "extraEnv" .Values.extraEnv "reserved" <list of names>).
+*/}}
+{{- define "solace-broker-mcp.validateExtraEnv" -}}
+{{- $seen := dict }}
+{{- range $i, $e := .extraEnv }}
+{{- $name := (get ($e | default dict) "name") | default "" | toString }}
+{{- if not $name }}
+{{- fail (printf "extraEnv[%d] has no name" $i) }}
+{{- end }}
+{{- if hasPrefix "OBS_" $name }}
+{{- fail (printf "extraEnv: %s is set by the chart's observability values; use observability.* instead" $name) }}
+{{- end }}
+{{- if eq $name "MCP_SERVER_PORT" }}
+{{- fail "extraEnv: MCP_SERVER_PORT overrides server.port behind the Service and probes; set server.port instead" }}
+{{- end }}
+{{- if has $name $.reserved }}
+{{- fail (printf "extraEnv: %s is already set by the chart; set it through the chart's values instead" $name) }}
+{{- end }}
+{{- if hasKey $seen $name }}
+{{- fail (printf "extraEnv: %s appears more than once" $name) }}
+{{- end }}
+{{- $_ := set $seen $name true }}
 {{- end }}
 {{- end }}
