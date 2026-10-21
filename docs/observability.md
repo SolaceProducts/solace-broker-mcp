@@ -504,8 +504,13 @@ does not increment the drop counter because no write failure is returned.
 An `operation` record is emitted for a tool carrying `destructiveHint` after broker resolution
 and argument validation. It is not a record of every state change. In particular,
 `create-message-vpn`, `create-queue`, `create-queue-subscription`,
-`create-topic-endpoint`, `create-rdp`, `clear-queue-stats`, and `clear-client-stats`
-do not emit an operation record.
+`create-topic-endpoint`, `create-rdp`, `create-kafka-receiver-topic-binding`,
+`create-kafka-sender-queue-binding`, `clear-queue-stats`, and `clear-client-stats`
+do not emit an operation record. `create-kafka-receiver` and `create-kafka-sender` do:
+they are annotated destructive on purpose, because a Kafka bridge opens an outbound
+connection to a host the caller chooses, so their creation is audited. A call they
+reject (a secret in the arguments, or `enabled: true` with an authentication scheme)
+is still audited, as an `operation` record with `outcome=error`.
 
 A missing/unknown broker, unknown tool, or argument-validation failure happens before the
 destructive gate and emits no operation record.
