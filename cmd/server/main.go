@@ -453,8 +453,10 @@ func logConfigLoaded(cfg *config.ServerConfig) {
 // SDK v1.8.0 serves protocol 2026-07-28 only when it is true. SessionTimeout
 // stays set: it does nothing in stateless mode and is still needed otherwise.
 // PropagateRequestCancellation cancels a tool handler when its client drops the
-// request; the SDK applies it only to 2026-07-28 requests, so it is inert for
-// older clients and in stateful mode.
+// request. The SDK applies it only to 2026-07-28 requests, which only the
+// stateless transport serves, so it follows the setting: it is on in stateless
+// mode and off otherwise. Tying it to the setting keeps a later SDK that reads
+// it in stateful mode from changing the default.
 //
 // Deliberately NOT set here: CrossOriginProtection (deprecated; we wrap
 // instead — see crossOriginProtection) and MaxRequestBodyBytes (we bound the
@@ -463,7 +465,7 @@ func newMCPStreamableOptions(stateless bool) *mcp.StreamableHTTPOptions {
 	return &mcp.StreamableHTTPOptions{
 		Stateless:                    stateless,
 		SessionTimeout:               defaults.DefaultMCPSessionIdleTimeout,
-		PropagateRequestCancellation: true,
+		PropagateRequestCancellation: stateless,
 	}
 }
 

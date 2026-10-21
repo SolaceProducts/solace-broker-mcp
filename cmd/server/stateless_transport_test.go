@@ -172,8 +172,9 @@ func TestNewMCPStreamableOptions_Transport(t *testing.T) {
 		if opts.SessionTimeout != defaults.DefaultMCPSessionIdleTimeout {
 			t.Errorf("stateless=%v: SessionTimeout = %v, want %v", stateless, opts.SessionTimeout, defaults.DefaultMCPSessionIdleTimeout)
 		}
-		if !opts.PropagateRequestCancellation {
-			t.Errorf("stateless=%v: PropagateRequestCancellation = false, want true", stateless)
+		if opts.PropagateRequestCancellation != stateless {
+			t.Errorf("stateless=%v: PropagateRequestCancellation = %v, want it to follow the setting",
+				stateless, opts.PropagateRequestCancellation)
 		}
 	}
 }

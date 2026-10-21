@@ -1889,7 +1889,10 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 
 	// Strict, unlike envBool: this selects the transport mode, so a typo that
 	// silently fell back to stateful would break a multi-replica deployment.
-	// Empty means unset, as for MCP_SERVER_PORT. No trimming: " true" is an error.
+	// Empty means unset, as for MCP_SERVER_PORT. The value is checked as the
+	// process receives it, with no trimming here: " true" set in the environment
+	// is an error. A value from a .env file was already trimmed and unquoted by
+	// loadEnvFile.
 	if v := os.Getenv("MCP_TRANSPORT_STATELESS"); v != "" {
 		stateless, err := strconv.ParseBool(v)
 		if err != nil {
