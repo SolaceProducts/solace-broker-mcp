@@ -236,19 +236,22 @@ jobs:
           kubeconform -summary deploy/otel-collector/kubernetes/
 
   # Helm chart (deploy/charts/solace-broker-mcp) Tiers 1-2: lint and schema,
-  # then helm-unittest template tests. Seconds, no cluster. Runs on every event
-  # this workflow does — like every job here it has no `paths:` filter, since a
+  # then helm-unittest template tests, then the drift check against
+  # deploy/kubernetes/ (.github/scripts/helm-parity-check.sh) and its
+  # self-test. Under a minute of checks, no cluster. Runs on every event this
+  # workflow does — like every job here it has no `paths:` filter, since a
   # filtered-out required check never reports and blocks the merge.
   # `make helm-check` runs the same steps locally with the same ct.yaml.
   #
   # Helm, helm-unittest and ct are release tarballs checked against pinned
-  # SHA-256 digests; kubeconform is a `go install` at a pinned version (checked
-  # by the Go checksum database); yamllint and yamale are pinned top-level
-  # `pipx install`s whose own dependencies are not pinned. All six are listed in
-  # THIRD_PARTY_BUILD_TEST.md § CI Tools. Helm and helm-unittest are pinned
-  # together: helm-unittest 1.1+ uses a `platformHooks` plugin field that older
-  # Helm rejects. HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml
-  # and ci-pr.yaml; bump all three together.
+  # SHA-256 digests; kubeconform, yq and dyff are `go install`s at pinned
+  # versions (checked by the Go checksum database); yamllint and yamale are
+  # pinned top-level `pipx install`s whose own dependencies are not pinned. All
+  # eight are listed in THIRD_PARTY_BUILD_TEST.md § CI Tools. Helm and
+  # helm-unittest are pinned together: helm-unittest 1.1+ uses a
+  # `platformHooks` plugin field that older Helm rejects.
+  # HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml and
+  # ci-pr.yaml; bump all three together.
   helm-chart:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -275,7 +278,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Install Helm, helm-unittest, chart-testing, kubeconform
+      - name: Install Helm, helm-unittest, chart-testing, kubeconform, yq, dyff
         shell: bash
         run: |
           set -euo pipefail
@@ -308,6 +311,10 @@ jobs:
           pipx install "yamale==${YAMALE_VERSION}"
 
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          # The drift check (helm-parity-check.sh) normalises with yq and
+          # diffs with dyff.
+          go install github.com/mikefarah/yq/v4@v4.54.1
+          go install github.com/homeport/dyff/cmd/dyff@v1.12.0
 
           echo "$bin" >> "$GITHUB_PATH"
 
@@ -317,6 +324,8 @@ jobs:
           helm plugin list
           ct version
           kubeconform -v
+          yq --version
+          go version -m "$(command -v dyff)" | head -3
 
       - name: Lint chart with every ci/*-values.yaml (Tier 1)
         # --all: without it ct lints only charts changed against main, so a
@@ -348,6 +357,18 @@ jobs:
 
       - name: Template unit tests (Tier 2)
         run: helm unittest deploy/charts/solace-broker-mcp
+
+      - name: Chart in step with deploy/kubernetes/ (Tier 2)
+        # Runs on every event this job runs on, with no paths filter, so a
+        # change to either install path alone blocks the merge until the other
+        # matches (SOL-156330). Before the self-test, so drift is reported here
+        # rather than as a failing self-test case.
+        run: .github/scripts/helm-parity-check.sh
+
+      - name: Drift check self-test (Tier 2)
+        # Proves the drift check above can fail: one-sided changes to either
+        # install path, in each direction, against scratch copies.
+        run: .github/scripts/helm-parity-check.test.sh
 
   e2e-basic-mcp:
     runs-on: ubuntu-latest

@@ -257,8 +257,8 @@ Command-line tools that the `helm-chart` job in `build-and-test.yml` downloads i
 `run:` step and that `make helm-check` runs locally, plus what `helm-chart-e2e.yml`
 and `make e2e-helm-all` use beyond them. None reaches a published
 artifact. Helm, helm-unittest, and chart-testing are fetched as release tarballs
-checked against pinned SHA-256 digests; kubeconform with `go install`; yamllint
-and yamale with `pipx install` at a pinned version.
+checked against pinned SHA-256 digests; kubeconform, yq, and dyff with
+`go install`; yamllint and yamale with `pipx install` at a pinned version.
 
 - `helm/helm` `v3.22.1`: rendering and linting the Helm chart, and installing it
   in `helm-chart-e2e.yml`. Also fetched, same tarball and digest, by `ci-pr.yaml`'s
@@ -272,6 +272,11 @@ and yamale with `pipx install` at a pinned version.
   [Apache-2.0](https://github.com/helm/chart-testing/blob/v3.15.0/LICENSE)
 - `yannh/kubeconform` `v0.6.7`: validating rendered and raw Kubernetes manifests.
   [Apache-2.0](https://github.com/yannh/kubeconform/blob/v0.6.7/LICENSE)
+- `mikefarah/yq` `v4.54.1`: normalising the chart render and `deploy/kubernetes/`
+  before the drift check compares them (`helm-parity-check.sh`).
+  [MIT](https://github.com/mikefarah/yq/blob/v4.54.1/LICENSE)
+- `homeport/dyff` `v1.12.0`: the drift check's structural diff.
+  [MIT](https://github.com/homeport/dyff/blob/v1.12.0/LICENSE)
 - `yamllint` (PyPI) `1.38.0`: YAML lint, run by `ct lint`.
   [GPL-3.0-or-later](https://github.com/adrienverge/yamllint/blob/v1.38.0/LICENSE)
 - `yamale` (PyPI) `6.1.0`: Chart.yaml schema check, run by `ct lint`.

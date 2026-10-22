@@ -1,0 +1,36 @@
+# parity-values.yaml plus the two optional resources deploy/kubernetes/ ships
+# as .example files: the examples pass of .github/scripts/helm-parity-check.sh
+# compares the ServiceMonitor and Ingress this renders with
+# servicemonitor.yaml.example and ingress.yaml.example. The check renders each
+# pass with one values file, as ct lint and kubeconform also use each ci/ file
+# on its own, so the main values are repeated. The check fails unless this
+# file is parity-values.yaml plus observability.serviceMonitor and ingress.
+fullnameOverride: solace-broker-mcp
+image:
+  tag: latest
+  pullPolicy: null
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    insecureSkipVerify: false
+    envPrefix: BROKER
+    auth:
+      mode: basic
+      username: admin
+      password: changeme
+mcpClientAuth:
+  devToken: ci-only-placeholder
+networkPolicy:
+  enabled: true
+podDisruptionBudget:
+  enabled: true
+observability:
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+ingress:
+  enabled: true
+  host: mcp.example.com
+  tls:
+    secretName: solace-broker-mcp-tls

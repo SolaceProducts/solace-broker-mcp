@@ -77,7 +77,8 @@ spec:
         - name: solace-broker-mcp
           image: ghcr.io/solaceproducts/solace-broker-mcp:latest
           # Kept identical to the Helm chart (deploy/charts/solace-broker-mcp),
-          # which SOL-156330 checks for drift. The server writes nothing to
+          # as is every file here: the helm-chart CI job fails on drift
+          # (.github/scripts/helm-parity-check.sh). The server writes nothing to
           # disk; if that changes, mount an emptyDir for the path rather than
           # dropping readOnlyRootFilesystem.
           securityContext:
