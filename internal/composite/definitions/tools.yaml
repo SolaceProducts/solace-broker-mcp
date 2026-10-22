@@ -1718,10 +1718,13 @@ tools:
       activityState, deliveryState, selector, and the window and ACK
       counters. Returns up to 100 by default (max 500 via maxResults). Use
       this to find which consumer is slowing a queue whose backlog is
-      growing. A consumer is stalled when unackedMsgCount sits at the lower
-      of its windowSize and the queue's maxDeliveredUnackedMsgsPerFlow (from
-      get-queue-metrics): the broker sends it nothing more until it ACKs.
-      unackedMsgCount never exceeds that limit; well below it is healthy. A
+      growing. Two separate signals, both read per flow: (1) stalled on
+      application ACKs: unackedMsgCount at or near
+      queue.data.maxDeliveredUnackedMsgsPerFlow in this same response; the
+      broker sends the flow nothing more until the application ACKs.
+      windowSize does not cap unackedMsgCount, so a count above windowSize is
+      normal. (2) transport window full: usedWindowSize equal to windowSize,
+      with windowClosedCount rising between two calls. A
       maxUnackedMsgsExceededMsgCount or windowClosedCount that rises between
       two calls means the stall keeps recurring (both are cumulative
       counters). deliveryState deliver-from-spool means the flow stalled and

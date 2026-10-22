@@ -459,10 +459,14 @@ empty list.
 
 How to read a flow:
 
-- `unackedMsgCount` at the lower of the flow's `windowSize` and the queue's
-  `maxDeliveredUnackedMsgsPerFlow` (from `get-queue-metrics`): the consumer is
-  stalled. The event broker sends it nothing more until it acknowledges.
-  `unackedMsgCount` never exceeds that limit; well below it is healthy.
+- `unackedMsgCount` at or near the queue's `maxDeliveredUnackedMsgsPerFlow`
+  (returned in the `queue` step of the same response): the consumer is stalled
+  on application acknowledgements. The event broker sends it nothing more until
+  the application acknowledges. `windowSize` does not cap `unackedMsgCount`, so
+  a count above `windowSize` is normal.
+- `usedWindowSize` equal to `windowSize`, with `windowClosedCount` rising
+  between two calls: the transport window is full. This is a separate signal
+  from the one above.
 - `maxUnackedMsgsExceededMsgCount` or `windowClosedCount` rising between two
   calls: the stall keeps recurring. Both are cumulative counters.
 - `deliveryState` of `deliver-from-spool`: the flow stalled, and the event
