@@ -355,6 +355,8 @@ jobs:
       - name: Template unit tests (Tier 2)
         run: helm unittest deploy/charts/solace-broker-mcp
 
+  # Keep in sync with e2e-basic-mcp-stateless below: the two jobs are the same steps
+  # and differ only by MCP_TRANSPORT_STATELESS. A change to one belongs in the other.
   e2e-basic-mcp:
     runs-on: ubuntu-latest
     needs: build
@@ -416,6 +418,8 @@ jobs:
         if: always()
         run: docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 
+  # Keep in sync with e2e-basic-mcp above.
+  #
   # The same suite against a stateless server (MCP_TRANSPORT_STATELESS=true). It is
   # a separate job, not a matrix leg of e2e-basic-mcp, so the required check named
   # e2e-basic-mcp keeps its name and stays stateful, which is still the default. The
