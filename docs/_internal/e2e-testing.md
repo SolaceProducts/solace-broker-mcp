@@ -287,7 +287,7 @@ MCP_TRANSPORT_STATELESS=true bash test/e2e-basic-mcp/run-all.sh
 
 A green stateless run shows that the handshake and tool calls work with no session header, over the `2025-11-25` wire these helpers pin. Scenario 2 also drives the Go SDK client against the stateless server, so a failure there is a finding about that client. A green run does not exercise `2026-07-28`, does not show that other clients work or that replicas behave, and does not cover session-scoped behaviour such as per-session fairness. `docs/configuration.md` still says to leave the flag off in production.
 
-Only the `e2e-basic-mcp` suite is mode-aware. The handshake copies in the oauth, tracing, dashboard and llm suites still require `Mcp-Session-Id` and fail against a stateless server (SOL-154338). `e2e-common/lib.test.sh` checks the helper's two-way behaviour with a stubbed `curl`; it needs no broker and no server. CI runs it in the `lint` job. `make check` does not, so run `bash test/e2e-common/lib.test.sh` yourself after touching the handshake helpers.
+The shared helpers in `e2e-common/lib.sh` follow `MCP_TRANSPORT_STATELESS`, so every suite that uses them (basic-mcp, monitoring, management, action, oauth, helm and llm) gets the mode-aware `mcp_initialize`. CI runs only `e2e-basic-mcp` stateless; the others were not run stateless. The handshake copies in the oauth, tracing, dashboard and llm suites still require `Mcp-Session-Id` and fail against a stateless server (SOL-154338). `e2e-common/lib.test.sh` checks the helper's two-way behaviour with a stubbed `curl`; it needs no broker and no server. CI runs it in the `lint` job. `make check` does not, so run `bash test/e2e-common/lib.test.sh` yourself after touching the handshake helpers.
 
 ---
 
@@ -390,14 +390,19 @@ A second phase, Linux only, is the ticket's headline case — the log stream its
 
 ## CI Integration
 
-The E2E tests run as a separate `e2e` job in `.github/workflows/build-and-test.yml`, gated on the `build` job passing:
+The E2E tests run as separate jobs in `.github/workflows/build-and-test.yml`, each gated on the `build` job passing:
 
 ```
 lint ──┐
-       ├── build ──── e2e
+       ├── build ──┬── e2e-basic-mcp
+                   ├── e2e-basic-mcp-stateless
+                   ├── e2e-oauth
+                   ├── e2e-monitoring
+                   ├── e2e-management
+                   └── e2e-action
 ```
 
-The job:
+The `e2e-basic-mcp` job:
 1. Starts both Solace brokers with `docker compose up -d`
 2. Waits for both brokers to be fully ready (SEMP API + message spool, up to 120s)
 3. Runs `bash test/e2e-basic-mcp/run-all.sh`
