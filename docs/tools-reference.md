@@ -477,7 +477,8 @@ How to read a flow:
 | `queueName` | string | yes | The queue to list consumers for. |
 | `maxResults` | integer | no | Max consumers to return (default 100, max 500). |
 
-**Returns:** step-keyed envelope, steps `queue` (existence check) and
+**Returns:** step-keyed envelope, steps `queue` (existence check, with the
+queue's `maxDeliveredUnackedMsgsPerFlow` and `spooledMsgCount`) and
 `consumers` (array of flows). Each flow carries `clientName`, `flowId`,
 `bindTime`, `activityState`, `deliveryState`, `unackedMsgCount`, `windowSize`,
 `usedWindowSize`, `windowClosedCount`, `maxUnackedMsgsExceededMsgCount`,

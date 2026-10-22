@@ -1016,6 +1016,10 @@ test_list_queue_consumers_slow_consumer() {
 
     assert_json_field "$flow" '. != null' "true" \
         "list-queue-consumers [$broker]: e2e-monitoring-slow-consumer-$letter must be bound to $F5_QUEUE" || return 1
+    # The preflight returns the per-flow ACK limit the flow is compared
+    # against, so the agent needs no get-queue-metrics call for it.
+    assert_json_field "$content" ".queue.data.maxDeliveredUnackedMsgsPerFlow" "$F5_MAX_UNACKED" \
+        "list-queue-consumers [$broker]: queue.data.maxDeliveredUnackedMsgsPerFlow must be $F5_MAX_UNACKED" || return 1
     # sessionName is the flow's transacted session; the broker omits it for a
     # non-transacted consumer such as F5's, so it is not required here.
     assert_json_field "$flow" '[ "clientName","flowId","bindTime","activityState","deliveryState","unackedMsgCount","windowSize","usedWindowSize","windowClosedCount","maxUnackedMsgsExceededMsgCount","redeliveredMsgCount","ackedMsgCount","selector" ] - keys == []' "true" \

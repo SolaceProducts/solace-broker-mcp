@@ -53,7 +53,11 @@ func makeTxFlows(start, n int) []any {
 }
 
 func queuePreflightOK() *sempv2.Result {
-	return &sempv2.Result{StatusCode: 200, Data: map[string]any{"data": map[string]any{"queueName": "q1"}}}
+	return &sempv2.Result{StatusCode: 200, Data: map[string]any{"data": map[string]any{
+		"queueName":                      "q1",
+		"maxDeliveredUnackedMsgsPerFlow": float64(10000),
+		"spooledMsgCount":                float64(42),
+	}}}
 }
 
 func TestListQueueConsumers_ReturnsBoundFlows(t *testing.T) {
@@ -70,7 +74,7 @@ func TestListQueueConsumers_ReturnsBoundFlows(t *testing.T) {
 		t.Fatalf("calls = %v, want the queue GET then the tx-flows GET", client.calls)
 	}
 	preArgs := client.calls[0].args
-	if preArgs["msgVpnName"] != "vpn1" || preArgs["queueName"] != "q1" || preArgs["select"] != "queueName" {
+	if preArgs["msgVpnName"] != "vpn1" || preArgs["queueName"] != "q1" || preArgs["select"] != strings.Join(queuePreflightFields, ", ") {
 		t.Errorf("preflight args = %v", preArgs)
 	}
 	args := client.calls[1].args
@@ -79,6 +83,12 @@ func TestListQueueConsumers_ReturnsBoundFlows(t *testing.T) {
 	}
 	if args["select"] != strings.Join(queueConsumerFields, ", ") {
 		t.Errorf("tx-flows select = %q", args["select"])
+	}
+
+	// The per-flow ACK limit comes back in the same response as the flows.
+	queue, _ := result["queue"].(map[string]any)
+	if q, _ := queue["data"].(map[string]any); q["maxDeliveredUnackedMsgsPerFlow"] != float64(10000) {
+		t.Errorf("queue = %v, want maxDeliveredUnackedMsgsPerFlow 10000", result["queue"])
 	}
 
 	consumers, _ := result["consumers"].(map[string]any)

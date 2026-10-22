@@ -1747,7 +1747,8 @@ tools:
     steps:
       # Preflight: same reason as list-queue-subscriptions. The tx-flows
       # collection GET answers 200 with data: [] for a missing queue, which
-      # would read as "no consumers bound".
+      # would read as "no consumers bound". It also returns the per-flow ACK
+      # limit each flow's unackedMsgCount is compared against.
       - id: queue
         operation: monitor/getMsgVpnQueue
         args:
@@ -1755,6 +1756,8 @@ tools:
           queueName: "{{.Params.queueName}}"
         select:
           - queueName
+          - maxDeliveredUnackedMsgsPerFlow
+          - spooledMsgCount
       - id: consumers
         operation: monitor/getMsgVpnQueueTxFlows
         followPages: true

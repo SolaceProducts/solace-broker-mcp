@@ -32,6 +32,11 @@ var queueConsumerFields = []string{
 	"selector",
 }
 
+// queuePreflightFields is the select list of the queue preflight: the
+// per-flow ACK limit an agent compares unackedMsgCount against, and the
+// backlog, so one call answers "which consumer is stalling this queue".
+var queuePreflightFields = []string{"queueName", "maxDeliveredUnackedMsgsPerFlow", "spooledMsgCount"}
+
 // TestLoadTools_ListQueueConsumers checks the shipped definition, not a
 // hand-built copy: preflight on the queue, then the paginated tx-flow list.
 func TestLoadTools_ListQueueConsumers(t *testing.T) {
@@ -78,8 +83,8 @@ func TestLoadTools_ListQueueConsumers(t *testing.T) {
 	if preflight.FollowPages || preflight.Parallel {
 		t.Error("the preflight step must be sequential and unpaginated")
 	}
-	if !slices.Equal(preflight.Select, []string{"queueName"}) {
-		t.Errorf("preflight select = %v, want [queueName]", preflight.Select)
+	if !slices.Equal(preflight.Select, queuePreflightFields) {
+		t.Errorf("preflight select = %v, want %v", preflight.Select, queuePreflightFields)
 	}
 
 	list := tool.Steps[1]
