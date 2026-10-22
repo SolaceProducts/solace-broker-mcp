@@ -1,0 +1,38 @@
+# mcpClientAuth.mode: oauth with every oauth-related value set: the commented-
+# out production alternative in deploy/kubernetes/configmap.yaml, which the
+# drift check cannot see. Used by `ct lint`, the kubeconform step, and
+# tests/oauth_test.yaml.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    insecureSkipVerify: true
+    auth:
+      mode: basic
+      username: admin
+      password: ci-only-placeholder
+mcpClientAuth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: mcp-server
+  resourceUrl: "https://mcp.example.com/mcp"
+  scopesSupported:
+    - openid
+    - offline_access
+  toolAuthorization:
+    enabled: true
+    groupsClaimName: roles
+    filterToolsList: true
+    accessLevelGroups:
+      mcp-readers:
+        - list-queues
+        - list-vpns
+      mcp-operators:
+        - create-queue
+enableWriteTools: true
+allowInsecureBrokerTls: true
+tlsTerminatedUpstream: true
+ingress:
+  enabled: true
+  host: mcp.example.com
+  tls:
+    secretName: mcp-example-tls

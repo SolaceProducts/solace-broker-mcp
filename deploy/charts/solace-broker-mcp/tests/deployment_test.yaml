@@ -290,3 +290,30 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "image.repository is required"
+
+  - it: renders imagePullPolicy IfNotPresent by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+
+  # null leaves the field to Kubernetes' own default (Always for :latest,
+  # IfNotPresent otherwise), as deploy/kubernetes/deployment.yaml does.
+  - it: omits imagePullPolicy when pullPolicy is null
+    set:
+      image.pullPolicy: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].imagePullPolicy
+
+  - it: references no dev-token Secret under oauth, even one left set
+    values:
+      - ../ci/oauth-values.yaml
+    set:
+      mcpClientAuth.existingSecret: leftover-dev-token
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DEV_TOKEN
+          any: true

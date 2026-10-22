@@ -10,9 +10,10 @@ Architecture and diagrams: `docs/internal/architecture.md`.
   additionally runs the E2E jobs below); run before pushing.
 - `make test` — unit tests. Single test: `go test ./internal/<pkg>/ -run TestName -v`
 - `make test-cover` — unit tests + coverage gate only (no vet/lint)
-- `make helm-check` — Helm chart lint, kubeconform and helm-unittest (`deploy/charts/`),
-  same steps as CI's `helm-chart` job. Not part of `make check`; run it when the
-  chart changes. Tool prerequisites: `deploy/charts/solace-broker-mcp/README.md`.
+- `make helm-check` — Helm chart lint, kubeconform, helm-unittest (`deploy/charts/`)
+  and the chart-vs-`deploy/kubernetes/` drift check, same steps as CI's `helm-chart`
+  job. Not part of `make check`; run it when the chart or `deploy/kubernetes/`
+  changes. Tool prerequisites (incl. `yq`, `dyff`): `deploy/charts/solace-broker-mcp/README.md`.
 - `make e2e-all` — the `test/e2e-basic-mcp` suite against Dockerized brokers, full
   lifecycle (up, run, teardown). CI also runs the oauth and monitoring E2E suites
   (`docs/internal/e2e-testing.md`).
