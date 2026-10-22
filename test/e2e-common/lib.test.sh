@@ -92,6 +92,24 @@ for mode in "" true; do
     if [ "$RC" -ne 0 ] && [[ "$ERR" == *"initialize request"* ]]; then ok "request failure (mode='$mode'): prints a message, not a silent exit"; else bad "request failure (mode='$mode'): rc=$RC err='$ERR'"; fi
 done
 
+# run_init above calls mcp_initialize on the left of `&& ||`, which turns errexit
+# off, so it cannot see the grep guard in mcp_initialize. A separate strict bash
+# process can: with no Mcp-Session-Id header (the normal stateless response) grep
+# exits 1, and the guard is what keeps that from ending the function.
+echo "mcp_initialize under set -euo pipefail"
+export -f curl
+export CALLS FAKE
+run_strict() {
+    : >"$CALLS"
+    OUT=$(FAKE="$2" MCP_TRANSPORT_STATELESS="$1" bash -euo pipefail -c 'source "$here/lib.sh"; mcp_initialize' 2>"$tmp/err") && RC=0 || RC=$?
+    ERR=$(<"$tmp/err")
+}
+export here
+run_strict true noid
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then ok "stateless, no ID: the strict script is not aborted by grep"; else bad "stateless, no ID, strict: rc=$RC out='$OUT' err='$ERR'"; fi
+run_strict "" noid
+if [ "$RC" -ne 0 ] && [[ "$ERR" == *"No Mcp-Session-Id"* ]]; then ok "stateful, no ID, strict: prints the message"; else bad "stateful, no ID, strict: rc=$RC err='$ERR'"; fi
+
 echo "mcp_request"
 
 : >"$CALLS"
