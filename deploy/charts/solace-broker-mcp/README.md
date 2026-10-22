@@ -18,12 +18,14 @@ Grafana, or an OpenTelemetry collector; use their own charts
 > exposed as values: the edits the raw files suggest only in prose comments
 > (spreading replicas across zones with `topologyKey`, narrowing the
 > NetworkPolicy's metrics rule with a `podSelector`, dropping the Ingress's
-> `/.well-known` path under static), and in-pod TLS, which the raw ConfigMap
-> mentions as an alternative to `tls_terminated_upstream`. The
+> `/.well-known` path under static). In-pod TLS, which the raw ConfigMap
+> mentions only in prose as an alternative to `tls_terminated_upstream`, is
+> [`tls.existingSecret`](#certificate-files) here. The
 > `helm-chart` CI job keeps the two in step: a change to either side alone
 > fails it ([Developing the chart](#developing-the-chart)). Beyond what the raw
-> manifests carry, the chart does not yet cover settings that need a mounted
-> file (in-pod TLS, CA bundles; SOL-156417) or broker-side OAuth (SOL-156418).
+> manifests carry, the chart mounts [certificate files](#certificate-files)
+> (in-pod TLS, a CA bundle, the OTLP exporter's TLS files). It does not yet
+> cover broker-side OAuth (SOL-156418).
 > Until the chart is published to a registry, install it from a checkout of
 > this repository.
 
@@ -124,7 +126,9 @@ kubectl rollout restart deployment/mcp-solace-broker-mcp
 | `mcpClientAuth.scopesSupported` | `null` | Scopes advertised to MCP clients; `null` = `["openid"]`. Entra needs `offline_access` |
 | `mcpClientAuth.toolAuthorization.*` | `null`, `accessLevelGroups: {}` | `oauth` only: `enabled` (required under `oauth`), `groupsClaimName`, `filterToolsList`, `accessLevelGroups`; see [Tool authorization](#tool-authorization) |
 | `enableWriteTools` | `null` | `true` registers the write/action tools; `null` = the server default, `false` |
-| `tlsTerminatedUpstream` | `null` | **Required `true`** under `oauth`: acknowledges TLS is terminated at the Ingress or gateway |
+| `tlsTerminatedUpstream` | `null` | Under `oauth`, **required `true`** unless `tls.existingSecret` is set: acknowledges TLS is terminated at the Ingress or gateway. Not with `tls.existingSecret` |
+| `tls.existingSecret` | `""` | In-pod TLS: a `kubernetes.io/tls` Secret; the server and its probes switch to HTTPS. See [In-pod TLS](#in-pod-tls) |
+| `caBundle.configMap`, `caBundle.secret` | `null` | Extra CA certificates behind `SSL_CERT_FILE`, as `{name, key}` (`key` defaults to `ca.crt`); one of the two. See [CA bundle](#ca-bundle) |
 | `allowInsecureBrokerTls` | `null` | Under `oauth`, accepts a broker with `insecureSkipVerify: true`; without it such a broker fails rendering |
 | `server.port` | `9090` | Server and Service port. Must differ from the metrics port (`9091`, or the port in `observability.metrics.bindAddress`) |
 | `server.logLevel` | `info` | `debug`, `info`, `warn` or `error` |
@@ -135,6 +139,7 @@ kubectl rollout restart deployment/mcp-solace-broker-mcp
 | `observability.shutdownDrainDelayS` | `null` | Drain delay after SIGTERM (server default 10s). `terminationGracePeriodSeconds` follows it: this + 35, else `45` |
 | `observability.serviceName`, `.serviceInstanceId`, `.deploymentEnvironment`, `.cloudRegion` | `null` | Telemetry identity. The server also reads `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, which [`extraEnv`](#extra-environment-variables) can set |
 | `observability.saturationThresholdMs`, `.otelSelfStatsIntervalS` | `null` | Saturation log threshold (server default 1000) and self-stats interval (server default 60) |
+| `observability.otlpTls.certificate`, `.clientCertificate`, `.clientKey` | `null` | The OTLP exporter's CA and mTLS pair, each `{secret: {name, key}}` or `{configMap: {name, key}}` (`clientKey`: Secret only). See [OTLP TLS](#otlp-tls) |
 | `networkPolicy.enabled` | `false` | Renders a NetworkPolicy; see [NetworkPolicy](#networkpolicy) |
 | `networkPolicy.metricsNamespace` | `monitoring` | The namespace allowed to reach the metrics port |
 | `podDisruptionBudget.enabled` | `false` | Renders a PodDisruptionBudget with `maxUnavailable: 1` |
@@ -144,6 +149,7 @@ kubectl rollout restart deployment/mcp-solace-broker-mcp
 | `ingress.tls.secretName` | `""` | TLS Secret for `ingress.host`; empty renders no `tls` block |
 | `ingress.annotations` | the four ingress-nginx annotations | Set a key to `null` to remove it |
 | `extraEnv` | `[]` | Extra container env vars as full `EnvVar` entries (`value` or `valueFrom`); see [Extra environment variables](#extra-environment-variables) |
+| `extraVolumes`, `extraVolumeMounts` | `[]` | Extra pod volumes and container mounts as full `Volume` / `VolumeMount` entries; see [Other files](#other-files) |
 | `goMemLimit` | `""` | `GOMEMLIMIT` override. Empty derives 75% of `resources.limits.memory`, floored to whole MiB (`512Mi` → `384MiB`, `1Gi` → `768MiB`). Only integer `Mi` and `Gi` limits can be derived; for any other form set this explicitly, in Go's form (`MiB`, not `Mi`), or `off` |
 
 Server settings follow one rule: a key set to `null` is left out of the
@@ -200,6 +206,7 @@ mcpClientAuth:
   toolAuthorization:
     enabled: false        # required under oauth; see Tool authorization
 # TLS terminates at the Ingress: oauth refuses a plaintext listener otherwise.
+# Or terminate it in the pod with tls.existingSecret (Certificate files).
 tlsTerminatedUpstream: true
 ingress:
   enabled: true
@@ -213,8 +220,9 @@ refuse at startup: a missing `issuer`, `audience` or `resourceUrl`; an
 `issuer`, `resourceUrl` or broker `url` that is not `https://` (or, for the
 first two, that the server cannot parse as a URL; a value carrying a
 `${VAR_NAME}` reference, which the server substitutes first, skips that parse
-check, and the `https://` one too when it starts with the reference); `tlsTerminatedUpstream`
-not `true` (this chart cannot yet terminate TLS in the pod, SOL-156417); a
+check, and the `https://` one too when it starts with the reference);
+neither `tlsTerminatedUpstream: true` nor in-pod TLS
+([`tls.existingSecret`](#in-pod-tls)); a
 broker with `insecureSkipVerify: true` unless `allowInsecureBrokerTls: true`;
 `toolAuthorization.enabled` left unset; and a blank group name, or a tool name
 that is empty or has surrounding whitespace, in `accessLevelGroups`. Whether a
@@ -403,8 +411,8 @@ The server pushes OTLP over gRPC only, so use the collector's `4317` port, not
 `4318`. Other `OTEL_*` settings (`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`,
 `OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`,
 `OTEL_METRICS_EXEMPLAR_FILTER`) go in [`extraEnv`](#extra-environment-variables).
-OTLP certificate files need a mounted file, which this chart cannot yet supply
-(SOL-156417). If something else restricts this pod's egress, allow TCP 4317 to
+A private-CA or mTLS collector takes
+[`observability.otlpTls`](#otlp-tls). If something else restricts this pod's egress, allow TCP 4317 to
 the collector there: the chart's NetworkPolicy is ingress-only.
 
 ### Grafana
@@ -491,8 +499,9 @@ ingress:
 value can come from a Secret (`valueFrom.secretKeyRef`) as well as a literal
 `value`. Rendering fails if an entry sets an `OBS_*` variable or
 `MCP_SERVER_PORT` (use the named values instead), a name the chart already
-sets (`CONFIG_FILE`, `POD_NAME`, `GOMEMLIMIT`, a credential variable, or
-`OTEL_EXPORTER_OTLP_ENDPOINT` when `observability.otlpEndpoint` is set), or the
+sets (`CONFIG_FILE`, `POD_NAME`, `GOMEMLIMIT`, a credential variable,
+`OTEL_EXPORTER_OTLP_ENDPOINT` when `observability.otlpEndpoint` is set, or a
+[certificate file](#certificate-files) variable when its value is set), or the
 same name twice: Kubernetes would keep only the last one, silently.
 
 ### Egress proxy
@@ -526,6 +535,139 @@ so an `http://...:4317` collector endpoint is not governed by `HTTP_PROXY`. To
 reach an in-cluster collector directly, list its host in `NO_PROXY` exactly as
 `observability.otlpEndpoint` spells it: `NO_PROXY` matches the host as written,
 not after DNS resolution.
+
+## Certificate files
+
+The root filesystem is read-only, so every file the server reads arrives as a
+volume. The chart mounts each one read-only and points the server at it.
+
+| Value | Mounted at | Sets |
+|---|---|---|
+| `tls.existingSecret` | `/etc/mcp-server/tls/` | `tls_cert_file`, `tls_key_file` in the config |
+| `caBundle` | `/etc/mcp-server/ca/ca.crt` | `SSL_CERT_FILE` |
+| `observability.otlpTls` | `/etc/mcp-server/otlp/` | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `_CLIENT_CERTIFICATE`, `_CLIENT_KEY` |
+
+**Rotation needs a restart.** The server reads these files once, at startup:
+the TLS pair when it starts listening, the CA bundle and the OTLP files when it
+builds its clients and exporters. A rotated Secret or ConfigMap reaches the
+volume, but the running server keeps the old certificates. The chart cannot
+roll the pods for you either: it never sees the contents of a Secret or
+ConfigMap it does not create, so no `checksum/*` annotation covers them. After
+a rotation (cert-manager renews ahead of expiry), restart the pods:
+
+```bash
+kubectl -n <namespace> rollout restart deployment/<release>-solace-broker-mcp
+```
+
+### In-pod TLS
+
+`tls.existingSecret` names a `kubernetes.io/tls` Secret (keys `tls.crt` and
+`tls.key`, as cert-manager writes them). The server then serves HTTPS on
+`server.port`, and the startup, liveness and readiness probes switch to
+`scheme: HTTPS`. The metrics port stays plain HTTP.
+
+```yaml
+tls:
+  existingSecret: mcp-server-tls
+```
+
+Under `mcpClientAuth.mode: oauth` this satisfies the server's refusal of a
+plaintext listener in place of `tlsTerminatedUpstream: true`. Setting both
+fails rendering: TLS terminates either in the pod or upstream.
+
+With an Ingress in front, the controller must speak HTTPS to the pod, or every
+request fails. The chart does not set this for you. For ingress-nginx:
+
+```yaml
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+```
+
+### CA bundle
+
+`caBundle` trusts extra CA certificates (PEM) for outbound TLS: a private
+identity provider or broker CA. Set one key of a ConfigMap or of a Secret, not
+both; `key` defaults to `ca.crt`.
+
+```yaml
+caBundle:
+  configMap:
+    name: corp-ca
+    key: ca.crt
+```
+
+The chart sets `SSL_CERT_FILE` to the mounted file. It reaches:
+
+- **The identity provider client** (OIDC discovery, JWKS, token exchange),
+  which adds the file to the system roots itself
+  (`internal/idpclient/client.go`).
+- **Every other outbound TLS connection that uses the system roots**, through
+  Go's standard library on Linux: the broker SEMP connections, and the OTLP
+  exporter unless `observability.otlpTls.certificate` is set.
+
+The public roots stay trusted. `SSL_CERT_FILE` replaces the default bundle
+file, but Go still reads every file in `/etc/ssl/certs`, where the image keeps
+its public CA bundle. A broker with `insecureSkipVerify: true` checks no
+certificate at all, so the bundle has no effect there.
+
+### OTLP TLS
+
+`observability.otlpTls` supplies the OTLP exporter's TLS files for a collector
+behind a private CA or one that requires mTLS
+([`docs/observability.md`](../../../docs/observability.md) § OTLP Transport
+Security). Each value takes `{secret: {name, key}}` or `{configMap: {name,
+key}}`; `clientKey` takes a Secret only. It needs `tracing.enabled` or
+`metrics.otlp.enabled`, the client pair is set together, and an
+`otlpEndpoint`, when set, must be `https://`: with these files the exporter
+uses TLS whatever the scheme says. For the same reason rendering fails when
+`extraEnv` asks an exporting signal for cleartext, read in the exporter's own
+order: the signal's `OTEL_EXPORTER_OTLP_TRACES_INSECURE` or `_METRICS_INSECURE`,
+else `OTEL_EXPORTER_OTLP_INSECURE`, set to `true`; else an `http://` or
+`unix:` scheme on the signal's `_TRACES_ENDPOINT` or `_METRICS_ENDPOINT`, else
+on `OTEL_EXPORTER_OTLP_ENDPOINT`. An entry set through `valueFrom` is not
+checked.
+
+```yaml
+observability:
+  otlpEndpoint: "https://otel-collector.observability.svc:4317"
+  tracing:
+    enabled: true
+  otlpTls:
+    certificate:                  # the collector's CA; key defaults to ca.crt
+      configMap: {name: otel-ca}
+    clientCertificate:            # key defaults to tls.crt
+      secret: {name: mcp-otel-client}
+    clientKey:                    # key defaults to tls.key
+      secret: {name: mcp-otel-client}
+```
+
+`certificate` replaces the system roots for the collector connection, so
+`caBundle` no longer applies to it.
+
+### Other files
+
+`extraVolumes` and `extraVolumeMounts` append full `Volume` and `VolumeMount`
+entries, for a file no named value covers: for example the per-signal
+`OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` or `_METRICS_` variants, set through
+[`extraEnv`](#extra-environment-variables). Rendering fails on a volume name
+or `mountPath` the chart already uses, and on a `mountPath` above one, such as
+`/etc/mcp-server`: the container could not start. Mount beside the chart's
+paths, or inside one of them.
+
+```yaml
+extraVolumes:
+  - name: traces-ca
+    configMap:
+      name: traces-ca
+extraVolumeMounts:
+  - name: traces-ca
+    mountPath: /etc/traces-ca
+    readOnly: true
+extraEnv:
+  - name: OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE
+    value: /etc/traces-ca/ca.crt
+```
 
 ## Pod security
 

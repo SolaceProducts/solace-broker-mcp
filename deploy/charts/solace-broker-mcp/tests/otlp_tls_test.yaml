@@ -1,0 +1,358 @@
+# observability.otlpTls: the OTLP exporter's CA and client certificate pair,
+# projected into /etc/mcp-server/otlp and named by the OTEL_EXPORTER_OTLP_*
+# certificate env vars. The _METRICS_/_TRACES_ variants stay on extraEnv.
+suite: OTLP TLS
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+set:
+  observability.tracing.enabled: true
+  observability.otlpEndpoint: "https://otel-collector.observability.svc:4317"
+tests:
+  - it: projects all three files into one volume and sets the env vars
+    set:
+      observability.otlpTls:
+        certificate: {configMap: {name: otel-ca, key: root.pem}}
+        clientCertificate: {secret: {name: otel-client, key: cert.pem}}
+        clientKey: {secret: {name: otel-client, key: key.pem}}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: otlp-tls
+            projected:
+              sources:
+                - configMap:
+                    name: otel-ca
+                    items: [{key: root.pem, path: ca.crt}]
+                - secret:
+                    name: otel-client
+                    items: [{key: cert.pem, path: client.crt}]
+                - secret:
+                    name: otel-client
+                    items: [{key: key.pem, path: client.key}]
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: otlp-tls, mountPath: /etc/mcp-server/otlp, readOnly: true}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/mcp-server/otlp/ca.crt}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE, value: /etc/mcp-server/otlp/client.crt}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CLIENT_KEY, value: /etc/mcp-server/otlp/client.key}
+
+  - it: defaults the keys to ca.crt, tls.crt and tls.key
+    set:
+      observability.otlpTls:
+        certificate: {secret: {name: otel-ca}}
+        clientCertificate: {configMap: {name: otel-client-cert}}
+        clientKey: {secret: {name: otel-client}}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: otlp-tls
+            projected:
+              sources:
+                - secret:
+                    name: otel-ca
+                    items: [{key: ca.crt, path: ca.crt}]
+                - configMap:
+                    name: otel-client-cert
+                    items: [{key: tls.crt, path: client.crt}]
+                - secret:
+                    name: otel-client
+                    items: [{key: tls.key, path: client.key}]
+
+  - it: renders the CA alone, with no client pair
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/mcp-server/otlp/ca.crt}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CLIENT_KEY, value: /etc/mcp-server/otlp/client.key}
+
+  - it: renders under metrics.otlp alone
+    set:
+      observability.tracing.enabled: false
+      observability.metrics.otlp.enabled: true
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/mcp-server/otlp/ca.crt}
+
+  # The SDK ignores half a client pair without an error, so mTLS would be
+  # off with nothing said.
+  - it: fails on a client certificate without its key
+    set:
+      observability.otlpTls.clientCertificate: {secret: {name: otel-client}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls.clientCertificate and observability.otlpTls.clientKey must be set together"
+
+  - it: fails on a client key without its certificate
+    set:
+      observability.otlpTls.clientKey: {secret: {name: otel-client}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls.clientCertificate and observability.otlpTls.clientKey must be set together"
+
+  - it: fails on a client key from a ConfigMap
+    set:
+      observability.otlpTls.clientCertificate: {secret: {name: otel-client}}
+      observability.otlpTls.clientKey: {configMap: {name: otel-client}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/otlpTls/clientKey': additional properties 'configMap' not allowed"
+
+  - it: fails on a reference with both secret and configMap
+    set:
+      observability.otlpTls.certificate:
+        secret: {name: otel-ca}
+        configMap: {name: otel-ca}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls.certificate: set configMap or secret, not both"
+
+  # A values overlay drops a base file's reference by setting its source to
+  # null, as for caBundle; Helm then leaves an empty map behind.
+  - it: treats a reference whose source an overlay set to null as unset
+    set:
+      observability.otlpTls.certificate: {configMap: null}
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/mcp-server/otlp/ca.crt}
+
+  - it: still fails on half a client pair once an overlay drops the key
+    set:
+      observability.otlpTls.clientCertificate: {secret: {name: otel-client}}
+      observability.otlpTls.clientKey: {secret: null}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls.clientCertificate and observability.otlpTls.clientKey must be set together"
+
+  - it: fails when neither tracing nor metrics.otlp would use the files
+    set:
+      observability.tracing.enabled: false
+      observability.otlpEndpoint: ""
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but neither observability.tracing.enabled nor observability.metrics.otlp.enabled is true"
+
+  # The SDK prefers the TLS credentials these files produce over the
+  # cleartext an http:// endpoint asks for, so it would dial TLS to a
+  # plaintext collector and every export would fail.
+  - it: fails with an http:// otlpEndpoint
+    set:
+      observability.otlpEndpoint: "http://otel-collector.observability.svc:4317"
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but observability.otlpEndpoint is http://"
+
+  - it: fails with an upper-case HTTP:// otlpEndpoint and only the client pair
+    set:
+      observability.otlpEndpoint: "HTTP://otel-collector.observability.svc:4317"
+      observability.otlpTls.clientCertificate: {secret: {name: otel-client}}
+      observability.otlpTls.clientKey: {secret: {name: otel-client}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but observability.otlpEndpoint is http://"
+
+  # The same conflict through extraEnv: a literal value that asks for
+  # cleartext. A valueFrom entry is not visible at render time.
+  - it: fails with OTEL_EXPORTER_OTLP_INSECURE true in extraEnv
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "TRUE"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but extraEnv OTEL_EXPORTER_OTLP_INSECURE asks for cleartext"
+
+  - it: fails with an http:// traces endpoint in extraEnv while tracing is on
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "http://plain:4317"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but extraEnv OTEL_EXPORTER_OTLP_TRACES_ENDPOINT asks for cleartext"
+
+  - it: fails with an http:// OTEL_EXPORTER_OTLP_ENDPOINT in extraEnv
+    set:
+      observability.otlpEndpoint: ""
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://plain:4317"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "observability.otlpTls is set but extraEnv OTEL_EXPORTER_OTLP_ENDPOINT asks for cleartext"
+
+  # The SDK trims each value before it reads it.
+  - it: fails on a padded true in extraEnv
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: " true"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv OTEL_EXPORTER_OTLP_INSECURE asks for cleartext"
+
+  - it: fails on a padded http:// traces endpoint in extraEnv
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: " http://plain:4317"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv OTEL_EXPORTER_OTLP_TRACES_ENDPOINT asks for cleartext"
+
+  - it: renders with a padded false
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: " false "}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_INSECURE, value: " false "}
+
+  - it: renders with OTEL_EXPORTER_OTLP_INSECURE false, or from a valueFrom
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "false"}
+        - name: OTEL_EXPORTER_OTLP_TRACES_INSECURE
+          valueFrom: {configMapKeyRef: {name: otel-settings, key: insecure}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_INSECURE, value: "false"}
+
+  - it: renders with an http:// metrics endpoint while only tracing exports
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT, value: "http://plain:4317"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT, value: "http://plain:4317"}
+
+  - it: fails on a unix:// traces endpoint in extraEnv
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "unix:///var/run/otel.sock"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv OTEL_EXPORTER_OTLP_TRACES_ENDPOINT asks for cleartext"
+
+  - it: fails on a unix-abstract metrics endpoint while metrics export
+    set:
+      observability.tracing.enabled: false
+      observability.metrics.otlp.enabled: true
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT, value: "unix-abstract:otel"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv OTEL_EXPORTER_OTLP_METRICS_ENDPOINT asks for cleartext"
+
+  # The SDK reads the traces exporter's unix-abstract scheme as secure.
+  - it: renders a unix-abstract traces endpoint
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "unix-abstract:otel"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "unix-abstract:otel"}
+
+  # A signal's own variable wins over the generic one in the SDK.
+  - it: renders a generic INSECURE true that the exporting signal overrides
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+        - {name: OTEL_EXPORTER_OTLP_TRACES_INSECURE, value: "false"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_TRACES_INSECURE, value: "false"}
+
+  - it: renders a generic http:// endpoint that the exporting signal overrides
+    set:
+      observability.otlpEndpoint: ""
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://plain:4317"}
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "https://c:4317"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "https://c:4317"}
+
+  - it: still fails on a generic INSECURE true when only one exporting signal overrides it
+    set:
+      observability.metrics.otlp.enabled: true
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_INSECURE, value: "true"}
+        - {name: OTEL_EXPORTER_OTLP_TRACES_INSECURE, value: "false"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv OTEL_EXPORTER_OTLP_INSECURE asks for cleartext"
+
+  - it: renders with no otlpEndpoint, the endpoint coming from extraEnv
+    set:
+      observability.otlpEndpoint: ""
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, value: "https://otel-collector.observability.svc:4317"}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/mcp-server/otlp/ca.crt}
+
+  - it: refuses the chart's OTLP certificate vars in extraEnv once set
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_CERTIFICATE, value: /etc/other/ca.crt}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: OTEL_EXPORTER_OTLP_CERTIFICATE is already set by the chart"
+
+  - it: leaves the per-signal variants to extraEnv
+    set:
+      observability.otlpTls.certificate: {configMap: {name: otel-ca}}
+      extraEnv:
+        - {name: OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE, value: /etc/traces-ca/ca.crt}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE, value: /etc/traces-ca/ca.crt}
+
+  - it: renders nothing for an all-null otlpTls
+    set:
+      observability.otlpTls: {certificate: null, clientCertificate: null, clientKey: null}
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1

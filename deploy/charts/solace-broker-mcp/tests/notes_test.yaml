@@ -101,3 +101,77 @@ tests:
     asserts:
       - notMatchRegexRaw:
           pattern: "/metrics is unauthenticated"
+
+  - it: probes over https with in-pod TLS
+    set:
+      tls.existingSecret: mcp-server-tls
+    asserts:
+      - matchRegexRaw:
+          pattern: "curl -sk https://127\\.0\\.0\\.1:9090/readyz"
+      - matchRegexRaw:
+          pattern: "MCP clients connect to https://<service>:9090/mcp"
+      - notMatchRegexRaw:
+          pattern: "in cleartext"
+
+  - it: probes over http without in-pod TLS
+    asserts:
+      - matchRegexRaw:
+          pattern: "curl -s http://127\\.0\\.0\\.1:9090/readyz"
+
+  - it: says the Service port serves TLS under oauth with in-pod TLS
+    values:
+      - ../ci/oauth-values.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+      tlsTerminatedUpstream: null
+      ingress.annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTPS}
+    asserts:
+      - matchRegexRaw:
+          pattern: "The Service port serves TLS from tls.existingSecret"
+      - notMatchRegexRaw:
+          pattern: "serves plaintext"
+
+  - it: warns that an Ingress must speak HTTPS to an in-pod TLS backend
+    set:
+      tls.existingSecret: mcp-server-tls
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-example-tls
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: tls.existingSecret serves HTTPS in the pod"
+
+  - it: does not warn about the backend protocol once the annotation is set
+    set:
+      tls.existingSecret: mcp-server-tls
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-example-tls
+      ingress.annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTPS}
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "tls.existingSecret serves HTTPS in the pod"
+
+  # A base values file may carry backend-protocol: HTTP; the key alone says
+  # nothing about whether the controller speaks HTTPS to the pod.
+  - it: warns when the backend-protocol annotation is not HTTPS
+    set:
+      tls.existingSecret: mcp-server-tls
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-example-tls
+      ingress.annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTP}
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: tls.existingSecret serves HTTPS in the pod"
+
+  - it: accepts HTTPS in any letter case, with surrounding spaces
+    set:
+      tls.existingSecret: mcp-server-tls
+      ingress.enabled: true
+      ingress.host: mcp.example.com
+      ingress.tls.secretName: mcp-example-tls
+      ingress.annotations: {nginx.ingress.kubernetes.io/backend-protocol: " https "}
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "tls.existingSecret serves HTTPS in the pod"

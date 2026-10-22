@@ -1,11 +1,17 @@
 {{- $creds := include "solace-broker-mcp.credentials" . | fromJsonArray }}
 {{- $obsEnv := include "solace-broker-mcp.obsEnv" . | fromJsonArray }}
 {{- $metricsPort := include "solace-broker-mcp.metricsPort" . | atoi }}
+{{- $files := include "solace-broker-mcp.fileMounts" . | fromJson }}
 {{- $reserved := list "CONFIG_FILE" "POD_NAME" "GOMEMLIMIT" }}
-{{- range (concat $creds $obsEnv) }}
+{{- range (concat $creds $obsEnv $files.env) }}
 {{- $reserved = append $reserved .name }}
 {{- end }}
 {{- include "solace-broker-mcp.validateExtraEnv" (dict "extraEnv" .Values.extraEnv "reserved" $reserved) }}
+{{- $volumeNames := list "config" }}
+{{- range $files.volumes }}{{ $volumeNames = append $volumeNames .name }}{{ end }}
+{{- $mountPaths := list "/etc/mcp-server/config.yaml" }}
+{{- range $files.mounts }}{{ $mountPaths = append $mountPaths .mountPath }}{{ end }}
+{{- include "solace-broker-mcp.validateExtraVolumes" (dict "volumes" .Values.extraVolumes "mounts" .Values.extraVolumeMounts "names" $volumeNames "paths" $mountPaths) }}
 {{- $managedSecret := include "solace-broker-mcp.hasManagedSecret" . }}
 {{- /* Hash only what secret.yaml renders: a value set alongside existingSecret is
 ignored by the chart, so hashing it would expose it and roll pods for nothing. */}}
@@ -114,7 +120,7 @@ spec:
             # has no ceiling below limits.memory.
             - name: GOMEMLIMIT
               value: {{ include "solace-broker-mcp.goMemLimit" . | quote }}
-            {{- range $obsEnv }}
+            {{- range (concat $obsEnv $files.env) }}
             - name: {{ .name }}
               value: {{ .value | quote }}
             {{- end }}
@@ -140,13 +146,23 @@ spec:
               mountPath: /etc/mcp-server/config.yaml
               subPath: config.yaml
               readOnly: true
+            {{- with $files.mounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           # startupProbe gates liveness/readiness until cold-start init
           # completes (~60s budget). /readyz reflects the server's own
-          # readiness only — it makes no broker calls.
+          # readiness only — it makes no broker calls. All three follow
+          # tls.existingSecret: in-pod TLS serves them over HTTPS too.
           startupProbe:
             httpGet:
               path: /readyz
               port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 2
             timeoutSeconds: 3
             failureThreshold: 30
@@ -154,6 +170,9 @@ spec:
             httpGet:
               path: /livez
               port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 15
             timeoutSeconds: 3
             failureThreshold: 3
@@ -161,6 +180,9 @@ spec:
             httpGet:
               path: /readyz
               port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -174,3 +196,9 @@ spec:
         - name: config
           configMap:
             name: {{ include "solace-broker-mcp.fullname" . | quote }}
+        {{- with $files.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
