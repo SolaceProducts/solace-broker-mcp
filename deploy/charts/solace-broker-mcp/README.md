@@ -588,7 +588,8 @@ share a namespace), and the pod template's checksum annotations. Those keys
 belong to the chart alone: a raw file carrying one fails the check, since the
 normalisation would otherwise hide that edit. The
 ConfigMap's `config.yaml` is compared as parsed YAML, and the Secret by key
-names only. Comments are not compared, so the raw files' commented-out
+names only, under `stringData` and `data` alike, so no Secret value appears in
+a report. Comments are not compared, so the raw files' commented-out
 alternatives are covered by helm-unittest cases instead. Any other difference
 fails the job with a `dyff` report naming the field.
 
@@ -596,7 +597,8 @@ The comparison reads YAML 1.2, but kubectl and Helm read YAML 1.1, where an
 unquoted `off`, `on`, `yes`, `no`, `y` or `n` is a boolean. So an unquoted one
 on either side fails the check too, even when both sides agree: quote it. So
 does a document on either side with no `kind` or `metadata.name`, which the
-kind-and-name matching would otherwise skip.
+kind-and-name matching would otherwise skip, and a Secret value that is not a
+string (an unquoted number), which kubectl rejects.
 
 When it fails, change the other side to match. A new raw manifest or `.example`
 file needs a chart counterpart and, usually, a line in one of the two parity

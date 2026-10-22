@@ -28,8 +28,9 @@
 # only one side fails. Everything else is compared structurally with dyff after
 # the normalisation below, applied to both sides alike. A raw file carrying a
 # key the normalisation removes fails on its own (raw_guard), and so does either
-# side carrying an unquoted word YAML 1.1 reads as a boolean (yaml11_guard), or a
-# document with no kind or name, which would otherwise drop out (shape_guard).
+# side carrying an unquoted word YAML 1.1 reads as a boolean (yaml11_guard), a
+# Secret value that is not a string (secret_guard), or a document with no kind
+# or name, which would otherwise drop out (shape_guard).
 #
 # WHAT IT CANNOT SEE
 #
@@ -95,8 +96,11 @@ NORMALISE='
   # 4. The ConfigMap embedded config.yaml, compared as parsed YAML, not text.
   with(select(.kind == "ConfigMap"); .data."config.yaml" |= from_yaml) |
 
-  # 5. The Secret by key names, not values: both sides carry placeholders.
-  with(select(.kind == "Secret"); .stringData[] = "") |
+  # 5. The Secret by key names, not values: both sides carry placeholders, and
+  #    a value must never reach the report. data as well as stringData: a data
+  #    value is base64, which is the value. has() so neither field is created.
+  with(select(.kind == "Secret" and has("stringData")); .stringData[] = "") |
+  with(select(.kind == "Secret" and has("data")); .data[] = "") |
 
   # Comments are documentation, not configuration.
   ... comments = ""
@@ -223,6 +227,26 @@ yaml11_guard() {
     fi
 }
 
+# secret_guard <stream> <label>: returns 1 when a Secret's stringData or data
+# value is not a string. kubectl rejects such a Secret, and NORMALISE blanks the
+# values before the comparison, so it would otherwise pass. The report names
+# the key and the type, never the value.
+secret_guard() {
+    local found
+    found=$(yq eval -N '
+        select(kind == "map" and .kind == "Secret") | (.kind + "/" + .metadata.name) as $id |
+        ((.stringData | select(kind == "map") | to_entries | .[] | {"f": "stringData", "e": .}),
+         (.data | select(kind == "map") | to_entries | .[] | {"f": "data", "e": .})) |
+        select((.e.value | tag) != "!!str") |
+        $id + ": " + .f + "." + (.e.key | tostring) + " is " + (.e.value | tag)
+    ' "$1") || { echo "helm-parity-check: yq failed on $1" >&2; exit 1; }
+    if [ -n "$found" ]; then
+        echo "in $2, Secret values that are not strings (quote them):"
+        echo "$found" | sed 's/^/  /'
+        return 1
+    fi
+}
+
 # compare <pass> <chart file> <raw file> <raw label> <raw stream, unnormalised>
 #     <chart stream for yaml11_guard> <chart label> <chart render, whole>
 #     <raw file>...
@@ -238,6 +262,8 @@ compare() {
     raw_guard "$5" "$label" || pass_drift=1
     yaml11_guard "$5" "$label" || pass_drift=1
     yaml11_guard "$6" "$7" || pass_drift=1
+    secret_guard "$5" "$label" || pass_drift=1
+    secret_guard "$6" "$7" || pass_drift=1
     ids "$chart" >"$WORK/chart.ids"
     ids "$raw" >"$WORK/raw.ids"
     if [ ! -s "$WORK/raw.ids" ]; then
@@ -311,9 +337,9 @@ case $values_rc in
     *) echo "helm-parity-check: dyff failed (exit $values_rc)" >&2; exit 1 ;;
 esac
 render parity-examples-values.yaml "$WORK/examples.rendered"
-main_kinds=$(yq eval-all -N 'select(kind == "map") | .kind' "$WORK/main.rendered" | sort -u | paste -sd'|')
+main_kinds=$(yq eval-all -N 'select(kind == "map") | .kind' "$WORK/main.rendered" | sort -u | paste -sd'|' -)
 added_kinds=$(yq eval-all -N 'select(kind == "map") | .kind' "$WORK/examples.rendered" | sort -u |
-    grep -vxE "$main_kinds" | paste -sd'|' || true)
+    grep -vxE "$main_kinds" | paste -sd'|' - || true)
 if [ -z "$added_kinds" ]; then
     echo "helm-parity-check: ci/parity-examples-values.yaml renders no kind beyond the main pass" >&2
     exit 1

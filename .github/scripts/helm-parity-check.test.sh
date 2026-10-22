@@ -269,6 +269,34 @@ root=$(fixture)
 edit 's/^(  BROKER_PASSWORD: )/$1x/' "$root/raw/secret.yaml"
 assert_check "a raw Secret value change is not drift (compared by key)" 0 "$root"
 
+# Secret values never reach the report, under data as under stringData: a data
+# value is base64, which is the value. U0VOVElORUw= is "SENTINEL".
+root=$(fixture)
+edit 's/^stringData:$/data:/; s/^(  BROKER_PASSWORD: ).*$/$1U0VOVElORUw=/' "$root/raw/secret.yaml"
+assert_check "a raw Secret moved to data fails without printing its values" 1 "$root" \
+    "BROKER_PASSWORD" "U0VOVElORUw|SENTINEL"
+
+root=$(fixture)
+edit 's/^(type: Opaque)$/$1\ndata:\n  EXTRA_KEY: U0VOVElORUw=/' "$root/raw/secret.yaml"
+assert_check "a raw data key alongside stringData fails without printing its value" 1 "$root" \
+    "EXTRA_KEY" "U0VOVElORUw|SENTINEL"
+
+root=$(fixture)
+edit 's/^(type: Opaque)$/$1\ndata:\n  EXTRA_KEY: U0VOVElORUw=/' "$root/raw/secret.yaml"
+edit 's/^(type: Opaque)$/$1\ndata:\n  EXTRA_KEY: b3RoZXI=/' "$root/chart/templates/secret.yaml"
+assert_check "a data key on both sides with different values is not drift" 0 "$root"
+
+# kubectl rejects a Secret value that is not a string; blanking it first would
+# hide that.
+root=$(fixture)
+edit 's/^(  BROKER_USERNAME: ).*$/${1}12345/' "$root/raw/secret.yaml"
+assert_check "an unquoted number as a raw Secret value fails" 1 "$root" \
+    "Secret/solace-broker-mcp: stringData.BROKER_USERNAME"
+
+root=$(fixture)
+edit 's/^(  BROKER_USERNAME: ).*$/${1}"12345"/' "$root/raw/secret.yaml"
+assert_check "a quoted number as a raw Secret value is not drift" 0 "$root"
+
 # --- a broken render is a failure, never a vacuous pass ----------------------
 
 root=$(fixture)
