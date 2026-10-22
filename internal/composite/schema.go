@@ -117,14 +117,19 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 		}
 	case step.FollowPages:
 		// fetchPaginated always sets data + truncated; truncatedMessage only
-		// appears when truncated is true. See executor.go.
+		// appears when truncated is true, and nextCursor only on a truncated
+		// resumable step. See executor.go.
+		properties := map[string]any{
+			"data":             map[string]any{"type": "array", "items": item},
+			"truncated":        map[string]any{"type": "boolean"},
+			"truncatedMessage": map[string]any{"type": "string"},
+		}
+		if step.Resumable {
+			properties["nextCursor"] = map[string]any{"type": "string"}
+		}
 		return map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"data":             map[string]any{"type": "array", "items": item},
-				"truncated":        map[string]any{"type": "boolean"},
-				"truncatedMessage": map[string]any{"type": "string"},
-			},
+			"type":                 "object",
+			"properties":           properties,
 			"required":             []string{"data", "truncated"},
 			"additionalProperties": false,
 		}

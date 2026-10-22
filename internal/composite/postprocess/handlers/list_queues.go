@@ -72,9 +72,10 @@ func init() {
 //
 // The counts are over what the paginator actually returned. Under truncation
 // (followPages stopped at maxResults / capMax / maxPages), the summary also
-// includes scanned (the count of items observed) and truncated: true so the
-// LLM sees the partial-scan reality next to the counts rather than only on
-// the raw data block.
+// includes scanned (the count of items observed), truncated: true, and a
+// scopeNote saying the counts are partial and how to continue, so the LLM sees
+// the partial-scan reality next to the counts rather than only on the raw
+// data block.
 //
 // A queue whose required fields are missing or the wrong type is skipped from
 // every counter and tallied into skipped (surfaced when non-zero). One odd row
@@ -125,6 +126,11 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	}
 	if t, _ := step["truncated"].(bool); t {
 		out["truncated"] = true
+		note := fmt.Sprintf("These counts cover only the %d queues scanned, not the whole VPN.", len(items))
+		if _, ok := step["nextCursor"].(string); ok {
+			note += " Pass nextCursor as cursor to scan the next page."
+		}
+		out["scopeNote"] = note
 	}
 	return out, nil
 }
