@@ -2,7 +2,7 @@
 
 Deploys the Solace Broker MCP server into Kubernetes: a Deployment, a
 Service, a ConfigMap holding the server config, and a Secret holding broker
-credentials and the MCP dev token. A ServiceMonitor, NetworkPolicy,
+credentials and, under `mcpClientAuth.mode: static`, the MCP dev token. A ServiceMonitor, NetworkPolicy,
 PodDisruptionBudget and Ingress are optional, each off by default.
 
 The chart deploys **only the MCP server**. It does not deploy Prometheus,
@@ -11,16 +11,21 @@ Grafana, or an OpenTelemetry collector; use their own charts
 `open-telemetry/opentelemetry-collector`) and point this chart at them. See
 [Observability](#observability).
 
-> **Status: `0.x`, parity in progress.** The chart does not yet cover
-> everything in [`deploy/kubernetes/`](../../kubernetes/): OAuth client
-> authentication is still to come, settings that need a mounted file (TLS
-> certificates, CA bundles) are tracked in SOL-156417, and the chart has no
-> value yet for the config file's `observability.shutdown_drain_delay_s` or its
-> telemetry identity keys (`service_name`, `service_instance_id`,
-> `deployment_environment`, `cloud_region`). The server also reads identity
-> from `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, which
-> [`extraEnv`](#extra-environment-variables) can set. Until the chart is
-> published to a registry, install it from a checkout of this repository.
+> **At parity with [`deploy/kubernetes/`](../../kubernetes/).** Every
+> resource and setting the raw manifests carry, including their `.example`
+> files and their commented-out alternatives (OAuth, the `OBS_*` switches, the
+> `observability:` tunables), can be produced from this chart's values. Not
+> exposed as values: the edits the raw files suggest only in prose comments
+> (spreading replicas across zones with `topologyKey`, narrowing the
+> NetworkPolicy's metrics rule with a `podSelector`, dropping the Ingress's
+> `/.well-known` path under static), and in-pod TLS, which the raw ConfigMap
+> mentions as an alternative to `tls_terminated_upstream`. The
+> `helm-chart` CI job keeps the two in step: a change to either side alone
+> fails it ([Developing the chart](#developing-the-chart)). Beyond what the raw
+> manifests carry, the chart does not yet cover settings that need a mounted
+> file (in-pod TLS, CA bundles; SOL-156417) or broker-side OAuth (SOL-156418).
+> Until the chart is published to a registry, install it from a checkout of
+> this repository.
 
 ## Install
 
@@ -109,18 +114,27 @@ kubectl rollout restart deployment/mcp-solace-broker-mcp
 |---|---|---|
 | `image.repository` | `ghcr.io/solaceproducts/solace-broker-mcp` | Server image |
 | `image.tag` | `""` | Defaults to the chart's `appVersion`: a release version without the leading `v` |
-| `image.pullPolicy` | `IfNotPresent` | |
+| `image.pullPolicy` | `IfNotPresent` | `null` omits `imagePullPolicy`, so Kubernetes' default applies (`Always` for `:latest`) |
 | `replicaCount` | `2` | Above one replica, clients are pinned to a pod by the Service's `sessionAffinity: ClientIP` (MCP sessions live in one pod's memory) |
 | `brokers` | `{}` | **Required.** Broker name → connection; see [Brokers](#brokers) |
-| `mcpClientAuth.mode` | `static` | Only `static` is supported in this chart version |
-| `mcpClientAuth.devToken` | `""` | Chart-managed dev token. Ignored when `existingSecret` is set |
-| `mcpClientAuth.existingSecret` | `""` | Secret holding the dev token under key `dev-token` |
+| `mcpClientAuth.mode` | `static` | `static` (shared dev token) or `oauth`; see [Client authentication](#client-authentication) |
+| `mcpClientAuth.devToken` | `""` | `static` only. Chart-managed dev token. Ignored when `existingSecret` is set, and under `oauth` |
+| `mcpClientAuth.existingSecret` | `""` | `static` only. Secret holding the dev token under key `dev-token` |
+| `mcpClientAuth.issuer`, `.audience`, `.resourceUrl` | `null` | **Required** under `oauth`; `issuer` and `resourceUrl` as `https://` URLs |
+| `mcpClientAuth.scopesSupported` | `null` | Scopes advertised to MCP clients; `null` = `["openid"]`. Entra needs `offline_access` |
+| `mcpClientAuth.toolAuthorization.*` | `null`, `accessLevelGroups: {}` | `oauth` only: `enabled` (required under `oauth`), `groupsClaimName`, `filterToolsList`, `accessLevelGroups`; see [Tool authorization](#tool-authorization) |
+| `enableWriteTools` | `null` | `true` registers the write/action tools; `null` = the server default, `false` |
+| `tlsTerminatedUpstream` | `null` | **Required `true`** under `oauth`: acknowledges TLS is terminated at the Ingress or gateway |
+| `allowInsecureBrokerTls` | `null` | Under `oauth`, accepts a broker with `insecureSkipVerify: true`; without it such a broker fails rendering |
 | `server.port` | `9090` | Server and Service port. Must differ from the metrics port (`9091`, or the port in `observability.metrics.bindAddress`) |
 | `server.logLevel` | `info` | `debug`, `info`, `warn` or `error` |
 | `server.listenAddress` | `"0.0.0.0"` | `"0.0.0.0"` or `"::"` only: a pod must bind all interfaces for the Service and probes to reach it, and its IP is not known at render time |
 | `semp.*` | as in `deploy/kubernetes/configmap.yaml` | SEMP client tuning: `maxConcurrentPerBroker`, `requestTimeoutDuration`, `requestMinInterval`, `maxQueueWait`, `fairScheduling`, `retries`, `retryMinInterval`, `retryMaxInterval`. Durations are strings such as `"0s"`; the server rejects a bare number. See `docs/configuration.md` |
 | `resources` | requests `cpu: 100m`, `memory: 128Mi`; limits `memory: 512Mi` | No CPU limit by design: CFS throttling stalls the bursts this workload makes |
 | `observability.*` | all off except correlation IDs | Observability switches and the OTLP endpoint; see [Observability](#observability) |
+| `observability.shutdownDrainDelayS` | `null` | Drain delay after SIGTERM (server default 10s). `terminationGracePeriodSeconds` follows it: this + 35, else `45` |
+| `observability.serviceName`, `.serviceInstanceId`, `.deploymentEnvironment`, `.cloudRegion` | `null` | Telemetry identity. The server also reads `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, which [`extraEnv`](#extra-environment-variables) can set |
+| `observability.saturationThresholdMs`, `.otelSelfStatsIntervalS` | `null` | Saturation log threshold (server default 1000) and self-stats interval (server default 60) |
 | `networkPolicy.enabled` | `false` | Renders a NetworkPolicy; see [NetworkPolicy](#networkpolicy) |
 | `networkPolicy.metricsNamespace` | `monitoring` | The namespace allowed to reach the metrics port |
 | `podDisruptionBudget.enabled` | `false` | Renders a PodDisruptionBudget with `maxUnavailable: 1` |
@@ -159,6 +173,89 @@ brokers:
 Because Helm merges maps, the default `brokers` is empty: your values file
 supplies every broker.
 
+## Client authentication
+
+`mcpClientAuth.mode` selects how MCP clients authenticate
+([`docs/authentication.md`](../../../docs/authentication.md)):
+
+- **`static`** (default): one shared dev token, so the chart installs with no
+  identity provider. Keep the Service `ClusterIP`.
+- **`oauth`**: clients present a JWT from your identity provider. It is the
+  only mode meant to be reachable from outside the cluster, and the only one
+  with per-caller identity in the audit log.
+
+```yaml
+mcpClientAuth:
+  mode: oauth
+  issuer: "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+  audience: "11111111-1111-1111-1111-111111111111"
+  resourceUrl: "https://mcp.example.com/mcp"
+  # Microsoft Entra ID: keep openid, add offline_access (or clients get no
+  # refresh token to renew with) and the delegated scope exposed on this
+  # server's app registration. For Keycloak, omit the key: ["openid"] is enough.
+  scopesSupported:
+    - openid
+    - offline_access
+    - "https://mcp.example.com/mcp/access_as_user"
+  toolAuthorization:
+    enabled: false        # required under oauth; see Tool authorization
+# TLS terminates at the Ingress: oauth refuses a plaintext listener otherwise.
+tlsTerminatedUpstream: true
+ingress:
+  enabled: true
+  host: mcp.example.com   # resourceUrl's host (not checked by the chart)
+  tls:
+    secretName: mcp-example-tls
+```
+
+The chart fails rendering on these oauth setups, which the server would
+refuse at startup: a missing `issuer`, `audience` or `resourceUrl`; an
+`issuer`, `resourceUrl` or broker `url` that is not `https://` (or, for the
+first two, that the server cannot parse as a URL; a value carrying a
+`${VAR_NAME}` reference, which the server substitutes first, skips that parse
+check, and the `https://` one too when it starts with the reference); `tlsTerminatedUpstream`
+not `true` (this chart cannot yet terminate TLS in the pod, SOL-156417); a
+broker with `insecureSkipVerify: true` unless `allowInsecureBrokerTls: true`;
+`toolAuthorization.enabled` left unset; and a blank group name, or a tool name
+that is empty or has surrounding whitespace, in `accessLevelGroups`. Whether a
+granted tool exists is checked only by the server, at startup: a misspelled
+tool name renders, and with `enabled: true` the pod then fails to start. Under `oauth` the dev token is not
+used: `devToken` and `mcpClientAuth.existingSecret` are ignored, so a shared
+base values file can keep them.
+
+### Tool authorization
+
+`mcpClientAuth.toolAuthorization` gates each tool by the groups in the
+caller's token
+([`docs/authentication.md`](../../../docs/authentication.md#tool-authorization-claim-based-rbac)).
+It is `oauth` only: setting any of its keys under `static` fails rendering.
+
+```yaml
+mcpClientAuth:
+  toolAuthorization:
+    enabled: true
+    groupsClaimName: roles      # null = "groups"
+    filterToolsList: true       # tools/list shows each caller only what it may call
+    accessLevelGroups:          # required when enabled is true
+      mcp-readers: [list-queues, list-vpns]
+      mcp-operators: [create-queue]
+```
+
+`enabled: false` lets any authenticated caller invoke any registered tool.
+`accessLevelGroups` defaults to empty because Helm merges maps: your values
+file supplies every group, and setting a group to `null` drops one that a
+base values file granted.
+
+### Write tools
+
+The write/action tools (create, update and delete broker configuration, plus
+operational actions) are registered only with `enableWriteTools: true`
+([`docs/user-guide.md`](../../../docs/user-guide.md)). It is independent of
+the client authentication mode, and it is the only control that removes them
+for everyone: a group in `accessLevelGroups` that grants a write tool while
+`enableWriteTools` is off renders, as the server only warns about it, but the
+tool is never registered.
+
 ## Credentials and Secrets
 
 Each credential reaches the pod as one env var, which the rendered config
@@ -169,7 +266,7 @@ references as `${...}`. Credentials are never written into the ConfigMap.
 | Broker username (`basic`) | `<PREFIX>_USERNAME` | `username` |
 | Broker password (`basic`) | `<PREFIX>_PASSWORD` | `password` |
 | Broker token (`bearer`) | `<PREFIX>_TOKEN` | `token` |
-| MCP dev token | `DEV_TOKEN` | `dev-token` |
+| MCP dev token (`static` only) | `DEV_TOKEN` | `dev-token` |
 
 `<PREFIX>` is the broker's `envPrefix`, by default its name upper-cased with
 `-` replaced by `_` (`my-broker` → `MY_BROKER`). A custom `envPrefix` must
@@ -347,10 +444,9 @@ ingress:
 
 > **Under `mcpClientAuth.mode: static`, publishing the server exposes the
 > shared `DEV_TOKEN`**, its only credential: anyone who can reach the host and
-> holds the token gets broker-admin-backed access. Switch to OAuth first. OAuth
-> is not yet available in this chart version (SOL-156330): until it is, keep the
-> Ingress on a trusted network, or deploy with OAuth from
-> [`deploy/kubernetes/`](../../kubernetes/) instead.
+> holds the token gets broker-admin-backed access. Switch to
+> [OAuth](#client-authentication) first, or keep the Ingress on a trusted
+> network.
 
 Set `ingress.tls.secretName`. Without it the Ingress serves plain HTTP, unless
 TLS terminates in front of it, and every client's bearer token crosses that
@@ -450,7 +546,8 @@ make helm-check
 
 It runs the same steps as CI's `helm-chart` job: `ct lint` with every
 `ci/*-values.yaml`, a chart version bump check against `main`, `kubeconform`
-over the rendered chart, and the helm-unittest suites in `tests/`.
+over the rendered chart, the helm-unittest suites in `tests/`, and the drift
+check against [`deploy/kubernetes/`](../../kubernetes/) with its self-test.
 `ci/optional-resources-values.yaml` turns every optional resource on. Its
 ServiceMonitor is skipped by that `kubeconform` pass, which uses built-in
 schemas only, and is validated against the CRD schema catalog in `ci-pr.yaml`'s
@@ -466,3 +563,44 @@ Tools, at the versions CI pins:
 | [chart-testing](https://github.com/helm/chart-testing) (`ct`) | v3.15.0, with its `etc/` files in `~/.ct` |
 | `yamllint` and `yamale` (Python, used by `ct lint`) | 1.38.0 and 6.1.0 |
 | [kubeconform](https://github.com/yannh/kubeconform) | v0.6.7 |
+| [yq](https://github.com/mikefarah/yq) (mikefarah, not the Python `yq`) | v4.54.1 |
+| [dyff](https://github.com/homeport/dyff) | v1.12.0 |
+| perl (the drift check self-test) | any 5.x (macOS and most Linux distributions ship one) |
+
+### The drift check
+
+[`.github/scripts/helm-parity-check.sh`](../../../.github/scripts/helm-parity-check.sh)
+renders the chart twice and compares each render with the raw manifests,
+matching resources by kind and name in both directions:
+
+- `ci/parity-values.yaml` reproduces `kubectl apply -f deploy/kubernetes/` and
+  is compared with every file that apply reads there (`*.json`, `*.yaml`,
+  `*.yml`).
+- `ci/parity-examples-values.yaml` also turns on the ServiceMonitor and
+  Ingress; only those are compared, with the `*.example` files. The check
+  also fails unless this file is `ci/parity-values.yaml` plus those two
+  resources' values.
+
+Before comparing, both sides go through a short, fixed allow-list of intended
+differences, each commented in the script: the labels only Helm sets,
+`app.kubernetes.io/instance` (the chart also selects on it, so two releases can
+share a namespace), and the pod template's checksum annotations. Those keys
+belong to the chart alone: a raw file carrying one fails the check, since the
+normalisation would otherwise hide that edit. The
+ConfigMap's `config.yaml` is compared as parsed YAML, and the Secret by key
+names only, under `stringData` and `data` alike, so no Secret value appears in
+a report. Comments are not compared, so the raw files' commented-out
+alternatives are covered by helm-unittest cases instead. Any other difference
+fails the job with a `dyff` report naming the field.
+
+The comparison reads YAML 1.2, but kubectl and Helm read YAML 1.1, where an
+unquoted `off`, `on`, `yes`, `no`, `y` or `n` is a boolean. So an unquoted one
+on either side fails the check too, even when both sides agree: quote it. So
+does a document on either side with no `kind` or `metadata.name`, which the
+kind-and-name matching would otherwise skip, and a Secret value that is not a
+string (an unquoted number), which kubectl rejects.
+
+When it fails, change the other side to match. A new raw manifest or `.example`
+file needs a chart counterpart and, usually, a line in one of the two parity
+values files. Adding an entry to the allow-list is a reviewed change: it must
+describe an intended difference, not paper over drift.

@@ -16,7 +16,13 @@ refuses to run without it. That is deliberate — see the table below.
 
 To install with Helm instead, see the chart in
 [`deploy/charts/solace-broker-mcp/`](../charts/solace-broker-mcp/README.md).
-It is `0.x` and does not yet cover every file here.
+It can produce everything here, including the `.example` files and the
+commented-out alternatives, with the exceptions its README lists (in-pod TLS,
+and edits these files suggest only in comments, such as a zone `topologyKey`),
+and CI keeps the two in step: a change to a file
+here that the chart does not match fails the `helm-chart` job
+([`.github/scripts/helm-parity-check.sh`](../../.github/scripts/helm-parity-check.sh)).
+Change both together.
 
 ## Edit these before applying
 

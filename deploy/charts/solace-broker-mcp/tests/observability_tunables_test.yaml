@@ -1,0 +1,111 @@
+# The observability: YAML tunables from deploy/kubernetes/configmap.yaml's
+# commented block, and the grace period derived from the drain delay. Each key
+# renders only when set (the config rendering rule).
+suite: observability tunables
+templates:
+  - configmap.yaml
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders every tunable under observability when set
+    template: configmap.yaml
+    set:
+      observability.metrics.bindAddress: ":9191"
+      observability.shutdownDrainDelayS: 20
+      observability.serviceName: solace-broker-mcp
+      observability.serviceInstanceId: "${POD_NAME}"
+      observability.deploymentEnvironment: production
+      observability.cloudRegion: us-east-1
+      observability.saturationThresholdMs: 1500
+      observability.otelSelfStatsIntervalS: 30
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: |-
+            (?m)^observability:
+              metrics_bind_address: ":9191"
+              shutdown_drain_delay_s: 20
+              service_name: "solace-broker-mcp"
+              service_instance_id: "\$\{POD_NAME\}"
+              deployment_environment: "production"
+              cloud_region: "us-east-1"
+              saturation_threshold_ms: 1500
+              otel_self_stats_interval_s: 30$
+
+  - it: renders an observability block holding only the keys that are set
+    template: configmap.yaml
+    set:
+      observability.cloudRegion: eu-west-1
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^observability:\\n  cloud_region: \"eu-west-1\"$"
+
+  - it: renders no observability block by default
+    template: configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "observability:"
+
+  - it: keeps terminationGracePeriodSeconds at 45 by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+
+  # drain + 30s shutdown timeout + 3s hook timeout + 2s buffer
+  # (deploy/kubernetes/deployment.yaml).
+  - it: derives terminationGracePeriodSeconds from shutdownDrainDelayS
+    template: deployment.yaml
+    set:
+      observability.shutdownDrainDelayS: 20
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 55
+
+  - it: derives 45 from the server's default drain delay set explicitly
+    template: deployment.yaml
+    set:
+      observability.shutdownDrainDelayS: 10
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+
+  # The server re-defaults a non-positive drain delay to 10s, so 0 would
+  # silently drain for 10s inside a 35s grace period.
+  - it: rejects a zero shutdownDrainDelayS (schema)
+    template: deployment.yaml
+    set:
+      observability.shutdownDrainDelayS: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/shutdownDrainDelayS'"
+
+  - it: rejects a fractional shutdownDrainDelayS (schema)
+    template: deployment.yaml
+    set:
+      observability.shutdownDrainDelayS: 1.5
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/shutdownDrainDelayS'"
+
+  - it: rejects a zero saturationThresholdMs (schema)
+    template: configmap.yaml
+    set:
+      observability.saturationThresholdMs: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/saturationThresholdMs'"
+
+  - it: rejects a zero otelSelfStatsIntervalS (schema)
+    template: configmap.yaml
+    set:
+      observability.otelSelfStatsIntervalS: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/observability/otelSelfStatsIntervalS'"

@@ -165,3 +165,19 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: "username: \"\\$\\{BROKER_USERNAME\\}\""
+
+  - it: renders the top-level switches under mode static when set
+    set:
+      enableWriteTools: true
+      allowInsecureBrokerTls: false
+      tlsTerminatedUpstream: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^enable_write_tools: true$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^allow_insecure_broker_tls: false$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^tls_terminated_upstream: false$"

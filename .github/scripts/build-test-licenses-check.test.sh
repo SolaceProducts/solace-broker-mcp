@@ -241,6 +241,34 @@ add_defaulted_tag_image() { # <tmp> — a compose `${VAR:-default}` tag holds a
     printf '\n# fixture\n    image: testonly/thing:${TESTONLY_TAG:-v9}\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 
+shim_go_with_download_chatter() { # <tmp> — stand in for a cold module cache.
+    # `go list` on a cold cache writes lines like "go: downloading
+    # golang.org/x/oauth2 v0.35.0" to stderr while it still succeeds and prints
+    # the real closure to stdout. Actually clearing GOMODCACHE would be slow and
+    # flaky in CI (a real network fetch), so this shims `go` instead: the wrapper
+    # prints one such line to stderr, then execs the real `go` so the closure it
+    # reports is still genuine. It exercises exactly the code path a cold cache
+    # would — a stderr line present alongside a zero exit and valid stdout — with
+    # a fixture that is fast and deterministic.
+    #
+    # Sets PATH_PREFIX rather than PATH itself: assert_check calls this function
+    # directly (no subshell), so the assignment is visible there, and prepending
+    # PATH only for the check's own invocation keeps the shim from leaking into
+    # anything else assert_check runs for this case.
+    local real_go
+    real_go=$(command -v go) || return 1
+    mkdir -p "$1/bin"
+    cat >"$1/bin/go" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = "list" ]; then
+    echo "go: downloading golang.org/x/oauth2 v0.35.0" >&2
+fi
+exec "$real_go" "\$@"
+SHIM
+    chmod +x "$1/bin/go"
+    PATH_PREFIX="$1/bin"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> [mutation function + args]
@@ -277,7 +305,15 @@ assert_check() {
     # because that is where GitHub Actions reads them, and only the closing
     # verdict goes to stderr. Asserting on one stream would miss the other.
     local out_file="$tmp/output.txt"
-    (cd "$tmp" && "$CHECK" >"$out_file" 2>&1) || got=$?
+    # PATH_PREFIX, when a mutation set it, goes ahead of PATH so the check picks
+    # up a shimmed tool (e.g. a fake `go`) instead of the real one. Read fresh on
+    # every call and cleared after, so one case's shim cannot leak into the next.
+    if [ -n "${PATH_PREFIX:-}" ]; then
+        (cd "$tmp" && PATH="$PATH_PREFIX:$PATH" "$CHECK" >"$out_file" 2>&1) || got=$?
+        unset PATH_PREFIX
+    else
+        (cd "$tmp" && "$CHECK" >"$out_file" 2>&1) || got=$?
+    fi
     local captured
     captured=$(cat "$out_file" 2>/dev/null || true)
 
@@ -342,6 +378,19 @@ assert_check "Go module row for an unused module fails" 1 \
 # still lists it — the two files answer different questions.
 assert_check "missing row for a module that also ships fails" 1 \
     drop_row "github.com/modelcontextprotocol/go-sdk"
+
+# `go list`'s stderr must never be parsed as module data. On a cold module
+# cache it writes lines like "go: downloading golang.org/x/oauth2 v0.35.0" to
+# stderr while still succeeding; a `go list ... 2>&1` merges that line into the
+# stream this check parses as "module-path version" pairs, producing a fake
+# module named `go:` at version "downloading golang.org/x/oauth2 v0.35.0". That
+# fake module is then reported as a new, undocumented dependency — failing an
+# otherwise-clean tree for a toolchain message, not a real drift. Confirmed on a
+# real PR coming off a fresh clone with nothing cached yet.
+EXPECT_STDERR="✅ $DOC matches" \
+    assert_check "go list stderr chatter (cold cache download messages) is not parsed as a module" 0 \
+    shim_go_with_download_chatter
+unset EXPECT_STDERR
 
 # --- GitHub Actions, both directions ----------------------------------------
 assert_check "missing action row fails" 1 \

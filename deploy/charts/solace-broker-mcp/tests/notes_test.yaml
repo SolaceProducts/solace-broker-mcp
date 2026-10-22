@@ -44,13 +44,24 @@ tests:
       - matchRegexRaw:
           pattern: "WARNING: ingress.enabled publishes the server under mcp_client_auth.mode static"
 
-  - it: says OAuth is not yet available in this chart
+  - it: points a static Ingress at the chart's oauth mode
     set:
       ingress.enabled: true
       ingress.host: mcp.example.com
     asserts:
       - matchRegexRaw:
-          pattern: "OAuth is not yet available in this chart"
+          pattern: "Switch to mcpClientAuth.mode oauth"
+      - notMatchRegexRaw:
+          pattern: "not yet available"
+
+  - it: does not warn about the dev token under oauth
+    values:
+      - ../ci/oauth-values.yaml
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "dev token|DEV_TOKEN|publishes the server under"
+      - matchRegexRaw:
+          pattern: "token from your identity provider"
 
   - it: warns about an Ingress with no TLS secret
     set:
