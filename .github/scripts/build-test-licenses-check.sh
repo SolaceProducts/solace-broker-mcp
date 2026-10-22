@@ -219,11 +219,23 @@ while read -r gomod; do
     # GOOS pinned to linux for the same reason as licenses-check.sh: the
     # closure is platform-dependent, and linux (what CI runs on) is the ground
     # truth this inventory documents — not the maintainer's laptop.
+    #
+    # stdout and stderr are captured separately and must stay that way. `go
+    # list` writes toolchain chatter to stderr — most commonly "go: downloading
+    # X" on a cold module cache — and a `2>&1` here used to merge that line into
+    # list_out, where the parser below reads it as a module named `go:` at
+    # version "downloading golang.org/x/oauth2 v0.35.0". That is not
+    # hypothetical: it happened on a real PR with nothing cached yet. The error
+    # path still shows stderr, so a real failure remains diagnosable.
     list_out=""
+    list_err=""
     list_rc=0
-    list_out=$(cd "$sub" && GOOS=linux go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./... 2>&1) || list_rc=$?
+    list_err_file=$(mktemp)
+    list_out=$(cd "$sub" && GOOS=linux go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./... 2>"$list_err_file") || list_rc=$?
+    list_err=$(cat "$list_err_file")
+    rm -f "$list_err_file"
     if [ "$list_rc" -ne 0 ]; then
-        err "$DOC" "'go list' failed in $sub, so its dependency closure is unknown. Fix that before trusting this check. Output: $(head -3 <<<"$list_out" | tr '\n' ' ')"
+        err "$DOC" "'go list' failed in $sub, so its dependency closure is unknown. Fix that before trusting this check. Output: $(head -3 <<<"$list_err" | tr '\n' ' ')"
         continue
     fi
 
