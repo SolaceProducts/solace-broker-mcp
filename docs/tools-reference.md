@@ -459,9 +459,11 @@ empty list.
 
 How to read a flow:
 
-- `unackedMsgCount` at or near `windowSize`: the flow's window is full. The
-  event broker sends nothing more to this consumer until it acknowledges.
-- `windowClosedCount` or `maxUnackedMsgsExceededMsgCount` rising between two
+- `unackedMsgCount` at the lower of the flow's `windowSize` and the queue's
+  `maxDeliveredUnackedMsgsPerFlow` (from `get-queue-metrics`): the consumer is
+  stalled. The event broker sends it nothing more until it acknowledges.
+  `unackedMsgCount` never exceeds that limit; well below it is healthy.
+- `maxUnackedMsgsExceededMsgCount` or `windowClosedCount` rising between two
   calls: the stall keeps recurring. Both are cumulative counters.
 - `deliveryState` of `deliver-from-spool`: the flow stalled, and the event
   broker is now delivering its messages from the spool.
@@ -476,11 +478,11 @@ How to read a flow:
 | `maxResults` | integer | no | Max consumers to return (default 100, max 500). |
 
 **Returns:** step-keyed envelope, steps `queue` (existence check) and
-`consumers` (array of flows). Each flow carries `clientName`, `sessionName`,
-`flowId`, `bindTime`, `activityState`, `deliveryState`, `unackedMsgCount`,
-`windowSize`, `usedWindowSize`, `windowClosedCount`,
-`maxUnackedMsgsExceededMsgCount`, `redeliveredMsgCount`, `ackedMsgCount`, and
-`selector`. An empty `consumers` array means the queue exists and nothing is
+`consumers` (array of flows). Each flow carries `clientName`, `flowId`,
+`bindTime`, `activityState`, `deliveryState`, `unackedMsgCount`, `windowSize`,
+`usedWindowSize`, `windowClosedCount`, `maxUnackedMsgsExceededMsgCount`,
+`redeliveredMsgCount`, `ackedMsgCount`, and `selector`, plus `sessionName` for
+a transacted session (the event broker omits it otherwise). An empty `consumers` array means the queue exists and nothing is
 bound to it.
 
 ```json

@@ -1714,17 +1714,20 @@ tools:
   - name: list-queue-consumers
     description: >
       List the consumers bound to a queue, one entry per flow: clientName,
-      sessionName, flowId, bindTime, activityState, deliveryState, selector,
-      and the window and ACK counters. Returns up to 100 by default (max 500
-      via maxResults). Use this to find which consumer is slowing a queue
-      whose backlog is growing. unackedMsgCount at or near windowSize means
-      the flow's window is full: the broker sends nothing more to that
-      consumer until it ACKs. A windowClosedCount or
-      maxUnackedMsgsExceededMsgCount that rises between two calls means the
-      stall keeps recurring (both are cumulative counters). deliveryState
-      deliver-from-spool means the flow stalled and the broker is now
-      delivering its messages from the spool. Verifies the queue exists before listing, so a nonexistent queue
-      is reported as an error rather than an empty list.
+      sessionName (transacted sessions only), flowId, bindTime,
+      activityState, deliveryState, selector, and the window and ACK
+      counters. Returns up to 100 by default (max 500 via maxResults). Use
+      this to find which consumer is slowing a queue whose backlog is
+      growing. A consumer is stalled when unackedMsgCount sits at the lower
+      of its windowSize and the queue's maxDeliveredUnackedMsgsPerFlow (from
+      get-queue-metrics): the broker sends it nothing more until it ACKs.
+      unackedMsgCount never exceeds that limit; well below it is healthy. A
+      maxUnackedMsgsExceededMsgCount or windowClosedCount that rises between
+      two calls means the stall keeps recurring (both are cumulative
+      counters). deliveryState deliver-from-spool means the flow stalled and
+      the broker is now delivering its messages from the spool. Verifies the
+      queue exists before listing, so a nonexistent queue is reported as an
+      error rather than an empty list.
     annotations:
       readOnly: true
     strictParameters: true
