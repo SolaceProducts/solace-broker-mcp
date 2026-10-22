@@ -669,6 +669,49 @@ func TestCallTool_ListQueuesRejectsMisspelledParams(t *testing.T) {
 	}
 }
 
+// TestCallTool_ListQueueConsumersRejectsUnknownParams drives the real
+// list-queue-consumers schema through CallTool's validation (SOL-156294): an
+// undeclared key such as clientName (a filter the tool does not offer) must
+// fail rather than be dropped and return every consumer.
+func TestCallTool_ListQueueConsumersRejectsUnknownParams(t *testing.T) {
+	realTools, executor := realCatalog(t)
+	var schema map[string]any
+	for _, tool := range realTools {
+		if tool.Name == "list-queue-consumers" {
+			schema = NewCompositeToolHandler(tool, executor).Metadata().InputSchema
+		}
+	}
+	if schema == nil {
+		t.Fatal("list-queue-consumers not found in the real catalog")
+	}
+
+	mgr := NewToolManager(newTestPool(t))
+	handler := newStubHandler("list-queue-consumers")
+	handler.schema = schema
+	mgr.Register(handler)
+
+	base := func() map[string]any {
+		return map[string]any{"broker": "dev", "msgVpnName": "default", "queueName": "q1"}
+	}
+
+	for _, bad := range []string{"clientName", "maxResult"} {
+		args := base()
+		args[bad] = "x"
+		result, err := mgr.CallTool(context.Background(), "list-queue-consumers", args, Identity{})
+		text := callToolResultText(t, result, err)
+		if !strings.Contains(text, "parameter validation failed") || !strings.Contains(text, bad) {
+			t.Errorf("%s: text = %q, want a parameter validation failure naming it", bad, text)
+		}
+	}
+
+	args := base()
+	args["maxResults"] = 20
+	result, err := mgr.CallTool(context.Background(), "list-queue-consumers", args, Identity{})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("valid params: err = %v, result = %+v, want success", err, result)
+	}
+}
+
 // TestRealCatalog_StrictParametersSet guards which tools opt into
 // StrictParameters (SOL-155435): every paginated list tool (has maxResults)
 // must, and no tool taking an object parameter (create-*/update-*, whose
@@ -678,7 +721,7 @@ func TestRealCatalog_StrictParametersSet(t *testing.T) {
 	want := []string{
 		"list-bridges", "list-client-profiles", "list-client-subscriptions",
 		"list-client-usernames", "list-clients", "list-kafka-receivers",
-		"list-kafka-senders", "list-queue-discards", "list-queue-subscriptions",
+		"list-kafka-senders", "list-queue-consumers", "list-queue-discards", "list-queue-subscriptions",
 		"list-queues", "list-rdps", "list-slow-subscribers", "list-vpns",
 	}
 

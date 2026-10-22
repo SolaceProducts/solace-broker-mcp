@@ -1144,7 +1144,8 @@ tools:
       backpressure. Does NOT flip for slow guaranteed-message consumers (slow
       to ACK), because the broker self-throttles via the transmit window
       before TCP egress can stall. To find slow guaranteed consumers, use
-      list-queues / get-queue-metrics. Server-side filtered via SEMP where
+      list-queues / get-queue-metrics, then list-queue-consumers on the
+      queue to see which bound consumer is not ACKing. Server-side filtered via SEMP where
       clause — only matching clients are returned. The response includes a
       summary block with byClientProfile, byPlatform (grouped counts),
       and totalTxDiscardedMsgCount (cumulative lifetime discards across
@@ -1706,6 +1707,73 @@ tools:
           msgVpnName: "{{.Params.msgVpnName}}"
           queueName: "{{.Params.queueName}}"
           count: "100"
+    result:
+      strategy: collect
+
+  # SOL-156294: per-consumer flow state for slow-consumer triage.
+  - name: list-queue-consumers
+    description: >
+      List the consumers bound to a queue, one entry per flow: clientName,
+      sessionName, flowId, bindTime, activityState, deliveryState, selector,
+      and the window and ACK counters. Returns up to 100 by default (max 500
+      via maxResults). Use this to find which consumer is slowing a queue
+      whose backlog is growing. unackedMsgCount at or near windowSize means
+      the broker has stopped sending to that consumer because it is not
+      ACKing. A windowClosedCount or maxUnackedMsgsExceededMsgCount that rises
+      between calls means the stall keeps recurring. deliveryState
+      deliver-from-spool means the flow is draining the spool rather than
+      keeping up with new messages. Counters are cumulative since the flow
+      bound. Verifies the queue exists before listing, so a nonexistent queue
+      is reported as an error rather than an empty list.
+    annotations:
+      readOnly: true
+    strictParameters: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to list consumers for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of consumers to return (default 100, max 500)"
+    steps:
+      # Preflight: same reason as list-queue-subscriptions. The tx-flows
+      # collection GET answers 200 with data: [] for a missing queue, which
+      # would read as "no consumers bound".
+      - id: queue
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+        select:
+          - queueName
+      - id: consumers
+        operation: monitor/getMsgVpnQueueTxFlows
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          count: "100"
+        select:
+          - clientName
+          - sessionName
+          - flowId
+          - bindTime
+          - activityState
+          - deliveryState
+          - unackedMsgCount
+          - windowSize
+          - usedWindowSize
+          - windowClosedCount
+          - maxUnackedMsgsExceededMsgCount
+          - redeliveredMsgCount
+          - ackedMsgCount
+          - selector
     result:
       strategy: collect
 
