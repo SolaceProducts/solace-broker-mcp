@@ -170,8 +170,12 @@ vet: ## go vet
 lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
+.PHONY: lib-test
+lib-test: ## Self-test of the e2e handshake helpers (stubbed curl, no broker; CI runs it in the lint job)
+	bash test/e2e-common/lib.test.sh
+
 .PHONY: check
-check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
+check: build-all vet lint lib-test test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
 
 # ── Helm chart ───────────────────────────────────────────────────────────────
 

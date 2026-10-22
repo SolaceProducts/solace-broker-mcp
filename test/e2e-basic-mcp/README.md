@@ -26,6 +26,10 @@ bash test/e2e-basic-mcp/run-all.sh
 docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 ```
 
+To run it against a stateless server, export `MCP_TRANSPORT_STATELESS=true` for step 2
+(see [Stateful and stateless runs](../../docs/_internal/e2e-testing.md#stateful-and-stateless-runs)).
+CI runs both modes.
+
 `run-all.sh` builds the MCP server and the Go agent, applies the base fixtures to
 both brokers, runs all four scenarios, and cleans up the fixtures and server on
 exit (via an `EXIT` trap). It assumes the brokers are already up — run the
