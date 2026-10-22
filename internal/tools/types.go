@@ -27,6 +27,7 @@ package tools
 import (
 	"context"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -105,6 +106,15 @@ type Metadata struct {
 	// tc). Zero value (false) preserves today's behavior for every other
 	// tool, which still gets the broker parameter injected and resolved.
 	NoBroker bool
+}
+
+// ResponseBounder is an optional interface a ToolHandler implements when its
+// result can be trimmed to fit the response-size cap (SOL-155577). The manager
+// calls BoundResponse only for a result whose compact-JSON size already exceeds
+// the cap, passing that size so nothing is measured twice. Implementations
+// modify result in place and report what they did; see composite.BoundResponse.
+type ResponseBounder interface {
+	BoundResponse(result map[string]any, size, limit int) composite.BoundReport
 }
 
 // ToolHandler is the interface every tool implementation satisfies. Composite

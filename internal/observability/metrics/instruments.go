@@ -124,14 +124,16 @@ var knownErrorTypes = func() map[ErrorType]bool {
 // that is not itself a RED instrument, mcp_broker_authz_denied_total
 // (SOL-153332, Story 49; see NewToolMetrics for why it lives here rather than
 // on SecurityMetrics), and mcp_owner_validation_total (SOL-154679), which
-// counts a write blocked by the owner-existence check on the same footing.
-// Every method is nil-safe, so a disabled server (nil) records nothing.
+// counts a write blocked by the owner-existence check on the same footing, and
+// mcp_response_bounded_total (SOL-155577), which counts a result the
+// response-size cap trimmed or could not trim. Every method is nil-safe, so a disabled server (nil) records nothing.
 type ToolMetrics struct {
 	invocations       metric.Int64Counter
 	duration          metric.Float64Histogram
 	activeRequests    metric.Int64UpDownCounter
 	brokerAuthzDenied metric.Int64Counter
 	ownerValidation   metric.Int64Counter
+	responseBounded   metric.Int64Counter
 }
 
 // NewToolMetrics registers the RED instruments. The exporter derives the
@@ -194,12 +196,25 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 		return nil, fmt.Errorf("register mcp_owner_validation_total: %w", err)
 	}
 
+	// mcp_response_bounded_total (SOL-155577): counts a tool result that came
+	// back over the response-size cap. Registered here for the same reason as
+	// the two counters above. A result under the cap is not counted; it is
+	// already in mcp_tool_invocation_total.
+	responseBounded, err := meter.Int64Counter(
+		"mcp.response.bounded",
+		metric.WithDescription("Number of tool results that exceeded the response-size cap, by outcome."),
+		metric.WithUnit("1"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_response_bounded_total: %w", err)
+	}
+
 	return &ToolMetrics{
 		invocations:       invocations,
 		duration:          duration,
 		activeRequests:    activeRequests,
 		brokerAuthzDenied: brokerAuthzDenied,
 		ownerValidation:   ownerValidation,
+		responseBounded:   responseBounded,
 	}, nil
 }
 
@@ -316,6 +331,45 @@ func (t *ToolMetrics) RecordOwnerValidation(ctx context.Context, tool, broker st
 		outcome = OwnerValidationOutcomeOther
 	}
 	t.ownerValidation.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("tool", tool),
+		attribute.String("broker", broker),
+		attribute.String("outcome", string(outcome)),
+	))
+}
+
+// ResponseBoundOutcome is the closed set mcp_response_bounded_total's outcome
+// label can carry (SOL-155577), for the same reason as OwnerValidationOutcome.
+type ResponseBoundOutcome string
+
+const (
+	// ResponseBoundTruncated: the result was over the cap and raw rows were
+	// omitted to bring it under, with the omission flagged in the result.
+	ResponseBoundTruncated ResponseBoundOutcome = "truncated"
+	// ResponseBoundUnbounded: the result was over the cap but no raw rows
+	// could be omitted to fix it (the excess is in a summary or in non-list
+	// fields), so it was returned as built. A non-zero count means a tool
+	// needs its own bound.
+	ResponseBoundUnbounded ResponseBoundOutcome = "unbounded"
+	// ResponseBoundOutcomeOther is the sentinel RecordResponseBounded coerces
+	// any value outside knownResponseBoundOutcomes to.
+	ResponseBoundOutcomeOther ResponseBoundOutcome = "other"
+)
+
+var knownResponseBoundOutcomes = map[ResponseBoundOutcome]bool{
+	ResponseBoundTruncated: true,
+	ResponseBoundUnbounded: true,
+}
+
+// RecordResponseBounded increments mcp_response_bounded_total for one result
+// that exceeded the response-size cap (SOL-155577). No-op on a nil receiver.
+func (t *ToolMetrics) RecordResponseBounded(ctx context.Context, tool, broker string, outcome ResponseBoundOutcome) {
+	if t == nil {
+		return
+	}
+	if !knownResponseBoundOutcomes[outcome] {
+		outcome = ResponseBoundOutcomeOther
+	}
+	t.responseBounded.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("tool", tool),
 		attribute.String("broker", broker),
 		attribute.String("outcome", string(outcome)),

@@ -53,6 +53,26 @@ with more than 500 matching objects require a narrower query. Applies to:
 `list-slow-subscribers`, `list-client-usernames`, `list-client-profiles`,
 `list-rdps`, `list-queue-discards`.
 
+### Response Size Cap
+
+A tool result is also capped at **64 KiB of compact JSON** (65,536
+bytes), independent of `maxResults`, so one wide list cannot overflow the calling
+host's token budget. Most results are well under it (a full 100-row `list-queues`
+is about 35 KB). A result over the cap has rows removed from the end of its
+largest list until it fits, and says so on the step that lost rows:
+
+| Field | Meaning |
+|---|---|
+| `truncated` | `true` |
+| `omittedItems` | How many rows were removed from that step |
+| `truncatedMessage` | What happened and how to narrow the query. Appended after any earlier `maxResults` message. |
+
+The rows kept are the first ones the event broker returned. A `postProcess`
+tool's `summary` is computed from every row fetched before any are removed, so
+its counts stay complete. Rows that were removed are not available through
+this tool; narrow the query (a single queue, client or Message VPN) to see
+them. The cap is fixed and is not configurable.
+
 ### Rate Limiting and Retries
 
 Requests to each event broker are subject to per-event-broker concurrency limits and an

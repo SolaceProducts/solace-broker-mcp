@@ -377,3 +377,64 @@ mcp_tool_invocation_total{broker="dev",error_type="broker_permission_denied",out
 		t.Error(err)
 	}
 }
+
+// TestToolMetrics_RecordResponseBounded pins the label set on
+// mcp_response_bounded_total (SOL-155577): one series per tool/broker/outcome,
+// with the two outcomes distinct.
+func TestToolMetrics_RecordResponseBounded(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tm.RecordResponseBounded(context.Background(), "list-queues", "dev", ResponseBoundTruncated)
+	tm.RecordResponseBounded(context.Background(), "list-queues", "dev", ResponseBoundTruncated)
+	tm.RecordResponseBounded(context.Background(), "list-bridges", "prod", ResponseBoundUnbounded)
+
+	const want = `
+# HELP mcp_response_bounded_total Number of tool results that exceeded the response-size cap, by outcome.
+# TYPE mcp_response_bounded_total counter
+mcp_response_bounded_total{broker="dev",outcome="truncated",tool="list-queues"} 2
+mcp_response_bounded_total{broker="prod",outcome="unbounded",tool="list-bridges"} 1
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_response_bounded_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestToolMetrics_RecordResponseBounded_UnknownOutcomeIsCoerced pins the closed
+// set: a value outside it lands on the "other" sentinel rather than minting a
+// series.
+func TestToolMetrics_RecordResponseBounded_UnknownOutcomeIsCoerced(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tm.RecordResponseBounded(context.Background(), "list-queues", "dev", "passed")
+	tm.RecordResponseBounded(context.Background(), "list-queues", "dev", "")
+
+	const want = `
+# HELP mcp_response_bounded_total Number of tool results that exceeded the response-size cap, by outcome.
+# TYPE mcp_response_bounded_total counter
+mcp_response_bounded_total{broker="dev",outcome="other",tool="list-queues"} 2
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_response_bounded_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestToolMetrics_RecordResponseBounded_NilReceiverIsNoop matches every other
+// ToolMetrics method: metrics disabled (nil *ToolMetrics) records nothing.
+func TestToolMetrics_RecordResponseBounded_NilReceiverIsNoop(t *testing.T) {
+	var tm *ToolMetrics
+	tm.RecordResponseBounded(context.Background(), "list-queues", "dev", ResponseBoundTruncated)
+}

@@ -45,9 +45,12 @@ mcp_owner_validation_total{broker="test-broker",outcome="rejected_not_found",too
 # TYPE mcp_panic_recovered_total counter
 mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
+# HELP mcp_response_bounded_total Number of tool results that exceeded the response-size cap, by outcome.
+# TYPE mcp_response_bounded_total counter
+mcp_response_bounded_total{broker="test-broker",outcome="truncated",tool="test-tool"} 1
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.2",metrics_schema="1.10"} 1
+mcp_schema_version{audit_schema="1.2",metrics_schema="1.11"} 1
 # HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
 # TYPE mcp_semp_request_duration_seconds histogram
 mcp_semp_request_duration_seconds_bucket{api="v2",broker="test-broker",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 1
