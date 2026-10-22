@@ -17,9 +17,10 @@ test_health_endpoint() {
 
 test_initialize() {
     local session_id
-    session_id=$(mcp_initialize)
+    # run_test calls this inside an `if`, which turns set -e off here, so a
+    # failed handshake only fails the test through this explicit return.
+    session_id=$(mcp_initialize) || return 1
     if mcp_is_stateless; then
-        # mcp_initialize already failed if a stateless server issued an ID.
         log_info "  Stateless: no session ID issued"
     else
         [ -n "$session_id" ] || { log_fail "Empty session ID"; return 1; }
