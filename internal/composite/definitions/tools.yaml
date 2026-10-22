@@ -1718,12 +1718,12 @@ tools:
       and the window and ACK counters. Returns up to 100 by default (max 500
       via maxResults). Use this to find which consumer is slowing a queue
       whose backlog is growing. unackedMsgCount at or near windowSize means
-      the broker has stopped sending to that consumer because it is not
-      ACKing. A windowClosedCount or maxUnackedMsgsExceededMsgCount that rises
-      between calls means the stall keeps recurring. deliveryState
-      deliver-from-spool means the flow is draining the spool rather than
-      keeping up with new messages. Counters are cumulative since the flow
-      bound. Verifies the queue exists before listing, so a nonexistent queue
+      the flow's window is full: the broker sends nothing more to that
+      consumer until it ACKs. A windowClosedCount or
+      maxUnackedMsgsExceededMsgCount that rises between two calls means the
+      stall keeps recurring (both are cumulative counters). deliveryState
+      deliver-from-spool means the flow stalled and the broker is now
+      delivering its messages from the spool. Verifies the queue exists before listing, so a nonexistent queue
       is reported as an error rather than an empty list.
     annotations:
       readOnly: true
