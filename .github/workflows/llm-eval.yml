@@ -115,7 +115,7 @@ jobs:
           cache: false
 
       - name: Setup Node (for Claude CLI install)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Tracks the pinned CLI's own floor, which rose from >=18.0.0 to
           # >=22.0.0 between 2.1.181 and 2.1.223. Node 20 satisfied the old
@@ -318,7 +318,7 @@ jobs:
         # The run log expires before someone is back to diagnose a red gate.
         # This artifact is the failed scenarios plus the broker and MCP logs.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: llm-eval-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
           path: ${{ env.ART_DIR }}

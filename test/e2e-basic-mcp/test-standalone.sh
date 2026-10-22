@@ -17,14 +17,19 @@ test_health_endpoint() {
 
 test_initialize() {
     local session_id
-    session_id=$(mcp_initialize)
-    [ -n "$session_id" ] || { log_fail "Empty session ID"; return 1; }
-    log_info "  Got session: $session_id"
+    # run_test calls this inside an `if`, which turns set -e off here, so a
+    # failed handshake only fails the test through this explicit return.
+    session_id=$(mcp_initialize) || return 1
+    if mcp_is_stateless; then
+        log_info "  Stateless: no session ID issued"
+    else
+        log_info "  Got session: $session_id"
+    fi
 }
 
 test_list_tools() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -44,7 +49,7 @@ test_list_tools() {
 
 test_list_brokers() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -94,7 +99,7 @@ test_describe_semp_schema_monitor_rejected() {
 
 test_get_rdp_status_broker_a() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -119,7 +124,7 @@ test_get_rdp_status_broker_a() {
 
 test_get_rdp_status_not_found() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -156,7 +161,7 @@ test_get_rdp_status_not_found() {
 
 test_get_queue_metrics_broker_a() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -181,7 +186,7 @@ test_get_queue_metrics_broker_a() {
 
 test_get_rdp_status_broker_b() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -206,7 +211,7 @@ test_get_rdp_status_broker_b() {
 
 test_get_queue_metrics_broker_b() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{

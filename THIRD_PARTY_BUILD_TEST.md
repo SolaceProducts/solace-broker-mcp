@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-10-20; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-10-22; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -171,18 +171,18 @@ note spells out.
 | `actions/attest-build-provenance` | `4d10147` | v4.2.2 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.2.2/LICENSE) |
 | `actions/checkout` | `3d3c42e` | v7.0.1 | MIT | [license](https://github.com/actions/checkout/blob/v7.0.1/LICENSE) |
 | `actions/dependency-review-action` | `a1d282b` | v5.0.0 | MIT | [license](https://github.com/actions/dependency-review-action/blob/v5.0.0/LICENSE) |
-| `actions/download-artifact` | `3e5f45b` | v8.0.1 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.1/LICENSE) |
+| `actions/download-artifact` | `9000827` | v8.0.2 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.2/LICENSE) |
 | `actions/github-script` | `3a2844b` | v9.0.0 | MIT | [license](https://github.com/actions/github-script/blob/v9.0.0/LICENSE.md) |
 | `actions/setup-go` | `b7ad1da` | v7.0.0 | MIT | [license](https://github.com/actions/setup-go/blob/v7.0.0/LICENSE) |
-| `actions/setup-node` | `8207627` | v7.0.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.0.0/LICENSE) |
-| `actions/upload-artifact` | `043fb46` | v7.0.1 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.1/LICENSE) |
+| `actions/setup-node` | `949feb2` | v7.1.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.1.0/LICENSE) |
+| `actions/upload-artifact` | `cf430e0` | v7.0.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.2/LICENSE) |
 | `docker/build-push-action` | `c3c9e26` | v7.4.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.4.0/LICENSE) |
 | `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `f87e599` | v4.4.1 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.4.1/LICENSE) |
 | `docker/setup-qemu-action` | `9901266` | v4.4.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.4.0/LICENSE) |
-| `github/codeql-action/analyze` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
-| `github/codeql-action/init` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
+| `github/codeql-action/analyze` | `24c5418` | v4.38.3 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.3/LICENSE) |
+| `github/codeql-action/init` | `24c5418` | v4.38.3 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.3/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `helm/kind-action` | `1544676` | v1.15.1 | Apache-2.0 | [license](https://github.com/helm/kind-action/blob/v1.15.1/LICENSE) |
 | `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
@@ -200,19 +200,19 @@ All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `62f160f` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `62f160f` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `62f160f` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `62f160f` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `62f160f` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `62f160f` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `fc6b754` | Solace |
 
-`62f160f` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-10-20 by the Dependabot
-`internal-reusable-workflows` group update (#521); the prior pin was `38c37f0`.
+`fc6b754` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-10-22 by the Dependabot
+`internal-reusable-workflows` group update (#529); the prior pin was `62f160f`.
 
 This update collapsed `update-manifest.yaml` into the shared pin: all six now
-agree on `62f160f`, so the separate-pin note that once stood here no longer
+agree on `fc6b754`, so the separate-pin note that once stood here no longer
 applies.
 
 Two entries have been dropped from this table, both by the reverse-direction

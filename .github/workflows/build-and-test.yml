@@ -167,6 +167,12 @@ jobs:
           # fewer packages, but the output still confirms which linters ran.
           args: --verbose
 
+      # Needs no broker and no server: curl is stubbed. It holds mcp_initialize to
+      # the mode's session-ID contract in both directions, so a stateful server
+      # that stops issuing an ID cannot pass the e2e suites unnoticed.
+      - name: E2E handshake helper self-test
+        run: bash test/e2e-common/lib.test.sh
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -370,10 +376,36 @@ jobs:
         # install path, in each direction, against scratch copies.
         run: .github/scripts/helm-parity-check.test.sh
 
+  # The basic e2e suite once per transport mode. Which check is required is decided
+  # by name in the repository ruleset, not here: only `e2e-basic-mcp` is required, so
+  # the stateful run keeps that exact name, and the stateless run, named differently,
+  # does not block merging. fail-fast is off so a red stateless run cannot cancel the
+  # required stateful one.
+  #
+  # A stateless pass shows the handshake and tool calls work with no Mcp-Session-Id,
+  # over the 2025-11-25 wire the shell helpers pin. Scenario 2 also drives a go-sdk
+  # client against the stateless server, so a red there is a real finding about that
+  # client, not only about the shell helpers. A pass does not show compatibility of
+  # other clients, behaviour across replicas, or 2026-07-28, so docs/configuration.md
+  # still says to leave the flag off in production.
+  #
+  # MCP_TRANSPORT_STATELESS reaches the server through start-server.sh, and an
+  # environment variable wins over test/e2e-basic-mcp/.env.
   e2e-basic-mcp:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e-basic-mcp
+            stateless: false
+          - name: e2e-basic-mcp-stateless
+            stateless: true
+    env:
+      MCP_TRANSPORT_STATELESS: ${{ matrix.stateless }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
