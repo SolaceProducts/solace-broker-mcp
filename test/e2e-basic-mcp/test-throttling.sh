@@ -212,6 +212,9 @@ record_max_inflight() {
 # server-side, and one session avoids the per-handshake stagger that N sessions
 # would add. If that ever regressed to serialised dispatch, phase C's
 # "max in-flight > 2" fails loudly rather than any phase passing quietly.
+# Against a stateless server (MCP_TRANSPORT_STATELESS=true) there is no session:
+# $sid is empty and each request stands alone, so the same assertion is what
+# shows the calls overlapped.
 #
 # The warm-up is what makes the ticker's buffered-tick behaviour deterministic
 # instead of accidental. It creates the BrokerClient (and starts the ticker),

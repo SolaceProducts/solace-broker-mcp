@@ -18,8 +18,13 @@ test_health_endpoint() {
 test_initialize() {
     local session_id
     session_id=$(mcp_initialize)
-    [ -n "$session_id" ] || { log_fail "Empty session ID"; return 1; }
-    log_info "  Got session: $session_id"
+    if mcp_is_stateless; then
+        # mcp_initialize already failed if a stateless server issued an ID.
+        log_info "  Stateless: no session ID issued"
+    else
+        [ -n "$session_id" ] || { log_fail "Empty session ID"; return 1; }
+        log_info "  Got session: $session_id"
+    fi
 }
 
 test_list_tools() {
