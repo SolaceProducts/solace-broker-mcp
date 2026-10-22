@@ -990,6 +990,80 @@ test_get_queue_metrics_slow_consumer() {
 test_get_queue_metrics_slow_consumer_a() { test_get_queue_metrics_slow_consumer "broker-a"; }
 test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer "broker-b"; }
 
+# ── Tool 24: list-queue-consumers (F5 slow guaranteed-message consumer; SOL-156294)
+# Value check: get-queue-metrics shows the F5 queue is backing up; this tool
+# names the consumer doing it. On $F5_QUEUE this broker's broker-driver
+# receiver (e2e-monitoring-slow-consumer-<a|b>) is the one bound flow, and its
+# unackedMsgCount pins near the per-flow ceiling ($F5_MAX_UNACKED), the same
+# signal get-queue-metrics reads as the queue-level txUnackedMsgCount.
+# Every selected field is present. Cross-broker isolation: the other broker's
+# consumer is absent.
+# Envelope: {"queue":{"data":{...}},"consumers":{"data":[...]}}.
+
+test_list_queue_consumers_slow_consumer() {
+    local broker="$1" letter="${1#broker-}" other
+    local response content flow
+    [ "$letter" = "a" ] && other="b" || other="a"
+
+    response=$(mcp_call_tool "list-queue-consumers" \
+        "$(jq -nc --arg b "$broker" --arg q "$F5_QUEUE" \
+            '{broker:$b,msgVpnName:"default",queueName:$q}')") || return 1
+    content=$(extract_content "$response")
+
+    flow=$(echo "$content" | jq -c --arg c "e2e-monitoring-slow-consumer-$letter" \
+        '[.consumers.data[] | select(.clientName == $c)] | first')
+    log_info "list-queue-consumers [$broker]: F5 flow = $flow"
+
+    assert_json_field "$flow" '. != null' "true" \
+        "list-queue-consumers [$broker]: e2e-monitoring-slow-consumer-$letter must be bound to $F5_QUEUE" || return 1
+    # sessionName is the flow's transacted session; the broker omits it for a
+    # non-transacted consumer such as F5's, so it is not required here.
+    assert_json_field "$flow" '[ "clientName","flowId","bindTime","activityState","deliveryState","unackedMsgCount","windowSize","usedWindowSize","windowClosedCount","maxUnackedMsgsExceededMsgCount","redeliveredMsgCount","ackedMsgCount","selector" ] - keys == []' "true" \
+        "list-queue-consumers [$broker]: flow must carry the 13 always-present selected fields (got keys $(echo "$flow" | jq -c keys))" || return 1
+    assert_json_field "$flow" ".unackedMsgCount >= $F5_NEAR_UNACKED" "true" \
+        "list-queue-consumers [$broker]: unackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $F5_NEAR_UNACKED)" || return 1
+    # The flow keeps hitting the queue's maxDeliveredUnackedMsgsPerFlow, which
+    # is the F5 stall itself.
+    assert_json_field "$flow" '.maxUnackedMsgsExceededMsgCount > 0' "true" \
+        "list-queue-consumers [$broker]: maxUnackedMsgsExceededMsgCount must be > 0 on the F5 flow" || return 1
+    assert_json_field "$content" "[.consumers.data[] | select(.clientName == \"e2e-monitoring-slow-consumer-$other\")] | length" "0" \
+        "list-queue-consumers [$broker]: broker-$other's consumer must not appear" || return 1
+}
+
+# test-queue-3 (F1 multi-queue fixture) exists and nothing is bound to it:
+# a successful result with an empty list, not an error.
+test_list_queue_consumers_unbound_queue() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-queue-consumers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",queueName:"test-queue-3"}')") || return 1
+    assert_json_field "$response" '.result != null and .result.isError != true' "true" \
+        "list-queue-consumers [$broker]: an existing unbound queue is a successful result" || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.consumers.data == []' "true" \
+        "list-queue-consumers [$broker]: an existing unbound queue returns an empty list" || return 1
+}
+
+# The preflight turns a missing queue into NOT_FOUND; the tx-flows GET alone
+# would answer 200 with an empty list.
+test_list_queue_consumers_missing_queue() {
+    local broker="$1"
+    local response
+    response=$(mcp_call_tool "list-queue-consumers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",queueName:"e2e-no-such-queue"}')") || return 1
+    assert_json_field "$response" ".result.isError" "true" \
+        "list-queue-consumers [$broker]: nonexistent queue reports isError=true, not an empty list" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "list-queue-consumers [$broker]: nonexistent queue reports NOT_FOUND" || return 1
+}
+
+test_list_queue_consumers_slow_consumer_a() { test_list_queue_consumers_slow_consumer "broker-a"; }
+test_list_queue_consumers_slow_consumer_b() { test_list_queue_consumers_slow_consumer "broker-b"; }
+test_list_queue_consumers_unbound_queue_a() { test_list_queue_consumers_unbound_queue "broker-a"; }
+test_list_queue_consumers_unbound_queue_b() { test_list_queue_consumers_unbound_queue "broker-b"; }
+test_list_queue_consumers_missing_queue_a() { test_list_queue_consumers_missing_queue "broker-a"; }
+test_list_queue_consumers_missing_queue_b() { test_list_queue_consumers_missing_queue "broker-b"; }
+
 # ── Tool 10: list-slow-subscribers (F6 slow direct subscriber) ──────────────
 # Value check (AC 12): the F6 fixture SIGSTOPs a direct subscriber under a
 # large-payload flood so its TCP egress window stalls and the broker flags it
@@ -2007,5 +2081,12 @@ run_test "Tool 23 — get-client-profile (broker-a)"      test_get_client_profil
 run_test "Tool 23 — get-client-profile (broker-b)"      test_get_client_profile_b
 run_test "Tool 23 — get-client-profile not found (broker-a)" test_get_client_profile_not_found_a
 run_test "Tool 23 — get-client-profile not found (broker-b)" test_get_client_profile_not_found_b
+
+run_test "Tool 24 — list-queue-consumers slow consumer (broker-a)" test_list_queue_consumers_slow_consumer_a
+run_test "Tool 24 — list-queue-consumers slow consumer (broker-b)" test_list_queue_consumers_slow_consumer_b
+run_test "Tool 24 — list-queue-consumers unbound queue (broker-a)" test_list_queue_consumers_unbound_queue_a
+run_test "Tool 24 — list-queue-consumers unbound queue (broker-b)" test_list_queue_consumers_unbound_queue_b
+run_test "Tool 24 — list-queue-consumers missing queue (broker-a)" test_list_queue_consumers_missing_queue_a
+run_test "Tool 24 — list-queue-consumers missing queue (broker-b)" test_list_queue_consumers_missing_queue_b
 
 print_summary "MCP tool tests"
