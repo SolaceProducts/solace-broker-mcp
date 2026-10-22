@@ -83,7 +83,7 @@ shared and live in `test/e2e-common/`, not in the suite directory.
 
 ## Configuration
 
-Per-suite configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars (suite-wide protocol settings such as `MCP_PROTOCOL_VERSION` live in `e2e-common/lib.sh` instead). It is read by:
+Per-suite configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars (suite-wide protocol settings such as `MCP_PROTOCOL_VERSION` live in `e2e-common/lib.sh` instead). The transport mode is the exception: `MCP_TRANSPORT_STATELESS` is deliberately not in this file, so every local run stays stateful unless you set it in the environment of the run (see [Stateful and stateless runs](#stateful-and-stateless-runs)). It is read by:
 
 - **docker-compose.yml** — broker port mappings and admin password
 - **helpers.sh** — broker URLs, SEMP auth, fixture management
@@ -246,7 +246,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 | Test | What it validates |
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
-| `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
+| `test_initialize` | MCP handshake completes. A stateful server returns `Mcp-Session-Id`; a stateless one (`MCP_TRANSPORT_STATELESS=true`) returns none, and the helper fails if the response contradicts the mode in either direction |
 | `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns all 58 tools: 30 read-only plus 28 write (4 action, 24 management). |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
@@ -261,13 +261,33 @@ Each test session follows the MCP handshake before calling tools. The server res
 
 ```
 POST /mcp  initialize
-           ← Mcp-Session-Id header + server capabilities (SSE)
+           ← server capabilities (SSE)
+           ← Mcp-Session-Id header (stateful only; a stateless server sends none)
 
-POST /mcp  notifications/initialized   (Mcp-Session-Id: <id>)
+POST /mcp  notifications/initialized   (Mcp-Session-Id: <id>, stateful only)
 
-POST /mcp  tools/list or tools/call    (Mcp-Session-Id: <id>)
+POST /mcp  tools/list or tools/call    (Mcp-Session-Id: <id>, stateful only)
            ← SSE with JSON-RPC response in data: line
 ```
+
+A stateless request carries no `Mcp-Session-Id` header at all; the helpers do not send a blank one. `MCP-Protocol-Version` is sent in both modes.
+
+### Stateful and stateless runs
+
+The handshake helpers in `e2e-common/lib.sh` (`mcp_initialize`, `mcp_request`) read `MCP_TRANSPORT_STATELESS`, the same variable the server reads, to know which mode the run is testing. They do not guess it from the response:
+
+- **Unset or false (stateful, the default).** A missing `Mcp-Session-Id` fails the run with a printed message.
+- **True (stateless).** A missing `Mcp-Session-Id` is expected, and an issued one fails the run.
+
+To run the suite stateless locally, export the variable for the run:
+
+```bash
+MCP_TRANSPORT_STATELESS=true bash test/e2e-basic-mcp/run-all.sh
+```
+
+A green stateless run shows that the handshake and tool calls work with no session header, over the `2025-11-25` wire these helpers pin. Scenario 2 also drives the Go SDK client against the stateless server, so a failure there is a finding about that client. A green run does not exercise `2026-07-28`, does not show that other clients work or that replicas behave, and does not cover session-scoped behaviour such as per-session fairness. `docs/configuration.md` still says to leave the flag off in production.
+
+The shared helpers in `e2e-common/lib.sh` follow `MCP_TRANSPORT_STATELESS`, so every suite that uses them (basic-mcp, monitoring, management, action, oauth, helm and llm) gets the mode-aware `mcp_initialize`. CI runs only `e2e-basic-mcp` stateless; the others were not run stateless. The handshake copies in the oauth, tracing, dashboard and llm suites still require `Mcp-Session-Id` and fail against a stateless server (SOL-154338). `e2e-common/lib.test.sh` checks the helper's two-way behaviour with a stubbed `curl`; it needs no broker and no server. CI runs it in the `lint` job. `make check` does not, so run `bash test/e2e-common/lib.test.sh` yourself after touching the handshake helpers.
 
 ---
 
@@ -370,19 +390,26 @@ A second phase, Linux only, is the ticket's headline case — the log stream its
 
 ## CI Integration
 
-The E2E tests run as a separate `e2e` job in `.github/workflows/build-and-test.yml`, gated on the `build` job passing:
+The E2E tests run as separate jobs in `.github/workflows/build-and-test.yml`, each gated on the `build` job passing:
 
 ```
 lint ──┐
-       ├── build ──── e2e
+       ├── build ──┬── e2e-basic-mcp
+                   ├── e2e-basic-mcp-stateless
+                   ├── e2e-oauth
+                   ├── e2e-monitoring
+                   ├── e2e-management
+                   └── e2e-action
 ```
 
-The job:
+The `e2e-basic-mcp` job:
 1. Starts both Solace brokers with `docker compose up -d`
 2. Waits for both brokers to be fully ready (SEMP API + message spool, up to 120s)
 3. Runs `bash test/e2e-basic-mcp/run-all.sh`
 4. On failure: dumps last 100 lines of broker logs for debugging
 5. Always tears down the brokers with `docker compose down -v`
+
+The job is a matrix that runs these steps once per transport mode. The stateful run is named `e2e-basic-mcp` and is the required check; the stateless run sets `MCP_TRANSPORT_STATELESS=true` and is named `e2e-basic-mcp-stateless`. The repository rules require checks by name, so only the stateful run blocks merging.
 
 ---
 

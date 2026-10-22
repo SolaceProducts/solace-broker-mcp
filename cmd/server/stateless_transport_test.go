@@ -44,6 +44,25 @@ func transportHandler(t *testing.T, stateless bool) *mcp.StreamableHTTPHandler {
 	}, newMCPStreamableOptions(stateless))
 }
 
+// forEachTransportMode runs a test body once per transport mode, each in its own
+// subtest over a fresh production-shaped handler. The body receives the mode so
+// the handshake helper can hold the server to that mode's session contract
+// instead of accepting whatever comes back.
+func forEachTransportMode(t *testing.T, run func(t *testing.T, handler http.Handler, stateless bool)) {
+	t.Helper()
+	for _, mode := range []struct {
+		name      string
+		stateless bool
+	}{
+		{name: "stateful", stateless: false},
+		{name: "stateless", stateless: true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			run(t, transportHandler(t, mode.stateless), mode.stateless)
+		})
+	}
+}
+
 // bareRequest builds a request with no body, for the methods the transport
 // only allows (or refuses) outside POST.
 func bareRequest(method string) *http.Request {
@@ -76,6 +95,35 @@ func TestTransport_InitializeSessionID(t *testing.T) {
 			}
 			if !tt.wantSession && got != "" {
 				t.Errorf("initialize returned Mcp-Session-Id %q; the stateless transport must not issue one", got)
+			}
+		})
+	}
+}
+
+// TestSessionIDForMode is the dangerous-line proof for the handshake helper: the
+// leniency stateless needs must not let a stateful server that stopped issuing
+// session IDs pass, and a stateless server that starts issuing one must fail.
+func TestSessionIDForMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		stateless bool
+		header    string
+		wantID    string
+		wantErr   bool
+	}{
+		{name: "stateful with an id", stateless: false, header: "abc", wantID: "abc"},
+		{name: "stateful without an id fails", stateless: false, header: "", wantErr: true},
+		{name: "stateless without an id", stateless: true, header: "", wantID: ""},
+		{name: "stateless with an id fails", stateless: true, header: "abc", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := sessionIDForMode(tt.stateless, tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("sessionIDForMode(%v, %q) error = %v, wantErr %v", tt.stateless, tt.header, err, tt.wantErr)
+			}
+			if got != tt.wantID {
+				t.Errorf("sessionIDForMode(%v, %q) = %q, want %q", tt.stateless, tt.header, got, tt.wantID)
 			}
 		})
 	}
