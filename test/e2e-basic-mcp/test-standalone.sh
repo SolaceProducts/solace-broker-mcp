@@ -30,7 +30,7 @@ test_initialize() {
 
 test_list_tools() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -50,7 +50,7 @@ test_list_tools() {
 
 test_list_brokers() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -100,7 +100,7 @@ test_describe_semp_schema_monitor_rejected() {
 
 test_get_rdp_status_broker_a() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -125,7 +125,7 @@ test_get_rdp_status_broker_a() {
 
 test_get_rdp_status_not_found() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -162,7 +162,7 @@ test_get_rdp_status_not_found() {
 
 test_get_queue_metrics_broker_a() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -187,7 +187,7 @@ test_get_queue_metrics_broker_a() {
 
 test_get_rdp_status_broker_b() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
@@ -212,7 +212,7 @@ test_get_rdp_status_broker_b() {
 
 test_get_queue_metrics_broker_b() {
     local session_id
-    session_id=$(mcp_initialize)
+    session_id=$(mcp_initialize) || return 1
 
     local response
     response=$(mcp_request "$session_id" '{
