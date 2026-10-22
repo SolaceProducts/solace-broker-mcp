@@ -106,7 +106,7 @@ func sessionStatus(handler *mcp.StreamableHTTPHandler, sessionID string) int {
 // exactly that, which is why this asserts the field is populated rather than
 // merely that the options are non-nil.
 func TestNewMCPStreamableOptions_SetsSessionIdleTimeout(t *testing.T) {
-	opts := newMCPStreamableOptions()
+	opts := newMCPStreamableOptions(false)
 
 	if opts == nil {
 		t.Fatal("newMCPStreamableOptions returned nil; idle sessions would never be reaped")
