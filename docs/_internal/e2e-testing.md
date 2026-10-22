@@ -409,7 +409,7 @@ The `e2e-basic-mcp` job:
 4. On failure: dumps last 100 lines of broker logs for debugging
 5. Always tears down the brokers with `docker compose down -v`
 
-A second job, `e2e-basic-mcp-stateless`, runs the same steps with `MCP_TRANSPORT_STATELESS=true`. It is a separate job, not a matrix leg, so the required check named `e2e-basic-mcp` keeps its name and stays stateful, which is still the default.
+The job is a matrix that runs these steps once per transport mode. The stateful run is named `e2e-basic-mcp` and is the required check; the stateless run sets `MCP_TRANSPORT_STATELESS=true` and is named `e2e-basic-mcp-stateless`. The repository rules require checks by name, so only the stateful run blocks merging.
 
 ---
 
