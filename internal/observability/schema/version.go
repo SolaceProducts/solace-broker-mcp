@@ -63,4 +63,9 @@ const MetricsSchemaVersion = "1.10"
 // bump; correcting that now costs nothing; per v0.8.0 (the latest tag),
 // AuditSchemaVersion was still 1.0 there, so no released consumer has ever
 // pinned to a version that saw the smaller closed sets.
-const AuditSchemaVersion = "1.2"
+// 1.3 (SOL-154703): audit_event_type grew to eight (added
+// owner_validation_rejected), and reason gained a vocabulary
+// (owner_not_found) for it. Additive: no existing field, event type or reason
+// changes. A query pinned to audit_schema_version="1.2" must move to 1.3 to keep
+// matching, and a closed-set validator must accept owner_validation_rejected.
+const AuditSchemaVersion = "1.3"
