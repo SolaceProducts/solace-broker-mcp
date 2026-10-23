@@ -93,7 +93,7 @@ func TestListQueues_TruncationSurfaced(t *testing.T) {
 	}
 	t.Run("truncated", func(t *testing.T) {
 		got, err := ListQueues(map[string]map[string]any{
-			"queues": {"data": items, "truncated": true},
+			"queues": {"data": items, "truncated": true, "nextCursor": "c1"},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -103,6 +103,24 @@ func TestListQueues_TruncationSurfaced(t *testing.T) {
 		}
 		if got["truncated"] != true {
 			t.Errorf("truncated: got %v, want true", got["truncated"])
+		}
+		if note, _ := got["scopeNote"].(string); !strings.Contains(note, "2 queues") || !strings.Contains(note, "nextCursor") {
+			t.Errorf("scopeNote: got %q, want it to say the counts cover only the 2 queues scanned and point at nextCursor", note)
+		}
+	})
+	t.Run("truncated without cursor", func(t *testing.T) {
+		got, err := ListQueues(map[string]map[string]any{
+			"queues": {"data": items, "truncated": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		note, _ := got["scopeNote"].(string)
+		if !strings.Contains(note, "2 queues") {
+			t.Errorf("scopeNote: got %q, want it to say the counts cover only the 2 queues scanned", note)
+		}
+		if strings.Contains(note, "nextCursor") {
+			t.Errorf("scopeNote: got %q, must not point at a nextCursor that isn't there", note)
 		}
 	})
 	t.Run("not truncated omits flag", func(t *testing.T) {
@@ -117,6 +135,9 @@ func TestListQueues_TruncationSurfaced(t *testing.T) {
 		}
 		if _, present := got["truncated"]; present {
 			t.Errorf("truncated key should be omitted when false, got %v", got["truncated"])
+		}
+		if _, present := got["scopeNote"]; present {
+			t.Errorf("scopeNote should be omitted when not truncated, got %v", got["scopeNote"])
 		}
 	})
 }

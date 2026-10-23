@@ -182,6 +182,78 @@ test_get_queue_metrics_broker_a() {
     assert_contains "$response" "test-queue" "Response should mention the queue name" || return 1
 }
 
+# list-queues cursor paging (SOL-155415): page with maxResults=40, passing each
+# nextCursor back as cursor, and check the pages join into exactly the unpaged
+# list — no gaps, no duplicates, same order. 95 extra queues plus test-queue
+# make three pages (40/40/16) while staying under the standard edition's
+# 100-queue-per-VPN limit.
+PAGING_QUEUE_COUNT=95
+
+test_list_queues_paging() {
+    local i rc=0
+    for i in $(seq -w 1 "$PAGING_QUEUE_COUNT"); do
+        semp_post "$BROKER_A_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues" \
+            "{\"queueName\":\"e2e-page-q-$i\"}" || { rc=1; break; }
+    done
+    [ "$rc" -eq 0 ] && { _list_queues_paging_check || rc=1; }
+    for i in $(seq -w 1 "$PAGING_QUEUE_COUNT"); do
+        semp_delete "$BROKER_A_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues/e2e-page-q-$i"
+    done
+    return "$rc"
+}
+
+_list_queues_paging_check() {
+    local response expected
+    response=$(mcp_call_tool "list-queues" '{"broker":"broker-a","msgVpnName":"default","maxResults":500}') || return 1
+    expected=$(jq -r '.result.structuredContent.queues.data[].queueName' <<<"$response")
+    local total
+    total=$(grep -c . <<<"$expected" || true)
+    if [ "$total" -le 80 ]; then
+        log_fail "unpaged list-queues returned $total queues, want > 80 so paging spans three pages"
+        return 1
+    fi
+
+    local got="" cursor="" page=0 args count next
+    while :; do
+        page=$((page + 1))
+        if [ "$page" -gt 10 ]; then
+            log_fail "paging did not finish within 10 pages"
+            return 1
+        fi
+        args=$(jq -nc --arg c "$cursor" \
+            '{broker:"broker-a",msgVpnName:"default",maxResults:40} + (if $c == "" then {} else {cursor:$c} end)')
+        response=$(mcp_call_tool "list-queues" "$args") || return 1
+        count=$(jq '.result.structuredContent.queues.data | length' <<<"$response")
+        next=$(jq -r '.result.structuredContent.queues.nextCursor // ""' <<<"$response")
+        got+=$(jq -r '.result.structuredContent.queues.data[].queueName' <<<"$response")$'\n'
+        if [ -z "$next" ]; then
+            break
+        fi
+        if [ "$count" -ne 40 ]; then
+            log_fail "page $page returned $count queues with a nextCursor, want 40"
+            return 1
+        fi
+        cursor="$next"
+    done
+    got=$(grep . <<<"$got")
+
+    if [ "$page" -ne 3 ]; then
+        log_fail "paging took $page pages for $total queues at 40 per page, want 3"
+        return 1
+    fi
+    local dups
+    dups=$(sort <<<"$got" | uniq -d)
+    if [ -n "$dups" ]; then
+        log_fail "paged list-queues returned duplicates: $(tr '\n' ' ' <<<"$dups")"
+        return 1
+    fi
+    if [ "$got" != "$expected" ]; then
+        log_fail "paged list-queues differs from the unpaged list:"
+        diff <(printf '%s\n' "$expected") <(printf '%s\n' "$got") >&2 || true
+        return 1
+    fi
+}
+
 # ── Broker B tests ───────────────────────────────────────────────────────────
 
 test_get_rdp_status_broker_b() {
@@ -307,6 +379,7 @@ run_test "describe-semp-schema monitor rejected"   test_describe_semp_schema_mon
 run_test "Get RDP status (broker-a)"               test_get_rdp_status_broker_a
 run_test "Get RDP status not found"                test_get_rdp_status_not_found
 run_test "Get queue metrics (broker-a)"            test_get_queue_metrics_broker_a
+run_test "List queues cursor paging (broker-a)"    test_list_queues_paging
 run_test "Get RDP status (broker-b)"               test_get_rdp_status_broker_b
 run_test "Get queue metrics (broker-b)"            test_get_queue_metrics_broker_b
 run_test "Get RDP status summary (broker-a)"       test_get_rdp_status_summary_a

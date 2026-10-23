@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -105,6 +106,9 @@ func validateTool(tool *CompositeTool) error {
 			return err
 		}
 		if err := validateOptionalArgs(step); err != nil {
+			return err
+		}
+		if err := validateResumable(step, tool.Parameters); err != nil {
 			return err
 		}
 		if err := validateBodyChecks(step); err != nil {
@@ -200,6 +204,27 @@ func validateOptionalArgs(step Step) error {
 		}
 	}
 	return nil
+}
+
+// validateResumable checks what fetchPaginated relies on for a resumable step:
+// it paginates, its page size is a fixed integer it can clamp against, and the
+// tool declares the cursor parameter that nextCursor is fed back through.
+func validateResumable(step Step, params []ParameterDef) error {
+	if !step.Resumable {
+		return nil
+	}
+	if !step.FollowPages {
+		return fmt.Errorf("step %s: resumable requires followPages", step.ID)
+	}
+	if n, err := strconv.Atoi(step.Args["count"]); err != nil || n <= 0 {
+		return fmt.Errorf("step %s: resumable requires args.count to be a positive integer literal", step.ID)
+	}
+	for _, p := range params {
+		if p.Name == "cursor" {
+			return nil
+		}
+	}
+	return fmt.Errorf("step %s: resumable requires a \"cursor\" parameter on the tool", step.ID)
 }
 
 func validateFanOut(step Step, priorStepIDs map[string]bool, priorStepSelects map[string][]string) error {
