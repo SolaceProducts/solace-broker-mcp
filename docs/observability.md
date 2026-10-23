@@ -395,18 +395,21 @@ call. The latency of the two pre-flight reads is in `mcp_semp_request_duration_s
 |---|---|---|---|
 | `mcp_response_bounded_total` | Counter | `tool`, `broker`, `outcome` | Solace |
 
-A tool result larger than 64 KiB of compact JSON is cut down before it is sent, so one list
-cannot overflow the calling host's token budget. The cap is fixed; lower `maxResults` to get
-smaller responses. This counts each result that came back over the cap. `outcome` is one of:
+A composite tool's result whose indented JSON text is larger than 64 KiB is cut down before it is
+sent, so one list cannot overflow the calling host's token budget. Native tools such as
+`describe-semp-schema` are not capped and are not counted here. The cap is fixed; lower
+`maxResults` to get smaller responses. This counts each capped-tool result that came back over the
+cap. `outcome` is one of:
 
 | `outcome` | Meaning |
 |---|---|
-| `truncated` | Raw rows were omitted to bring the result under the cap. The result says so: the step carries `truncated: true`, `omittedItems`, and a `truncatedMessage`. |
+| `truncated` | Raw rows were omitted to bring the result under the cap. The result says so: the step carries `omittedItems` and a `truncatedMessage` (and `truncated: true`, which `maxResults` also sets). |
 | `unbounded` | The result was over the cap but had no raw rows to omit (the excess is in a summary), so it was returned as built. A tool needs its own bound. Treat any `unbounded` series as a bug to file. |
 
 Each trimmed result also writes one WARN log line, `response exceeded the size cap; rows
 omitted`, with `tool`, `broker`, `original_bytes`, `returned_bytes`, `limit_bytes`,
-`omitted_items` and `trimmed_steps`. It carries no parameter values and no rows. An `unbounded`
+`omitted_items` and `trimmed_steps`. The byte fields are the length of the indented JSON text. It
+carries no parameter values and no rows. An `unbounded`
 result writes `response exceeded the size cap and has no rows to omit; returned as built`.
 
 Series appear only after their first oversized result, so `absent()` is not an alert. A series

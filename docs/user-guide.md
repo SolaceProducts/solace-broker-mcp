@@ -42,7 +42,7 @@ The Solace Broker MCP Server requires:
 
 - **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
 - **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Event brokers with more than 500 queues, clients, or VPNs require multiple queries.
-- **Response size cap** — A tool result is capped at 64 KiB of compact JSON. A larger one has rows removed from its largest list, and the step says `truncated: true` with `omittedItems` and a `truncatedMessage`. See [Tools Reference → Response Size Cap](tools-reference.md#response-size-cap).
+- **Response size cap** — The result of a composite (YAML-defined) tool is capped at 64 KiB of JSON text. A larger one has rows removed from its largest list, and the step reports `omittedItems` and a `truncatedMessage`. Native tools such as `describe-semp-schema` are not capped. See [Tools Reference → Response Size Cap](tools-reference.md#response-size-cap).
 - **OAuth required in production** — Production deployments use `mcp_client_auth.mode: oauth`; the boot banner flags `disabled` and `static` as insecure modes. All MCP client connections must present a valid OAuth or JSON Web Token (JWT). Plan your identity provider integration before deploying to shared environments.
 
 ## Quick Start

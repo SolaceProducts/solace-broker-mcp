@@ -110,9 +110,10 @@ type Metadata struct {
 
 // ResponseBounder is an optional interface a ToolHandler implements when its
 // result can be trimmed to fit the response-size cap (SOL-155577). The manager
-// calls BoundResponse only for a result whose compact-JSON size already exceeds
-// the cap, passing that size so nothing is measured twice. Implementations
-// modify result in place and report what they did; see composite.BoundResponse.
+// calls BoundResponse only for a result whose indented text (TextContent, the
+// larger copy of every result) already exceeds the cap, passing that length so
+// nothing is measured twice. Implementations modify result in place and report
+// what they did; see composite.BoundResponse.
 type ResponseBounder interface {
 	BoundResponse(result map[string]any, size, limit int) composite.BoundReport
 }

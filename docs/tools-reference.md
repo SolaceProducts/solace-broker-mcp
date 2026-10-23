@@ -55,17 +55,24 @@ with more than 500 matching objects require a narrower query. Applies to:
 
 ### Response Size Cap
 
-A tool result is also capped at **64 KiB of compact JSON** (65,536
-bytes), independent of `maxResults`, so one wide list cannot overflow the calling
-host's token budget. Most results are well under it (a full 100-row `list-queues`
-is about 35 KB). A result over the cap has rows removed from the end of its
-largest list until it fits, and says so on the step that lost rows:
+The result of a **composite tool** (every YAML-defined tool: the `list-*`,
+`get-*` status tools, and the write tools) is capped at **64 KiB of JSON text**
+(65,536 bytes), measured on the indented text a model reads, independent of
+`maxResults`. This keeps one wide list from overflowing the calling host's token
+budget. The native tools (`describe-semp-schema`, `list-brokers`,
+`get-broker-status`, `get-discard-stats`, `get-redundancy-status`,
+`get-queue-metrics`) are not capped; `describe-semp-schema` with `view: "raw"`
+can be much larger, and its description says so.
+
+Most results are well under the cap: a full 100-row `list-queues` is about
+50 KB of text. A result over it has rows removed from the end of its largest
+list until it fits, and says so on each step that lost rows:
 
 | Field | Meaning |
 |---|---|
-| `truncated` | `true` |
-| `omittedItems` | How many rows were removed from that step |
-| `truncatedMessage` | What happened and how to narrow the query. Appended after any earlier `maxResults` message. |
+| `omittedItems` | How many rows were removed from that step. **Present only when the size cap trimmed the step.** |
+| `truncated` | `true`. Also set when `maxResults` or the page limit stopped the fetch, so on its own it does not mean the cap trimmed anything. |
+| `truncatedMessage` | What happened and how to narrow the query. Appended after an earlier note; the "Use `maxResults` ... to retrieve more" advice is dropped from that note, since a larger `maxResults` would be trimmed back to the same rows. |
 
 The rows kept are the first ones the event broker returned. A `postProcess`
 tool's `summary` is computed from every row fetched before any are removed, so

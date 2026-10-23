@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,9 +38,10 @@ import (
 // Widths model a fleet, not a lab: object names are unique per row, but
 // categorical fields (profile, platform, state, failure reason) draw from a
 // small vocabulary the way real brokers' do. Worst-case widths use the longest
-// names and failure reasons the broker accepts; uniqueText makes every
-// categorical value unique per row, which is the case a summary keyed by those
-// values cannot bound.
+// names and failure reasons the broker accepts, and every enabled object is
+// down with a failure reason, so handlers that list failures are exercised;
+// uniqueText makes every categorical value unique per row, which is the case a
+// summary keyed by those values cannot bound.
 type genClient struct {
 	total      int
 	worst      bool
@@ -85,7 +87,11 @@ func (g *genClient) val(field string, i int) any {
 	case strings.HasSuffix(lf, "name") || lf == "clientaddress" || lf == "remotehost" || lf == "localtopic" ||
 		lf == "remotetopic" || lf == "postrequesttarget" || lf == "bootstrapaddresslist" || lf == "clientusername":
 		return g.text(field, i, width(28, 100))
-	case strings.HasSuffix(lf, "enabled") || strings.HasSuffix(lf, "up") || lf == "slowsubscriber" || lf == "dynamic":
+	case strings.HasSuffix(lf, "up"):
+		// Worst case is an outage: every enabled object is down, so the
+		// handlers that list or group the failures have the most to say.
+		return !g.worst
+	case strings.HasSuffix(lf, "enabled") || lf == "slowsubscriber" || lf == "dynamic":
 		return true
 	case strings.Contains(lf, "time"):
 		return int64(1700000000 + i)
@@ -140,7 +146,8 @@ func (g *genClient) Execute(_ context.Context, op *sempv2.Operation, args map[st
 	return &sempv2.Result{StatusCode: 200, Data: map[string]any{"data": items, "links": links, "meta": meta}}, nil
 }
 
-// measuredCase is one shipped tool run at one input size and width model.
+// measuredCase is one shipped tool run at one input size and width model. Sizes
+// are bytes of the indented text, the unit the cap is measured in.
 type measuredCase struct {
 	tool       string
 	maxResults int
@@ -149,10 +156,20 @@ type measuredCase struct {
 	rep        BoundReport
 	after      int
 	summary    int
+	summaryMap map[string]any
 }
 
 func (c measuredCase) String() string {
 	return fmt.Sprintf("%s maxResults=%d worst=%v: %d bytes raw, %d after the cap", c.tool, c.maxResults, c.worst, c.raw, c.after)
+}
+
+func indentedLen(t *testing.T, v any) int {
+	t.Helper()
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
 }
 
 func measureShippedTools(t *testing.T, uniqueText bool, only string) []measuredCase {
@@ -196,15 +213,14 @@ func measureShippedTools(t *testing.T, uniqueText bool, only string) []measuredC
 				if err != nil {
 					t.Fatalf("%s: %v", tool.Name, err)
 				}
-				raw, _ := json.Marshal(res)
-				summary := 0
-				if s, ok := res["summary"]; ok {
-					b, _ := json.Marshal(s)
-					summary = len(b)
+				raw := indentedLen(t, res)
+				summary, _ := res["summary"].(map[string]any)
+				summarySize := 0
+				if summary != nil {
+					summarySize = indentedLen(t, summary)
 				}
-				rep := BoundResponse(res, len(raw), ResponseCapBytes)
-				after, _ := json.Marshal(res)
-				cases = append(cases, measuredCase{tool.Name, n, worst, len(raw), rep, len(after), summary})
+				rep := BoundResponse(tool.Result, res, raw, ResponseCapBytes)
+				cases = append(cases, measuredCase{tool.Name, n, worst, raw, rep, indentedLen(t, res), summarySize, summary})
 			}
 		}
 	}
@@ -266,6 +282,37 @@ func TestShippedPostProcessSummaries_AreSmallAgainstTheCap(t *testing.T) {
 	}
 }
 
+// The Kafka status tools list each unexpectedly-down binding in their summary,
+// capped (maxFailedBindingsListed). That cap only matters when bindings are
+// down, so the size tests above could pass with the cap deleted if the
+// generator never produced a failure. Pin that it does: in the worst-case runs
+// the failure detail must be populated, and truncated at the cap, so the budget
+// check is measuring the code that bounds it.
+func TestShippedKafkaStatusSummaries_ExerciseTheFailureDetail(t *testing.T) {
+	seen := 0
+	for _, tool := range []string{"get-kafka-receiver-status", "get-kafka-sender-status"} {
+		for _, c := range measureShippedTools(t, false, tool) {
+			if !c.worst {
+				continue
+			}
+			seen++
+			// reflect, not a type assertion: the handler's slice and map types are
+			// its own, and a change of either must not read as "no failures".
+			failed := reflect.ValueOf(c.summaryMap["failedBindings"])
+			byReason := reflect.ValueOf(c.summaryMap["byBindingFailureReason"])
+			if !failed.IsValid() || failed.Len() == 0 || !byReason.IsValid() || byReason.Len() == 0 {
+				t.Errorf("%s: failedBindings and byBindingFailureReason are %v and %v; the generator is not producing failures", c, c.summaryMap["failedBindings"], c.summaryMap["byBindingFailureReason"])
+			}
+			if c.summaryMap["failedBindingsTruncated"] != true {
+				t.Errorf("%s: failedBindingsTruncated = %v; more bindings are down than the cap lists, so the cap must have applied", c, c.summaryMap["failedBindingsTruncated"])
+			}
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("measured %d worst-case Kafka status runs, want 2", seen)
+	}
+}
+
 // Positive control for the two tests above: with the same machinery, a summary
 // that grows with the item count is caught. Without this the "stay under the
 // cap" assertions could pass because the detector is blind rather than because
@@ -284,10 +331,10 @@ func TestResponseCapDetector_CatchesAnUnboundedSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(res)
-	rep := BoundResponse(res, len(raw), ResponseCapBytes)
+	raw := indentedLen(t, res)
+	rep := BoundResponse(ResultStrategy{Strategy: "postProcess", PostProcess: "__unbounded_summary"}, res, raw, ResponseCapBytes)
 	if !rep.Unbounded {
-		t.Fatalf("an unbounded summary of %d bytes was not reported (report %+v)", len(raw), rep)
+		t.Fatalf("an unbounded summary of %d bytes was not reported (report %+v)", raw, rep)
 	}
 }
 
@@ -301,4 +348,45 @@ func (g *genClient) rowsFor(n int, fields ...string) []any {
 		out[i] = m
 	}
 	return out
+}
+
+// The note a real paginated fetch writes when maxResults cut a step short, run
+// through the valve: the "Use maxResults ... to retrieve more" advice goes (a
+// call with a larger maxResults is trimmed back to the same rows), while the
+// count it carried stays. Driven through the real executor so the text the
+// valve strips is the text the fetch produces, not a copy of it in a test.
+func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool CompositeTool
+	for _, c := range tools {
+		if c.Name == "list-queues" {
+			tool = c
+		}
+	}
+	res, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, &genClient{total: 150},
+		map[string]any{"msgVpnName": "default", "maxResults": float64(100)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := res["queues"].(map[string]any)
+	before, _ := step["truncatedMessage"].(string)
+	if !strings.Contains(before, "Use maxResults") {
+		t.Fatalf("precondition: the fetch's own note is %q, want the maxResults advice", before)
+	}
+
+	rep := BoundResponse(tool.Result, res, indentedLen(t, res), 20000)
+	if !rep.Truncated {
+		t.Fatalf("report %+v, want the step trimmed", rep)
+	}
+	after := res["queues"].(map[string]any)["truncatedMessage"].(string)
+	if strings.Contains(after, "Use maxResults") || !strings.HasPrefix(after, "Results limited to 100. Response size limit reached") {
+		t.Errorf("message = %q, want the count kept, the advice gone and the size note after it", after)
+	}
 }

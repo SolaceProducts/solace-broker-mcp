@@ -43,11 +43,15 @@ import (
 const responseBoundedFamily = "mcp_response_bounded_total"
 
 // boundStub is a stub tool that opts in to the valve by delegating to the real
-// composite.BoundResponse, as CompositeToolHandler does.
-type boundStub struct{ *stubHandler }
+// composite.BoundResponse, as CompositeToolHandler does. A zero strategy is a
+// collect tool.
+type boundStub struct {
+	*stubHandler
+	strategy composite.ResultStrategy
+}
 
 func (b boundStub) BoundResponse(result map[string]any, size, limit int) composite.BoundReport {
-	return composite.BoundResponse(result, size, limit)
+	return composite.BoundResponse(b.strategy, result, size, limit)
 }
 
 func bigRows(n int) []any {
@@ -118,6 +122,17 @@ func stepRows(t *testing.T, res *mcp.CallToolResult, step string) (rows int, fla
 	return len(s["data"].([]any)), s
 }
 
+// textSize is the length of v as the manager sends it in TextContent — the unit
+// the response-size cap is measured in.
+func textSize(t *testing.T, v any) int {
+	t.Helper()
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
+}
+
 func compactSize(t *testing.T, v any) int {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -127,16 +142,18 @@ func compactSize(t *testing.T, v any) int {
 	return len(b)
 }
 
+func resultText(res *mcp.CallToolResult) string { return res.Content[0].(*mcp.TextContent).Text }
+
 // The cap is inclusive at the manager too: a result exactly at the cap is sent
 // as built and leaves no trace; one byte over is trimmed, counted and logged.
 func TestResponseBound_Boundary(t *testing.T) {
 	result := map[string]any{"queues": map[string]any{"data": bigRows(60)}}
-	size := compactSize(t, result)
+	size := textSize(t, result)
 
 	t.Run("at the cap", func(t *testing.T) {
 		logs, restore := captureSlog(t)
 		defer restore()
-		mgr, p := boundManager(t, boundStub{stubReturning("list-things", result, false)}, size)
+		mgr, p := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, size)
 		res := callBound(t, mgr, "list-things")
 
 		if rows, step := stepRows(t, res, "queues"); rows != 60 || step["truncated"] != nil {
@@ -153,15 +170,15 @@ func TestResponseBound_Boundary(t *testing.T) {
 	t.Run("one byte over", func(t *testing.T) {
 		logs, restore := captureSlog(t)
 		defer restore()
-		mgr, p := boundManager(t, boundStub{stubReturning("list-things", result, false)}, size-1)
+		mgr, p := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, size-1)
 		res := callBound(t, mgr, "list-things")
 
 		rows, step := stepRows(t, res, "queues")
 		if rows >= 60 || step["truncated"] != true || step["omittedItems"] != 60-rows {
 			t.Fatalf("rows=%d truncated=%v omittedItems=%v; want rows trimmed and flagged", rows, step["truncated"], step["omittedItems"])
 		}
-		if got := compactSize(t, res.StructuredContent); got > size-1 {
-			t.Errorf("trimmed result is %d bytes, over the %d cap", got, size-1)
+		if got := len(resultText(res)); got > size-1 {
+			t.Errorf("trimmed text is %d bytes, over the %d cap", got, size-1)
 		}
 		want := responseBoundedFamily + `{broker="dev",outcome="truncated",tool="list-things"} 1`
 		if got := boundLines(scrape(t, p)); len(got) != 1 || got[0] != want {
@@ -175,11 +192,42 @@ func TestResponseBound_Boundary(t *testing.T) {
 	})
 }
 
+// The cap is measured on the indented text the model reads, not the compact
+// structured copy: a result can be under the cap compact and well over it as
+// text (1.09x to 1.47x across the shipped tools). With the cap set between the
+// two sizes the result must be trimmed, and what is sent must fit as text. The
+// control, a cap at the text size, leaves the same result alone.
+func TestResponseBound_IsMeasuredOnTheIndentedText(t *testing.T) {
+	result := map[string]any{"queues": map[string]any{"data": bigRows(60)}}
+	compact, text := compactSize(t, result), textSize(t, result)
+	if compact >= text {
+		t.Fatalf("precondition: compact %d should be smaller than text %d", compact, text)
+	}
+
+	between := (compact + text) / 2
+	mgr, p := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, between)
+	res := callBound(t, mgr, "list-things")
+	if rows, step := stepRows(t, res, "queues"); rows >= 60 || step["truncated"] != true {
+		t.Fatalf("rows=%d truncated=%v; a result whose text is over the cap must be trimmed even though its compact form is under", rows, step["truncated"])
+	}
+	if got := len(resultText(res)); got > between {
+		t.Errorf("text is %d bytes, over the %d cap", got, between)
+	}
+	if got := boundLines(scrape(t, p)); len(got) != 1 {
+		t.Errorf("series = %v, want one truncated series", got)
+	}
+
+	control, _ := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, text)
+	if rows, _ := stepRows(t, callBound(t, control, "list-things"), "queues"); rows != 60 {
+		t.Errorf("rows = %d with the cap at the text size; the control must be untouched", rows)
+	}
+}
+
 // What the model reads (TextContent) and what a structured client reads must be
 // the same trimmed result, in valid JSON.
 func TestResponseBound_TextContentMatchesStructured(t *testing.T) {
 	result := map[string]any{"queues": map[string]any{"data": bigRows(80)}}
-	mgr, _ := boundManager(t, boundStub{stubReturning("list-things", result, false)}, 4000)
+	mgr, _ := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, 4000)
 	res := callBound(t, mgr, "list-things")
 
 	text := res.Content[0].(*mcp.TextContent).Text
@@ -192,8 +240,8 @@ func TestResponseBound_TextContentMatchesStructured(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatal("text content and structured content disagree after trimming")
 	}
-	if len(text) < 4000/2 {
-		t.Errorf("text content is only %d bytes; rows were trimmed far below the cap", len(text))
+	if len(text) > 4000 || len(text) < 4000/2 {
+		t.Errorf("text content is %d bytes; want it under the 4000 cap but not trimmed far below it", len(text))
 	}
 }
 
@@ -215,7 +263,7 @@ func TestResponseBound_HandlerWithoutBounderIsUntouched(t *testing.T) {
 // An error result is never trimmed: it must reach the caller whole.
 func TestResponseBound_ErrorResultIsUntouched(t *testing.T) {
 	result := map[string]any{"queues": map[string]any{"data": bigRows(60)}}
-	mgr, p := boundManager(t, boundStub{stubReturning("list-things", result, true)}, 1000)
+	mgr, p := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, true)}, 1000)
 	res := callBound(t, mgr, "list-things")
 
 	if rows, _ := stepRows(t, res, "queues"); rows != 60 {
@@ -235,7 +283,7 @@ func TestResponseBound_UnboundedIsRecordedNotTrimmed(t *testing.T) {
 	}
 	logs, restore := captureSlog(t)
 	defer restore()
-	mgr, p := boundManager(t, boundStub{stubReturning("list-things", result, false)}, 1000)
+	mgr, p := boundManager(t, boundStub{stubHandler: stubReturning("list-things", result, false)}, 1000)
 	res := callBound(t, mgr, "list-things")
 
 	if rows, step := stepRows(t, res, "queues"); rows != 2 || step["truncated"] != nil {
@@ -255,7 +303,7 @@ func TestResponseBound_MetricsDisabledStillTrims(t *testing.T) {
 	result := map[string]any{"queues": map[string]any{"data": bigRows(60)}}
 	mgr := NewToolManager(newTestPool(t)) // no WithToolMetrics
 	mgr.responseCap = 3000
-	mgr.Register(boundStub{stubReturning("list-things", result, false)})
+	mgr.Register(boundStub{stubHandler: stubReturning("list-things", result, false)})
 	res := callBound(t, mgr, "list-things")
 
 	if rows, step := stepRows(t, res, "queues"); rows >= 60 || step["truncated"] != true {
@@ -279,7 +327,7 @@ func TestResponseBound_TrimmedResultIsRevalidated(t *testing.T) {
 	}
 	logs, restore := captureSlog(t)
 	defer restore()
-	mgr, p := boundManager(t, boundStub{h}, 3000)
+	mgr, p := boundManager(t, boundStub{stubHandler: h}, 3000)
 	res := callBound(t, mgr, "list-things")
 
 	if !res.IsError {
@@ -369,8 +417,8 @@ func TestResponseBound_RealCompositeTool_EndToEnd(t *testing.T) {
 	if rows == 0 || rows >= totalRows || step["truncated"] != true || step["omittedItems"] != totalRows-rows {
 		t.Fatalf("rows=%d truncated=%v omittedItems=%v; want a trimmed, flagged page", rows, step["truncated"], step["omittedItems"])
 	}
-	if got := compactSize(t, first.StructuredContent); got > composite.ResponseCapBytes {
-		t.Errorf("result is %d bytes, over the %d cap", got, composite.ResponseCapBytes)
+	if got := len(resultText(first)); got > composite.ResponseCapBytes {
+		t.Errorf("text the model reads is %d bytes, over the %d cap", got, composite.ResponseCapBytes)
 	}
 	if a, b := first.Content[0].(*mcp.TextContent).Text, second.Content[0].(*mcp.TextContent).Text; a != b {
 		t.Error("two identical calls returned different output")

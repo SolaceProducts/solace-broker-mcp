@@ -24,6 +24,11 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 )
 
+var (
+	collectStrategy     = composite.ResultStrategy{Strategy: "collect"}
+	postProcessStrategy = composite.ResultStrategy{Strategy: "postProcess", PostProcess: "anything"}
+)
+
 // rows builds n rows of roughly width bytes each, distinct per index so a
 // wrong prefix is detectable.
 func rows(n, width int) []any {
@@ -34,9 +39,11 @@ func rows(n, width int) []any {
 	return out
 }
 
-func sizeOf(t *testing.T, v any) int {
+// textLen is the length of v as the manager sends it in TextContent, the unit
+// the cap is measured in.
+func textLen(t *testing.T, v any) int {
 	t.Helper()
-	b, err := json.Marshal(v)
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,60 +62,67 @@ func TestBoundResponse_Boundary(t *testing.T) {
 	build := func() map[string]any {
 		return map[string]any{"queues": map[string]any{"data": rows(40, 100), "truncated": false}}
 	}
-	size := sizeOf(t, build())
+	size := textLen(t, build())
 
 	for _, tc := range []struct {
-		name      string
-		limit     int
-		wantTrim  bool
-		wantAsIs  bool
-		wantUnbnd bool
+		name     string
+		limit    int
+		wantTrim bool
 	}{
-		{"at the cap", size, false, true, false},
-		{"over the cap by one byte", size - 1, true, false, false},
-		{"far under the cap", size * 10, false, true, false},
+		{"at the cap", size, false},
+		{"over the cap by one byte", size - 1, true},
+		{"far under the cap", size * 10, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := build()
-			rep := composite.BoundResponse(out, size, tc.limit)
-			if rep.Truncated != tc.wantTrim {
-				t.Fatalf("Truncated = %v, want %v (report %+v)", rep.Truncated, tc.wantTrim, rep)
+			rep := composite.BoundResponse(collectStrategy, out, size, tc.limit)
+			if rep.Truncated != tc.wantTrim || rep.Unbounded {
+				t.Fatalf("report = %+v, want Truncated=%v and not Unbounded", rep, tc.wantTrim)
 			}
-			if rep.Unbounded != tc.wantUnbnd {
-				t.Fatalf("Unbounded = %v, want %v", rep.Unbounded, tc.wantUnbnd)
-			}
-			if tc.wantAsIs && !reflect.DeepEqual(out, build()) {
+			if !tc.wantTrim && !reflect.DeepEqual(out, build()) {
 				t.Fatal("result was modified although it was within the cap")
+			}
+			if tc.wantTrim && textLen(t, out) > tc.limit {
+				t.Fatalf("trimmed result is %d bytes, over the %d limit", textLen(t, out), tc.limit)
 			}
 		})
 	}
 }
 
 // "Just over" must land under the cap for real, measured on the marshaled
-// result, not on the function's own estimate — across a sweep of limits so an
-// off-by-one in the reserve shows up at some limit.
-func TestBoundResponse_ResultFitsUnderTheCap(t *testing.T) {
-	base := map[string]any{
-		"vpn":    map[string]any{"data": map[string]any{"msgVpnName": "default"}},
-		"queues": map[string]any{"data": rows(300, 80), "truncated": true, "truncatedMessage": "Results limited to 300."},
-		"extras": map[string]any{"data": rows(120, 200)},
+// text, across a sweep of limits so an off-by-one shows up at some limit. It
+// must also not over-trim: the result lands within one row of the limit, since
+// the size is measured exactly rather than padded for what is added.
+func TestBoundResponse_FitsUnderTheCapAndIsTight(t *testing.T) {
+	build := func() map[string]any {
+		return map[string]any{
+			"vpn":    map[string]any{"data": map[string]any{"msgVpnName": "default"}},
+			"queues": map[string]any{"data": rows(300, 80), "truncated": true, "truncatedMessage": "Results limited to 300."},
+			"extras": map[string]any{"data": rows(120, 200)},
+		}
 	}
-	size := sizeOf(t, base)
+	size := textLen(t, build())
+	// The widest row as it sits in the output (indented under the step's data
+	// array, plus its separator) bounds how far below the limit the last
+	// removal can land; the slack covers the size note changing length as the
+	// counts in it change.
+	rowAtDepth, err := json.MarshalIndent(rows(1, 200)[0], "      ", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	widest := len(rowAtDepth) + 8 + 16
 	for limit := 3000; limit < size; limit += 997 {
-		out := map[string]any{
-			"vpn":    base["vpn"],
-			"queues": base["queues"],
-			"extras": base["extras"],
+		out := build()
+		rep := composite.BoundResponse(collectStrategy, out, size, limit)
+		if rep.Unbounded || !rep.Truncated || rep.OmittedItems == 0 {
+			t.Fatalf("limit %d: report %+v", limit, rep)
 		}
-		rep := composite.BoundResponse(out, size, limit)
-		if rep.Unbounded {
-			t.Fatalf("limit %d: reported unbounded", limit)
-		}
-		if got := sizeOf(t, out); got > limit {
+		got := textLen(t, out)
+		if got > limit {
 			t.Fatalf("limit %d: result is %d bytes after bounding", limit, got)
 		}
-		if !rep.Truncated || rep.OmittedItems == 0 {
-			t.Fatalf("limit %d: nothing omitted: %+v", limit, rep)
+		if limit-got > widest {
+			t.Fatalf("limit %d: result is %d bytes, %d under the limit — more than one row (%d) was over-trimmed", limit, got, limit-got, widest)
 		}
 	}
 }
@@ -117,8 +131,8 @@ func TestBoundResponse_ResultFitsUnderTheCap(t *testing.T) {
 // the query — in the keys paginated truncation already uses.
 func TestBoundResponse_TruncationIsVisible(t *testing.T) {
 	out := map[string]any{"queues": map[string]any{"data": rows(100, 100)}}
-	size := sizeOf(t, out)
-	rep := composite.BoundResponse(out, size, size/2)
+	size := textLen(t, out)
+	rep := composite.BoundResponse(collectStrategy, out, size, size/2)
 
 	step := out["queues"].(map[string]any)
 	kept := len(step["data"].([]any))
@@ -147,7 +161,7 @@ func TestBoundResponse_TruncationIsVisible(t *testing.T) {
 func TestBoundResponse_SummaryUntouchedAndNamed(t *testing.T) {
 	summary := map[string]any{"scanned": 100, "downCount": 3}
 	out := map[string]any{"queues": map[string]any{"data": rows(100, 100)}, "summary": summary}
-	composite.BoundResponse(out, sizeOf(t, out), 4000)
+	composite.BoundResponse(postProcessStrategy, out, textLen(t, out), 4000)
 
 	if !reflect.DeepEqual(out["summary"], map[string]any{"scanned": 100, "downCount": 3}) {
 		t.Fatalf("summary changed: %v", out["summary"])
@@ -158,16 +172,102 @@ func TestBoundResponse_SummaryUntouchedAndNamed(t *testing.T) {
 	}
 }
 
-// A paginated step that already carries a maxResults message keeps it; the
-// size note is appended rather than replacing it.
-func TestBoundResponse_PreservesExistingTruncationMessage(t *testing.T) {
-	out := map[string]any{"queues": map[string]any{
-		"data": rows(100, 100), "truncated": true, "truncatedMessage": "Results limited to 100. Use maxResults (up to 500) to retrieve more.",
-	}}
-	composite.BoundResponse(out, sizeOf(t, out), 3000)
-	msg := out["queues"].(map[string]any)["truncatedMessage"].(string)
-	if !strings.HasPrefix(msg, "Results limited to 100.") || !strings.Contains(msg, "Response size limit reached") {
-		t.Fatalf("message = %q, want the original followed by the size note", msg)
+// A postProcess summary is the handler's output, not a step, so a summary that
+// happens to hold a "data" array is never trimmed — it is the one thing the
+// valve promises not to touch. Only the raw step gives up rows.
+func TestBoundResponse_PostProcessSummaryWithDataArrayIsNotTrimmed(t *testing.T) {
+	summaryRows := rows(100, 100)
+	out := map[string]any{
+		"queues":  map[string]any{"data": rows(5, 50)},
+		"summary": map[string]any{"data": summaryRows, "count": 100},
+	}
+	// Small enough that the summary's rows alone could not fit: the raw step
+	// is emptied, and the result is still too big, so nothing can be done.
+	rep := composite.BoundResponse(postProcessStrategy, out, textLen(t, out), 6000)
+
+	if got := out["summary"].(map[string]any)["data"].([]any); len(got) != 100 {
+		t.Fatalf("summary.data lost rows: %d left of 100", len(got))
+	}
+	if _, set := out["summary"].(map[string]any)["omittedItems"]; set {
+		t.Fatal("summary was flagged as trimmed")
+	}
+	if !rep.Unbounded {
+		t.Fatalf("report = %+v, want Unbounded: the only oversized part is the summary", rep)
+	}
+
+	// With room for the summary, the raw step is what gets trimmed.
+	big := map[string]any{
+		"queues":  map[string]any{"data": rows(100, 100)},
+		"summary": map[string]any{"data": rows(3, 10), "count": 3},
+	}
+	rep = composite.BoundResponse(postProcessStrategy, big, textLen(t, big), 8000)
+	if !rep.Truncated || !reflect.DeepEqual(rep.TrimmedSteps, []string{"queues"}) {
+		t.Fatalf("report = %+v, want only the raw step trimmed", rep)
+	}
+	if got := big["summary"].(map[string]any)["data"].([]any); len(got) != 3 {
+		t.Fatalf("summary.data changed: %d rows", len(got))
+	}
+}
+
+// For a collect tool every key is a step, and the loader reserves the step ID
+// "summary" only for postProcess, so a collect step named "summary" is trimmed
+// like any other.
+func TestBoundResponse_CollectStepNamedSummaryIsTrimmed(t *testing.T) {
+	out := map[string]any{"summary": map[string]any{"data": rows(100, 100)}}
+	rep := composite.BoundResponse(collectStrategy, out, textLen(t, out), 4000)
+
+	if !rep.Truncated || rowCount(t, out, "summary") >= 100 {
+		t.Fatalf("report = %+v, rows left %d: a collect step named summary was not trimmed", rep, rowCount(t, out, "summary"))
+	}
+	msg := out["summary"].(map[string]any)["truncatedMessage"].(string)
+	if strings.Contains(msg, "summary was computed") {
+		t.Errorf("message %q describes a handler summary a collect tool does not have", msg)
+	}
+}
+
+// What an earlier truncation note says is kept — except advice the size cap
+// makes wrong. "Use maxResults (up to 500) to retrieve more" would send the
+// caller to a call that returns the same rows, so it goes; the rest of the note
+// (how many rows maxResults allowed) and the other notes stay.
+func TestBoundResponse_EarlierTruncationNote(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		prev     string
+		wantKept string
+		wantGone string
+	}{
+		{
+			name:     "maxResults note loses its advice",
+			prev:     "Results limited to 100. Use maxResults (up to 500) to retrieve more.",
+			wantKept: "Results limited to 100.",
+			wantGone: "Use maxResults",
+		},
+		{
+			name:     "ceiling note is kept whole",
+			prev:     "More results exist but the maximum limit of 500 has been reached. Not all results are shown.",
+			wantKept: "More results exist but the maximum limit of 500 has been reached. Not all results are shown.",
+		},
+		{
+			name:     "page-limit note is kept whole",
+			prev:     "Pagination stopped after 50 pages; result is incomplete. This usually indicates a broker issue with a persistent nextPageUri — narrow the query (e.g., by msgVpnName or a where filter) or contact your broker administrator.",
+			wantKept: "Pagination stopped after 50 pages; result is incomplete.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := map[string]any{"queues": map[string]any{"data": rows(100, 100), "truncated": true, "truncatedMessage": tc.prev}}
+			composite.BoundResponse(collectStrategy, out, textLen(t, out), 3000)
+			msg := out["queues"].(map[string]any)["truncatedMessage"].(string)
+
+			if !strings.HasPrefix(msg, tc.wantKept) || !strings.Contains(msg, "Response size limit reached") {
+				t.Errorf("message = %q, want the earlier note followed by the size note", msg)
+			}
+			if tc.wantGone != "" && strings.Contains(msg, tc.wantGone) {
+				t.Errorf("message = %q still contains %q", msg, tc.wantGone)
+			}
+			if tc.wantGone == "" && !strings.Contains(msg, tc.prev) {
+				t.Errorf("message = %q lost part of the earlier note", msg)
+			}
+		})
 	}
 }
 
@@ -181,13 +281,13 @@ func TestBoundResponse_Deterministic(t *testing.T) {
 			"c": map[string]any{"data": rows(80, 90)},
 		}
 	}
-	size := sizeOf(t, build())
+	size := textLen(t, build())
 	first := build()
-	composite.BoundResponse(first, size, size/3)
+	composite.BoundResponse(collectStrategy, first, size, size/3)
 	want, _ := json.Marshal(first)
 	for i := 0; i < 50; i++ {
 		again := build()
-		composite.BoundResponse(again, size, size/3)
+		composite.BoundResponse(collectStrategy, again, size, size/3)
 		got, _ := json.Marshal(again)
 		if string(got) != string(want) {
 			t.Fatalf("run %d produced different output", i)
@@ -195,26 +295,49 @@ func TestBoundResponse_Deterministic(t *testing.T) {
 	}
 }
 
-// The largest array gives up rows first, so one huge step does not leave a
-// small sibling empty. The first rows are the ones kept.
+// The largest array gives up rows first. The big step is named so that it
+// sorts LAST: draining steps in plain ID order, or always taking the first, would
+// empty the small one before touching the big one, and this fails.
 func TestBoundResponse_TrimsLargestFirstAndKeepsThePrefix(t *testing.T) {
 	big, small := rows(200, 100), rows(5, 100)
-	out := map[string]any{"big": map[string]any{"data": big}, "small": map[string]any{"data": small}}
-	size := sizeOf(t, out)
-	rep := composite.BoundResponse(out, size, size/2)
+	out := map[string]any{"z-big": map[string]any{"data": big}, "a-small": map[string]any{"data": small}}
+	size := textLen(t, out)
+	rep := composite.BoundResponse(collectStrategy, out, size, size/2)
 
-	if rowCount(t, out, "small") != 5 {
-		t.Errorf("small step lost rows: %d left", rowCount(t, out, "small"))
+	if rowCount(t, out, "a-small") != 5 {
+		t.Errorf("small step lost rows: %d left of 5", rowCount(t, out, "a-small"))
 	}
-	kept := out["big"].(map[string]any)["data"].([]any)
+	kept := out["z-big"].(map[string]any)["data"].([]any)
 	if len(kept) >= 200 || !reflect.DeepEqual(kept, big[:len(kept)]) {
 		t.Errorf("big step: kept %d rows, want a strict prefix of the original", len(kept))
 	}
-	if !reflect.DeepEqual(rep.TrimmedSteps, []string{"big"}) {
-		t.Errorf("TrimmedSteps = %v, want [big]", rep.TrimmedSteps)
+	if !reflect.DeepEqual(rep.TrimmedSteps, []string{"z-big"}) {
+		t.Errorf("TrimmedSteps = %v, want [z-big]", rep.TrimmedSteps)
 	}
-	if _, set := out["small"].(map[string]any)["truncated"]; set {
+	if _, set := out["a-small"].(map[string]any)["truncated"]; set {
 		t.Error("untrimmed step was flagged truncated")
+	}
+}
+
+// Steps of similar size shrink together: their kept counts end within one row
+// of each other, whatever their IDs sort as. A selection that always drains one
+// step in ID order leaves one empty and the others whole.
+func TestBoundResponse_SimilarStepsShrinkTogether(t *testing.T) {
+	out := map[string]any{
+		"alpha": map[string]any{"data": rows(90, 100)},
+		"mid":   map[string]any{"data": rows(90, 100)},
+		"zulu":  map[string]any{"data": rows(90, 100)},
+	}
+	size := textLen(t, out)
+	composite.BoundResponse(collectStrategy, out, size, size/2)
+
+	counts := []int{rowCount(t, out, "alpha"), rowCount(t, out, "mid"), rowCount(t, out, "zulu")}
+	lo, hi := counts[0], counts[0]
+	for _, c := range counts {
+		lo, hi = min(lo, c), max(hi, c)
+	}
+	if hi-lo > 1 || hi >= 90 || lo == 0 {
+		t.Fatalf("kept counts %v: want all three trimmed to within one row of each other", counts)
 	}
 }
 
@@ -227,7 +350,7 @@ func TestBoundResponse_UnboundedWhenRowsCannotFixIt(t *testing.T) {
 		"summary": map[string]any{"byReason": map[string]any{huge: 1}},
 	}
 	before, _ := json.Marshal(out)
-	rep := composite.BoundResponse(out, len(before), 2000)
+	rep := composite.BoundResponse(postProcessStrategy, out, textLen(t, out), 2000)
 
 	if !rep.Unbounded || rep.Truncated || rep.OmittedItems != 0 {
 		t.Fatalf("report = %+v, want Unbounded only", rep)
@@ -235,6 +358,63 @@ func TestBoundResponse_UnboundedWhenRowsCannotFixIt(t *testing.T) {
 	after, _ := json.Marshal(out)
 	if string(after) != string(before) {
 		t.Fatal("an unfixable result was modified anyway")
+	}
+}
+
+// Whether trimming can help is decided on the exact size of the emptied
+// result, not an estimate. Pin both sides of that boundary at the production
+// cap: padding that leaves the emptied result exactly at the cap is trimmed;
+// one byte more is unfixable. An estimate that pads for the keys it adds, as the
+// first version did, reports the first case Unbounded and ships it oversized.
+func TestBoundResponse_FeasibilityIsExactAtTheProductionCap(t *testing.T) {
+	limit := composite.ResponseCapBytes
+	build := func(pad int) map[string]any {
+		return map[string]any{
+			"summary": map[string]any{"pad": strings.Repeat("p", pad)},
+			"queues":  map[string]any{"data": rows(1, 1000)},
+		}
+	}
+	// Probe: a pad that leaves the result over the cap with the row, and under
+	// it without. Emptying the row gives the exact size of the emptied result.
+	probe := build(limit - 500)
+	rep := composite.BoundResponse(postProcessStrategy, probe, textLen(t, probe), limit)
+	if !rep.Truncated || rowCount(t, probe, "queues") != 0 {
+		t.Fatalf("probe: report %+v, rows left %d", rep, rowCount(t, probe, "queues"))
+	}
+	emptied := textLen(t, probe)
+	exactPad := limit - 500 + (limit - emptied)
+
+	fits := build(exactPad)
+	rep = composite.BoundResponse(postProcessStrategy, fits, textLen(t, fits), limit)
+	if !rep.Truncated || rep.Unbounded {
+		t.Fatalf("pad %d leaves the emptied result at the cap, but the report is %+v", exactPad, rep)
+	}
+	if got := textLen(t, fits); got != limit {
+		t.Fatalf("trimmed result is %d bytes, want exactly %d", got, limit)
+	}
+
+	over := build(exactPad + 1)
+	rep = composite.BoundResponse(postProcessStrategy, over, textLen(t, over), limit)
+	if !rep.Unbounded || rep.Truncated || rowCount(t, over, "queues") != 1 {
+		t.Fatalf("one byte past the boundary: report %+v, rows left %d; want Unbounded and untouched", rep, rowCount(t, over, "queues"))
+	}
+}
+
+// A step whose every row is omitted keeps "data" as an empty array. A nil slice
+// would serialize as null, which breaks a client that iterates the list and a
+// schema that requires an array.
+func TestBoundResponse_EveryRowOmittedLeavesAnEmptyArray(t *testing.T) {
+	out := map[string]any{"queues": map[string]any{"data": rows(1, 3000)}}
+	rep := composite.BoundResponse(collectStrategy, out, textLen(t, out), 1000)
+	if !rep.Truncated || rowCount(t, out, "queues") != 0 {
+		t.Fatalf("report %+v, rows left %d: want every row omitted", rep, rowCount(t, out, "queues"))
+	}
+	if _, isNil := out["queues"].(map[string]any)["data"].([]any); !isNil {
+		t.Fatal("data is not a []any")
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), `"data":null`) || !strings.Contains(string(b), `"data":[]`) {
+		t.Fatalf("serialized result = %s, want data to be []", b)
 	}
 }
 
@@ -248,7 +428,7 @@ func TestBoundResponse_NothingTrimmable(t *testing.T) {
 		"data not a slice": {"step": map[string]any{"data": "text"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rep := composite.BoundResponse(out, 10_000, 10)
+			rep := composite.BoundResponse(collectStrategy, out, 10_000, 10)
 			if !rep.Unbounded || rep.Truncated {
 				t.Fatalf("report = %+v, want Unbounded", rep)
 			}
@@ -261,7 +441,7 @@ func TestBoundResponse_NothingTrimmable(t *testing.T) {
 func TestBoundResponse_DoesNotMutateTheSharedStepMap(t *testing.T) {
 	step := map[string]any{"data": rows(60, 100)}
 	out := map[string]any{"queues": step}
-	composite.BoundResponse(out, sizeOf(t, out), 2000)
+	composite.BoundResponse(collectStrategy, out, textLen(t, out), 2000)
 
 	if len(step["data"].([]any)) != 60 {
 		t.Errorf("shared step's rows were trimmed in place: %d left", len(step["data"].([]any)))
@@ -278,7 +458,7 @@ func TestBoundResponse_MessageHasNoRowOrCallerContent(t *testing.T) {
 	data := rows(100, 100)
 	data[0].(map[string]any)["queueName"] = marker
 	out := map[string]any{"queues": map[string]any{"data": data}}
-	composite.BoundResponse(out, sizeOf(t, out), 3000)
+	composite.BoundResponse(collectStrategy, out, textLen(t, out), 3000)
 
 	msg := out["queues"].(map[string]any)["truncatedMessage"].(string)
 	if strings.Contains(msg, marker) {
