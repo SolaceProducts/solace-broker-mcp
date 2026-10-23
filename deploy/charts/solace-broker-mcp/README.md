@@ -24,8 +24,8 @@ Grafana, or an OpenTelemetry collector; use their own charts
 > `helm-chart` CI job keeps the two in step: a change to either side alone
 > fails it ([Developing the chart](#developing-the-chart)). Beyond what the raw
 > manifests carry, the chart mounts [certificate files](#certificate-files)
-> (in-pod TLS, a CA bundle, the OTLP exporter's TLS files). It does not yet
-> cover broker-side OAuth (SOL-156418).
+> (in-pod TLS, a CA bundle, the OTLP exporter's TLS files) and renders
+> [broker-side OAuth](#broker-side-oauth-hop-2) (`brokerOAuth`).
 > Until the chart is published to a registry, install it from a checkout of
 > this repository.
 
@@ -99,8 +99,8 @@ chart-managed Secret, so a change to either rolls the pods. The rollout keeps
 capacity (`maxUnavailable: 0`, `maxSurge: 1`).
 
 The Secret checksum is a hash of the chart-managed credentials, and anyone who
-can read the Deployment can read it. A weak password or dev token can be
-guessed offline against it. Use long random credentials, or supply them through
+can read the Deployment can read it. A weak password, dev token or IdP client
+secret can be guessed offline against it. Use long random credentials, or supply them through
 existing Secrets, which the checksum does not cover.
 
 A change to an **existing** Secret you manage yourself does not roll the pods.
@@ -125,6 +125,7 @@ kubectl rollout restart deployment/mcp-solace-broker-mcp
 | `mcpClientAuth.issuer`, `.audience`, `.resourceUrl` | `null` | **Required** under `oauth`; `issuer` and `resourceUrl` as `https://` URLs |
 | `mcpClientAuth.scopesSupported` | `null` | Scopes advertised to MCP clients; `null` = `["openid"]`. Entra needs `offline_access` |
 | `mcpClientAuth.toolAuthorization.*` | `null`, `accessLevelGroups: {}` | `oauth` only: `enabled` (required under `oauth`), `groupsClaimName`, `filterToolsList`, `accessLevelGroups`; see [Tool authorization](#tool-authorization) |
+| `brokerOAuth.*` | `null`, secrets `""` | The identity provider for brokers with `auth.mode: oauth`: `idpTokenEndpoint`, `mcpServerClientId`, `grantType`, `clientAuthMethod`, `clientSecret` or `existingSecret`, and the optional `tokenExpiryFallback`, `circuitBreaker.*`, `retryAfter.*`; see [Broker-side OAuth (Hop 2)](#broker-side-oauth-hop-2) |
 | `enableWriteTools` | `null` | `true` registers the write/action tools; `null` = the server default, `false` |
 | `tlsTerminatedUpstream` | `null` | Under `oauth`, **required `true`** unless `tls.existingSecret` is set: acknowledges TLS is terminated at the Ingress or gateway. Not with `tls.existingSecret` |
 | `tls.existingSecret` | `""` | In-pod TLS: a `kubernetes.io/tls` Secret; the server and its probes switch to HTTPS. See [In-pod TLS](#in-pod-tls) |
@@ -169,11 +170,12 @@ brokers:
     insecureSkipVerify: false               # optional; dev only
     envPrefix: ""                           # default: name upper-cased, "-" -> "_"
     auth:
-      mode: basic                           # basic | bearer
+      mode: basic                           # basic | bearer | oauth
       username: ""                          # chart-managed (ignored when existingSecret is set)
       password: ""
       token: ""                             # bearer
       existingSecret: ""                    # keys: username + password (basic) or token (bearer)
+      target: null                          # oauth only; see Broker-side OAuth (Hop 2)
 ```
 
 Because Helm merges maps, the default `brokers` is empty: your values file
@@ -264,6 +266,79 @@ for everyone: a group in `accessLevelGroups` that grants a write tool while
 `enableWriteTools` is off renders, as the server only warns about it, but the
 tool is never registered.
 
+## Broker-side OAuth (Hop 2)
+
+A broker with `auth.mode: oauth` has no credential of its own. For each call,
+the server exchanges the caller's token at your identity provider (IdP) for a
+token for that broker, so every agent reaches the broker under its own
+identity instead of a shared admin credential
+([`docs/authentication.md`](../../../docs/authentication.md#step-2b-configure-broker-oauth-hop-2)).
+
+Prerequisites:
+
+- **Hop 1 oauth:** `mcpClientAuth.mode: oauth` (see
+  [Client authentication](#client-authentication)). The exchange consumes the
+  caller's token, which only that mode provides.
+- **An IdP client for the server**, registered for token exchange (RFC 8693)
+  or, for Microsoft Entra ID, On-Behalf-Of (jwt-bearer, RFC 7523), with a
+  client secret.
+- **Each broker's OAuth profile** accepting the exchanged token
+  ([`docs/authentication.md`](../../../docs/authentication.md#step-2c-configure-the-event-brokers-oauth-profile)).
+- A privately signed token endpoint needs its CA in [`caBundle`](#ca-bundle).
+
+```yaml
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      target: solace-broker-prod      # this broker's API at the IdP; required under jwt-bearer
+  lab:                                # oauth and basic brokers can be mixed
+    url: "https://lab.example.com:943"
+    auth:
+      mode: basic
+      existingSecret: lab-semp
+brokerOAuth:
+  idpTokenEndpoint: "https://idp.example.com/realms/acme/protocol/openid-connect/token"
+  mcpServerClientId: mcp-server
+  grantType: "urn:ietf:params:oauth:grant-type:token-exchange"
+  clientAuthMethod: client_secret_basic   # or client_secret_post
+  existingSecret: mcp-idp-client          # key: client-secret
+  # tokenExpiryFallback: 1h               # optional; null fails closed
+```
+
+`clientSecret` sets a chart-managed secret instead of `existingSecret`. Either
+way it reaches the pod as `BROKER_OAUTH_CLIENT_SECRET`, which the config
+references as `${BROKER_OAUTH_CLIENT_SECRET}` under the one
+`mcp_server_client_auth` method `clientAuthMethod` names; it is never written
+into the ConfigMap. A chart-managed secret is covered by the pod template's
+`checksum/secret`, so changing it rolls the pods, with the same exposure as
+broker credentials ([Upgrade](#upgrade)); rotating an existing Secret needs a
+restart. `circuitBreaker.*` and `retryAfter.maxHonoredDuration` default to
+`null`: the server's defaults are in
+[`docs/configuration.md`](../../../docs/configuration.md#circuit-breaker).
+Durations are strings (`"30s"`, not `30`); the schema checks the integer
+bounds, and the server checks duration ranges at startup.
+
+The chart fails rendering on these setups, which the server would refuse at
+startup: an oauth broker under `mcpClientAuth.mode: static`; an oauth broker
+with no `brokerOAuth`; a `brokerOAuth` missing `idpTokenEndpoint`,
+`mcpServerClientId`, `grantType`, `clientAuthMethod`, or both `clientSecret`
+and `existingSecret`; an `idpTokenEndpoint` that is not
+`http(s)://<host>[:port][/path]`, or not `https://` under
+`mcpClientAuth.mode: oauth`; and a whitespace-only `target`. It also refuses
+an `idpTokenEndpoint` with credentials, a query string or a fragment, which
+would send a secret to the IdP in plain sight (no message echoes the value),
+and `username`, `password`, `token` or `existingSecret` on an oauth broker, or
+`target` on a `basic` or `bearer` one, which the server would ignore. Under
+the jwt-bearer `grantType` it also refuses an oauth broker with no `target`:
+the server would start, then fail every exchange for that broker. Write
+`idpTokenEndpoint` out in full: unlike `mcpClientAuth.issuer`, it refuses a
+`${VAR_NAME}` reference. An
+oauth broker needs no `envPrefix`, and ignores one left set. `brokerOAuth` set
+with no oauth broker renders, as the server only warns about it; the install
+notes warn too.
+
 ## Credentials and Secrets
 
 Each credential reaches the pod as one env var, which the rendered config
@@ -275,19 +350,21 @@ references as `${...}`. Credentials are never written into the ConfigMap.
 | Broker password (`basic`) | `<PREFIX>_PASSWORD` | `password` |
 | Broker token (`bearer`) | `<PREFIX>_TOKEN` | `token` |
 | MCP dev token (`static` only) | `DEV_TOKEN` | `dev-token` |
+| IdP client secret (`brokerOAuth`) | `BROKER_OAUTH_CLIENT_SECRET` | `client-secret` |
 
 `<PREFIX>` is the broker's `envPrefix`, by default its name upper-cased with
 `-` replaced by `_` (`my-broker` → `MY_BROKER`). A custom `envPrefix` must
 match `^[A-Z_][A-Z0-9_]*$`, since the server substitutes only upper-case
-`${...}` references; a broker name starting with a digit therefore needs one.
+`${...}` references; a `basic` or `bearer` broker whose name starts with a
+digit therefore needs one.
 Setting `envPrefix: BROKER` on a single broker reproduces the env var names in
 `deploy/kubernetes/secret.yaml`.
 
 - **Chart-managed:** credentials set in values go into one Secret named after
   the release (`<release>-solace-broker-mcp`), loaded with `envFrom`. It is
   created only when at least one credential is chart-managed.
-- **Existing Secret:** set `brokers.<name>.auth.existingSecret` or
-  `mcpClientAuth.existingSecret`. The chart injects each key with
+- **Existing Secret:** set `brokers.<name>.auth.existingSecret`,
+  `mcpClientAuth.existingSecret` or `brokerOAuth.existingSecret`. The chart injects each key with
   `secretKeyRef` under the same env var name. Create the Secret first:
 
   ```bash

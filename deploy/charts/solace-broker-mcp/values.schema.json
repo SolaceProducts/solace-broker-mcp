@@ -84,6 +84,7 @@
                 "enum": [
                   "basic",
                   "bearer",
+                  "oauth",
                   null
                 ]
               },
@@ -110,6 +111,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "target": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "target: this broker's downstream API at the identity provider (oauth only; setting it under basic or bearer fails rendering). Optional under token-exchange, required under jwt-bearer (sent as scope); must not be whitespace-only."
               }
             }
           }
@@ -219,6 +227,158 @@
               "propertyNames": {
                 "pattern": "\\S"
               }
+            }
+          }
+        }
+      }
+    },
+    "brokerOAuth": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "broker_oauth: the identity provider the server exchanges each caller's token at for a broker token (Hop 2). Rendered, and validated in the templates, when any value is set. null keys are left out, so the server's defaults apply (docs/configuration.md). URL and secret checks live in the templates: Helm prints a schema-rejected value in full.",
+      "properties": {
+        "idpTokenEndpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "idp_token_endpoint; required. http(s)://<host>[:port][/path], https under mcpClientAuth.mode oauth. A literal URL: no ${VAR_NAME} reference."
+        },
+        "mcpServerClientId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_server_client_id; required."
+        },
+        "grantType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "urn:ietf:params:oauth:grant-type:token-exchange",
+            "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            null
+          ],
+          "description": "grant_type; required. Mirrors validGrantTypes (internal/config/config.go)."
+        },
+        "clientAuthMethod": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "client_secret_basic",
+            "client_secret_post",
+            null
+          ],
+          "description": "The one mcp_server_client_auth sub-block rendered; required."
+        },
+        "clientSecret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Chart-managed client secret (ignored when existingSecret is set). Reaches the pod as BROKER_OAUTH_CLIENT_SECRET, never the ConfigMap."
+        },
+        "existingSecret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A Secret holding the client secret under the key client-secret."
+        },
+        "tokenExpiryFallback": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+          "description": "token_expiry_fallback; a positive duration string."
+        },
+        "circuitBreaker": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "circuit_breaker. Bounds mirror internal/config/idp_circuit_breaker.go; duration ranges are checked by the server.",
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "failureRateWindow": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "description": "failure_rate_window"
+            },
+            "minimumRequests": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "failureRateThresholdPercent": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 100
+            },
+            "consecutiveFailureThreshold": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "openStateDuration": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "description": "open_state_duration"
+            },
+            "halfOpenProbeRequests": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
+        },
+        "retryAfter": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "retry_after.",
+          "properties": {
+            "maxHonoredDuration": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+              "description": "max_honored_duration"
             }
           }
         }

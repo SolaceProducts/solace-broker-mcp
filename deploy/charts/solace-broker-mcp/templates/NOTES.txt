@@ -65,3 +65,13 @@ WARNING: /metrics is unauthenticated and networkPolicy.enabled is false, so any
 pod that can route to this one can read it. Set networkPolicy.enabled and
 networkPolicy.metricsNamespace (README.md § NetworkPolicy).
 {{- end }}
+{{- $oauthBroker := false }}
+{{- range $name, $broker := .Values.brokers }}
+{{- if and $broker (eq (dig "auth" "mode" "" ($broker | default dict) | toString) "oauth") }}{{ $oauthBroker = true }}{{ end }}
+{{- end }}
+{{- if and (include "solace-broker-mcp.brokerOAuthSet" .) (not $oauthBroker) }}
+
+WARNING: brokerOAuth is set but no broker uses auth.mode oauth, so the server
+logs a warning and never exchanges a token. Set a broker's auth.mode to oauth
+(README.md § Broker-side OAuth), or remove brokerOAuth.
+{{- end }}
