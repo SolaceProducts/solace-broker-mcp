@@ -1,15 +1,22 @@
+{{- $tls := include "solace-broker-mcp.tlsSecret" . -}}
 {{ include "solace-broker-mcp.fullname" . }} is deploying {{ .Values.replicaCount }} replica(s).
 
 Check it is ready:
 
   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "solace-broker-mcp.fullname" . }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "solace-broker-mcp.fullname" . }} {{ (.Values.server | default dict).port | default 9090 }}:{{ (.Values.server | default dict).port | default 9090 }}
-  curl -s http://127.0.0.1:{{ (.Values.server | default dict).port | default 9090 }}/readyz
+  {{ if $tls }}curl -sk https{{ else }}curl -s http{{ end }}://127.0.0.1:{{ (.Values.server | default dict).port | default 9090 }}/readyz
 
 {{ if eq ((.Values.mcpClientAuth | default dict).mode | default "" | toString) "oauth" -}}
 MCP clients connect to {{ .Values.mcpClientAuth.resourceUrl }} with a token from your identity provider
-({{ .Values.mcpClientAuth.issuer }}). The Service port serves plaintext behind the
+({{ .Values.mcpClientAuth.issuer }}).
+{{- if $tls }} The Service port serves TLS from tls.existingSecret.
+{{- else }} The Service port serves plaintext behind the
 TLS-terminating Ingress or gateway: keep the Service ClusterIP.
+{{- end }}
+{{- else if $tls -}}
+MCP clients connect to https://<service>:{{ (.Values.server | default dict).port | default 9090 }}/mcp with the dev token as a
+Bearer token. Keep the Service ClusterIP: the dev token is a shared credential.
 {{- else -}}
 MCP clients connect to http://<service>:{{ (.Values.server | default dict).port | default 9090 }}/mcp with the dev token as a
 Bearer token. Keep the Service ClusterIP: under mcp_client_auth.mode static the
@@ -44,6 +51,13 @@ keep the Ingress on a trusted network.
 WARNING: ingress.tls.secretName is empty, so the Ingress serves plain HTTP
 unless TLS terminates in front of it, and clients send their bearer token in
 cleartext. Set ingress.tls.secretName.
+{{- end }}
+{{- if and $tls (.Values.ingress | default dict).enabled (not (has (get ((.Values.ingress | default dict).annotations | default dict) "nginx.ingress.kubernetes.io/backend-protocol" | toString | trim | upper) (list "HTTPS" "GRPCS"))) }}
+
+WARNING: tls.existingSecret serves HTTPS in the pod, so the Ingress controller
+must connect to it over HTTPS or every request fails. For ingress-nginx, set
+ingress.annotations."nginx.ingress.kubernetes.io/backend-protocol": "HTTPS"
+(README.md § In-pod TLS); other controllers have their own setting.
 {{- end }}
 {{- if and (or (dig "metrics" "scrape" "enabled" false $obs) (dig "serviceMonitor" "enabled" false $obs)) (not (.Values.networkPolicy | default dict).enabled) }}
 

@@ -53,7 +53,9 @@ always required.
 
 This applies to both OTLP metrics and traces. TLS is the default. An `http://` endpoint or
 `OTEL_EXPORTER_OTLP_INSECURE=true` switches the exporter to cleartext gRPC without another
-warning. Use an `https://` endpoint to a collector you control.
+warning, unless a CA file or a complete client certificate and key pair below loads for that
+signal: the exporter then uses TLS anyway. Use an `https://` endpoint to a collector you
+control.
 
 For a private CA, set `OTEL_EXPORTER_OTLP_CERTIFICATE` or its
 `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE` / `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` variant.

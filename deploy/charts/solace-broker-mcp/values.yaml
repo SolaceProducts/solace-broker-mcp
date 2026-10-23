@@ -79,11 +79,29 @@ mcpClientAuth:
 # accessLevelGroups does not register it; this does.
 enableWriteTools: null
 
-# Required true under mcpClientAuth.mode oauth, which refuses a plaintext
-# listener: it acknowledges that TLS is terminated at the Ingress or gateway in
-# front of the Service (in-pod TLS is not yet supported by this chart,
-# SOL-156417). The Service's plaintext port must never leave the cluster.
+# Acknowledges that TLS is terminated at the Ingress or gateway in front of the
+# Service. mcpClientAuth.mode oauth refuses a plaintext listener, so it needs
+# this set to true or in-pod TLS (tls.existingSecret), and the two cannot both
+# be set. The Service's plaintext port must never leave the cluster.
 tlsTerminatedUpstream: null
+
+# In-pod TLS: a kubernetes.io/tls Secret (keys tls.crt and tls.key), mounted
+# read-only at /etc/mcp-server/tls. The server then serves HTTPS on
+# server.port, probes included; the metrics port stays plain HTTP. An Ingress
+# in front must speak HTTPS to the pod (README.md § In-pod TLS). The server
+# reads the files at startup: restart the pods after rotating the Secret.
+tls:
+  existingSecret: ""
+
+# Extra CA certificates (PEM) for outbound TLS: one key of a ConfigMap or a
+# Secret, mounted read-only, with SSL_CERT_FILE pointing at it. The public
+# roots stay trusted. Reaches the identity provider client, the broker SEMP
+# connections, and the OTLP exporter unless observability.otlpTls.certificate
+# is set (README.md § CA bundle). Set one of the two; key defaults to ca.crt.
+# Read at startup: restart the pods after changing it.
+caBundle:
+  configMap: null             # e.g. {name: corp-ca, key: ca.crt}
+  secret: null                # e.g. {name: corp-ca, key: ca.crt}
 
 # Under oauth, accepts a broker with insecureSkipVerify: true (certificate
 # checks off, exposing the broker admin credential to a man-in-the-middle);
@@ -141,6 +159,23 @@ observability:
   # tracing nor metrics.otlp on fails rendering: nothing would use it. It
   # must be http(s)://<host>[:port], with no credentials, path or query.
   otlpEndpoint: ""
+  # TLS files for the OTLP exporter (docs/observability.md § "OTLP Transport
+  # Security"), projected read-only into /etc/mcp-server/otlp, each with its
+  # OTEL_EXPORTER_OTLP_* variable set. Each takes {secret: {name, key}} or
+  # {configMap: {name, key}}; clientKey takes a secret only. Requires
+  # tracing.enabled or metrics.otlp.enabled, and an https:// otlpEndpoint when
+  # one is set; an extraEnv OTEL_EXPORTER_OTLP_*ENDPOINT or *_INSECURE that
+  # leaves an exporting signal on cleartext fails too. The _METRICS_/_TRACES_ variants
+  # are set through extraEnv plus extraVolumes. Read at startup: restart the
+  # pods after rotating them.
+  otlpTls:
+    # OTEL_EXPORTER_OTLP_CERTIFICATE: the collector's CA, which then replaces
+    # the system roots for the collector. key defaults to ca.crt.
+    certificate: null
+    # OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE / _CLIENT_KEY: the mTLS pair, set
+    # together. keys default to tls.crt and tls.key.
+    clientCertificate: null
+    clientKey: null
   # YAML tunables (docs/configuration.md § "Observability Settings"). null
   # leaves each out of the rendered config, so the server's default applies.
   # Integers must be at least 1: the server silently re-defaults anything less.
@@ -229,6 +264,16 @@ ingress:
 # Other OTEL_* settings: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
 # OTEL_EXPORTER_OTLP_INSECURE, OTEL_TRACES_SAMPLER(_ARG),
 # OTEL_METRICS_EXEMPLAR_FILTER; HTTP(S)_PROXY, NO_PROXY (README.md § Egress
-# proxy). Certificate file vars need a mounted file: see SOL-156417. Rendering
-# fails on OBS_*, MCP_SERVER_PORT, or any name the chart already sets.
+# proxy). Certificate files have named values: tls, caBundle and
+# observability.otlpTls; for any other file variable (the OTLP _METRICS_/
+# _TRACES_ certificate variants), mount the file with extraVolumes and
+# extraVolumeMounts. Rendering fails on OBS_*, MCP_SERVER_PORT, or any name
+# the chart already sets.
 extraEnv: []
+
+# Full Volume and VolumeMount entries, appended to the pod's volumes and the
+# container's volumeMounts. The root filesystem is read-only, so a file the
+# server reads must arrive this way. Rendering fails on a volume name or
+# mountPath the chart already uses, or a mountPath above one (/etc/mcp-server).
+extraVolumes: []
+extraVolumeMounts: []

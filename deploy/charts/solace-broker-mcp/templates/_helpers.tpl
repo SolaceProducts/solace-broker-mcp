@@ -160,6 +160,7 @@ certificate check (config.go validateBrokerURL, validate). */}}
 {{- if not $creds }}
 {{- fail "brokers: at least one broker is required (see values.yaml or README.md for an example)" }}
 {{- end }}
+{{- $_ := include "solace-broker-mcp.fileMounts" . }}
 {{- include "solace-broker-mcp.validateClientAuth" . }}
 {{- /* Under oauth the dev token is not used: a devToken or existingSecret left
 over from a shared base values file is ignored, never rendered. */}}
@@ -238,10 +239,10 @@ the scheme: a scheme written out in the value is known here. */}}
 {{- fail (printf "mcpClientAuth.%s must be https://<host>[:port][/path] with no credentials or whitespace when mcpClientAuth.mode is oauth" .) }}
 {{- end }}
 {{- end }}
-{{- /* The chart has no in-pod TLS yet (SOL-156417), and oauth refuses a
-plaintext listener unless TLS is acknowledged as terminated upstream. */}}
-{{- if ne (toString .Values.tlsTerminatedUpstream) "true" }}
-{{- fail "tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth: terminate TLS at the Ingress or gateway in front of the Service (in-pod TLS is not yet supported by this chart)" }}
+{{- /* oauth refuses a plaintext listener: TLS terminates in the pod
+(tls_cert_file) or is acknowledged as terminated upstream. */}}
+{{- if and (not (include "solace-broker-mcp.tlsSecret" .)) (ne (toString .Values.tlsTerminatedUpstream) "true") }}
+{{- fail "tls.existingSecret or tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth: terminate TLS in the pod, or at the Ingress or gateway in front of the Service" }}
 {{- end }}
 {{- if kindIs "invalid" $ta.enabled }}
 {{- fail "mcpClientAuth.toolAuthorization.enabled must be set to true or false when mcpClientAuth.mode is oauth (false lets any authenticated caller invoke any registered tool)" }}
@@ -268,6 +269,205 @@ class do, so a no-break space fails here rather than at startup. */}}
 {{- range $i, $scope := ($mca.scopesSupported | default list) }}
 {{- if or (not $scope) (regexMatch "[\\s\\x0B\\x{85}\\p{Z}]" (toString $scope)) }}
 {{- fail (printf "mcpClientAuth.scopesSupported[%d] must be non-empty with no whitespace" $i) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+tls.existingSecret, trimmed; empty when in-pod TLS is off.
+*/}}
+{{- define "solace-broker-mcp.tlsSecret" -}}
+{{- (.Values.tls | default dict).existingSecret | default "" | toString | trim }}
+{{- end }}
+
+{{/*
+One file reference, {configMap: {name, key}} or {secret: {name, key}}, as
+{kind, name, key}, with key defaulting to .default; {} when unset. A null
+reference is unset, and so is one whose configMap and secret are both null:
+a values overlay drops a base file's reference that way, and Helm leaves an
+empty map behind. values.schema.json
+enforces the rest before any template runs: a name and key Kubernetes
+accepts, and a Secret only for otlpTls.clientKey.
+Call with (dict "path" <values path> "ref" <value> "default" <key>).
+Output: JSON, read back with fromJson.
+*/}}
+{{- define "solace-broker-mcp.fileRef" -}}
+{{- $out := dict }}
+{{- if not (kindIs "invalid" .ref) }}
+{{- $cm := index .ref "configMap" }}
+{{- $sec := index .ref "secret" }}
+{{- if and (not (kindIs "invalid" $cm)) (not (kindIs "invalid" $sec)) }}
+{{- fail (printf "%s: set configMap or secret, not both" .path) }}
+{{- end }}
+{{- if not (and (kindIs "invalid" $cm) (kindIs "invalid" $sec)) }}
+{{- $kind := "secret" }}
+{{- $src := $sec }}
+{{- if not (kindIs "invalid" $cm) }}
+{{- $kind = "configMap" }}
+{{- $src = $cm }}
+{{- end }}
+{{- $out = dict "kind" $kind "name" (get $src "name" | toString) "key" (get $src "key" | default .default | toString) }}
+{{- end }}
+{{- end }}
+{{- toJson $out }}
+{{- end }}
+
+{{/*
+A volume that projects one key of a ConfigMap or Secret to .path, from a
+fileRef result. Call with (dict "volume" <name> "ref" <fileRef> "path" <file>).
+Output: JSON, read back with fromJson.
+*/}}
+{{- define "solace-broker-mcp.refVolume" -}}
+{{- $items := list (dict "key" .ref.key "path" .path) }}
+{{- if eq .ref.kind "configMap" }}
+{{- toJson (dict "name" .volume "configMap" (dict "name" .ref.name "items" $items)) }}
+{{- else }}
+{{- toJson (dict "name" .volume "secret" (dict "secretName" .ref.name "items" $items)) }}
+{{- end }}
+{{- end }}
+
+{{/*
+The certificate files the chart mounts: in-pod TLS (tls.existingSecret), the
+CA bundle behind SSL_CERT_FILE (caBundle) and the OTLP exporter's files
+(observability.otlpTls), as {tls, volumes, mounts, env}. Every mount is
+read-only. The server reads each file once, at startup, so a rotated
+certificate needs a pod restart (README.md § Certificate files). Called from
+credentials, so every template validates it.
+Output: JSON, read back with fromJson.
+*/}}
+{{- define "solace-broker-mcp.fileMounts" -}}
+{{- $volumes := list }}
+{{- $mounts := list }}
+{{- $env := list }}
+{{- $tlsSecret := include "solace-broker-mcp.tlsSecret" . }}
+{{- if $tlsSecret }}
+{{- /* The server does not refuse both; it serves TLS and ignores the
+acknowledgment, which then claims a proxy that is not there. */}}
+{{- if eq (toString .Values.tlsTerminatedUpstream) "true" }}
+{{- fail "tls.existingSecret and tlsTerminatedUpstream: true cannot both be set: TLS terminates either in the pod or upstream" }}
+{{- end }}
+{{- $volumes = append $volumes (dict "name" "tls" "secret" (dict "secretName" $tlsSecret)) }}
+{{- $mounts = append $mounts (dict "name" "tls" "mountPath" "/etc/mcp-server/tls" "readOnly" true) }}
+{{- end }}
+{{- $ca := include "solace-broker-mcp.fileRef" (dict "path" "caBundle" "ref" (.Values.caBundle | default dict) "default" "ca.crt") | fromJson }}
+{{- if $ca }}
+{{- $volumes = append $volumes (include "solace-broker-mcp.refVolume" (dict "volume" "ca-bundle" "ref" $ca "path" "ca.crt") | fromJson) }}
+{{- $mounts = append $mounts (dict "name" "ca-bundle" "mountPath" "/etc/mcp-server/ca" "readOnly" true) }}
+{{- $env = append $env (dict "name" "SSL_CERT_FILE" "value" "/etc/mcp-server/ca/ca.crt") }}
+{{- end }}
+{{- $obs := .Values.observability | default dict }}
+{{- $otlpTls := $obs.otlpTls | default dict }}
+{{- $sources := list }}
+{{- $set := dict }}
+{{- /* Each: value name, default key, file name, env var. */}}
+{{- range (list
+  (list "certificate" "ca.crt" "ca.crt" "OTEL_EXPORTER_OTLP_CERTIFICATE")
+  (list "clientCertificate" "tls.crt" "client.crt" "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE")
+  (list "clientKey" "tls.key" "client.key" "OTEL_EXPORTER_OTLP_CLIENT_KEY")) }}
+{{- $field := index . 0 }}
+{{- $ref := include "solace-broker-mcp.fileRef" (dict "path" (printf "observability.otlpTls.%s" $field) "ref" (index $otlpTls $field) "default" (index . 1)) | fromJson }}
+{{- if $ref }}
+{{- $_ := set $set $field true }}
+{{- $items := list (dict "key" $ref.key "path" (index . 2)) }}
+{{- $sources = append $sources (dict $ref.kind (dict "name" $ref.name "items" $items)) }}
+{{- $env = append $env (dict "name" (index . 3) "value" (printf "/etc/mcp-server/otlp/%s" (index . 2))) }}
+{{- end }}
+{{- end }}
+{{- if $sources }}
+{{- /* The SDK reads the client pair only when both are set, and drops half
+a pair without an error, which would leave mTLS off unannounced. */}}
+{{- if ne (hasKey $set "clientCertificate") (hasKey $set "clientKey") }}
+{{- fail "observability.otlpTls.clientCertificate and observability.otlpTls.clientKey must be set together" }}
+{{- end }}
+{{- if not (or (dig "tracing" "enabled" false $obs) (dig "metrics" "otlp" "enabled" false $obs)) }}
+{{- fail "observability.otlpTls is set but neither observability.tracing.enabled nor observability.metrics.otlp.enabled is true: nothing would use it" }}
+{{- end }}
+{{- /* The SDK prefers the TLS credentials these files produce over the
+cleartext an http:// endpoint asks for, so it would dial TLS to a plaintext
+collector and every export would fail. As for otlpEndpoint itself, the
+message does not echo the value. */}}
+{{- if regexMatch "^[Hh][Tt][Tt][Pp]://" ($obs.otlpEndpoint | default "" | toString | trim) }}
+{{- fail "observability.otlpTls is set but observability.otlpEndpoint is http://: the exporter would still use TLS. Use an https:// endpoint, or remove otlpTls" }}
+{{- end }}
+{{- /* The same conflict through extraEnv. For each exporting signal this
+follows the SDK's own order (otlpconfig envconfig.go): the signal's *_INSECURE,
+else the generic one, read as true case-insensitively; else the scheme of the
+signal's *_ENDPOINT, else the generic one (http and unix are cleartext, and
+for metrics unix-abstract). Values are trimmed, and an empty one is unset, as
+the SDK reads them. A valueFrom entry is not visible at render time, so a
+signal it decides is not checked. */}}
+{{- $extra := dict }}
+{{- range (.Values.extraEnv | default list) }}
+{{- $e := . | default dict }}
+{{- $n := get $e "name" | default "" | toString }}
+{{- if hasKey $e "valueFrom" }}
+{{- $_ := set $extra $n (dict "unknown" true) }}
+{{- else }}
+{{- $v := get $e "value" | default "" | toString | trim }}
+{{- if $v }}{{ $_ := set $extra $n (dict "value" $v) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- $signals := list }}
+{{- if dig "tracing" "enabled" false $obs }}{{ $signals = append $signals (list "TRACES_" (list "http" "unix")) }}{{ end }}
+{{- if dig "metrics" "otlp" "enabled" false $obs }}{{ $signals = append $signals (list "METRICS_" (list "http" "unix" "unix-abstract")) }}{{ end }}
+{{- range $signals }}
+{{- $prefix := index . 0 }}
+{{- $decider := "" }}
+{{- $insecure := false }}
+{{- range (list (printf "OTEL_EXPORTER_OTLP_%sINSECURE" $prefix) "OTEL_EXPORTER_OTLP_INSECURE") }}
+{{- if and (not $decider) (hasKey $extra .) }}{{ $decider = . }}{{ end }}
+{{- end }}
+{{- if $decider }}
+{{- $insecure = eq (lower (toString (get (get $extra $decider) "value"))) "true" }}
+{{- else }}
+{{- range (list (printf "OTEL_EXPORTER_OTLP_%sENDPOINT" $prefix) "OTEL_EXPORTER_OTLP_ENDPOINT") }}
+{{- if and (not $decider) (hasKey $extra .) }}{{ $decider = . }}{{ end }}
+{{- end }}
+{{- if $decider }}
+{{- $scheme := regexReplaceAll "^([A-Za-z][A-Za-z0-9+.-]*):.*$" (toString (get (get $extra $decider) "value")) "${1}" | lower }}
+{{- $insecure = has $scheme (index . 1) }}
+{{- end }}
+{{- end }}
+{{- if and $decider (not (get (get $extra $decider) "unknown")) $insecure }}
+{{- fail (printf "observability.otlpTls is set but extraEnv %s asks for cleartext: the exporter would still use TLS. Use an https:// endpoint, or remove otlpTls" $decider) }}
+{{- end }}
+{{- end }}
+{{- $volumes = append $volumes (dict "name" "otlp-tls" "projected" (dict "sources" $sources)) }}
+{{- $mounts = append $mounts (dict "name" "otlp-tls" "mountPath" "/etc/mcp-server/otlp" "readOnly" true) }}
+{{- end }}
+{{- toJson (dict "tls" (not (empty $tlsSecret)) "volumes" $volumes "mounts" $mounts "env" $env) }}
+{{- end }}
+
+{{/*
+Validates extraVolumes and extraVolumeMounts against what the chart renders:
+a volume name or mountPath the chart already uses would be refused by the API
+server at install, after rendering succeeded, and one mounted above a chart
+mountPath would stop the pod starting. Paths compare after clean, so a
+trailing slash does not hide a clash.
+Call with (dict "volumes" <extraVolumes> "mounts" <extraVolumeMounts>
+"names" <chart volume names> "paths" <chart mountPaths>).
+*/}}
+{{- define "solace-broker-mcp.validateExtraVolumes" -}}
+{{- range .volumes }}
+{{- if has (toString .name) $.names }}
+{{- fail (printf "extraVolumes: %s is a volume the chart already renders; choose another name" (toString .name)) }}
+{{- end }}
+{{- end }}
+{{- $paths := list }}
+{{- range .paths }}{{ $paths = append $paths (clean .) }}{{ end }}
+{{- range .mounts }}
+{{- $path := toString .mountPath }}
+{{- if has (clean $path) $paths }}
+{{- fail (printf "extraVolumeMounts: %s is a mountPath the chart already uses; choose another path" $path) }}
+{{- end }}
+{{- /* runc cannot create the chart's mount points inside a volume mounted
+above them (read-only, as ConfigMap and Secret volumes are): the pod fails
+with RunContainerError. A mount nested inside a chart mount works. */}}
+{{- $above := printf "%s/" (trimSuffix "/" (clean $path)) }}
+{{- range $paths }}
+{{- if hasPrefix $above . }}
+{{- fail (printf "extraVolumeMounts: %s contains a mountPath the chart already uses; mount it beside /etc/mcp-server, not above" $path) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -312,6 +512,10 @@ only as ${<ENV VAR>} references; the values live in a Secret.
 {{- include "solace-broker-mcp.kv" (list "" "port" $server.port) }}
 {{- include "solace-broker-mcp.kv" (list "" "log_level" $server.logLevel) }}
 {{- include "solace-broker-mcp.kv" (list "" "listen_address" $server.listenAddress) }}
+{{- if (include "solace-broker-mcp.fileMounts" . | fromJson).tls }}
+tls_cert_file: "/etc/mcp-server/tls/tls.crt"
+tls_key_file: "/etc/mcp-server/tls/tls.key"
+{{- end }}
 {{- include "solace-broker-mcp.kv" (list "" "tls_terminated_upstream" .Values.tlsTerminatedUpstream) }}
 {{- include "solace-broker-mcp.kv" (list "" "enable_write_tools" .Values.enableWriteTools) }}
 {{- include "solace-broker-mcp.kv" (list "" "allow_insecure_broker_tls" .Values.allowInsecureBrokerTls) }}

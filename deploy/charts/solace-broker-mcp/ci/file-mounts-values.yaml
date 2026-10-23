@@ -1,0 +1,45 @@
+# Every certificate file value at once: in-pod TLS under oauth (in place of
+# tlsTerminatedUpstream), a CA bundle, the OTLP exporter's CA and mTLS pair,
+# and an extra volume for a per-signal variant. Used by `ct lint` and the
+# kubeconform step.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: ci-only-placeholder
+mcpClientAuth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: mcp-server
+  resourceUrl: "https://mcp.example.com/mcp"
+  toolAuthorization:
+    enabled: false
+tls:
+  existingSecret: mcp-server-tls
+caBundle:
+  configMap:
+    name: corp-ca
+observability:
+  otlpEndpoint: "https://otel-collector.observability.svc:4317"
+  tracing:
+    enabled: true
+  otlpTls:
+    certificate:
+      configMap: {name: otel-ca}
+    clientCertificate:
+      secret: {name: mcp-otel-client}
+    clientKey:
+      secret: {name: mcp-otel-client}
+extraVolumes:
+  - name: metrics-ca
+    configMap:
+      name: metrics-ca
+extraVolumeMounts:
+  - name: metrics-ca
+    mountPath: /etc/metrics-ca
+    readOnly: true
+extraEnv:
+  - name: OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE
+    value: /etc/metrics-ca/ca.crt
