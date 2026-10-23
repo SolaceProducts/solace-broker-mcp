@@ -80,10 +80,11 @@ jobs:
       # reasoning SOL-153190 used to pick the Go module graph over FOSSA for
       # THIRD_PARTY_LICENSES.md — no reconciliation needed between generator
       # and any gate, because there is no second resolution to disagree with.
-      # Pinned to v1.10.0 deliberately, not @latest: v1.10.0 is the newest
-      # release whose own go.mod requires exactly `go 1.25`, matching this
-      # repo's pin — v1.11.0 requires 1.26 and would force a toolchain
-      # download on every release run for no benefit here.
+      # Pinned to v1.10.0 deliberately, not @latest. It was chosen while this
+      # repo was on `go 1.25`: v1.10.0's own go.mod requires `go 1.25`, and
+      # v1.11.0 requires 1.26.0, which would then have forced a toolchain
+      # download on every release run. The repo now requires 1.26.10, so that
+      # reason no longer separates them; moving the pin is its own change.
       #
       # Absence must not gate, a proven divergence must — these are two
       # different failure modes and this story is explicit that only one of

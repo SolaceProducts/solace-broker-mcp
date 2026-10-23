@@ -36,7 +36,7 @@ The Solace Broker MCP Server requires:
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
 | **OAuth provider** (production only) | An OpenID Connect (OIDC)-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `mcp_client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
-| **Go 1.25+** (development only) | Only required if building from source. Go is not required for binary or Docker deployments. |
+| **Go 1.26.10+** (development only) | Only required if building from source. Go is not required for binary or Docker deployments. |
 
 ## Limitations and Considerations
 
