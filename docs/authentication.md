@@ -492,10 +492,23 @@ the `disabled`/`static` dev modes.
 
 ### Session Routing at the Ingress (Required Above One Replica)
 
-The deployment ships `replicas: 2`. Putting an ingress, gateway, or mesh in
-front of the Service — which the pattern above tells you to do — **requires**
-configuring session routing at that layer. Skipping it breaks the deployment
-rather than degrading it.
+The server runs in one of two modes, and only one of them needs session
+routing:
+
+- **Stateful (the default).** The server holds each MCP session in one pod's
+  memory, so every request in a session must reach that pod. Everything in this
+  section applies.
+- **Stateless (`MCP_TRANSPORT_STATELESS=true`).** No session exists, so any
+  replica can serve any request and none of the routing below is needed. This
+  is the setting for deployments with more than one replica, but it is work in
+  progress: leave it off in production until the note on its row in
+  [Server Settings](configuration.md#server-settings) is removed. See
+  [Switching to Stateless Mode](#switching-to-stateless-mode).
+
+The deployment ships `replicas: 2`. In stateful mode, putting an ingress,
+gateway, or mesh in front of the Service — which the pattern above tells you to
+do — **requires** configuring session routing at that layer. Skipping it breaks
+the deployment rather than degrading it.
 
 #### Why It Breaks
 
@@ -538,6 +551,10 @@ Three caveats:
   Restrict `proxy-real-ip-cidr` to the load balancer's CIDR.
 - Sessions still die with their pod. Affinity pins a live session; it cannot
   carry state across a rolling update.
+- Affinity does not pool the event broker budget. It keeps one client on one
+  replica, but two clients on two replicas still each get a full
+  `semp.max_concurrent_per_broker` and `semp.request_min_interval`; see
+  [Sharing a Broker Fairly Between Callers](configuration.md#sharing-a-broker-fairly-between-callers).
 
 #### What Does Not Work
 
@@ -576,6 +593,29 @@ With no portable answer today, use your controller's consistent-hash-on-source-a
 extension — Istio `DestinationRule` `consistentHash.useSourceIp`, Envoy Gateway
 `BackendTrafficPolicy` with `consistentHash.type: SourceIP` — or run
 `replicas: 1` and accept the rollout downtime.
+
+#### Switching to Stateless Mode
+
+Set `MCP_TRANSPORT_STATELESS=true` in the server's environment. It is an
+environment variable only, with no YAML key. With it set:
+
+- The server issues no `Mcp-Session-Id`, so a pod restart or rolling update
+  loses no session state.
+- Neither the ingress annotation nor the Service's `sessionAffinity` is
+  required. The shipped manifests and Helm chart keep `sessionAffinity:
+  ClientIP`, which does no harm in this mode; remove it to spread each client's
+  requests across replicas.
+- `GET` and `DELETE` on `/mcp` return `405`, and there is no idle timeout.
+- A client's requests may reach every replica, so the per-replica event broker
+  limits add up across all of them; see
+  [Sharing a Broker Fairly Between Callers](configuration.md#sharing-a-broker-fairly-between-callers).
+
+The full description, with the value forms the server accepts, is on the
+`MCP_TRANSPORT_STATELESS` row in [Server Settings](configuration.md#server-settings).
+Stateful mode with session routing stays supported as the fallback. The shipped
+manifests and chart are stateful until the default changes: see
+[`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md#stateless-mode-and-session-affinity)
+and the [chart README](../deploy/charts/solace-broker-mcp/README.md#stateless-mode).
 
 ### Tool Authorization (Claim-Based RBAC)
 

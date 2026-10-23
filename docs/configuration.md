@@ -36,6 +36,11 @@ A resolved value's single trailing newline (`\n` or `\r\n`) is trimmed automatic
 
 ## Server Settings
 
+<!-- The work-in-progress wording on MCP_TRANSPORT_STATELESS (this table, the
+     CHANGELOG entry, and docs/authentication.md) comes out when the gates on
+     SOL-154338 pass: the client matrix recorded on SOL-153649, SOL-154329
+     (connection and stream bounds), and SOL-154337 (stateless re-soak). -->
+
 | YAML field | Env var | Default | Description |
 |---|---|---|---|
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
@@ -46,7 +51,7 @@ A resolved value's single trailing newline (`\n` or `\r\n`) is trimmed automatic
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `tls_terminated_upstream` | — | `false` | Opt in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| — | `MCP_TRANSPORT_STATELESS` | `false` | **Work in progress. Leave it off in production for now:** client compatibility has not been verified yet, and the default will not change until it has. Serves the MCP transport without sessions, as protocol `2026-07-28` expects. Accepts the values Go's `strconv.ParseBool` accepts (`true`, `false`, `1`, `0`, `t`, `f`); empty means unset; any other value stops startup with an error naming the variable. The value is checked as the process receives it: spaces and quotes in a `.env` file are removed first, but a padded value set directly in the environment is an error. When `true`: no `Mcp-Session-Id` is issued, so no session state is lost when a pod restarts; the ingress does not need session routing (see [Session Routing at the Ingress](authentication.md#session-routing-at-the-ingress-required-above-one-replica)); the 2-hour idle timeout does not apply; `GET` and `DELETE` on `/mcp` return `405` with `Allow: POST`. Fair scheduling still protects one account from another, but no longer splits users inside one shared service account. The startup line `config loaded` shows `transport_stateless`. |
+| — | `MCP_TRANSPORT_STATELESS` | `false` | **Work in progress. Leave it off in production for now:** client compatibility has not been verified yet, and the default will not change until it has. The clients tested, with versions and dates, are in the [client compatibility matrix](https://sol-jira.atlassian.net/browse/SOL-153649). Serves the MCP transport without sessions, as protocol `2026-07-28` expects. Accepts the values Go's `strconv.ParseBool` accepts (`true`, `false`, `1`, `0`, `t`, `f`); empty means unset; any other value stops startup with an error naming the variable. The value is checked as the process receives it: spaces and quotes in a `.env` file are removed first, but a padded value set directly in the environment is an error. When `true`: no `Mcp-Session-Id` is issued, so no session state is lost when a pod restarts; the ingress does not need session routing (see [Session Routing at the Ingress](authentication.md#session-routing-at-the-ingress-required-above-one-replica)); the 2-hour idle timeout does not apply; `GET` and `DELETE` on `/mcp` return `405` with `Allow: POST`. Fair scheduling still protects one account from another, but no longer splits users inside one shared service account. The startup line `config loaded` shows `transport_stateless`. |
 | `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (28 in total): the four action API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 24 Config API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, `rdp`, `kafka-receiver` and `kafka-sender`, plus `create`/`delete` for `queue-subscription`, `kafka-receiver-topic-binding` and `kafka-sender-queue-binding`). The Kafka bridge tools also need the broker's Kafka bridge capacity (`system_scaling_maxkafkabridgecount`, set when the broker is created): without it every Kafka bridge create fails "Kafka Bridge limit of 0 reached". This includes the non-destructive stats-reset tools (which still mutate event broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
@@ -326,13 +331,13 @@ Configured under the `semp` key. Controls how the server throttles and retries r
 
 | YAML field | Default | Description |
 |---|---|---|
-| `semp.request_min_interval` | `100ms` | Minimum spacing between successive SEMP requests per event broker. Set to `0` to disable throttling. |
+| `semp.request_min_interval` | `100ms` | Minimum spacing between successive SEMP requests per event broker. Set to `0` to disable throttling. Enforced per replica; see [Sharing a Broker Fairly Between Callers](#sharing-a-broker-fairly-between-callers). |
 | `semp.max_queue_wait` | `30s` | Maximum time a request waits to be admitted before it is rejected. Set to `0` to wait indefinitely. |
 | `semp.request_timeout_duration` | `1m` | HTTP request timeout for individual SEMP calls. |
 | `semp.retries` | `10` | Maximum retry attempts for a failed SEMP call. Set to `0` to disable retries. |
 | `semp.retry_min_interval` | `3s` | Starting backoff before the first retry. |
 | `semp.retry_max_interval` | `30s` | Maximum backoff cap regardless of retry count. |
-| `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. |
+| `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. Enforced per replica; see [Sharing a Broker Fairly Between Callers](#sharing-a-broker-fairly-between-callers). |
 | `semp.fair_scheduling` | `true` | Share each broker's request pace fairly across callers instead of first-come-first-served. Kill switch, not a capacity control. |
 
 ### Sharing a Broker Fairly Between Callers
@@ -388,9 +393,32 @@ full per-caller fairness.
 - **It reslices the budget, it does not enlarge it.**
   `semp.request_min_interval` and `semp.max_concurrent_per_broker` remain the
   only capacity controls, and they still hold across all callers combined.
-- **It is per process, not per cluster.** The server ships with two replicas, so
-  two callers routed to different pods each get a full per-broker budget. That
-  is true today as well; fairness does not change it.
+- **It is per replica, not per cluster.** Each server process enforces
+  `semp.request_min_interval` and `semp.max_concurrent_per_broker` on its own,
+  with no knowledge of the other replicas, so the event broker sees the sum of
+  the budgets. The server ships with two replicas, and fairness does not change
+  this. Measured with one event broker, `max_concurrent_per_broker: 2` and
+  `request_min_interval: 100ms`:
+
+  | Setup | Peak concurrent requests at the broker | Request rate |
+  |---|---|---|
+  | 1 replica | 2 | 10.6 req/s |
+  | 2 replicas | 4 | 17.4 req/s |
+
+  With one replica the gaps between requests held at 100ms. With two they
+  alternated between about 23ms and 77ms, closer together than the configured
+  interval. The rate rose by less than double because the event broker's own
+  response time became the limit at this scale; the concurrency figure shows
+  the effect more clearly. Three or more replicas were not measured.
+
+  This does not depend on the transport mode. It occurs in the default stateful
+  mode whenever two clients reach different replicas: session affinity keeps one
+  client on one replica, but does not stop two clients on two replicas from
+  reaching the same event broker. Stateless mode also lets a single client's
+  requests reach every replica. To keep the total you intend across N replicas,
+  divide `semp.max_concurrent_per_broker` by N (a total of 10 across 2 replicas
+  is `5` each) and multiply `semp.request_min_interval` by N (a total pace of
+  one request per 100ms across 2 replicas is `200ms` each).
 - **A new caller's first request waits for a completion, not for a reservation.**
   Once another caller has work queued and holds no slots, the last free
   in-flight slot stops being available to a caller that already holds one, so

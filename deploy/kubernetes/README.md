@@ -126,7 +126,9 @@ in front of it, and do not expose that port beyond the cluster.
 `.example` so the directory-wide `kubectl apply` above skips it, since an
 Ingress needs a hostname and TLS secret only you can supply.
 
-> **Session routing is required, not optional.** An Ingress bypasses the
+> **Session routing is required, not optional** (in the default stateful mode;
+> see [Stateless mode and session affinity](#stateless-mode-and-session-affinity)).
+> An Ingress bypasses the
 > Service's `sessionAffinity: ClientIP`, and with `replicas: 2` nearly every
 > request after initialize then hits a pod that does not hold the session and
 > gets `404 session not found`. `ingress.yaml.example` carries the annotation
@@ -134,6 +136,34 @@ Ingress needs a hostname and TLS secret only you can supply.
 > nor hashing on `Mcp-Session-Id` works — see
 > [`docs/authentication.md`](../../docs/authentication.md#session-routing-at-the-ingress-required-above-one-replica)
 > § "Session Routing at the Ingress".
+
+## Stateless mode and session affinity
+
+These manifests run the server in its default stateful mode, which needs the
+Service's `sessionAffinity: ClientIP` (and the ingress annotation behind an
+Ingress). Affinity has limits: it does not apply behind an Ingress, gateway, or
+mesh; clients behind one NAT address share one pod; sessions are lost when a
+pod restarts; and it does not pool the event broker limits, which each replica
+enforces separately (see
+[`docs/configuration.md`](../../docs/configuration.md#sharing-a-broker-fairly-between-callers)).
+
+Stateless mode removes the need for affinity: with `MCP_TRANSPORT_STATELESS=true`
+no session exists and any replica can serve any request. It is work in
+progress, so leave it off in production for now (see its row in
+[`docs/configuration.md`](../../docs/configuration.md#server-settings)). To try
+it, add the variable to the container's `env` in `deployment.yaml`:
+
+```yaml
+- name: MCP_TRANSPORT_STATELESS
+  value: "true"
+```
+
+`service.yaml` can stay as shipped: affinity is not required in stateless mode
+and does no harm. Delete `sessionAffinity` and `sessionAffinityConfig` if you
+want each client's requests spread across pods. The Ingress annotation is not
+needed either. To return to stateful mode, remove the variable. The
+[Helm chart](../charts/solace-broker-mcp/README.md#stateless-mode) sets the
+same variable through `extraEnv`.
 
 ## Metrics scraping
 

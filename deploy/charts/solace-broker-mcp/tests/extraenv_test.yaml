@@ -38,6 +38,16 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: NO_PROXY, value: ".svc,.cluster.local,10.0.0.0/8"}
 
+  - it: renders MCP_TRANSPORT_STATELESS, the documented way to turn stateless mode on
+    set:
+      extraEnv:
+        - name: MCP_TRANSPORT_STATELESS
+          value: "true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MCP_TRANSPORT_STATELESS, value: "true"}
+
   - it: fails on an OBS_* name
     set:
       extraEnv:
