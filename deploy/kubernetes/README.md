@@ -155,9 +155,11 @@ it, use an image that contains the variable and add it to the container's `env`
 in `deployment.yaml`. No release has it yet: the `:latest` image in
 `deployment.yaml` ignores it and stays stateful, so change `image:` to one that
 has it, such as the development image CI uses
-(`ghcr.io/solaceproducts/solace-broker-mcp-dev:dev`), and confirm the startup
-`config loaded` line shows `transport_stateless` set to `true` before removing any
-session routing:
+(`ghcr.io/solaceproducts/solace-broker-mcp-dev`), and confirm the startup
+`config loaded` line shows `transport_stateless` set to `true` before removing
+any session routing. Use an immutable `dev-<short sha>` tag, not the moving `dev`
+tag: `dev` is retagged nightly, and with the default `imagePullPolicy` a node can
+keep running an older cached build. Then add the variable:
 
 ```yaml
 - name: MCP_TRANSPORT_STATELESS

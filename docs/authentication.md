@@ -603,8 +603,10 @@ environment variable only, with no YAML key. With it set:
   loses no session state.
 - Neither the ingress annotation nor the Service's `sessionAffinity` is
   required. The shipped manifests and Helm chart keep `sessionAffinity:
-  ClientIP`, which does no harm in this mode; remove it to spread each client's
-  requests across replicas.
+  ClientIP`. That does not affect correctness in this mode, but it keeps each
+  client address on one replica, so there is no spreading while it is on. Remove
+  it from the manifests to spread each client's requests across replicas; the
+  chart has no value for that yet.
 - `GET` and `DELETE` on `/mcp` return `405`, and there is no idle timeout.
 - A client's requests may reach every replica, so the per-replica event broker
   limits add up across all of them; see
