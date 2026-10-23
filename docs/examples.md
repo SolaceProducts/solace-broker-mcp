@@ -155,6 +155,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 { "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>" } }
 { "name": "get-queue-metrics", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
 { "name": "list-queue-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
+{ "name": "list-queue-consumers", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" } }
 ```
 
 **Clients**

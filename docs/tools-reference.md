@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **29 read-only tools** plus **28 write tools** — four action
+The server exposes **30 read-only tools** plus **28 write tools** — four action
 tools and 24 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -51,7 +51,7 @@ event broker's SEMP (Solace Element Management Protocol) responses internally an
 with more than 500 matching objects require a narrower query. Applies to:
 `list-vpns`, `list-queues`, `list-clients`, `list-client-subscriptions`,
 `list-slow-subscribers`, `list-client-usernames`, `list-client-profiles`,
-`list-rdps`, `list-queue-discards`.
+`list-rdps`, `list-queue-discards`, `list-queue-consumers`.
 
 ### Rate Limiting and Retries
 
@@ -119,7 +119,7 @@ and sender queue bindings) are gated behind the same flag and documented under
 | Event Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
-| Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics), [`list-queue-subscriptions`](#list-queue-subscriptions) | — |
+| Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics), [`list-queue-subscriptions`](#list-queue-subscriptions), [`list-queue-consumers`](#list-queue-consumers) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | Client Access | [`list-client-usernames`](#list-client-usernames), [`get-client-username`](#get-client-username), [`list-client-profiles`](#list-client-profiles), [`get-client-profile`](#get-client-profile) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
@@ -450,6 +450,47 @@ broker).
 
 **Example request:** "What topics is orders.q subscribed to on prod-broker?"
 
+### list-queue-consumers
+
+List the consumers bound to a queue, one entry per flow. Use it to find which
+consumer is slowing a queue whose backlog is growing. Verifies the queue exists
+before listing, so a nonexistent queue is reported as an error rather than an
+empty list.
+
+How to read a flow:
+
+- `unackedMsgCount` at the lower of the flow's `windowSize` and the queue's
+  `maxDeliveredUnackedMsgsPerFlow` (from `get-queue-metrics`): the consumer is
+  stalled. The event broker sends it nothing more until it acknowledges.
+  `unackedMsgCount` never exceeds that limit; well below it is healthy.
+- `maxUnackedMsgsExceededMsgCount` or `windowClosedCount` rising between two
+  calls: the stall keeps recurring. Both are cumulative counters.
+- `deliveryState` of `deliver-from-spool`: the flow stalled, and the event
+  broker is now delivering its messages from the spool.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the queue. |
+| `queueName` | string | yes | The queue to list consumers for. |
+| `maxResults` | integer | no | Max consumers to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, steps `queue` (existence check) and
+`consumers` (array of flows). Each flow carries `clientName`, `flowId`,
+`bindTime`, `activityState`, `deliveryState`, `unackedMsgCount`, `windowSize`,
+`usedWindowSize`, `windowClosedCount`, `maxUnackedMsgsExceededMsgCount`,
+`redeliveredMsgCount`, `ackedMsgCount`, and `selector`, plus `sessionName` for
+a transacted session (the event broker omits it otherwise). An empty `consumers` array means the queue exists and nothing is
+bound to it.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q" }
+```
+
+**Example request:** "orders.q is backing up on prod-broker. Which consumer is slow?"
+
 ---
 
 ## Clients
@@ -540,7 +581,8 @@ broker).
 Clients in a VPN flagged with the event broker's `slowSubscriber` field
 (server-side `where: slowSubscriber==true`). Narrow signal — catches direct-
 messaging/replication-bridge backpressure; does **not** flip for slow guaranteed
-consumers. For those, use `list-queues` / `get-queue-metrics`.
+consumers. For those, use `list-queues` / `get-queue-metrics`, then
+`list-queue-consumers` on the queue.
 Verifies the VPN exists before listing, so a nonexistent VPN is reported as an
 error rather than an empty list.
 
