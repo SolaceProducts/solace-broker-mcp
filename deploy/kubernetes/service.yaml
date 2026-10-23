@@ -8,8 +8,10 @@ spec:
   type: ClusterIP
   # MCP sessions live in one pod's memory, so a session ID sent to any other
   # pod gets a 404. ClientIP affinity pins each client to its own pod, and is
-  # required above one replica. timeoutSeconds must stay above the 2h session
-  # idle timeout (defaults.DefaultMCPSessionIdleTimeout).
+  # required above one replica in the default stateful mode; with
+  # MCP_TRANSPORT_STATELESS=true it is not needed (README.md § Stateless mode
+  # and session affinity). timeoutSeconds must stay above the 2h session idle
+  # timeout (defaults.DefaultMCPSessionIdleTimeout).
   #
   # CAVEAT: kube-proxy applies this on the ClusterIP path only. An Ingress,
   # Gateway, or service mesh bypasses it — including the TLS-terminating
