@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING**: Minimum Go toolchain raised to 1.26.10 (`go.mod`'s `go` directive), so release binaries pick up the `crypto/x509` fix for CVE-2026-111943: certificate chains through eight distrusted eMudhra intermediate CAs now fail verification even on a host whose trust store is not updated. This affects the broker and identity-provider connections that verify against system roots. A source build on Go 1.26.0–1.26.9 with `GOTOOLCHAIN=local` fails with `go.mod requires go >= 1.26.10`. Migration: upgrade the build toolchain to Go 1.26.10 or later, or leave `GOTOOLCHAIN` at its default so Go downloads it. Tracked under SOL-156656.
 - **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
 
 ### Fixed
