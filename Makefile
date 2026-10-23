@@ -170,8 +170,12 @@ vet: ## go vet
 lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
+.PHONY: lib-test
+lib-test: ## Self-test of the e2e handshake helpers (stubbed curl, no broker; CI runs it in the lint job)
+	bash test/e2e-common/lib.test.sh
+
 .PHONY: check
-check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
+check: build-all vet lint lib-test test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
 
 # ── Helm chart ───────────────────────────────────────────────────────────────
 
@@ -184,12 +188,13 @@ check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled t
 # it passes; and kubeconform silently skips a file path without a .yaml suffix.
 # Built-in schemas only, which carry no CRDs, and kubeconform fails a kind it has
 # no schema for: so the ServiceMonitor is skipped here, and ci-pr.yaml validates
-# it against the CRD catalog.
+# it against the CRD catalog. Last, the drift check against deploy/kubernetes/
+# and its self-test (.github/scripts/helm-parity-check.sh).
 CHART_DIR := deploy/charts/solace-broker-mcp
 CT_CONFIG := deploy/charts/ct.yaml
 
 .PHONY: helm-check
-helm-check: ## Helm chart lint, kubeconform and helm-unittest (matches CI helm-chart job; needs helm, helm-unittest, ct, yamllint, yamale, kubeconform)
+helm-check: ## Helm chart lint, kubeconform, helm-unittest and drift check vs deploy/kubernetes/ (matches CI helm-chart job; needs helm, helm-unittest, ct, yamllint, yamale, kubeconform, yq, dyff, perl)
 	ct lint --config $(CT_CONFIG) --all
 	ct lint --config $(CT_CONFIG) --check-version-increment
 	@set -e; out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
@@ -199,6 +204,8 @@ helm-check: ## Helm chart lint, kubeconform and helm-unittest (matches CI helm-c
 		kubeconform -strict -summary -skip ServiceMonitor <"$$out"; \
 	done
 	helm unittest $(CHART_DIR)
+	.github/scripts/helm-parity-check.sh
+	.github/scripts/helm-parity-check.test.sh
 
 # ── Compliance ───────────────────────────────────────────────────────────────
 

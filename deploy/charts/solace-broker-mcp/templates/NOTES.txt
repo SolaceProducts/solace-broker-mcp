@@ -6,9 +6,15 @@ Check it is ready:
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "solace-broker-mcp.fullname" . }} {{ (.Values.server | default dict).port | default 9090 }}:{{ (.Values.server | default dict).port | default 9090 }}
   curl -s http://127.0.0.1:{{ (.Values.server | default dict).port | default 9090 }}/readyz
 
+{{ if eq ((.Values.mcpClientAuth | default dict).mode | default "" | toString) "oauth" -}}
+MCP clients connect to {{ .Values.mcpClientAuth.resourceUrl }} with a token from your identity provider
+({{ .Values.mcpClientAuth.issuer }}). The Service port serves plaintext behind the
+TLS-terminating Ingress or gateway: keep the Service ClusterIP.
+{{- else -}}
 MCP clients connect to http://<service>:{{ (.Values.server | default dict).port | default 9090 }}/mcp with the dev token as a
 Bearer token. Keep the Service ClusterIP: under mcp_client_auth.mode static the
 token crosses the cluster network in cleartext.
+{{- end }}
 {{- if include "solace-broker-mcp.hasManagedSecret" . }}
 
 The pod template's checksum/secret annotation is a hash of the chart-managed
@@ -30,9 +36,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT. Otherwise set observability.otlpEndpoint.
 WARNING: ingress.enabled publishes the server under mcp_client_auth.mode static,
 whose only credential is the shared dev token: anyone who can reach
 {{ .Values.ingress.host }}/mcp with it gets broker-admin-backed access.
-OAuth is not yet available in this chart (SOL-156330): until it is, keep the
-Ingress on a trusted network, or use deploy/kubernetes/ with oauth
-(README.md § Ingress).
+Switch to mcpClientAuth.mode oauth (README.md § Client authentication), or
+keep the Ingress on a trusted network.
 {{- end }}
 {{- if and (.Values.ingress | default dict).enabled (not (dig "tls" "secretName" "" (.Values.ingress | default dict) | toString | trim)) }}
 

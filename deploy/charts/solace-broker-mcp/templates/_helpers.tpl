@@ -93,6 +93,12 @@ two ports with one number either way. */}}
 {{- if not .Values.brokers }}
 {{- fail "brokers: at least one broker is required (see values.yaml or README.md for an example)" }}
 {{- end }}
+{{- $mca := .Values.mcpClientAuth | default dict }}
+{{- $mcaMode := $mca.mode | default "" | toString }}
+{{- if not (has $mcaMode (list "static" "oauth")) }}
+{{- fail (printf "mcpClientAuth.mode must be static or oauth, got %q" $mcaMode) }}
+{{- end }}
+{{- $oauth := eq $mcaMode "oauth" }}
 {{- $lowerNames := dict }}
 {{- range $name, $broker := .Values.brokers }}
 {{- if kindIs "invalid" $broker }}{{ continue }}{{ end }}
@@ -121,6 +127,17 @@ A secret in the path cannot be detected; README.md says the url must hold none. 
 {{- if or (not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#]+" $url)) (regexMatch "\\s" $url) }}
 {{- fail (printf "brokers.%s.url must be http(s)://<host>[:port][/path] with no whitespace" $name) }}
 {{- end }}
+{{- /* oauth is the server's production mode: it refuses a plain http broker
+url and, unless allow_insecure_broker_tls accepts the risk, a disabled
+certificate check (config.go validateBrokerURL, validate). */}}
+{{- if $oauth }}
+{{- if not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]://" $url) }}
+{{- fail (printf "brokers.%s.url must be https:// when mcpClientAuth.mode is oauth" $name) }}
+{{- end }}
+{{- if and $broker.insecureSkipVerify (not $.Values.allowInsecureBrokerTls) }}
+{{- fail (printf "brokers.%s.insecureSkipVerify is true while mcpClientAuth.mode is oauth: set allowInsecureBrokerTls: true to accept the risk, or use a trusted certificate" $name) }}
+{{- end }}
+{{- end }}
 {{- $auth := $broker.auth | default dict }}
 {{- $existing := $auth.existingSecret | default "" | toString | trim }}
 {{- $prefix := include "solace-broker-mcp.envPrefix" (dict "name" $name "broker" $broker) }}
@@ -143,16 +160,16 @@ A secret in the path cannot be detected; README.md says the url must hold none. 
 {{- if not $creds }}
 {{- fail "brokers: at least one broker is required (see values.yaml or README.md for an example)" }}
 {{- end }}
-{{- $mca := .Values.mcpClientAuth | default dict }}
-{{- $mcaMode := $mca.mode | default "" | toString }}
-{{- if ne $mcaMode "static" }}
-{{- fail (printf "mcpClientAuth.mode %q is not supported by this chart version; only static (oauth arrives in a later chart version)" $mcaMode) }}
-{{- end }}
+{{- include "solace-broker-mcp.validateClientAuth" . }}
+{{- /* Under oauth the dev token is not used: a devToken or existingSecret left
+over from a shared base values file is ignored, never rendered. */}}
+{{- if not $oauth }}
 {{- $mcaExisting := $mca.existingSecret | default "" | toString | trim }}
 {{- if not (or ($mca.devToken | default "" | toString | trim) $mcaExisting) }}
 {{- fail "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required when mcpClientAuth.mode is static" }}
 {{- end }}
 {{- $creds = append $creds (dict "name" "DEV_TOKEN" "key" "dev-token" "existingSecret" $mcaExisting "value" ($mca.devToken | default "" | toString)) }}
+{{- end }}
 {{- $seen := dict }}
 {{- range $creds }}
 {{- if hasKey $seen .name }}
@@ -161,6 +178,99 @@ A secret in the path cannot be detected; README.md says the url must hold none. 
 {{- $_ := set $seen .name true }}
 {{- end }}
 {{- toJson $creds }}
+{{- end }}
+
+{{/*
+mcpClientAuth.toolAuthorization.accessLevelGroups without its null entries:
+null is how a values overlay drops a group a base file granted, as for
+brokers. Output: JSON, read back with fromJson.
+*/}}
+{{- define "solace-broker-mcp.accessLevelGroups" -}}
+{{- $groups := dict }}
+{{- range $name, $tools := ((.Values.mcpClientAuth | default dict).toolAuthorization | default dict).accessLevelGroups | default dict }}
+{{- if not (kindIs "invalid" $tools) }}{{ $_ := set $groups $name $tools }}{{ end }}
+{{- end }}
+{{- toJson $groups }}
+{{- end }}
+
+{{/*
+Validates mcpClientAuth and the switches oauth depends on, mirroring the
+server's startup errors (internal/config/config.go validate and
+validateToolAuthorization). Called from credentials, so every template runs it.
+As for broker urls, no message echoes a url.
+*/}}
+{{- define "solace-broker-mcp.validateClientAuth" -}}
+{{- $mca := .Values.mcpClientAuth | default dict }}
+{{- $ta := $mca.toolAuthorization | default dict }}
+{{- $groups := include "solace-broker-mcp.accessLevelGroups" . | fromJson }}
+{{- /* An empty accessLevelGroups map is the default (Helm deep-merges maps), so
+only a non-empty one counts as set. */}}
+{{- $taSet := or (not (kindIs "invalid" $ta.enabled)) (not (kindIs "invalid" $ta.groupsClaimName)) (not (kindIs "invalid" $ta.filterToolsList)) (not (empty $groups)) }}
+{{- if ne (toString $mca.mode) "oauth" }}
+{{- if $taSet }}
+{{- fail (printf "mcpClientAuth.toolAuthorization is only supported when mcpClientAuth.mode is oauth (currently %q): set mode to oauth or remove it" (toString $mca.mode)) }}
+{{- end }}
+{{- else }}
+{{- range (list "issuer" "audience" "resourceUrl") }}
+{{- if not (get $mca . | default "" | toString | trim) }}
+{{- fail (printf "mcpClientAuth.%s is required when mcpClientAuth.mode is oauth" .) }}
+{{- end }}
+{{- end }}
+{{- /* The server parses both with url.Parse, which refuses a host character
+outside RFC 3986, a non-numeric port, a malformed %-escape in the path or
+fragment (not the query, which it leaves unparsed) and any ASCII control
+character. This is slightly stricter: it also refuses whitespace, a < or " or
+non-ASCII character in the host, an empty port, and a bracketed host that is
+not hex digits, colons and dots (so no IPv6 zone).
+The server substitutes ${VAR_NAME} references (config.go envVarPattern) before
+it validates, so a value carrying one skips the URL pattern: what the
+reference expands to is unknown here. */}}
+{{- $urlRe := "^[Hh][Tt][Tt][Pp][Ss]://([A-Za-z0-9._~!$&'()*+,;=-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?(/([^?#%]|%[0-9A-Fa-f]{2})*)?(\\?[^#]*)?(#([^%]|%[0-9A-Fa-f]{2})*)?$" }}
+{{- range (list "issuer" "resourceUrl") }}
+{{- $u := get $mca . | toString }}
+{{- $badShape := not (regexMatch $urlRe $u) }}
+{{- if regexMatch "\\$\\{[A-Z0-9_]+\\}" $u }}
+{{- /* Still https:// unless the reference itself comes first and may supply
+the scheme: a scheme written out in the value is known here. */}}
+{{- $badShape = not (regexMatch "^(\\$\\{[A-Z0-9_]+\\}|[Hh][Tt][Tt][Pp][Ss]://)" $u) }}
+{{- end }}
+{{- if or (regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $u) $badShape (regexMatch "[\\s\\x00-\\x1f\\x7f]" $u) }}
+{{- fail (printf "mcpClientAuth.%s must be https://<host>[:port][/path] with no credentials or whitespace when mcpClientAuth.mode is oauth" .) }}
+{{- end }}
+{{- end }}
+{{- /* The chart has no in-pod TLS yet (SOL-156417), and oauth refuses a
+plaintext listener unless TLS is acknowledged as terminated upstream. */}}
+{{- if ne (toString .Values.tlsTerminatedUpstream) "true" }}
+{{- fail "tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth: terminate TLS at the Ingress or gateway in front of the Service (in-pod TLS is not yet supported by this chart)" }}
+{{- end }}
+{{- if kindIs "invalid" $ta.enabled }}
+{{- fail "mcpClientAuth.toolAuthorization.enabled must be set to true or false when mcpClientAuth.mode is oauth (false lets any authenticated caller invoke any registered tool)" }}
+{{- end }}
+{{- if and $ta.enabled (empty $groups) }}
+{{- fail "mcpClientAuth.toolAuthorization.accessLevelGroups is required when mcpClientAuth.toolAuthorization.enabled is true" }}
+{{- end }}
+{{- if and (not (kindIs "invalid" $ta.groupsClaimName)) (not ($ta.groupsClaimName | toString | trim)) }}
+{{- fail "mcpClientAuth.toolAuthorization.groupsClaimName must not be blank: set it, or null for the server default \"groups\"" }}
+{{- end }}
+{{- /* The schema's \S patterns are ASCII-only. The server trims with
+strings.TrimSpace and splits on unicode.IsSpace, as sprig's trim and this
+class do, so a no-break space fails here rather than at startup. */}}
+{{- range $group, $tools := $groups }}
+{{- if not (trim $group) }}
+{{- fail "mcpClientAuth.toolAuthorization.accessLevelGroups: a group name is empty or whitespace-only" }}
+{{- end }}
+{{- range $tools }}
+{{- if or (not .) (ne (toString .) (trim (toString .))) }}
+{{- fail (printf "mcpClientAuth.toolAuthorization.accessLevelGroups.%s: a tool name is empty or has leading or trailing whitespace" $group) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $i, $scope := ($mca.scopesSupported | default list) }}
+{{- if or (not $scope) (regexMatch "[\\s\\x0B\\x{85}\\p{Z}]" (toString $scope)) }}
+{{- fail (printf "mcpClientAuth.scopesSupported[%d] must be non-empty with no whitespace" $i) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -202,9 +312,32 @@ only as ${<ENV VAR>} references; the values live in a Secret.
 {{- include "solace-broker-mcp.kv" (list "" "port" $server.port) }}
 {{- include "solace-broker-mcp.kv" (list "" "log_level" $server.logLevel) }}
 {{- include "solace-broker-mcp.kv" (list "" "listen_address" $server.listenAddress) }}
+{{- include "solace-broker-mcp.kv" (list "" "tls_terminated_upstream" .Values.tlsTerminatedUpstream) }}
+{{- include "solace-broker-mcp.kv" (list "" "enable_write_tools" .Values.enableWriteTools) }}
+{{- include "solace-broker-mcp.kv" (list "" "allow_insecure_broker_tls" .Values.allowInsecureBrokerTls) }}
 mcp_client_auth:
 {{- include "solace-broker-mcp.kv" (list "  " "mode" $mca.mode) }}
+{{- if eq (toString $mca.mode) "oauth" }}
+{{- include "solace-broker-mcp.kv" (list "  " "issuer" $mca.issuer) }}
+{{- include "solace-broker-mcp.kv" (list "  " "audience" $mca.audience) }}
+{{- include "solace-broker-mcp.kv" (list "  " "resource_url" $mca.resourceUrl) }}
+{{- include "solace-broker-mcp.kv" (list "  " "scopes_supported" $mca.scopesSupported) }}
+{{- $ta := $mca.toolAuthorization | default dict }}
+{{- $taLines := "" }}
+{{- $taLines = printf "%s%s" $taLines (include "solace-broker-mcp.kv" (list "    " "enabled" $ta.enabled)) }}
+{{- $taLines = printf "%s%s" $taLines (include "solace-broker-mcp.kv" (list "    " "groups_claim_name" $ta.groupsClaimName)) }}
+{{- $taLines = printf "%s%s" $taLines (include "solace-broker-mcp.kv" (list "    " "filter_tools_list" $ta.filterToolsList)) }}
+{{- $groups := include "solace-broker-mcp.accessLevelGroups" . | fromJson }}
+{{- if not (empty $groups) }}
+{{- $taLines = printf "%s%s" $taLines (include "solace-broker-mcp.kv" (list "    " "access_level_groups" $groups)) }}
+{{- end }}
+{{- if $taLines }}
+  tool_authorization:
+{{- $taLines }}
+{{- end }}
+{{- else }}
   dev_token: "${DEV_TOKEN}"
+{{- end }}
 {{- $sempLines := "" }}
 {{- $sempKeys := dict "max_concurrent_per_broker" "maxConcurrentPerBroker" "request_timeout_duration" "requestTimeoutDuration" "request_min_interval" "requestMinInterval" "max_queue_wait" "maxQueueWait" "fair_scheduling" "fairScheduling" "retries" "retries" "retry_min_interval" "retryMinInterval" "retry_max_interval" "retryMaxInterval" }}
 {{- range (list "max_concurrent_per_broker" "request_timeout_duration" "request_min_interval" "max_queue_wait" "fair_scheduling" "retries" "retry_min_interval" "retry_max_interval") }}
@@ -230,7 +363,12 @@ brokers:
       token: {{ printf "${%s_TOKEN}" $prefix | toJson }}
 {{- end }}
 {{- end }}
+{{- $obs := .Values.observability | default dict }}
 {{- $obsLines := include "solace-broker-mcp.kv" (list "  " "metrics_bind_address" $metrics.bindAddress) }}
+{{- $obsKeys := dict "shutdown_drain_delay_s" "shutdownDrainDelayS" "service_name" "serviceName" "service_instance_id" "serviceInstanceId" "deployment_environment" "deploymentEnvironment" "cloud_region" "cloudRegion" "saturation_threshold_ms" "saturationThresholdMs" "otel_self_stats_interval_s" "otelSelfStatsIntervalS" }}
+{{- range (list "shutdown_drain_delay_s" "service_name" "service_instance_id" "deployment_environment" "cloud_region" "saturation_threshold_ms" "otel_self_stats_interval_s") }}
+{{- $obsLines = printf "%s%s" $obsLines (include "solace-broker-mcp.kv" (list "  " . (index $obs (get $obsKeys .)))) }}
+{{- end }}
 {{- if $obsLines }}
 observability:
 {{- $obsLines }}

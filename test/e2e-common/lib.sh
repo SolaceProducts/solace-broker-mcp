@@ -687,7 +687,35 @@ assert_negotiated_protocol() {
     fi
 }
 
-# Performs the MCP initialize handshake. Returns the Mcp-Session-Id.
+# True when this run targets a stateless server, i.e. MCP_TRANSPORT_STATELESS is
+# a value Go's strconv.ParseBool reads as true. The variable is the one the
+# server itself reads, so the helper and the server are told the mode once. The
+# server stays the validator: a junk value stops it at startup, and here it
+# simply counts as stateful.
+mcp_is_stateless() {
+    case "${MCP_TRANSPORT_STATELESS:-}" in
+        1 | t | T | true | TRUE | True) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Sets MCP_SESSION_HEADER to the curl arguments that carry a session ID, or to
+# nothing when the ID is empty (stateless). A blank "Mcp-Session-Id:" header is
+# never sent. Expand it as ${MCP_SESSION_HEADER[@]+"${MCP_SESSION_HEADER[@]}"}
+# so an empty array is safe under `set -u` on older bash.
+_mcp_session_header() {
+    MCP_SESSION_HEADER=()
+    if [ -n "$1" ]; then
+        MCP_SESSION_HEADER=(-H "Mcp-Session-Id: $1")
+    fi
+}
+
+# Performs the MCP initialize handshake. Returns the Mcp-Session-Id, or an empty
+# string against a stateless server (MCP_TRANSPORT_STATELESS=true), which issues
+# none. The mode comes from the variable, never from what the response happens
+# to contain: a stateful server that stops issuing an ID must fail here, not be
+# mistaken for a stateless one. The check runs both ways, so a stateless server
+# that starts issuing an ID fails too.
 mcp_initialize() {
     local response
     response=$(curl -sf -D - -X POST "$MCP_URL/mcp" \
@@ -703,13 +731,25 @@ mcp_initialize() {
                 "capabilities": {},
                 "clientInfo": { "name": "e2e-test", "version": "1.0.0" }
             }
-        }')
+        }') || {
+        log_fail "initialize request to $MCP_URL/mcp failed (no connection or an HTTP error status)"
+        return 1
+    }
 
+    # grep exits 1 when the header is absent, which is the normal stateless
+    # case. That is an answer, not an error, so it must not be able to end this
+    # function under set -e and pipefail before the mode check below runs.
     local session_id
-    session_id=$(echo "$response" | grep -i 'mcp-session-id' | tr -d '\r' | awk -F': ' '{print $2}')
+    session_id=$(echo "$response" | { grep -i 'mcp-session-id' || true; } | tr -d '\r' | awk -F': ' '{print $2}')
 
-    if [ -z "$session_id" ]; then
-        log_fail "No Mcp-Session-Id in initialize response"
+    if mcp_is_stateless; then
+        if [ -n "$session_id" ]; then
+            log_fail "Mcp-Session-Id '$session_id' in initialize response, but MCP_TRANSPORT_STATELESS=true: a stateless server must not issue one"
+            echo "$response" >&2
+            return 1
+        fi
+    elif [ -z "$session_id" ]; then
+        log_fail "No Mcp-Session-Id in initialize response, and MCP_TRANSPORT_STATELESS is not true: a stateful server must issue one"
         echo "$response" >&2
         return 1
     fi
@@ -717,11 +757,12 @@ mcp_initialize() {
     assert_negotiated_protocol "$response" || return 1
 
     # Send initialized notification
+    _mcp_session_header "$session_id"
     curl -sf -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $MCP_DEV_TOKEN" \
-        -H "Mcp-Session-Id: $session_id" \
+        ${MCP_SESSION_HEADER[@]+"${MCP_SESSION_HEADER[@]}"} \
         -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d '{
             "jsonrpc": "2.0",
@@ -747,7 +788,8 @@ mcp_call_tool() {
         '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:$t,arguments:$a}}')"
 }
 
-# Sends an MCP request with the given session ID. Returns the JSON response body.
+# Sends an MCP request with the given session ID (empty against a stateless
+# server, in which case no session header is sent). Returns the JSON response body.
 # The server responds with SSE (text/event-stream), so we extract the data: line.
 # MCP-Protocol-Version carries the negotiated revision: the transport serves a
 # request without that header at its own default (2025-03-26), so the handshake
@@ -757,11 +799,12 @@ mcp_request() {
     local body="$2"
 
     local raw
+    _mcp_session_header "$session_id"
     raw=$(curl -s -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $MCP_DEV_TOKEN" \
-        -H "Mcp-Session-Id: $session_id" \
+        ${MCP_SESSION_HEADER[@]+"${MCP_SESSION_HEADER[@]}"} \
         -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d "$body")
 

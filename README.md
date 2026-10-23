@@ -8,6 +8,8 @@
 
 A Model Context Protocol (MCP) server for Solace event brokers, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
+This server is one of several Solace MCP servers. To see all of them, go to [Solace Platform MCP Servers](https://github.com/SolaceProducts/solace-platform-mcp).
+
 ## Table of Contents
 
 - [Overview](#overview)

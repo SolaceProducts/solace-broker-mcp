@@ -1,0 +1,26 @@
+# The values that reproduce `kubectl apply -f deploy/kubernetes/`: the main
+# pass of .github/scripts/helm-parity-check.sh compares this render with every
+# deploy/kubernetes/*.yaml. Change it only together with those files. Also
+# used by `ct lint` and the kubeconform step, like every ci/*-values.yaml.
+fullnameOverride: solace-broker-mcp
+image:
+  tag: latest
+  # The raw Deployment sets no imagePullPolicy, leaving Kubernetes' default.
+  pullPolicy: null
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    insecureSkipVerify: false
+    # Reproduces the raw BROKER_USERNAME / BROKER_PASSWORD and the single
+    # envFrom Secret.
+    envPrefix: BROKER
+    auth:
+      mode: basic
+      username: admin
+      password: changeme
+mcpClientAuth:
+  devToken: ci-only-placeholder
+networkPolicy:
+  enabled: true
+podDisruptionBudget:
+  enabled: true

@@ -25,12 +25,17 @@
           "type": "string"
         },
         "pullPolicy": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "Always",
             "IfNotPresent",
-            "Never"
-          ]
+            "Never",
+            null
+          ],
+          "description": "null leaves imagePullPolicy to the Kubernetes default."
         }
       }
     },
@@ -118,7 +123,8 @@
         "mode": {
           "type": "string",
           "enum": [
-            "static"
+            "static",
+            "oauth"
           ]
         },
         "devToken": {
@@ -132,8 +138,112 @@
             "string",
             "null"
           ]
+        },
+        "issuer": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.issuer; required, https, under oauth."
+        },
+        "audience": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.audience; required under oauth."
+        },
+        "resourceUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.resource_url; required, https, under oauth."
+        },
+        "scopesSupported": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^\\S+$"
+          },
+          "description": "mcp_client_auth.scopes_supported; null = the server default [\"openid\"]."
+        },
+        "toolAuthorization": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "mcp_client_auth.tool_authorization; oauth only. Cross-field rules are enforced in the templates.",
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Required (true or false) under oauth."
+            },
+            "groupsClaimName": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "groups_claim_name; null = the server default \"groups\"."
+            },
+            "filterToolsList": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "filter_tools_list"
+            },
+            "accessLevelGroups": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\S(.*\\S)?$"
+                }
+              },
+              "description": "access_level_groups: group name to tool names. Required when enabled is true. A group set to null is left out, so an overlay can drop one a base file granted. Group names must not be blank, and tool names must be non-empty with no surrounding whitespace (the server refuses both at startup); whether a tool exists is checked only by the server, at startup.",
+              "propertyNames": {
+                "pattern": "\\S"
+              }
+            }
+          }
         }
       }
+    },
+    "enableWriteTools": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "enable_write_tools; null = the server default false."
+    },
+    "allowInsecureBrokerTls": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "allow_insecure_broker_tls; required for a broker with insecureSkipVerify under oauth."
+    },
+    "tlsTerminatedUpstream": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "tls_terminated_upstream; required true under oauth (no in-pod TLS in this chart)."
     },
     "server": {
       "type": [
@@ -243,6 +353,58 @@
         "otlpEndpoint": {
           "type": "string",
           "description": "OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC)."
+        },
+        "shutdownDrainDelayS": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.shutdown_drain_delay_s; also sets terminationGracePeriodSeconds (drain + 35)."
+        },
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.service_name"
+        },
+        "serviceInstanceId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.service_instance_id"
+        },
+        "deploymentEnvironment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.deployment_environment"
+        },
+        "cloudRegion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.cloud_region"
+        },
+        "saturationThresholdMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.saturation_threshold_ms"
+        },
+        "otelSelfStatsIntervalS": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.otel_self_stats_interval_s"
         },
         "correlationId": {
           "type": "object",

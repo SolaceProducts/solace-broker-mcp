@@ -130,13 +130,6 @@ tests:
       - failedTemplate:
           errorPattern: "env var DEV_TOKEN is produced twice"
 
-  - it: rejects an mcpClientAuth mode this chart does not support (schema)
-    set:
-      mcpClientAuth.mode: oauth
-    asserts:
-      - failedTemplate:
-          errorPattern: "at '/mcpClientAuth/mode': value must be 'static'"
-
   - it: rejects a broker name the server would refuse (schema)
     set:
       brokers.bad_name:
@@ -451,3 +444,27 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "^[^Q]*$"
+
+  # The dev modes reject tool_authorization outright (config.go).
+  - it: fails on toolAuthorization.enabled under mode static
+    set:
+      mcpClientAuth.toolAuthorization.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization is only supported when mcpClientAuth.mode is oauth"
+
+  - it: fails on accessLevelGroups under mode static
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups:
+        mcp-readers: [list-queues]
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization is only supported when mcpClientAuth.mode is oauth"
+
+  - it: renders under mode static when every group is null
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.dropped: null
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "tool_authorization"
