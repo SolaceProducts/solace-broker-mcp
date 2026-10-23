@@ -147,7 +147,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 
 Two versions identify the published contract:
 
-- `metrics_schema` is **1.10**, exposed by `mcp_schema_version`.
+- `metrics_schema` is **1.11**, exposed by `mcp_schema_version`.
 - `audit_schema` is **1.2**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
@@ -183,7 +183,7 @@ compatibility commitment.
 > `mcp_broker_unreachable_reason`, `mcp_broker_last_result_timestamp_seconds`,
 > `mcp_token_exchange_circuit_breaker_state`, `mcp_auth_failure_total`,
 > `mcp_authz_denied_total`, `mcp_broker_authz_denied_total`,
-> `mcp_owner_validation_total`, `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
+> `mcp_owner_validation_total`, `mcp_response_bounded_total`, `mcp_audit_events_dropped_total`, `mcp_panic_recovered_total`,
 > `mcp_otel_spans_exported_total`, `mcp_otel_spans_dropped_total`,
 > `mcp_otel_metrics_exported_total`, and `mcp_otel_metrics_dropped_total`.
 
@@ -390,6 +390,44 @@ the broker (SEMP code 72), it is `error_type="broker_permission_denied"` and
 call. The latency of the two pre-flight reads is in `mcp_semp_request_duration_seconds` with
 `operation` `getMsgVpnClientUsername` or `getMsgVpn`; those operations are shared with
 `get-client-username` and `get-vpn-status`, so the series are not exclusive to this check.
+
+### Response-Size Cap
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_response_bounded_total` | Counter | `tool`, `broker`, `outcome` | Solace |
+
+A composite tool's result whose indented JSON text is larger than 64 KiB is cut down before it is
+sent, so one list cannot overflow the calling host's token budget. Native tools such as
+`describe-semp-schema` are not capped and are not counted here. The cap is fixed; lower
+`maxResults` to get smaller responses. This counts each capped-tool result that came back over the
+cap. `outcome` is one of:
+
+| `outcome` | Meaning |
+|---|---|
+| `truncated` | Raw rows were omitted to bring the result under the cap. The result says so: the step carries `omittedItems` and a `truncatedMessage` (and `truncated: true`, which `maxResults` also sets). |
+| `unbounded` | The result was over the cap but had no raw rows to omit (the excess is in a summary), so it was returned as built. A tool needs its own bound. Treat any `unbounded` series as a bug to file. |
+
+Each trimmed result also writes one WARN log line, `response exceeded the size cap; rows
+omitted`, with `tool`, `broker`, `original_bytes`, `returned_bytes`, `limit_bytes`,
+`omitted_items` and `trimmed_steps`. The byte fields are the length of the indented JSON text. It
+carries no parameter values and no rows. An `unbounded`
+result writes `response exceeded the size cap and has no rows to omit; returned as built`.
+
+Series appear only after their first oversized result, so `absent()` is not an alert. A series
+born at `1` reads `increase() == 0`, so use the appearance clause as for `mcp_owner_validation_total`:
+
+```promql
+# any oversized result, including the one that creates a series
+increase(mcp_response_bounded_total[1h]) > 0
+  or (mcp_response_bounded_total unless mcp_response_bounded_total offset 1h)
+
+# which tools hit the cap, and how
+sum by (tool, outcome) (mcp_response_bounded_total)
+```
+
+A trimmed call is a normal success in `mcp_tool_invocation_total`; the cap changes the payload,
+not the outcome.
 
 ### Audit Pipeline Health
 

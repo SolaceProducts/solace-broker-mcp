@@ -53,6 +53,33 @@ with more than 500 matching objects require a narrower query. Applies to:
 `list-slow-subscribers`, `list-client-usernames`, `list-client-profiles`,
 `list-rdps`, `list-queue-discards`.
 
+### Response Size Cap
+
+The result of a **composite tool** (every YAML-defined tool: the `list-*`,
+`get-*` status tools, and the write tools) is capped at **64 KiB of JSON text**
+(65,536 bytes), measured on the indented text a model reads, independent of
+`maxResults`. This keeps one wide list from overflowing the calling host's token
+budget. The native tools (`describe-semp-schema`, `list-brokers`,
+`get-broker-status`, `get-discard-stats`, `get-redundancy-status`,
+`get-queue-metrics`) are not capped; `describe-semp-schema` with `view: "raw"`
+can be much larger, and its description says so.
+
+Most results are well under the cap: a full 100-row `list-queues` is about
+50 KB of text. A result over it has rows removed from the end of its largest
+list until it fits, and says so on each step that lost rows:
+
+| Field | Meaning |
+|---|---|
+| `omittedItems` | How many rows were removed from that step. **Present only when the size cap trimmed the step.** |
+| `truncated` | `true`. Also set when `maxResults` or the page limit stopped the fetch, so on its own it does not mean the cap trimmed anything. |
+| `truncatedMessage` | What happened and how to narrow the query. Appended after an earlier note; the "Use `maxResults` ... to retrieve more" advice is dropped from that note, since a larger `maxResults` would be trimmed back to the same rows. |
+
+The rows kept are the first ones the event broker returned. A `postProcess`
+tool's `summary` is computed from every row fetched before any are removed, so
+its counts stay complete. Rows that were removed are not available through
+this tool; narrow the query (a single queue, client or Message VPN) to see
+them. The cap is fixed and is not configurable.
+
 ### Rate Limiting and Retries
 
 Requests to each event broker are subject to per-event-broker concurrency limits and an

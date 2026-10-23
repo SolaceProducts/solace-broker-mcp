@@ -579,9 +579,7 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 				"More results exist but the maximum limit of %d has been reached. Not all results are shown.",
 				capMax)
 		default:
-			result["truncatedMessage"] = fmt.Sprintf(
-				"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
-				maxResults, capMax)
+			result["truncatedMessage"] = fmt.Sprintf("Results limited to %d.", maxResults) + maxResultsAdvice()
 		}
 	}
 	return result, nil

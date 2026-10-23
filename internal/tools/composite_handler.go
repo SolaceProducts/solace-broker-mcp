@@ -258,3 +258,14 @@ func cloneBoolPtr(p *bool) *bool {
 	v := *p
 	return &v
 }
+
+// BoundResponse trims raw rows from a result whose indented text exceeded the
+// response-size cap (SOL-155577), implementing ResponseBounder. The work lives
+// in composite.BoundResponse; this adapter gives the manager a handler-level
+// hook and supplies the tool's result strategy, which decides whether a
+// top-level "summary" is the handler's output or an ordinary step. A native
+// tool has neither the hook nor composite's step-keyed shape, so it is never
+// trimmed.
+func (h *CompositeToolHandler) BoundResponse(result map[string]any, size, limit int) composite.BoundReport {
+	return composite.BoundResponse(h.tool.Result, result, size, limit)
+}

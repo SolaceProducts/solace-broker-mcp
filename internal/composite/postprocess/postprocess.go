@@ -22,10 +22,17 @@
 // A handler's summary must itself stay bounded, regardless of how many items
 // the step scanned — cap any per-item list (see listQueueDiscards's
 // topOffenderQueues, capped at 10) rather than returning one row per scanned
-// item. ApplyResultStrategy has no generic size backstop today: a handler
-// that returns an unbounded list is exactly how list-queue-discards'
-// documented default first overflowed a calling MCP host's token budget
-// (SOL-155426; a systemic safety valve is tracked separately, not yet built).
+// item. A handler that returns an unbounded list is exactly how
+// list-queue-discards' documented default first overflowed a calling MCP
+// host's token budget (SOL-155426).
+//
+// The convention is checked, not just stated (SOL-155577). The runtime valve
+// (composite.BoundResponse) trims the raw step rows of an oversized result,
+// but it cannot trim a summary, so it only reports one that is too big.
+// TestShippedPostProcessSummaries_AreSmallAgainstTheCap in internal/composite
+// runs every shipped tool at its maximum input and worst-case widths and fails
+// if a handler's summary takes more than a quarter of composite.ResponseCapBytes.
+// A new handler is covered the moment its tool ships in tools.yaml.
 //
 // Handlers register from their package's init() block; main.go pulls them in
 // via a blank import. Each handler declares the field names it reads off each
