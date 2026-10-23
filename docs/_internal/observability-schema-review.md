@@ -96,6 +96,15 @@ than one now — are live today.
 
 ### Flag Defaults at GA
 
+<!-- Parsed by TestObservabilityDocFlagTableMatchesCode (internal/config/observability_doc_flags_test.go).
+     Structural requirements this section must keep:
+     - The heading text stays exactly "Flag Defaults at GA", at level ###.
+     - The first table under the heading starts with | Flag | Default | columns.
+     - Each Flag cell is one backticked OBS_*_ENABLED name, one row per flag.
+     - Default cells read `true` or `false` and match the code, except a flag with a derived
+       default (derivedDefaultFlags in the test), whose cell must stay prose, not `true`/`false`.
+     Run: go test ./internal/config -run TestObservabilityDocFlagTableMatchesCode -->
+
 Each capability is off by default unless the table says otherwise. A flag is off because
 turning it on commits us to something we cannot cheaply take back — a schema name, a
 listening port, a compliance record — so each default-off flag carries a written condition
@@ -190,6 +199,7 @@ So a name you would change is worth flagging now. See
 | Timestamps | RFC 3339, UTC. |
 | Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name in this document is tagged **OTel** or **Solace**. |
 | Cardinality | Every first-party `mcp_*` metric name and label key is documented here, and a CI check (`TestObservabilityDocMatchesRegistry`, `cmd/server`, SOL-154238) fails the build on any undocumented name or label key, in both directions: emitted-but-undocumented, and documented-as-live-but-not-emitted. (The `go_*`/`process_*` collectors and the OTLP span-export pair are outside that check's scope — the former isn't Solace-defined schema, the latter is exempt from the "claimed live" direction only, both explained where they're documented.) Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
+| Feature switches | Every `OBS_*_ENABLED` flag the code defines has a row in the Feature Switches table of `docs/observability.md` and in [Flag Defaults at GA](#flag-defaults-at-ga) above, and its documented default matches the code in both. A CI check in the same job (`TestObservabilityDocFlagTableMatchesCode`, `internal/config`, SOL-154609) fails the build on a flag with no row, a row with no flag, or a default mismatch. The flag inventory is every string literal whose value is an `OBS_*_ENABLED` name in the non-test Go files of `internal/config`, however it is declared, so a new flag fails the check until it is documented. `OBS_AUTH_FAILURE_COUNTER_ENABLED` has a derived default, so it is a named exception: its Default cell in each table must stay prose rather than `true`/`false`, and the follow-the-metrics-flags behavior itself is pinned by `TestObservability_AuthFailureCounter_FollowsProviderWhenUnset`. The check cannot read the KA's per-capability flag table in Confluence; that table is kept in step by review only. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
 ### Schema Versioning
@@ -635,7 +645,8 @@ active.
   `OBS_AUTH_FAILURE_COUNTER_ENABLED` flag as `mcp_auth_failure_total`. With either off, the
   series is absent rather than zero. Unlike `mcp_auth_failure_total`, nothing is pre-seeded: a
   series appears on the first denial for a given `tool` and `reason`, so `absent()` is not a
-  usable alert here — alert on `increase()` instead.
+  usable alert here, and `increase()` alone misses the first denial on each series — use the
+  appearance-clause alert in `docs/observability.md` (Authorization Denials).
 
 **Cardinality:** `|tool| x 2`.
 
@@ -673,7 +684,8 @@ denial rather than an MCP-server-side one (SOL-153332, Story 49).
   so a denial that is a policy gap on one broker and correct on another is only
   distinguishable with the label.
 - Behind the metrics egress flags, like every other `mcp_*` instrument. Nothing is pre-seeded, so
-  `absent()` is not a usable alert — alert on `increase()`.
+  `absent()` is not a usable alert, and `increase()` alone misses the first denial on each series
+  — use the same appearance-clause alert as `mcp_authz_denied_total` in `docs/observability.md`.
 
 **Cardinality:** `|tool| x |broker| x 1`.
 
@@ -1115,11 +1127,14 @@ Events](#authentication-events)). The stream is enabled with `OBS_AUDIT_LOG_ENAB
 > **The trigger is the `destructiveHint` annotation, not "did this change state".** Know the
 > gap before you rely on this stream as your complete record of change. The emitter branches
 > on a tool's `destructive` annotation (`internal/tools/manager.go`), and the `create-*` tools
-> are annotated `destructive: false` because creating an object is additive. So these seven
+> are annotated `destructive: false` because creating an object is additive, with two deliberate
+> exceptions: `create-kafka-receiver` and `create-kafka-sender` are annotated destructive because a
+> bridge opens an outbound connection to a host the caller chooses, so they are audited. These nine
 > tools change broker state and emit **no** `operation` record:
 >
 > `create-message-vpn`, `create-queue`, `create-queue-subscription`, `create-topic-endpoint`,
-> `create-rdp`, `clear-queue-stats`, `clear-client-stats`.
+> `create-rdp`, `create-kafka-receiver-topic-binding`, `create-kafka-sender-queue-binding`,
+> `clear-queue-stats`, `clear-client-stats`.
 >
 > An access review that needs object *creation* covered cannot get it from the audit stream
 > today; join to the `tool invoked` operational log line for those tools instead. Widening the

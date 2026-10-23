@@ -55,6 +55,7 @@ broker-config.yaml
 !test/e2e-action/.env
 !test/e2e-oauth/.env
 !test/e2e-llm/.env
+!test/e2e-helm/.env
 
 # Working documents that must not be committed (see OPEN_SOURCE_STATUS.md)
 Mark2-report.md

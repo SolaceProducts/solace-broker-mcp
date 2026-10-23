@@ -740,3 +740,30 @@ func TestDescribeSempSchema_RawViewOfBodylessOperationEmitsAttributes(t *testing
 		t.Errorf("describe(%q, raw) omits schema", withBody)
 	}
 }
+
+// TestDescribeSempSchema_RawViewSizeWarning pins the warning that view "raw" can
+// overflow a host's token cap on large operations (SOL-155427). Both the tool
+// description and the view parameter's description must carry it, since a host
+// may surface either one.
+func TestDescribeSempSchema_RawViewSizeWarning(t *testing.T) {
+	md := (&describeSempSchemaHandler{}).Metadata()
+	props, _ := md.InputSchema["properties"].(map[string]any)
+	view, _ := props["view"].(map[string]any)
+	viewDesc, _ := view["description"].(string)
+
+	// Each description is matched on its steering phrase, not a bare 'trimmed',
+	// which both carried before the warning existed. Whitespace is collapsed so
+	// re-wrapping the multi-line tool description cannot split a phrase.
+	for name, tc := range map[string]struct{ desc, steer string }{
+		"tool description": {md.Description, "Prefer 'trimmed'"},
+		"view description": {viewDesc, "use 'trimmed'"},
+	} {
+		desc := strings.Join(strings.Fields(tc.desc), " ")
+		if !strings.Contains(desc, "token limit") {
+			t.Errorf("%s should warn that 'raw' can exceed the host token limit; got: %q", name, desc)
+		}
+		if !strings.Contains(desc, tc.steer) {
+			t.Errorf("%s should steer callers with %q; got: %q", name, tc.steer, desc)
+		}
+	}
+}

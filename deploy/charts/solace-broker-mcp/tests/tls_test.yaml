@@ -1,0 +1,128 @@
+# In-pod TLS: tls.existingSecret, a kubernetes.io/tls Secret, is mounted
+# read-only and the server config points tls_cert_file / tls_key_file at it.
+# The server then serves HTTPS on its one listener, the probes' included.
+suite: in-pod TLS
+templates:
+  - deployment.yaml
+  - configmap.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders tls_cert_file and tls_key_file at the mounted tls.crt and tls.key
+    template: configmap.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^listen_address: "0\.0\.0\.0"\ntls_cert_file: "/etc/mcp-server/tls/tls\.crt"\ntls_key_file: "/etc/mcp-server/tls/tls\.key"$'
+
+  - it: mounts the Secret read-only
+    template: deployment.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: mcp-server-tls
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tls
+            mountPath: /etc/mcp-server/tls
+            readOnly: true
+
+  - it: switches the startup, liveness and readiness probes to HTTPS
+    template: deployment.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet
+          value: {path: /readyz, port: http, scheme: HTTPS}
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value: {path: /livez, port: http, scheme: HTTPS}
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value: {path: /readyz, port: http, scheme: HTTPS}
+
+  - it: leaves the probes on HTTP and renders no TLS keys without tls.existingSecret
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value: {path: /livez, port: http}
+        template: deployment.yaml
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "tls_cert_file|tls_key_file"
+        template: configmap.yaml
+
+  - it: treats a null tls.existingSecret as unset
+    template: deployment.yaml
+    set:
+      tls.existingSecret: null
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+
+  - it: fails with tlsTerminatedUpstream true
+    set:
+      tls.existingSecret: mcp-server-tls
+      tlsTerminatedUpstream: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "tls.existingSecret and tlsTerminatedUpstream: true cannot both be set"
+        template: deployment.yaml
+
+  - it: renders with tlsTerminatedUpstream false
+    template: configmap.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+      tlsTerminatedUpstream: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^tls_terminated_upstream: false$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^tls_cert_file: '
+
+  - it: fails on a Secret name that is not a DNS subdomain
+    set:
+      tls.existingSecret: My_Secret
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/tls/existingSecret': 'My_Secret' does not match pattern"
+        template: deployment.yaml
+
+  # oauth refuses a plaintext listener unless TLS terminates upstream; in-pod
+  # TLS is the other way to satisfy it (config.go validate).
+  - it: satisfies oauth's TLS requirement without tlsTerminatedUpstream
+    template: configmap.yaml
+    values:
+      - ../ci/oauth-values.yaml
+    set:
+      tls.existingSecret: mcp-server-tls
+      tlsTerminatedUpstream: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^tls_cert_file: "/etc/mcp-server/tls/tls\.crt"$'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "tls_terminated_upstream"
+
+  - it: still fails under oauth with neither in-pod TLS nor tlsTerminatedUpstream
+    template: deployment.yaml
+    values:
+      - ../ci/oauth-values.yaml
+    set:
+      tlsTerminatedUpstream: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "tls.existingSecret or tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth"

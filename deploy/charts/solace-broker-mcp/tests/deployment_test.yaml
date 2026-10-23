@@ -1,0 +1,319 @@
+suite: deployment
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+release:
+  name: rel
+tests:
+  # Pre-story testbed bug: a Service named mcp-server injected MCP_SERVER_PORT
+  # ("tcp://...") into every pod and broke config loading.
+  - it: disables Kubernetes service links
+    asserts:
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+
+  # Pre-story testbed bug: Kubernetes' command: replaces the image ENTRYPOINT.
+  - it: never overrides the image entrypoint with command
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].command
+
+  - it: selects on name + instance only
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: solace-broker-mcp
+            app.kubernetes.io/instance: rel
+      - isSubset:
+          path: spec.template.metadata.labels
+          content:
+            app.kubernetes.io/name: solace-broker-mcp
+            app.kubernetes.io/instance: rel
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: solace-broker-mcp
+            app.kubernetes.io/instance: rel
+
+  - it: hardens the pod and container
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+
+  - it: keeps the raw manifest's measured settings
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /livez
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: defaults the image tag to appVersion
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/solaceproducts/solace-broker-mcp:1.0.0
+
+  - it: derives GOMEMLIMIT 384MiB from 512Mi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GOMEMLIMIT, value: 384MiB}
+
+  - it: derives GOMEMLIMIT 768MiB from 1Gi
+    set:
+      resources.limits.memory: 1Gi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GOMEMLIMIT, value: 768MiB}
+
+  - it: floors GOMEMLIMIT to whole MiB
+    set:
+      resources.limits.memory: 513Mi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GOMEMLIMIT, value: 384MiB}
+
+  - it: fails on an unsupported memory suffix
+    set:
+      resources.limits.memory: 512M
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot derive GOMEMLIMIT"
+
+  - it: fails on a goMemLimit Go cannot parse
+    set:
+      goMemLimit: 400Mi
+    asserts:
+      - failedTemplate:
+          errorPattern: "goMemLimit \"400Mi\" is not a value Go accepts"
+
+  - it: accepts goMemLimit off
+    set:
+      goMemLimit: "off"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GOMEMLIMIT, value: "off"}
+
+  - it: lets goMemLimit override the derivation, even for an unsupported suffix
+    set:
+      resources.limits.memory: 512M
+      goMemLimit: 400MiB
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: GOMEMLIMIT, value: 400MiB}
+
+  - it: loads chart-managed credentials with envFrom
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: rel-solace-broker-mcp
+
+  - it: injects existing-Secret credentials with secretKeyRef and no envFrom
+    set:
+      brokers:
+        my-broker:
+          auth: {existingSecret: semp-creds, username: null, password: null}
+      mcpClientAuth:
+        devToken: ""
+        existingSecret: dev-tok
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_BROKER_USERNAME
+            valueFrom: {secretKeyRef: {name: semp-creds, key: username}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_BROKER_PASSWORD
+            valueFrom: {secretKeyRef: {name: semp-creds, key: password}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DEV_TOKEN
+            valueFrom: {secretKeyRef: {name: dev-tok, key: dev-token}}
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  - it: uses the token key for a bearer broker's existing Secret
+    set:
+      brokers:
+        my-broker:
+          auth: {mode: bearer, existingSecret: semp-tok, username: null, password: null}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_BROKER_TOKEN
+            valueFrom: {secretKeyRef: {name: semp-tok, key: token}}
+
+  # The checksums roll the pods on a config or credential change (AC 10). An
+  # exists-only check passes even for a constant, so pin the hashes for the
+  # default values and assert that one changed value moves each of them.
+  # Any change to the rendered config or the credential set changes these
+  # pinned values; regenerate with:
+  #   helm template rel . -f ci/default-values.yaml -s templates/deployment.yaml | grep checksum
+  - it: pins the config and Secret checksums for the default values
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: changes only the config checksum when the config changes
+    set:
+      server.logLevel: debug
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: changes only the Secret checksum when a broker credential changes
+    set:
+      brokers.my-broker.auth.password: rotated
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: 531c41302acb7a94ec3ce845ed5be24c80e10a3d0b9aaefb4c8e2465916e0357
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  # A value set alongside existingSecret is not rendered into the Secret, so it
+  # must not reach the (unsalted, readable) hash either.
+  - it: ignores a broker password that existingSecret overrides
+    set:
+      brokers.other:
+        url: "https://other.example.com:943"
+        auth: {mode: basic, existingSecret: other-semp, password: ignored}
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: ignores a dev token that existingSecret overrides
+    set:
+      mcpClientAuth.existingSecret: dev-tok
+      mcpClientAuth.devToken: ignored
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 0d1a36d7a1304d32eb3ff9f7f75fa01b257e0b9a23bdf939d1bb9127960d1ce6
+  - it: changes the Secret checksum when the dev token changes
+    set:
+      mcpClientAuth.devToken: rotated
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 53aa14ef6f3a98f2f8d2e5dd443868acbd5dc395070a57c73d3da8e34e40855e
+
+  - it: quotes a numeric-looking existing Secret name
+    set:
+      brokers.my-broker.auth:
+        existingSecret: "123"
+        username: null
+        password: null
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MY_BROKER_USERNAME
+            valueFrom: {secretKeyRef: {name: "123", key: username}}
+
+  - it: fails when image.repository is null instead of rendering an empty image
+    set:
+      image.repository: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "image.repository is required"
+
+  - it: renders imagePullPolicy IfNotPresent by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+
+  # null leaves the field to Kubernetes' own default (Always for :latest,
+  # IfNotPresent otherwise), as deploy/kubernetes/deployment.yaml does.
+  - it: omits imagePullPolicy when pullPolicy is null
+    set:
+      image.pullPolicy: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].imagePullPolicy
+
+  - it: references no dev-token Secret under oauth, even one left set
+    values:
+      - ../ci/oauth-values.yaml
+    set:
+      mcpClientAuth.existingSecret: leftover-dev-token
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DEV_TOKEN
+          any: true

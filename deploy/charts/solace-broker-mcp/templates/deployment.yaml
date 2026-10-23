@@ -1,0 +1,204 @@
+{{- $creds := include "solace-broker-mcp.credentials" . | fromJsonArray }}
+{{- $obsEnv := include "solace-broker-mcp.obsEnv" . | fromJsonArray }}
+{{- $metricsPort := include "solace-broker-mcp.metricsPort" . | atoi }}
+{{- $files := include "solace-broker-mcp.fileMounts" . | fromJson }}
+{{- $reserved := list "CONFIG_FILE" "POD_NAME" "GOMEMLIMIT" }}
+{{- range (concat $creds $obsEnv $files.env) }}
+{{- $reserved = append $reserved .name }}
+{{- end }}
+{{- include "solace-broker-mcp.validateExtraEnv" (dict "extraEnv" .Values.extraEnv "reserved" $reserved) }}
+{{- $volumeNames := list "config" }}
+{{- range $files.volumes }}{{ $volumeNames = append $volumeNames .name }}{{ end }}
+{{- $mountPaths := list "/etc/mcp-server/config.yaml" }}
+{{- range $files.mounts }}{{ $mountPaths = append $mountPaths .mountPath }}{{ end }}
+{{- include "solace-broker-mcp.validateExtraVolumes" (dict "volumes" .Values.extraVolumes "mounts" .Values.extraVolumeMounts "names" $volumeNames "paths" $mountPaths) }}
+{{- $managedSecret := include "solace-broker-mcp.hasManagedSecret" . }}
+{{- /* Hash only what secret.yaml renders: a value set alongside existingSecret is
+ignored by the chart, so hashing it would expose it and roll pods for nothing. */}}
+{{- $managedCreds := list }}
+{{- range $creds }}
+{{- if not .existingSecret }}
+{{- $managedCreds = append $managedCreds . }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+spec:
+  # Two replicas keep one pod serving through updates; requires the Service's
+  # sessionAffinity: ClientIP.
+  replicas: {{ .Values.replicaCount }}
+  # Pinned, not inherited: maxUnavailable: 0 brings the replacement to Ready
+  # before the old pod retires, so a rollout that cannot place a new pod stalls
+  # rather than dropping capacity.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "solace-broker-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "solace-broker-mcp.labels" . | nindent 8 }}
+      # Roll the pods on `helm upgrade` when the config or the chart-managed
+      # Secret changes; neither is re-read by a running server.
+      annotations:
+        checksum/config: {{ include "solace-broker-mcp.serverConfig" . | sha256sum }}
+        {{- if $managedSecret }}
+        checksum/secret: {{ toJson $managedCreds | sha256sum }}
+        {{- end }}
+    spec:
+      # Kubernetes injects <SVC>_PORT / <SVC>_SERVICE_HOST for every Service in
+      # the namespace. A Service named mcp-server yields MCP_SERVER_PORT, the
+      # server's own port override, and config loading fails.
+      enableServiceLinks: false
+      # The server never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      # Without this both replicas can land on one node, where node failure is
+      # still a full outage. ScheduleAnyway keeps single-node clusters
+      # schedulable.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "solace-broker-mcp.selectorLabels" . | nindent 14 }}
+      # Graceful-shutdown budget: shutdown_drain_delay_s (default 10) + drain
+      # (30) + shutdown hooks (3) + 2s buffer, so it follows
+      # observability.shutdownDrainDelayS. The drain runs in-process (no shell,
+      # no preStop hook). See deploy/kubernetes/deployment.yaml for the full
+      # derivation.
+      {{- $drain := (.Values.observability | default dict).shutdownDrainDelayS }}
+      terminationGracePeriodSeconds: {{ if kindIs "invalid" $drain }}45{{ else }}{{ add (int $drain) 35 }}{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532  # distroless nonroot UID
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # No command: the image ENTRYPOINT is the server binary, and
+        # Kubernetes' command: would replace it. Configured via CONFIG_FILE.
+        - name: {{ .Chart.Name }}
+          {{- $image := .Values.image | default dict }}
+          image: "{{ required "image.repository is required" $image.repository }}:{{ $image.tag | default .Chart.AppVersion }}"
+          {{- /* null leaves it to Kubernetes' default, as the raw
+          deploy/kubernetes/deployment.yaml does. */}}
+          {{- with $image.pullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            # The server writes nothing to disk.
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: {{ (.Values.server | default dict).port | default 9090 }}
+              protocol: TCP
+            # /metrics; the listener exists only with OBS_METRICS_SCRAPE_ENABLED.
+            # Follows observability.metrics.bindAddress.
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+          env:
+            - name: CONFIG_FILE
+              value: /etc/mcp-server/config.yaml
+            # service.instance.id: tells one replica's telemetry from another's.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Go never reads a cgroup memory limit; without this the heap target
+            # has no ceiling below limits.memory.
+            - name: GOMEMLIMIT
+              value: {{ include "solace-broker-mcp.goMemLimit" . | quote }}
+            {{- range (concat $obsEnv $files.env) }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            {{- range $creds }}
+            {{- if .existingSecret }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret | quote }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if $managedSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ include "solace-broker-mcp.fullname" . | quote }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mcp-server/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            {{- with $files.mounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # startupProbe gates liveness/readiness until cold-start init
+          # completes (~60s budget). /readyz reflects the server's own
+          # readiness only — it makes no broker calls. All three follow
+          # tls.existingSecret: in-pod TLS serves them over HTTPS too.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              {{- if $files.tls }}
+              scheme: HTTPS
+              {{- end }}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # No limits.cpu by design (CFS throttling stalls bursts); memory is
+          # capped because it is incompressible.
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "solace-broker-mcp.fullname" . | quote }}
+        {{- with $files.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

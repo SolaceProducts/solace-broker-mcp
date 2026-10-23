@@ -72,9 +72,11 @@ func callerKeyFromRequest(req *mcp.CallToolRequest) resilience.CallerKey {
 	}
 	// Session is nil only under test scaffolding; the SDK always populates it
 	// on a real dispatch. ID() returns "" when the transport carries no session
-	// ID, which this server's stateful streamable-HTTP handler does not do —
-	// cmd/server/main.go leaves StreamableHTTPOptions.Stateless unset, so a
-	// real MCP client always has one.
+	// ID. That is the case when MCP_TRANSPORT_STATELESS is true: the server issues
+	// none, so every call from one subject lands in one session bucket. With the
+	// default stateful transport a real MCP client always has one. Never use the
+	// session ID as an identity input: under the SDK's MCPGODEBUG
+	// allowsessionsinstateless=1 option the client can choose it.
 	if req.Session != nil {
 		key.Session = req.Session.ID()
 	}

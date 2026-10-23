@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -143,7 +144,7 @@ func conformanceHandler(t *testing.T) *mcp.StreamableHTTPHandler {
 	}
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return conformanceServer
-	}, newMCPStreamableOptions())
+	}, newMCPStreamableOptions(false))
 }
 
 // conformanceRequest builds a POST /mcp request with the headers the SDK
@@ -308,18 +309,34 @@ func decodeSingleResponse(t *testing.T, rec *httptest.ResponseRecorder) jsonRPCE
 	return env
 }
 
+// sessionIDForMode holds an initialize response's Mcp-Session-Id to the
+// contract of the mode under test, in both directions. A stateful server that
+// stops issuing an ID, or a stateless one that starts, is a regression; a check
+// that merely tolerated a missing ID would hide the first of those.
+func sessionIDForMode(stateless bool, header string) (string, error) {
+	switch {
+	case stateless && header != "":
+		return "", fmt.Errorf("initialize returned Mcp-Session-Id %q; the stateless handler must not issue one", header)
+	case !stateless && header == "":
+		return "", errors.New("initialize returned no Mcp-Session-Id; the stateful handler must issue one")
+	}
+	return header, nil
+}
+
 // initializeSessionFor performs the initialize handshake and returns the
 // session ID, so follow-up requests (tools/list, tools/call) land on an
-// initialized session. The stateful handler rejects them otherwise.
-func initializeSessionFor(t *testing.T, handler http.Handler) string {
+// initialized session. The stateful handler rejects them otherwise. The ID is
+// empty when stateless is true, because that handler issues none; postMCP omits
+// the header for an empty ID.
+func initializeSessionFor(t *testing.T, handler http.Handler, stateless bool) string {
 	t.Helper()
 	rec := postMCP(t, handler, initializeBodyFor("conformance-test"), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("initialize status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	sessionID := rec.Header().Get("Mcp-Session-Id")
-	if sessionID == "" {
-		t.Fatal("initialize returned no Mcp-Session-Id; the stateful handler must issue one")
+	sessionID, err := sessionIDForMode(stateless, rec.Header().Get("Mcp-Session-Id"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	// The spec requires the initialized notification before other requests.
 	// The SDK answers a notification with 202 and no body.
@@ -411,8 +428,11 @@ func keysOf(m map[string]any) []string {
 // (mcp/server.go returns jsonrpc.CodeInvalidParams for an unknown tool),
 // whereas the wording is the SDK's and may be reworded on any bump.
 func TestJSONRPC_ErrorEnvelopeForUnknownTool(t *testing.T) {
-	handler := conformanceHandler(t)
-	sessionID := initializeSessionFor(t, handler)
+	forEachTransportMode(t, runErrorEnvelopeForUnknownTool)
+}
+
+func runErrorEnvelopeForUnknownTool(t *testing.T, handler http.Handler, stateless bool) {
+	sessionID := initializeSessionFor(t, handler, stateless)
 
 	rec := postMCP(t, handler,
 		`{"jsonrpc":"2.0","id":42,"method":"tools/call",`+
@@ -449,6 +469,10 @@ func TestJSONRPC_ErrorEnvelopeForUnknownTool(t *testing.T) {
 // upgrade starts returning proper envelopes, this test fails and the finding
 // can be closed. See the SOL-150761 report.
 func TestJSONRPC_TransportLevelErrorsBypassTheEnvelope(t *testing.T) {
+	forEachTransportMode(t, runTransportLevelErrorsBypassTheEnvelope)
+}
+
+func runTransportLevelErrorsBypassTheEnvelope(t *testing.T, handler http.Handler, stateless bool) {
 	tests := []struct {
 		name     string
 		body     string
@@ -470,10 +494,9 @@ func TestJSONRPC_TransportLevelErrorsBypassTheEnvelope(t *testing.T) {
 			wantJSONRPCCode: codeMethodNotFound,
 		},
 	}
-	handler := conformanceHandler(t)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sessionID := initializeSessionFor(t, handler)
+			sessionID := initializeSessionFor(t, handler, stateless)
 
 			rec := postMCP(t, handler, tc.body, sessionID)
 
@@ -609,8 +632,20 @@ func TestInitialize_ProtocolVersionDriftDetector(t *testing.T) {
 // wireProtocolVersion. If a future SDK makes the stateful transport admit
 // 2026-07-28, the client will negotiate it here and this test fails, flagging
 // a protocol change the initialize probes above cannot see.
+//
+// Stateless is skipped: the stateless transport admits 2026-07-28, so the client
+// negotiates it and the assertion below does not apply. The stateless
+// negotiation is asserted in stateless_cancellation_test.go, so skipping here
+// loses no coverage.
 func TestInitialize_SDKClientNegotiatesWireVersion(t *testing.T) {
-	srv := httptest.NewServer(conformanceHandler(t))
+	forEachTransportMode(t, runSDKClientNegotiatesWireVersion)
+}
+
+func runSDKClientNegotiatesWireVersion(t *testing.T, handler http.Handler, stateless bool) {
+	if stateless {
+		t.Skip("the stateless transport negotiates 2026-07-28; stateless_cancellation_test.go asserts that")
+	}
+	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
 	ctx := context.Background()
@@ -816,8 +851,11 @@ func listToolsOverWire(t *testing.T, handler http.Handler, sessionID string) []w
 // internal/composite/schema_test.go checks individual generated schemas.
 // This is the only test that says "no tool may be missing these".
 func TestToolsList_WireCompleteness(t *testing.T) {
-	handler := conformanceHandler(t)
-	sessionID := initializeSessionFor(t, handler)
+	forEachTransportMode(t, runToolsListWireCompleteness)
+}
+
+func runToolsListWireCompleteness(t *testing.T, handler http.Handler, stateless bool) {
+	sessionID := initializeSessionFor(t, handler, stateless)
 
 	tools := listToolsOverWire(t, handler, sessionID)
 	if len(tools) == 0 {
@@ -967,8 +1005,11 @@ func callToolOverWireOmittedArguments(t *testing.T, handler http.Handler, sessio
 // a broker. The ToolManager success tail is covered at unit level in
 // internal/tools/.
 func TestToolsCall_ReturnsStructuredContent(t *testing.T) {
-	handler := conformanceHandler(t)
-	sessionID := initializeSessionFor(t, handler)
+	forEachTransportMode(t, runToolsCallReturnsStructuredContent)
+}
+
+func runToolsCallReturnsStructuredContent(t *testing.T, handler http.Handler, stateless bool) {
+	sessionID := initializeSessionFor(t, handler, stateless)
 
 	env := callToolOverWire(t, handler, sessionID, "list-brokers", "{}")
 	if env.Error != nil {
@@ -1026,6 +1067,10 @@ func TestToolsCall_ReturnsStructuredContent(t *testing.T) {
 // pins separately. The two subtests below cover both JSON Schema failure kinds
 // a client actually hits on the conformant path.
 func TestToolsCall_InputValidationIsAToolResult(t *testing.T) {
+	forEachTransportMode(t, runToolsCallInputValidationIsAToolResult)
+}
+
+func runToolsCallInputValidationIsAToolResult(t *testing.T, handler http.Handler, stateless bool) {
 	tests := []struct {
 		name string
 		// arguments are schema-invalid for get-vpn-status, a read-only
@@ -1043,8 +1088,7 @@ func TestToolsCall_InputValidationIsAToolResult(t *testing.T) {
 			arguments: `{"broker":"dev"}`,
 		},
 	}
-	handler := conformanceHandler(t)
-	sessionID := initializeSessionFor(t, handler)
+	sessionID := initializeSessionFor(t, handler, stateless)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			env := callToolOverWire(t, handler, sessionID, "get-vpn-status", tc.arguments)
@@ -1168,8 +1212,11 @@ var toolsWithoutInputValidation = map[string]bool{}
 // (the pool builds SEMP clients lazily) — a bogus alias would fail broker
 // resolution first and this test would then be asserting the wrong thing.
 func TestToolsCall_EveryToolValidatesItsInput(t *testing.T) {
-	handler := conformanceHandler(t)
-	sessionID := initializeSessionFor(t, handler)
+	forEachTransportMode(t, runToolsCallEveryToolValidatesItsInput)
+}
+
+func runToolsCallEveryToolValidatesItsInput(t *testing.T, handler http.Handler, stateless bool) {
+	sessionID := initializeSessionFor(t, handler, stateless)
 
 	allTools := listToolsOverWire(t, handler, sessionID)
 	if len(allTools) == 0 {

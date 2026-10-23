@@ -2,7 +2,7 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-llm/`](../../test/e2e-llm/README.md). [`release.yml`](../../.github/workflows/release.yml) calls [`llm-eval.yml`](../../.github/workflows/llm-eval.yml) on a `v*` tag and holds the GHCR push and the GitHub Release until it passes. A manual `workflow_dispatch` remains and checks out the ref you name (default `main`). It does not run on pull requests. A full run costs API credits (~$4.78 measured 2026-08-05).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). The Helm chart's end-to-end suite lives under [`test/e2e-helm/`](../../test/e2e-helm/README.md) (see [below](#helm-chart-suite--teste2e-helm)). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-llm/`](../../test/e2e-llm/README.md). [`release.yml`](../../.github/workflows/release.yml) calls [`llm-eval.yml`](../../.github/workflows/llm-eval.yml) on a `v*` tag and holds the GHCR push and the GitHub Release until it passes. A nightly schedule (06:00 UTC) also runs it on the tip of `main` and gates nothing. A manual `workflow_dispatch` remains and checks out the ref you name (default `main`). It does not run on pull requests. A full run costs API credits (~$4.78 measured 2026-08-05); once a day that is about $145 a month at that price.
 
 ## Shared scaffold — `test/e2e-common/lib.sh`
 
@@ -15,7 +15,7 @@ Location-independence contract: a suite sets `SUITE_DIR` (its own directory) bef
 | Suite | Fixtures | Focus |
 |---|---|---|
 | `e2e-monitoring` | F1–F7, created up front + broker-driver traffic | monitoring tools |
-| `e2e-management` | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint) |
+| `e2e-management` | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint, RDP, queue subscription) and the Kafka bridge write tools (against a real Kafka with PLAINTEXT and SASL listeners; needs the broker Kafka-bridge scaling env vars) |
 
 ---
 
@@ -83,7 +83,7 @@ shared and live in `test/e2e-common/`, not in the suite directory.
 
 ## Configuration
 
-Per-suite configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars (suite-wide protocol settings such as `MCP_PROTOCOL_VERSION` live in `e2e-common/lib.sh` instead). It is read by:
+Per-suite configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars (suite-wide protocol settings such as `MCP_PROTOCOL_VERSION` live in `e2e-common/lib.sh` instead). The transport mode is the exception: `MCP_TRANSPORT_STATELESS` is deliberately not in this file, so every local run stays stateful unless you set it in the environment of the run (see [Stateful and stateless runs](#stateful-and-stateless-runs)). It is read by:
 
 - **docker-compose.yml** — broker port mappings and admin password
 - **helpers.sh** — broker URLs, SEMP auth, fixture management
@@ -178,13 +178,15 @@ Two Solace PubSub+ Standard Edition containers are used for E2E tests, configure
 
 | Setting | broker-a | broker-b |
 |---|---|---|
-| Image | `solace/solace-pubsub-standard:latest` | `solace/solace-pubsub-standard:latest` |
+| Image | `solace/solace-pubsub-standard:${SOLACE_TAG:-latest}` | `solace/solace-pubsub-standard:${SOLACE_TAG:-latest}` |
 | Container | `solace-e2e-a` | `solace-e2e-b` |
 | SEMP port | `8080` (configurable via `.env`) | `8082` (configurable via `.env`) |
 | Credentials | `admin` / `admin` (from `.env`) | `admin` / `admin` (from `.env`) |
 | Default VPN | `default` (pre-created) | `default` (pre-created) |
 | Shared memory | 1 GB | 1 GB |
 | File descriptors | 1,048,576 (nofile ulimit) | 1,048,576 (nofile ulimit) |
+
+The image tag defaults to `latest`. Set `SOLACE_TAG` to run any suite against another broker release, for example the oldest supported LTS: `SOLACE_TAG=10.8.1.594 make e2e-all`. The nightly `e2e-broker-matrix.yml` workflow runs the basic-mcp, monitoring, action and management suites against `10.8.1.594` and `latest`.
 
 The broker readiness check has two phases:
 1. SEMP API responds to config requests
@@ -244,8 +246,8 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 | Test | What it validates |
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
-| `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
-| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns all 47 tools: 29 read-only plus 18 write (4 action, 14 management). |
+| `test_initialize` | MCP handshake completes. A stateful server returns `Mcp-Session-Id`; a stateless one (`MCP_TRANSPORT_STATELESS=true`) returns none, and the helper fails if the response contradicts the mode in either direction |
+| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns all 57 tools: 29 read-only plus 28 write (4 action, 24 management). |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
@@ -259,13 +261,33 @@ Each test session follows the MCP handshake before calling tools. The server res
 
 ```
 POST /mcp  initialize
-           ← Mcp-Session-Id header + server capabilities (SSE)
+           ← server capabilities (SSE)
+           ← Mcp-Session-Id header (stateful only; a stateless server sends none)
 
-POST /mcp  notifications/initialized   (Mcp-Session-Id: <id>)
+POST /mcp  notifications/initialized   (Mcp-Session-Id: <id>, stateful only)
 
-POST /mcp  tools/list or tools/call    (Mcp-Session-Id: <id>)
+POST /mcp  tools/list or tools/call    (Mcp-Session-Id: <id>, stateful only)
            ← SSE with JSON-RPC response in data: line
 ```
+
+A stateless request carries no `Mcp-Session-Id` header at all; the helpers do not send a blank one. `MCP-Protocol-Version` is sent in both modes.
+
+### Stateful and stateless runs
+
+The handshake helpers in `e2e-common/lib.sh` (`mcp_initialize`, `mcp_request`) read `MCP_TRANSPORT_STATELESS`, the same variable the server reads, to know which mode the run is testing. They do not guess it from the response:
+
+- **Unset or false (stateful, the default).** A missing `Mcp-Session-Id` fails the run with a printed message.
+- **True (stateless).** A missing `Mcp-Session-Id` is expected, and an issued one fails the run.
+
+To run the suite stateless locally, export the variable for the run:
+
+```bash
+MCP_TRANSPORT_STATELESS=true bash test/e2e-basic-mcp/run-all.sh
+```
+
+A green stateless run shows that the handshake and tool calls work with no session header, over the `2025-11-25` wire these helpers pin. Scenario 2 also drives the Go SDK client against the stateless server, so a failure there is a finding about that client. A green run does not exercise `2026-07-28`, does not show that other clients work or that replicas behave, and does not cover session-scoped behaviour such as per-session fairness. `docs/configuration.md` still says to leave the flag off in production.
+
+The shared helpers in `e2e-common/lib.sh` follow `MCP_TRANSPORT_STATELESS`, so every suite that uses them (basic-mcp, monitoring, management, action, oauth, helm and llm) gets the mode-aware `mcp_initialize`. CI runs only `e2e-basic-mcp` stateless; the others were not run stateless. The handshake copies in the oauth, tracing, dashboard and llm suites still require `Mcp-Session-Id` and fail against a stateless server (SOL-154338). `e2e-common/lib.test.sh` checks the helper's two-way behaviour with a stubbed `curl`; it needs no broker and no server. CI runs it in the `lint` job. `make check` does not, so run `bash test/e2e-common/lib.test.sh` yourself after touching the handshake helpers.
 
 ---
 
@@ -368,16 +390,47 @@ A second phase, Linux only, is the ticket's headline case — the log stream its
 
 ## CI Integration
 
-The E2E tests run as a separate `e2e` job in `.github/workflows/build-and-test.yml`, gated on the `build` job passing:
+The E2E tests run as separate jobs in `.github/workflows/build-and-test.yml`, each gated on the `build` job passing:
 
 ```
 lint ──┐
-       ├── build ──── e2e
+       ├── build ──┬── e2e-basic-mcp
+                   ├── e2e-basic-mcp-stateless
+                   ├── e2e-oauth
+                   ├── e2e-monitoring
+                   ├── e2e-management
+                   └── e2e-action
 ```
 
-The job:
+The `e2e-basic-mcp` job:
 1. Starts both Solace brokers with `docker compose up -d`
 2. Waits for both brokers to be fully ready (SEMP API + message spool, up to 120s)
 3. Runs `bash test/e2e-basic-mcp/run-all.sh`
 4. On failure: dumps last 100 lines of broker logs for debugging
 5. Always tears down the brokers with `docker compose down -v`
+
+The job is a matrix that runs these steps once per transport mode. The stateful run is named `e2e-basic-mcp` and is the required check; the stateless run sets `MCP_TRANSPORT_STATELESS=true` and is named `e2e-basic-mcp-stateless`. The repository rules require checks by name, so only the stateful run blocks merging.
+
+---
+
+## Helm chart suite — `test/e2e-helm/`
+
+Tier 3 of the Helm chart's checks (SOL-156328). Tiers 1–2 — lint, kubeconform and `helm-unittest` — are the `helm-chart` job in `build-and-test.yml` and `make helm-check`. This suite installs `deploy/charts/solace-broker-mcp/` from the checkout into an ephemeral single-node `kind` cluster, against the standard two brokers, and drives live MCP tool calls through the chart's Service.
+
+**Prerequisites.** An **x86_64** host: the dev image is built for `linux/amd64` only (`dev-build.yaml`), so `kind` on arm64 (e.g. Apple Silicon) is not expected to run it; not tested on arm64. Docker with Compose, `kind`, `kubectl`, `helm`, `curl`, `jq`. Run it with `make e2e-helm-all`; `make e2e-helm-down` cleans up after an interrupted run.
+
+**What runs.** `run-all.sh` owns the whole lifecycle, so the Makefile and the workflow run the same script:
+
+1. Create the `kind` cluster with the node image pinned in `.env` (a leftover cluster of the same name is deleted first), then pull the dev image on the host (three attempts) and `kind load` it into the node, so the pods never pull from ghcr inside the node, where a pull was seen to time out.
+2. Start both brokers with `setup-brokers.sh`, then attach them to kind's Docker network. Pods reach them by **container IP**: container names do not resolve through cluster DNS (verified, NXDOMAIN).
+3. Create the decoy: a Service named `mcp-server`, in the target namespace, before the install.
+4. Create broker-b's Secret, then `helm install` with the dev image: broker-a chart-managed credentials, broker-b `existingSecret`, `mcpClientAuth.mode: static` with a per-run random token. Each broker's chart credentials are a user that exists on that broker only (set in `docker-compose.yml`; the shared `admin` user is for the suite's own setup), so credentials routed to the wrong broker fail authentication instead of passing. Values go through a `0600` file, not `--set`, and the password and token reach `jq` through its environment, so the install puts neither in argv. (`lib.sh`'s MCP helpers do pass the token to `curl` as a header argument, as in every suite.) The suite uses its own kubeconfig under `bin/`, so `kind` never rewrites `~/.kube/config`.
+5. Port-forward the Service and assert, through `lib.sh`'s MCP helpers unchanged: the decoy exists, every pod runs with `enableServiceLinks: false`, `list-brokers` returns exactly `broker-a` and `broker-b`, and `get-broker-status` (a SEMPv1 call, so it proves the credentials authenticate) succeeds on each broker.
+6. Negative control: `kubectl patch` the Deployment to `enableServiceLinks: true` and assert the new pod logs `invalid MCP_SERVER_PORT ... must be a number`.
+7. On failure, dump `kubectl describe` and logs for the release's pods and both brokers' container logs; then tear down on every exit, including `INT`/`TERM`.
+
+**Why the decoy and the patch.** Kubernetes injects `<SVC>_PORT` and friends only for Services that exist when a pod is created, so an install into an empty namespace can never reproduce the collision bug. The negative control uses `kubectl patch`, not a chart value, so users cannot re-enable the bug through values. It follows the control-phase convention of the throttling scenario above: a control that fails proves the assertion can see a regression.
+
+**Fail-fast SEMP budget.** The install sets `semp.retries: 2` with a 500ms–1s backoff, as `e2e-basic-mcp` does. At the chart's default (10 retries, 3s–30s backoff) a broker the pods cannot reach holds each tool call for minutes, long enough to run into the job timeout, which kills the run before the diagnostics dump.
+
+**CI.** [`helm-chart-e2e.yml`](../../.github/workflows/helm-chart-e2e.yml) runs on `workflow_run` after each successful "Dev build (unstable)" (nightly, 03:17 UTC, or a manual dev build), as `observability.yml` does, and on `workflow_dispatch`. It is not a PR check. The chart comes from the checkout but the server is the newest `:dev` image, so a server-only change that breaks the chart is caught by the next dev build's run, after merge. `workflow_run` and `workflow_dispatch` fire only for workflow files already on the default branch, so the workflow's first version is proven pre-merge by a local `make e2e-helm-all`. For the nightly no failure notification reaches a person: its runs are attributed to `github-merge-queue[bot]`, the actor of the scheduled dev build, so a red nightly is visible only in the Actions tab. A run started by hand (this workflow's dispatch, or one following a manually dispatched dev build) notifies whoever started it. If a run is cancelled or times out before `run-all.sh`'s trap fires, a separate `if: failure() || cancelled()` step dumps the diagnostics (a job timeout counts as a cancel, so `failure()` alone would skip it). The workflow runs `exec bash test/e2e-helm/run-all.sh` rather than `make e2e-helm-all`: on a cancel the runner signals only the step's entry process, and behind a shell and `make` the script was left running, holding the host lock, so the tear-down step was refused. `make e2e-helm-down` waits up to 120s for the lock, since a kill that lands during the script's own teardown leaves that teardown finishing in the background.

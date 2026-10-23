@@ -1,0 +1,79 @@
+suite: networkpolicy
+templates:
+  - networkpolicy.yaml
+values:
+  - ../ci/default-values.yaml
+release:
+  name: rel
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: selects on name + instance only, ingress only
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: solace-broker-mcp
+            app.kubernetes.io/instance: rel
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress]
+      - notExists:
+          path: spec.egress
+
+  - it: opens the MCP port to all and the metrics port to the monitoring namespace
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - equal:
+          path: spec.ingress
+          value:
+            - ports:
+                - {protocol: TCP, port: 9090}
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: monitoring
+              ports:
+                - {protocol: TCP, port: 9091}
+
+  - it: follows networkPolicy.metricsNamespace and server.port
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.metricsNamespace: observability
+      server.port: 8080
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports
+          value: [{protocol: TCP, port: 8080}]
+      - equal:
+          path: spec.ingress[1].from[0].namespaceSelector.matchLabels
+          value:
+            kubernetes.io/metadata.name: observability
+
+  - it: fails on an empty metricsNamespace
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.metricsNamespace: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "networkPolicy.metricsNamespace is required"
+
+  # Namespace names are lowercase DNS-1123 labels, so any other value is a
+  # selector that matches nothing and silently blocks every scrape.
+  - it: fails on a metricsNamespace that cannot be a namespace name
+    set:
+      networkPolicy.enabled: true
+      networkPolicy.metricsNamespace: Monitoring
+    asserts:
+      - failedTemplate:
+          errorPattern: "networkPolicy.metricsNamespace \"Monitoring\" is not a valid namespace name"

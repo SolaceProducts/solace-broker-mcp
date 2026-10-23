@@ -21,6 +21,7 @@ E2E_ACT_DIR := test/e2e-action
 COMPOSE_E2E_ACT := docker compose -f $(E2E_ACT_DIR)/docker-compose.yml
 E2E_OAUTH_DIR := test/e2e-oauth
 COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
+E2E_HELM_DIR := test/e2e-helm
 
 .DEFAULT_GOAL := help
 
@@ -169,8 +170,42 @@ vet: ## go vet
 lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
+.PHONY: lib-test
+lib-test: ## Self-test of the e2e handshake helpers (stubbed curl, no broker; CI runs it in the lint job)
+	bash test/e2e-common/lib.test.sh
+
 .PHONY: check
-check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; E2E runs separately)
+check: build-all vet lint lib-test test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; Helm chart checks via `make helm-check`; E2E runs separately)
+
+# ── Helm chart ───────────────────────────────────────────────────────────────
+
+# Tiers 1-2 of the chart's checks, the same steps as the `helm-chart` job in
+# build-and-test.yml and with the same ct.yaml. Kept out of `make check` so a
+# Go-only change never needs the Helm tool set; CI runs the job on every PR.
+# Prerequisites and pinned versions: deploy/charts/solace-broker-mcp/README.md.
+# Each chart is rendered to a file and fed to kubeconform on stdin: piped
+# straight from helm, a failed render would hand kubeconform empty input, which
+# it passes; and kubeconform silently skips a file path without a .yaml suffix.
+# Built-in schemas only, which carry no CRDs, and kubeconform fails a kind it has
+# no schema for: so the ServiceMonitor is skipped here, and ci-pr.yaml validates
+# it against the CRD catalog. Last, the drift check against deploy/kubernetes/
+# and its self-test (.github/scripts/helm-parity-check.sh).
+CHART_DIR := deploy/charts/solace-broker-mcp
+CT_CONFIG := deploy/charts/ct.yaml
+
+.PHONY: helm-check
+helm-check: ## Helm chart lint, kubeconform, helm-unittest and drift check vs deploy/kubernetes/ (matches CI helm-chart job; needs helm, helm-unittest, ct, yamllint, yamale, kubeconform, yq, dyff, perl)
+	ct lint --config $(CT_CONFIG) --all
+	ct lint --config $(CT_CONFIG) --check-version-increment
+	@set -e; out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	for f in $(CHART_DIR)/ci/*-values.yaml; do \
+		echo "kubeconform: $$f"; \
+		helm template ci $(CHART_DIR) -f "$$f" >"$$out"; \
+		kubeconform -strict -summary -skip ServiceMonitor <"$$out"; \
+	done
+	helm unittest $(CHART_DIR)
+	.github/scripts/helm-parity-check.sh
+	.github/scripts/helm-parity-check.test.sh
 
 # ── Compliance ───────────────────────────────────────────────────────────────
 
@@ -298,6 +333,18 @@ e2e-oauth-all: ## Full e2e-oauth cycle: certs, Keycloak+brokers up, configure OA
 	&& bash $(E2E_OAUTH_DIR)/configure-oauth-profiles.sh && bash $(E2E_OAUTH_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_OAUTH) down -v || echo "WARN: e2e-oauth-all teardown failed"; \
 	exit $$t
+
+# The Helm chart suite owns its whole lifecycle in run-all.sh (kind cluster,
+# brokers, chart install, tests, teardown on every exit), because the same
+# script is what helm-chart-e2e.yml runs. Needs kind, kubectl, helm and an
+# x86_64 host (the dev image is linux/amd64 only).
+.PHONY: e2e-helm-all
+e2e-helm-all: ## Full e2e-helm cycle: kind cluster up, brokers up, install the chart, run suite, tear down (tears down even on failure)
+	bash $(E2E_HELM_DIR)/run-all.sh
+
+.PHONY: e2e-helm-down
+e2e-helm-down: ## Remove the e2e-helm kind cluster and brokers left behind by an interrupted run
+	@bash -c '. $(E2E_HELM_DIR)/helpers.sh && acquire_run_lock 120 && teardown'
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 

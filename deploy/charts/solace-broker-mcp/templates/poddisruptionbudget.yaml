@@ -1,0 +1,18 @@
+{{- if (.Values.podDisruptionBudget | default dict).enabled }}
+{{- $_ := include "solace-broker-mcp.credentials" . }}
+# Adapted from deploy/kubernetes/poddisruptionbudget.yaml. Enforced by the
+# Eviction API, so it covers drains and cluster upgrades, not node failure or
+# rolling updates. maxUnavailable, not minAvailable: minAvailable: 1 against
+# replicaCount: 1 would block that node's drains forever.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "solace-broker-mcp.fullname" . | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "solace-broker-mcp.selectorLabels" . | nindent 6 }}
+{{- end }}

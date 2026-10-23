@@ -115,6 +115,8 @@ The following are examples of representative queries and the shape they return:
 | "Are there slow subscribers on `<your-vpn-name>`?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
 | "Are we dropping messages anywhere?" | `get-discard-stats` | `{ "clientDiscards": {...}, "spoolDiscards": {...} }` |
 | "Create a queue orders.q in `<your-vpn-name>`, then subscribe it to orders/>" | `create-queue` then `create-queue-subscription` | a bare `create-queue` alone leaves the queue inert — it attracts no messages until a subscription is added |
+| "Set up a Kafka Receiver from kafka:9092 into `<your-vpn-name>`, no authentication" | `create-queue`, `create-queue-subscription`, `create-kafka-receiver`, `create-kafka-receiver-topic-binding`, then `get-kafka-receiver-status` | the receiver is created and enabled in one call; the binding is passed `enabled: true`; the status shows the receiver and its bindings up after 10 to 40 seconds |
+| "Set up a Kafka Receiver from kafka:9094 using SASL user svc-orders" | `create-kafka-receiver` (disabled), then — after you set the password yourself — `update-kafka-receiver`, then `get-kafka-receiver-status` | the result names the attributes to set (`authenticationBasicUsername` and `authenticationBasicPassword`) and says not to paste them into the chat; the password never goes through the tool |
 
 Read-only tools return their event broker data in a step-keyed envelope. See
 [Tools Reference → Output](tools-reference.md#step-keyed-response-envelope).
@@ -206,6 +208,28 @@ create or are left unchanged on update:
 { "name": "update-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } } }
 { "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te" } }
 ```
+
+### Kafka bridges
+
+Create the destination queue and its subscription first (the broker does not require them, but records published to a topic nobody subscribes to are lost), then a Kafka Receiver with no authentication (created and enabled in one call), bind a topic, and check it came up:
+
+```json
+{ "name": "create-queue", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "create-queue-subscription", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "queueName": "orders.q", "subscriptionTopic": "kafka/orders" } }
+{ "name": "create-kafka-receiver", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "kafkaReceiverConfig": { "authenticationScheme": "none", "bootstrapAddressList": "kafka:9092", "enabled": true } } }
+{ "name": "create-kafka-receiver-topic-binding", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in", "topicName": "orders", "topicBindingConfig": { "localTopic": "kafka/orders", "enabled": true } } }
+{ "name": "get-kafka-receiver-status", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaReceiverName": "orders-in" } }
+```
+
+With authentication, the secret is set out of band. Create the sender disabled with the real scheme and the non-secret username; the result's `summary.handoff` tells the user to set `authenticationBasicUsername` and `authenticationBasicPassword` on the sender themselves (Broker Manager, CLI, SEMP or Terraform); after the user confirms, enable it and check its status:
+
+```json
+{ "name": "create-kafka-sender", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-out", "kafkaSenderConfig": { "authenticationScheme": "basic", "authenticationBasicUsername": "svc-orders", "bootstrapAddressList": "kafka:9094" } } }
+{ "name": "update-kafka-sender", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-out", "kafkaSenderConfig": { "enabled": true } } }
+{ "name": "get-kafka-sender-status", "arguments": { "broker": "dev-broker", "msgVpnName": "<your-vpn-name>", "kafkaSenderName": "orders-out" } }
+```
+
+A password in any argument (for example `authenticationBasicPassword` in `kafkaSenderConfig`) is rejected before anything reaches the broker.
 
 ## Multi-Broker Configuration
 

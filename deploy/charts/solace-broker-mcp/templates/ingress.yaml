@@ -1,0 +1,61 @@
+{{- $ingress := .Values.ingress | default dict }}
+{{- if $ingress.enabled }}
+{{- $_ := include "solace-broker-mcp.credentials" . }}
+{{- $host := $ingress.host | default "" | toString | trim }}
+{{- if not $host }}
+{{- fail "ingress.host is required when ingress.enabled is true" }}
+{{- end }}
+{{- $fullname := include "solace-broker-mcp.fullname" . }}
+{{- $secretName := dig "tls" "secretName" "" $ingress | toString | trim }}
+# Adapted from deploy/kubernetes/ingress.yaml.example. This publishes the
+# server; README.md § Ingress carries the warnings. The default annotations are
+# ingress-nginx-specific and upstream-hash-by is required, not tuning: an
+# Ingress bypasses the Service's sessionAffinity, and MCP sessions live in one
+# pod's memory. Other controllers ignore them silently and then 404 on session
+# routing.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname | quote }}
+  labels:
+    {{- include "solace-broker-mcp.labels" . | nindent 4 }}
+  {{- with $ingress.annotations }}
+  annotations:
+    {{- range $k, $v := . }}
+    {{- if not (kindIs "invalid" $v) }}
+    {{ $k | quote }}: {{ $v | toString | quote }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- with $ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if $secretName }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ $secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname | quote }}
+                port:
+                  name: http
+          # OAuth discovery: clients probe several paths here before they hold
+          # a token, and the server's JSON 404 lets them fail gracefully.
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname | quote }}
+                port:
+                  name: http
+# /livez and /readyz stay unexposed: unauthenticated, and for the kubelet.
+{{- end }}

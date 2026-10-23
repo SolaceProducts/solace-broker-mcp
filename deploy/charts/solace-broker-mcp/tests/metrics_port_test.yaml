@@ -1,0 +1,71 @@
+# observability.metrics.bindAddress: written to the config only when set, and
+# the metrics containerPort, Service port and NetworkPolicy port all follow it.
+suite: metrics port
+templates:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders no observability block and port 9091 when bindAddress is null
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^observability:"
+        template: configmap.yaml
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9091, protocol: TCP}
+        template: deployment.yaml
+      - contains:
+          path: spec.ports
+          content: {name: metrics, port: 9091, targetPort: metrics, protocol: TCP}
+        template: service.yaml
+
+  - it: writes metrics_bind_address into the config when set
+    set:
+      observability.metrics.bindAddress: ":9191"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^observability:\n  metrics_bind_address: \":9191\"$"
+        template: configmap.yaml
+
+  - it: moves every metrics port with bindAddress
+    set:
+      observability.metrics.bindAddress: "0.0.0.0:9191"
+      networkPolicy.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: metrics, containerPort: 9191, protocol: TCP}
+        template: deployment.yaml
+      - contains:
+          path: spec.ports
+          content: {name: metrics, port: 9191, targetPort: metrics, protocol: TCP}
+        template: service.yaml
+      - equal:
+          path: spec.ingress[1].ports
+          value: [{protocol: TCP, port: 9191}]
+        template: networkpolicy.yaml
+
+  - it: accepts an IPv6 wildcard bindAddress
+    set:
+      observability.metrics.bindAddress: "[::]:9191"
+    asserts:
+      - contains:
+          path: spec.ports
+          content: {name: metrics, port: 9191, targetPort: metrics, protocol: TCP}
+        template: service.yaml
+
+  - it: frees 9091 for server.port once the metrics port moves
+    set:
+      observability.metrics.bindAddress: ":9191"
+      server.port: 9091
+    asserts:
+      - contains:
+          path: spec.ports
+          content: {name: http, port: 9091, targetPort: http, protocol: TCP}
+        template: service.yaml

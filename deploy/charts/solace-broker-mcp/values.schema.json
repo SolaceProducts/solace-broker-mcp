@@ -1,0 +1,768 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "solace-broker-mcp chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never",
+            null
+          ],
+          "description": "null leaves imagePullPolicy to the Kubernetes default."
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "brokers": {
+      "type": "object",
+      "description": "Broker name -> connection. Names follow the server's alias rule (internal/config/config.go).",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+      },
+      "additionalProperties": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "http(s) SEMP URL. Validated in the template, not here: Helm prints a schema-rejected value in full, and a malformed url may carry credentials."
+          },
+          "insecureSkipVerify": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "envPrefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "basic",
+                  "bearer",
+                  null
+                ]
+              },
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "password": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "existingSecret": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "mcpClientAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "static",
+            "oauth"
+          ]
+        },
+        "devToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "existingSecret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issuer": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.issuer; required, https, under oauth."
+        },
+        "audience": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.audience; required under oauth."
+        },
+        "resourceUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "mcp_client_auth.resource_url; required, https, under oauth."
+        },
+        "scopesSupported": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^\\S+$"
+          },
+          "description": "mcp_client_auth.scopes_supported; null = the server default [\"openid\"]."
+        },
+        "toolAuthorization": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "mcp_client_auth.tool_authorization; oauth only. Cross-field rules are enforced in the templates.",
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Required (true or false) under oauth."
+            },
+            "groupsClaimName": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "groups_claim_name; null = the server default \"groups\"."
+            },
+            "filterToolsList": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "filter_tools_list"
+            },
+            "accessLevelGroups": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string",
+                  "pattern": "^\\S(.*\\S)?$"
+                }
+              },
+              "description": "access_level_groups: group name to tool names. Required when enabled is true. A group set to null is left out, so an overlay can drop one a base file granted. Group names must not be blank, and tool names must be non-empty with no surrounding whitespace (the server refuses both at startup); whether a tool exists is checked only by the server, at startup.",
+              "propertyNames": {
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      }
+    },
+    "enableWriteTools": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "enable_write_tools; null = the server default false."
+    },
+    "allowInsecureBrokerTls": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "allow_insecure_broker_tls; required for a broker with insecureSkipVerify under oauth."
+    },
+    "tlsTerminatedUpstream": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "tls_terminated_upstream; under oauth, required true unless tls.existingSecret is set, and never with it."
+    },
+    "tls": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "In-pod TLS.",
+      "properties": {
+        "existingSecret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$",
+          "description": "A kubernetes.io/tls Secret, mounted at /etc/mcp-server/tls; renders tls_cert_file and tls_key_file."
+        }
+      }
+    },
+    "caBundle": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Extra CA certificates behind SSL_CERT_FILE. configMap or secret, not both (enforced in the templates); key defaults to ca.crt.",
+      "properties": {
+        "configMap": {
+          "$ref": "#/definitions/configMapKey"
+        },
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      }
+    },
+    "server": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "logLevel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listenAddress": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "semp": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxConcurrentPerBroker": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "requestTimeoutDuration": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "requestMinInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "maxQueueWait": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "fairScheduling": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "retries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "retryMinInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        },
+        "retryMaxInterval": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+        }
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "goMemLimit": {
+      "type": "string"
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cross-field rules (an otlpEndpoint with no OTLP consumer, the metrics port) are enforced in the templates, not here.",
+      "properties": {
+        "otlpEndpoint": {
+          "type": "string",
+          "description": "OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC)."
+        },
+        "otlpTls": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "OTLP exporter TLS files, projected into /etc/mcp-server/otlp. The client pair is set together, and needs tracing or metrics.otlp (enforced in the templates).",
+          "properties": {
+            "certificate": {
+              "$ref": "#/definitions/fileRef",
+              "description": "OTEL_EXPORTER_OTLP_CERTIFICATE; key defaults to ca.crt."
+            },
+            "clientCertificate": {
+              "$ref": "#/definitions/fileRef",
+              "description": "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE; key defaults to tls.crt."
+            },
+            "clientKey": {
+              "$ref": "#/definitions/secretFileRef",
+              "description": "OTEL_EXPORTER_OTLP_CLIENT_KEY; key defaults to tls.key."
+            }
+          }
+        },
+        "shutdownDrainDelayS": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.shutdown_drain_delay_s; also sets terminationGracePeriodSeconds (drain + 35)."
+        },
+        "serviceName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.service_name"
+        },
+        "serviceInstanceId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.service_instance_id"
+        },
+        "deploymentEnvironment": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.deployment_environment"
+        },
+        "cloudRegion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "observability.cloud_region"
+        },
+        "saturationThresholdMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.saturation_threshold_ms"
+        },
+        "otelSelfStatsIntervalS": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "observability.otel_self_stats_interval_s"
+        },
+        "correlationId": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_CORRELATION_ID_ENABLED"
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_TRACING_ENABLED"
+            }
+          }
+        },
+        "auditLog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_AUDIT_LOG_ENABLED"
+            }
+          }
+        },
+        "saturationEvents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "OBS_SATURATION_EVENTS_ENABLED"
+            }
+          }
+        },
+        "authFailureCounter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "OBS_AUTH_FAILURE_COUNTER_ENABLED; null follows the metrics switches."
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bindAddress": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "observability.metrics_bind_address; null = the server default \":9091\". Format checked in the template."
+            },
+            "scrape": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "OBS_METRICS_SCRAPE_ENABLED"
+                }
+              }
+            },
+            "otlp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "OBS_METRICS_OTLP_ENABLED"
+                }
+              }
+            }
+          }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "additionalLabels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "metricsNamespace": {
+          "type": "string"
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": {
+              "type": "string"
+            }
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Set a default key to null to remove it."
+        }
+      }
+    },
+    "extraEnv": {
+      "type": "array",
+      "description": "Full Kubernetes EnvVar entries (value or valueFrom).",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string"
+          },
+          "valueFrom": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "extraVolumes": {
+      "type": "array",
+      "description": "Full Kubernetes Volume entries, appended to the pod's volumes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "description": "Full Kubernetes VolumeMount entries, appended to the container's volumeMounts.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "mountPath"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mountPath": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "configMapKey": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      },
+      "description": "One key of a ConfigMap: name, and key (optional; each value documents its default)."
+    },
+    "secretKey": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      },
+      "description": "One key of a Secret: name, and key (optional; each value documents its default)."
+    },
+    "fileRef": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "configMap": {
+          "$ref": "#/definitions/configMapKey"
+        },
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      },
+      "description": "A file from one key of a ConfigMap or a Secret. Exactly one of the two is enforced in the templates."
+    },
+    "secretFileRef": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      },
+      "description": "A file from one key of a Secret; a ConfigMap is refused for private keys."
+    }
+  }
+}

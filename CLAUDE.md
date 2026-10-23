@@ -10,6 +10,10 @@ Architecture and diagrams: `docs/internal/architecture.md`.
   additionally runs the E2E jobs below); run before pushing.
 - `make test` — unit tests. Single test: `go test ./internal/<pkg>/ -run TestName -v`
 - `make test-cover` — unit tests + coverage gate only (no vet/lint)
+- `make helm-check` — Helm chart lint, kubeconform, helm-unittest (`deploy/charts/`)
+  and the chart-vs-`deploy/kubernetes/` drift check, same steps as CI's `helm-chart`
+  job. Not part of `make check`; run it when the chart or `deploy/kubernetes/`
+  changes. Tool prerequisites (incl. `yq`, `dyff`): `deploy/charts/solace-broker-mcp/README.md`.
 - `make e2e-all` — the `test/e2e-basic-mcp` suite against Dockerized brokers, full
   lifecycle (up, run, teardown). CI also runs the oauth and monitoring E2E suites
   (`docs/internal/e2e-testing.md`).
@@ -60,8 +64,10 @@ blocks a PR without one. `make hooks` (once per clone) installs a
 ## Before opening a PR
 
 If the change touches production surface (`internal/config/`, tool definitions in
-`internal/composite/definitions/tools.yaml`, or native tool packages under
-`internal/tools/`), add a `CHANGELOG.md` entry under `[Unreleased]` — run
+`internal/composite/definitions/tools.yaml`, native tool packages under
+`internal/tools/`, the Helm chart under `deploy/charts/`, or the raw manifests
+under `deploy/kubernetes/`; the pattern is `SURFACE_RE` in
+`.github/scripts/production-surface.sh`), add a `CHANGELOG.md` entry under `[Unreleased]` — run
 `/changelog` to draft one from your diff. CI posts an advisory warning (not a
 block) on a behavior-changing PR with no `[Unreleased]` update, unless it carries
 the `no-changelog` label. The hard gate is at release time: cutting a release

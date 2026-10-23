@@ -8,6 +8,8 @@
 
 A Model Context Protocol (MCP) server for Solace event brokers, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
+This server is one of several Solace MCP servers. To see all of them, go to [Solace Platform MCP Servers](https://github.com/SolaceProducts/solace-platform-mcp).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -37,14 +39,14 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 
 ## Overview
 
-solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 47 tools: 29 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 18 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
+solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 57 tools: 29 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 28 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
 MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
 - **29 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, client usernames and profiles, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
-- **18 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, queue subscriptions, topic endpoints, and REST Delivery Points; gated behind `enable_write_tools` (off by default)
+- **28 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points, and Kafka Receivers and Senders with their bindings; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no authentication), static bearer tokens, or OAuth 2.1/OpenID Connect (OIDC) with JSON Web Token (JWT) validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured event brokers
 - **Multi-event-broker configuration** — Connect to multiple event brokers and address them by configured alias
@@ -71,7 +73,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 29 read + 18 write    │                      │  Brokers         │
+│  Claude Desktop) │   + Bearer JWT     │  • 29 read + 28 write    │                      │  Brokers         │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘  basic/bearer/oauth  └──────────────────┘
@@ -96,16 +98,17 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Kafka | `list-kafka-receivers`, `get-kafka-receiver-status`, `list-kafka-senders`, `get-kafka-sender-status` | List Kafka Receivers/Senders with up/down status; inspect a single receiver's or sender's topic/queue-binding status |
 | Discards | `get-discard-stats`, `list-queue-discards` | Event-broker-wide and per-VPN discard aggregates; per-queue discard counters |
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
-| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-queue-subscription`, `delete-queue-subscription`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-queue-subscription`, `delete-queue-subscription`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated (except the two Kafka bridge creates below). |
+| Kafka bridges (write) | `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding`, `delete-kafka-receiver-topic-binding`, `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding`, `delete-kafka-sender-queue-binding` | Create, update, and delete Kafka Receivers and Senders and their topic/queue bindings. Passwords, client secrets and other credentials are rejected by the server and must be set out of band; the create result tells the user how. `create-kafka-receiver` and `create-kafka-sender` are annotated `destructiveHint` (unlike other `create-*` tools) because a bridge opens an outbound connection to a host the caller chooses, so they are audited. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 18 write tools in total (four action, 14 management), on top of the 29 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 28 write tools in total (four action, 24 management), on top of the 29 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol; whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 47 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 57 tools
 - [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, rate-limit/retry settings, and outbound HTTP proxy support
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
@@ -114,7 +117,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 ## Prerequisites
 
-- Access to one or more Solace event brokers with SEMP management enabled
+- Access to one or more Solace event brokers, version 10.8.1 LTS or later, with SEMP management enabled
 - [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
 - **For Development / Building from Source:**
   - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
@@ -181,7 +184,27 @@ the configuration above. For contributors running from source, see
 
 Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64.
 
-Download the checksums file, verify the checksum, and extract:
+On macOS, download from the command line, not a browser. A browser marks the file as downloaded, and Gatekeeper then blocks the unsigned binary (see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary)). With the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`, fetch the latest release:
+
+```bash
+gh release download --repo SolaceProducts/solace-broker-mcp \
+  --pattern 'solace-broker-mcp-*-darwin-arm64.tar.gz' \
+  --pattern checksums-sha256.txt
+```
+
+Without the GitHub CLI, use `curl`. The first line looks up the latest release tag; to install a specific release, set `VERSION` to its tag instead:
+
+```bash
+VERSION=$(curl -sL -o /dev/null -w '%{url_effective}' https://github.com/SolaceProducts/solace-broker-mcp/releases/latest | sed 's#.*/##')
+curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/solace-broker-mcp-${VERSION}-darwin-arm64.tar.gz"
+curl -LO "https://github.com/SolaceProducts/solace-broker-mcp/releases/download/${VERSION}/checksums-sha256.txt"
+```
+
+On an Intel Mac, replace `darwin-arm64` with `darwin-amd64`.
+
+On other platforms, download the archive and `checksums-sha256.txt` from the release page.
+
+Verify the checksum and extract:
 
 ```bash
 # Verify checksum
@@ -202,8 +225,6 @@ To verify the checksum on Windows, compare the hash against the matching line in
 ```powershell
 Get-FileHash solace-broker-mcp-v*-windows-amd64.zip -Algorithm SHA256
 ```
-
-macOS: if Gatekeeper blocks the binary after a browser download, see [macOS Blocks the Downloaded Binary](docs/user-guide.md#macos-blocks-the-downloaded-binary).
 
 The archive contains the binary, a full-reference example configuration file (`broker-config.example.yaml`, every option documented inline — see [Configuration](docs/configuration.md) for the field-by-field reference), and the license. For this Quickstart, use the `broker-config.yaml` you created in [Configuration](#configuration) above.
 
@@ -516,6 +537,8 @@ Read our [Code of Conduct](.github/CODE_OF_CONDUCT.md) before participating.
 See [SUPPORT.md](.github/SUPPORT.md) for details.
 
 ## Security
+
+The server's own broker credentials are never included in tool results or error messages, and passwords stored on the broker are never returned to the AI. Write tools (off by default) reject known secret attributes such as the Message VPN replication-bridge password — set those out of band. Any other value you type into a prompt passes through the LLM like any other prompt content.
 
 For security vulnerability reporting, see [SECURITY.md](.github/SECURITY.md).
 

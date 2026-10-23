@@ -99,7 +99,7 @@ on:
 # the same string, so test and the Guardian scan already share one queue.
 # A third workflow Release calls joins that queue and cancels whichever
 # member is waiting. A new callee must use a literal group name.
-# llm-eval.yml uses llm-eval-<sha>.
+# llm-eval.yml uses llm-eval-<sha>, and llm-eval-nightly for its schedule.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -166,6 +166,12 @@ jobs:
           # package-load stats. With caching on a warm run legitimately analyzes
           # fewer packages, but the output still confirms which linters ran.
           args: --verbose
+
+      # Needs no broker and no server: curl is stubbed. It holds mcp_initialize to
+      # the mode's session-ID contract in both directions, so a stateful server
+      # that stops issuing an ID cannot pass the e2e suites unnoticed.
+      - name: E2E handshake helper self-test
+        run: bash test/e2e-common/lib.test.sh
 
   build:
     runs-on: ubuntu-latest
@@ -235,10 +241,171 @@ jobs:
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
           kubeconform -summary deploy/otel-collector/kubernetes/
 
+  # Helm chart (deploy/charts/solace-broker-mcp) Tiers 1-2: lint and schema,
+  # then helm-unittest template tests, then the drift check against
+  # deploy/kubernetes/ (.github/scripts/helm-parity-check.sh) and its
+  # self-test. Under a minute of checks, no cluster. Runs on every event this
+  # workflow does — like every job here it has no `paths:` filter, since a
+  # filtered-out required check never reports and blocks the merge.
+  # `make helm-check` runs the same steps locally with the same ct.yaml.
+  #
+  # Helm, helm-unittest and ct are release tarballs checked against pinned
+  # SHA-256 digests; kubeconform, yq and dyff are `go install`s at pinned
+  # versions (checked by the Go checksum database); yamllint and yamale are
+  # pinned top-level `pipx install`s whose own dependencies are not pinned. All
+  # eight are listed in THIRD_PARTY_BUILD_TEST.md § CI Tools. Helm and
+  # helm-unittest are pinned together: helm-unittest 1.1+ uses a
+  # `platformHooks` plugin field that older Helm rejects.
+  # HELM_VERSION/HELM_SHA256 are duplicated in helm-chart-e2e.yml and
+  # ci-pr.yaml; bump all three together.
+  helm-chart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HELM_VERSION: v3.22.1
+      HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+      HELM_UNITTEST_VERSION: 1.2.1
+      HELM_UNITTEST_SHA256: 48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
+      CT_VERSION: 3.15.0
+      CT_SHA256: 467561730f25fe09d5e6cd09a3e1f6aa759871c657a57602947c716d9be2c583
+      # ct lint shells out to both.
+      YAMLLINT_VERSION: 1.38.0
+      YAMALE_VERSION: 6.1.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # ct's changed-chart detection diffs against the target branch.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install Helm, helm-unittest, chart-testing, kubeconform, yq, dyff
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$RUNNER_TEMP/helm-tools"
+          bin="$HOME/.local/bin"
+          mkdir -p "$tmp" "$bin" "$HOME/.ct"
+
+          curl -fsSLo "$tmp/helm.tgz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $tmp/helm.tgz" | sha256sum -c -
+          tar -xzf "$tmp/helm.tgz" -C "$tmp" linux-amd64/helm
+          install -m 0755 "$tmp/linux-amd64/helm" "$bin/helm"
+
+          # The release tarball carries plugin.yaml and the binary, so it is
+          # unpacked straight into the plugins directory: no install hook runs
+          # and nothing is downloaded beyond the checksummed file.
+          curl -fsSLo "$tmp/unittest.tgz" "https://github.com/helm-unittest/helm-unittest/releases/download/v${HELM_UNITTEST_VERSION}/helm-unittest-linux-amd64-${HELM_UNITTEST_VERSION}.tgz"
+          echo "${HELM_UNITTEST_SHA256}  $tmp/unittest.tgz" | sha256sum -c -
+          plugins="$("$bin/helm" env HELM_PLUGINS)"
+          mkdir -p "$plugins/helm-unittest"
+          tar -xzf "$tmp/unittest.tgz" -C "$plugins/helm-unittest"
+
+          # ct reads its chart schema and yamllint config from ~/.ct.
+          curl -fsSLo "$tmp/ct.tgz" "https://github.com/helm/chart-testing/releases/download/v${CT_VERSION}/chart-testing_${CT_VERSION}_linux_amd64.tar.gz"
+          echo "${CT_SHA256}  $tmp/ct.tgz" | sha256sum -c -
+          tar -xzf "$tmp/ct.tgz" -C "$tmp" ct etc/chart_schema.yaml etc/lintconf.yaml
+          install -m 0755 "$tmp/ct" "$bin/ct"
+          cp "$tmp/etc/chart_schema.yaml" "$tmp/etc/lintconf.yaml" "$HOME/.ct/"
+
+          pipx install "yamllint==${YAMLLINT_VERSION}"
+          pipx install "yamale==${YAMALE_VERSION}"
+
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          # The drift check (helm-parity-check.sh) normalises with yq and
+          # diffs with dyff.
+          go install github.com/mikefarah/yq/v4@v4.54.1
+          go install github.com/homeport/dyff/cmd/dyff@v1.12.0
+
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        run: |
+          helm version
+          helm plugin list
+          ct version
+          kubeconform -v
+          yq --version
+          go version -m "$(command -v dyff)" | head -3
+
+      - name: Lint chart with every ci/*-values.yaml (Tier 1)
+        # --all: without it ct lints only charts changed against main, so a
+        # push, a release, or a PR not touching the chart would lint nothing.
+        run: ct lint --config deploy/charts/ct.yaml --all
+
+      - name: Require a chart version bump (Tier 1)
+        # --all disables ct's version-increment check, so a second pass with
+        # changed-chart detection enforces it on pull requests only.
+        if: github.event_name == 'pull_request'
+        run: ct lint --config deploy/charts/ct.yaml --check-version-increment
+
+      - name: Validate rendered manifests with kubeconform (Tier 1)
+        # helm lint and helm-unittest do not validate against the Kubernetes
+        # API. Rendered to a file and fed on stdin: a failed render piped into
+        # kubeconform would be a vacuous pass. Built-in schemas only, so the
+        # ServiceMonitor (a CRD kind) is skipped: it is validated against the
+        # CRD catalog in ci-pr.yaml's "Kubernetes manifests valid" job, which
+        # keeps that network dependency out of this required check.
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rendered.yaml"
+          for f in deploy/charts/solace-broker-mcp/ci/*-values.yaml; do
+            echo "kubeconform: $f"
+            helm template ci deploy/charts/solace-broker-mcp -f "$f" >"$out"
+            kubeconform -strict -summary -skip ServiceMonitor <"$out"
+          done
+
+      - name: Template unit tests (Tier 2)
+        run: helm unittest deploy/charts/solace-broker-mcp
+
+      - name: Chart in step with deploy/kubernetes/ (Tier 2)
+        # Runs on every event this job runs on, with no paths filter, so a
+        # change to either install path alone blocks the merge until the other
+        # matches (SOL-156330). Before the self-test, so drift is reported here
+        # rather than as a failing self-test case.
+        run: .github/scripts/helm-parity-check.sh
+
+      - name: Drift check self-test (Tier 2)
+        # Proves the drift check above can fail: one-sided changes to either
+        # install path, in each direction, against scratch copies.
+        run: .github/scripts/helm-parity-check.test.sh
+
+  # The basic e2e suite once per transport mode. Which check is required is decided
+  # by name in the repository ruleset, not here: only `e2e-basic-mcp` is required, so
+  # the stateful run keeps that exact name, and the stateless run, named differently,
+  # does not block merging. fail-fast is off so a red stateless run cannot cancel the
+  # required stateful one.
+  #
+  # A stateless pass shows the handshake and tool calls work with no Mcp-Session-Id,
+  # over the 2025-11-25 wire the shell helpers pin. Scenario 2 also drives a go-sdk
+  # client against the stateless server, so a red there is a real finding about that
+  # client, not only about the shell helpers. A pass does not show compatibility of
+  # other clients, behaviour across replicas, or 2026-07-28, so docs/configuration.md
+  # still says to leave the flag off in production.
+  #
+  # MCP_TRANSPORT_STATELESS reaches the server through start-server.sh, and an
+  # environment variable wins over test/e2e-basic-mcp/.env.
   e2e-basic-mcp:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e-basic-mcp
+            stateless: false
+          - name: e2e-basic-mcp-stateless
+            stateless: true
+    env:
+      MCP_TRANSPORT_STATELESS: ${{ matrix.stateless }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -436,7 +603,12 @@ jobs:
       - name: Start Solace brokers
         run: SUITE_DIR=test/e2e-management bash test/e2e-common/setup-brokers.sh
 
+      # A step-level timeout, shorter than the job's: a Kafka or bridge hang then ends
+      # this step as a failure, so the "(on failure)" steps below still run. If the
+      # job-level timeout fired instead, the job would be cancelled and those steps,
+      # including the Kafka log, would be skipped, on exactly the run that needs them.
       - name: Run E2E tests
+        timeout-minutes: 24
         run: bash test/e2e-management/run-all.sh
 
       - name: Broker logs (on failure)
@@ -446,6 +618,8 @@ jobs:
           docker logs solace-e2e-mgmt-a 2>&1 | tail -100
           echo "=== solace-e2e-mgmt-b ==="
           docker logs solace-e2e-mgmt-b 2>&1 | tail -100
+          echo "=== kafka-e2e-mgmt ==="
+          docker logs kafka-e2e-mgmt 2>&1 | tail -100
 
       - name: MCP server log (on failure)
         if: failure()

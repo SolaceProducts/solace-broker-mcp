@@ -1,0 +1,387 @@
+# mcpClientAuth.mode: oauth, tool authorization and the top-level switches.
+# The oauth block is a commented-out alternative in
+# deploy/kubernetes/configmap.yaml, so the drift check cannot see it: these
+# cases cover it instead. Each failure case mirrors a server startup error
+# (internal/config/config.go), so `helm install` fails instead of crash-looping.
+suite: oauth and tool authorization
+templates:
+  - configmap.yaml
+values:
+  - ../ci/oauth-values.yaml
+tests:
+  - it: renders every oauth key in the server config
+    asserts:
+      - equal:
+          path: data["config.yaml"]
+          value: |
+            port: 9090
+            log_level: "info"
+            listen_address: "0.0.0.0"
+            tls_terminated_upstream: true
+            enable_write_tools: true
+            allow_insecure_broker_tls: true
+            mcp_client_auth:
+              mode: "oauth"
+              issuer: "https://idp.example.com"
+              audience: "mcp-server"
+              resource_url: "https://mcp.example.com/mcp"
+              scopes_supported: ["openid","offline_access"]
+              tool_authorization:
+                enabled: true
+                groups_claim_name: "roles"
+                filter_tools_list: true
+                access_level_groups: {"mcp-operators":["create-queue"],"mcp-readers":["list-queues","list-vpns"]}
+            semp:
+              max_concurrent_per_broker: 10
+              request_timeout_duration: "1m"
+              request_min_interval: "100ms"
+              max_queue_wait: "30s"
+              fair_scheduling: true
+              retries: 10
+              retry_min_interval: "3s"
+              retry_max_interval: "30s"
+            brokers:
+              "my-broker":
+                url: "https://broker.example.com:943"
+                insecure_skip_verify: true
+                auth:
+                  mode: "basic"
+                  username: "${MY_BROKER_USERNAME}"
+                  password: "${MY_BROKER_PASSWORD}"
+
+  - it: carries no dev token under oauth, even one left set
+    set:
+      mcpClientAuth.devToken: leftover-from-a-base-values-file
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "dev_token|DEV_TOKEN"
+
+  - it: renders tool_authorization enabled false with nothing else
+    set:
+      mcpClientAuth.toolAuthorization.enabled: false
+      mcpClientAuth.toolAuthorization.groupsClaimName: null
+      mcpClientAuth.toolAuthorization.filterToolsList: null
+      mcpClientAuth.toolAuthorization.accessLevelGroups: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  tool_authorization:\\n    enabled: false\\nsemp:"
+
+  # The server only warns when a group grants a write tool that is not
+  # registered (config.go), so the chart does not fail on it either.
+  - it: renders a write-tool grant while enableWriteTools is false
+    set:
+      enableWriteTools: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^enable_write_tools: false$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "create-queue"
+
+  - it: fails when tool_authorization.enabled is not set under oauth
+    set:
+      mcpClientAuth.toolAuthorization.enabled: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.enabled must be set to true or false when mcpClientAuth.mode is oauth"
+
+  - it: fails when enabled is true with no accessLevelGroups
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.accessLevelGroups is required when mcpClientAuth.toolAuthorization.enabled is true"
+
+  - it: fails on a blank groupsClaimName
+    set:
+      mcpClientAuth.toolAuthorization.groupsClaimName: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.groupsClaimName must not be blank"
+
+  - it: fails on insecureSkipVerify under oauth without allowInsecureBrokerTls
+    set:
+      allowInsecureBrokerTls: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.insecureSkipVerify is true while mcpClientAuth.mode is oauth: set allowInsecureBrokerTls: true to accept the risk"
+
+  - it: fails on insecureSkipVerify under oauth with allowInsecureBrokerTls false
+    set:
+      allowInsecureBrokerTls: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.insecureSkipVerify is true while mcpClientAuth.mode is oauth"
+
+  - it: renders insecureSkipVerify false under oauth without allowInsecureBrokerTls
+    set:
+      allowInsecureBrokerTls: null
+      brokers.my-broker.insecureSkipVerify: false
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "allow_insecure_broker_tls"
+
+  # Without in-pod TLS (tls.existingSecret; tests/tls_test.yaml), oauth's
+  # plaintext listener needs the acknowledgment or the server refuses to start.
+  - it: fails under oauth without tlsTerminatedUpstream
+    set:
+      tlsTerminatedUpstream: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth"
+
+  - it: fails under oauth with tlsTerminatedUpstream false
+    set:
+      tlsTerminatedUpstream: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "tlsTerminatedUpstream: true is required when mcpClientAuth.mode is oauth"
+
+  - it: fails under oauth without an issuer
+    set:
+      mcpClientAuth.issuer: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer is required when mcpClientAuth.mode is oauth"
+
+  - it: fails under oauth without an audience
+    set:
+      mcpClientAuth.audience: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.audience is required when mcpClientAuth.mode is oauth"
+
+  - it: fails under oauth without a resourceUrl
+    set:
+      mcpClientAuth.resourceUrl: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl is required when mcpClientAuth.mode is oauth"
+
+  - it: fails on a plain http issuer under oauth
+    set:
+      mcpClientAuth.issuer: "http://idp.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  - it: fails on a plain http resourceUrl under oauth
+    set:
+      mcpClientAuth.resourceUrl: "http://mcp.example.com/mcp"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
+
+  - it: fails on a plain http broker url under oauth
+    set:
+      brokers.my-broker.url: "http://broker.example.com:8080"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be https:// when mcpClientAuth.mode is oauth"
+
+  - it: rejects a scope containing whitespace (schema)
+    set:
+      mcpClientAuth.scopesSupported:
+        - "openid profile"
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/mcpClientAuth/scopesSupported/0'"
+
+  - it: rejects an unsupported mcpClientAuth mode (schema)
+    set:
+      mcpClientAuth.mode: disabled
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/mcpClientAuth/mode': value must be one of 'static', 'oauth'"
+
+
+  # The server refuses these at startup (config.go validateToolAuthorization).
+  # Unknown tool names it can check only against its own registry, at startup.
+  - it: rejects a tool name with surrounding whitespace (schema)
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-readers[0]: "list-queues "
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/mcpClientAuth/toolAuthorization/accessLevelGroups/mcp-readers/0'"
+
+  - it: rejects an empty tool name (schema)
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-readers[0]: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/mcpClientAuth/toolAuthorization/accessLevelGroups/mcp-readers/0'"
+
+  - it: rejects a whitespace-only group name (schema)
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups:
+        " ": [list-queues]
+    asserts:
+      - failedTemplate:
+          errorPattern: "' ' does not match pattern"
+
+  # url.Parse refuses a non-numeric port, so the server would exit at startup.
+  - it: fails on an issuer with a non-numeric port
+    set:
+      mcpClientAuth.issuer: "https://idp.example.com:abc"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>\\[:port\\]"
+
+  - it: fails on a resourceUrl with a non-numeric port
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com:x/mcp"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>\\[:port\\]"
+
+  - it: renders an issuer with a numeric port and a path
+    set:
+      mcpClientAuth.issuer: "https://idp.example.com:8443/realms/mcp"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "issuer: \"https://idp.example.com:8443/realms/mcp\""
+
+  # The schema's \S is ASCII-only; the server trims and splits on Unicode
+  # whitespace (strings.TrimSpace, unicode.IsSpace), so a no-break space
+  # pasted from a document must fail here too.
+  - it: fails on a tool name ending in a no-break space
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-readers[0]: "list-queues "
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-readers: a tool name is empty or has leading or trailing whitespace"
+
+  - it: fails on a group name that is only a no-break space
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups:
+        " ": [list-queues]
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.accessLevelGroups: a group name is empty or whitespace-only"
+
+  - it: fails on a scope containing an em space
+    set:
+      mcpClientAuth.scopesSupported:
+        - "open id"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.scopesSupported\\[0\\] must be non-empty with no whitespace"
+
+  # url.Parse also refuses a host character outside RFC 3986, a malformed
+  # %-escape in the path or fragment, and any ASCII control character (not
+  # expressible here: helm-unittest cannot carry one through its YAML).
+  - it: fails on an issuer host with a character url.Parse refuses
+    set:
+      mcpClientAuth.issuer: "https://idp^x.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  - it: fails on an issuer host with a %-escape
+    set:
+      mcpClientAuth.issuer: "https://idp%41.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  - it: fails on a resourceUrl with a malformed %-escape in the path
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com/%zz"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
+
+  - it: fails on a resourceUrl with a malformed %-escape in the fragment
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com/mcp#%zz"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
+
+  # The server substitutes ${VAR_NAME} before it validates, so the chart cannot
+  # know what a reference expands to and checks only what holds either way.
+  - it: renders an issuer whose host is a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.issuer: "https://${IDP_HOST}/realms/mcp"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "issuer: \"https://\\$\\{IDP_HOST\\}/realms/mcp\""
+
+  - it: renders a resourceUrl whose port is a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com:${MCP_PORT}/mcp"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "resource_url: \"https://mcp.example.com:\\$\\{MCP_PORT\\}/mcp\""
+
+  # A scheme written out in the value is known here, reference or not.
+  - it: still fails on a plain http issuer carrying a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.issuer: "http://idp.example.com/${TENANT}"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  - it: still fails on a plain http resourceUrl carrying a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.resourceUrl: "http://mcp.example.com/${MCP_PATH}"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
+
+  - it: renders an issuer that is wholly a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.issuer: "${ISSUER_URL}"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "issuer: \"\\$\\{ISSUER_URL\\}\""
+
+  - it: still fails on credentials beside a ${VAR_NAME} reference
+    set:
+      mcpClientAuth.issuer: "https://user@${IDP_HOST}"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  # The server substitutes upper-case names only, so this stays literal text.
+  - it: fails on a lower-case ${...} the server does not substitute
+    set:
+      mcpClientAuth.issuer: "https://${idp_host}"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  # url.Parse leaves the query unparsed, so the server accepts this one.
+  - it: renders a resourceUrl whose query holds a bare percent sign
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com/mcp?x=%zz"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "resource_url: \"https://mcp.example.com/mcp\\?x=%zz\""
+
+  # null is how a values overlay drops a group a base file granted, as for
+  # brokers: the group is left out, not rendered as null.
+  - it: leaves out a group set to null
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-operators: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    access_level_groups: \\{\"mcp-readers\":\\[\"list-queues\",\"list-vpns\"\\]\\}$"
+
+  - it: fails when every group is null and enabled is true
+    set:
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-operators: null
+      mcpClientAuth.toolAuthorization.accessLevelGroups.mcp-readers: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.toolAuthorization.accessLevelGroups is required when mcpClientAuth.toolAuthorization.enabled is true"

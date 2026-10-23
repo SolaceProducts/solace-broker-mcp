@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-10-13; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-10-22; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -171,19 +171,20 @@ note spells out.
 | `actions/attest-build-provenance` | `4d10147` | v4.2.2 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.2.2/LICENSE) |
 | `actions/checkout` | `3d3c42e` | v7.0.1 | MIT | [license](https://github.com/actions/checkout/blob/v7.0.1/LICENSE) |
 | `actions/dependency-review-action` | `a1d282b` | v5.0.0 | MIT | [license](https://github.com/actions/dependency-review-action/blob/v5.0.0/LICENSE) |
-| `actions/download-artifact` | `3e5f45b` | v8.0.1 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.1/LICENSE) |
+| `actions/download-artifact` | `9000827` | v8.0.2 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.2/LICENSE) |
 | `actions/github-script` | `3a2844b` | v9.0.0 | MIT | [license](https://github.com/actions/github-script/blob/v9.0.0/LICENSE.md) |
 | `actions/setup-go` | `b7ad1da` | v7.0.0 | MIT | [license](https://github.com/actions/setup-go/blob/v7.0.0/LICENSE) |
-| `actions/setup-node` | `8207627` | v7.0.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.0.0/LICENSE) |
-| `actions/upload-artifact` | `043fb46` | v7.0.1 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.1/LICENSE) |
+| `actions/setup-node` | `949feb2` | v7.1.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.1.0/LICENSE) |
+| `actions/upload-artifact` | `cf430e0` | v7.0.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.2/LICENSE) |
 | `docker/build-push-action` | `c3c9e26` | v7.4.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.4.0/LICENSE) |
 | `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `f87e599` | v4.4.1 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.4.1/LICENSE) |
 | `docker/setup-qemu-action` | `9901266` | v4.4.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.4.0/LICENSE) |
-| `github/codeql-action/analyze` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
-| `github/codeql-action/init` | `2892aa5` | v4.38.2 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.2/LICENSE) |
+| `github/codeql-action/analyze` | `24c5418` | v4.38.3 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.3/LICENSE) |
+| `github/codeql-action/init` | `24c5418` | v4.38.3 | MIT | [license](https://github.com/github/codeql-action/blob/v4.38.3/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
+| `helm/kind-action` | `1544676` | v1.15.1 | Apache-2.0 | [license](https://github.com/helm/kind-action/blob/v1.15.1/LICENSE) |
 | `softprops/action-gh-release` | `efb3536` | v3.0.3 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.3/LICENSE) |
 
 `actions/github-script` names its license file `LICENSE.md` rather than
@@ -199,19 +200,19 @@ All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `c689e87` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `c689e87` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `c689e87` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `c689e87` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `c689e87` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `c689e87` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `fc6b754` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `fc6b754` | Solace |
 
-`28c83e5` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-09-30 by the Dependabot
-`github-actions` group update (#465); the prior pin was `668d31d`.
+`fc6b754` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-10-22 by the Dependabot
+`internal-reusable-workflows` group update (#529); the prior pin was `62f160f`.
 
 This update collapsed `update-manifest.yaml` into the shared pin: all six now
-agree on `28c83e5`, so the separate-pin note that once stood here no longer
+agree on `fc6b754`, so the separate-pin note that once stood here no longer
 applies.
 
 Two entries have been dropped from this table, both by the reverse-direction
@@ -249,6 +250,54 @@ published artifact; see [Scope](#scope).
 container image is a stack of filesystem layers, and the layers carry operating
 system packages under their own licenses, which is not the same question. That
 distinction matters for exactly one row, addressed in the following section.
+
+## CI Tools
+
+Command-line tools that the `helm-chart` job in `build-and-test.yml` downloads in a
+`run:` step and that `make helm-check` runs locally, plus what `helm-chart-e2e.yml`
+and `make e2e-helm-all` use beyond them. None reaches a published
+artifact. Helm, helm-unittest, and chart-testing are fetched as release tarballs
+checked against pinned SHA-256 digests; kubeconform, yq, and dyff with
+`go install`; yamllint and yamale with `pipx install` at a pinned version.
+
+- `helm/helm` `v3.22.1`: rendering and linting the Helm chart, and installing it
+  in `helm-chart-e2e.yml`. Also fetched, same tarball and digest, by `ci-pr.yaml`'s
+  "Kubernetes manifests valid" job, which renders the chart to validate its
+  ServiceMonitor against the CRD catalog. The pin is duplicated in all three
+  workflows; bump them together.
+  [Apache-2.0](https://github.com/helm/helm/blob/v3.22.1/LICENSE)
+- `helm-unittest/helm-unittest` `1.2.1`: Helm chart template unit tests.
+  [MIT](https://github.com/helm-unittest/helm-unittest/blob/v1.2.1/LICENSE)
+- `helm/chart-testing` (`ct`) `3.15.0`: Helm chart lint and version-bump check.
+  [Apache-2.0](https://github.com/helm/chart-testing/blob/v3.15.0/LICENSE)
+- `yannh/kubeconform` `v0.6.7`: validating rendered and raw Kubernetes manifests.
+  [Apache-2.0](https://github.com/yannh/kubeconform/blob/v0.6.7/LICENSE)
+- `mikefarah/yq` `v4.54.1`: normalising the chart render and `deploy/kubernetes/`
+  before the drift check compares them (`helm-parity-check.sh`).
+  [MIT](https://github.com/mikefarah/yq/blob/v4.54.1/LICENSE)
+- `homeport/dyff` `v1.12.0`: the drift check's structural diff.
+  [MIT](https://github.com/homeport/dyff/blob/v1.12.0/LICENSE)
+- `yamllint` (PyPI) `1.38.0`: YAML lint, run by `ct lint`.
+  [GPL-3.0-or-later](https://github.com/adrienverge/yamllint/blob/v1.38.0/LICENSE)
+- `yamale` (PyPI) `6.1.0`: Chart.yaml schema check, run by `ct lint`.
+  [MIT](https://github.com/23andMe/Yamale/blob/6.1.0/LICENSE)
+- `kubernetes-sigs/kind` `v0.33.0`: the throwaway cluster for the Helm chart E2E
+  suite, installed by `helm/kind-action` (its own row is in the actions table).
+  Pinned in `test/e2e-helm/.env`, with the `kindest/node:v1.37.0` node image by
+  digest; neither is a compose `image:`, so check 4 does not see them.
+  [Apache-2.0](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/LICENSE)
+- `kubernetes/kubectl` `v1.37.1`: driving the Helm chart E2E suite's cluster,
+  installed by `helm/kind-action` (pinned in `helm-chart-e2e.yml`).
+  [Apache-2.0](https://github.com/kubernetes/kubernetes/blob/v1.37.1/LICENSE)
+
+`helm/kind-action` checks kind and kubectl against the `.sha256sum`/`.sha256` file
+published beside each download, not against a digest pinned in this repository as
+Helm's is.
+
+This list is maintained by hand, and deliberately not a table: `build-test-licenses-check.sh`
+parses every table row in this file but does not discover tools installed by `run:` steps
+(see [Drift](#drift)). `actionlint` and `zizmor`,
+which `workflow-lint.yaml` installs the same way, are not yet listed.
 
 ## Scope
 
@@ -356,3 +405,5 @@ What it does not enforce:
   documented there for the same reason. When you bump a version, open the license
   link.
 - **Image layers.** See [Scope](#scope).
+- **CI tools installed by `run:` steps.** The [CI Tools](#ci-tools) list is
+  maintained by hand.

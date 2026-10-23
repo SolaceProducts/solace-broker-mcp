@@ -30,7 +30,7 @@ The Solace Broker MCP Server requires:
 
 | Requirement | Details |
 |---|---|
-| **Solace event broker** | One or more event brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
+| **Solace event broker** | One or more event brokers, version 10.8.1 LTS or later, with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
 | **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each event broker's SEMP management port. |
 | **Event broker credentials** | Per-event-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64), or Kubernetes. |
@@ -97,7 +97,7 @@ What are the current message rates for <your-vpn-name> on my-broker?
 
 ## Tools Reference
 
-The server exposes 29 read-only tools plus 18 write tools (47 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All event-broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` and `describe-semp-schema` are the exceptions — `list-brokers` returns the available event broker aliases, and `describe-semp-schema` returns SEMPv2 schema slices from the embedded OpenAPI spec without contacting any event broker. `describe-semp-schema` is primarily a helper: when a user says something like *"Create a queue named orders with a spool quota of 500 MB"*, the agent typically calls `describe-semp-schema` unprompted before the `create-queue` call, because the write tool descriptions point at it. Operators watching traces should expect it to fire immediately before a `create-*` or `update-*` call rather than being invoked directly. The write tools split into four action API tools (operational actions against live objects) and 14 Config API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST Delivery Points, plus create/delete for queue subscriptions); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling large language model (LLM) to obtain explicit user confirmation before invocation.
+The server exposes 29 read-only tools plus 28 write tools (57 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All event-broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` and `describe-semp-schema` are the exceptions — `list-brokers` returns the available event broker aliases, and `describe-semp-schema` returns SEMPv2 schema slices from the embedded OpenAPI spec without contacting any event broker. `describe-semp-schema` is primarily a helper: when a user says something like *"Create a queue named orders with a spool quota of 500 MB"*, the agent typically calls `describe-semp-schema` unprompted before the `create-queue` call, because the write tool descriptions point at it. Operators watching traces should expect it to fire immediately before a `create-*` or `update-*` call rather than being invoked directly. The write tools split into four action API tools (operational actions against live objects) and 24 Config API management tools (create/update/delete for Message VPNs, queues, topic endpoints, REST Delivery Points, Kafka Receivers and Kafka Senders, plus create/delete for queue subscriptions and for Kafka receiver topic bindings and sender queue bindings); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling large language model (LLM) to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -173,9 +173,9 @@ These read the provisioned client-username and client-profile configuration obje
 | Tool | Description |
 |---|---|
 | `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`). |
+| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding status (`topicBindingUpCount` out of `topicBindingCount`), plus which topic binding is down and its failure reason. |
 | `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
-| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`). |
+| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding status (`queueBindingUpCount` out of `queueBindingCount`), plus which queue binding is down and its failure reason. |
 
 ### Discards
 
@@ -188,9 +188,9 @@ These read the provisioned client-username and client-profile configuration obje
 
 These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager records every destructive invocation: with `OBS_AUDIT_LOG_ENABLED` on it emits one `operation` audit record per call carrying the broker, a hash of the arguments, the outcome, and the caller when one was authenticated — not the only audit record a call can produce, since a broker-side (hop-2) authorization denial also emits its own `broker_authz_denied` record alongside it, as does an `update-queue` or `update-topic-endpoint` call the owner check blocks (`owner_validation_rejected`) (see [Audit Trail](observability.md#audit-trail)); with it off, it emits the WARNING line it has always logged.
 
-**Naming convention.** Action API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. A sub-resource of one of those objects follows the same pattern one level down (`create-queue-subscription`, `delete-queue-subscription`) and has no `update-` tool, since SEMP has no update operation for it — a subscription is immutable; changing one is delete-and-recreate. Action tools run an operational action against a live object; management tools change configuration.
+**Naming convention.** Action API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, `rdp`, `kafka-receiver`, or `kafka-sender`. A sub-resource of one of those objects follows the same pattern one level down (`create-queue-subscription`, `delete-queue-subscription`) and has no `update-` tool, since SEMP has no update operation for it (a subscription is immutable) or it is not meant to be changed in place (a Kafka binding); changing one is delete-and-recreate. Action tools run an operational action against a live object; management tools change configuration.
 
-**Disabled by default.** These four action tools — together with the 14 Config API management tools following — are write tools (they change event broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML configuration to expose them. This gating is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+**Disabled by default.** These four action tools — together with the 24 Config API management tools following — are write tools (they change event broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML configuration to expose them. This gating is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
 
 `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -205,12 +205,12 @@ These tools modify event broker state via the SEMPv2 action API. There is **one 
 
 ### Management (Config API)
 
-These tools create, update, and delete event broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the preceding action tools. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a configuration object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`, `rdpConfig`); any attribute omitted takes the event broker default.
+These tools create, update, and delete event broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the preceding action tools. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not, except `create-kafka-receiver` and `create-kafka-sender`, which do (see [Kafka bridges](#kafka-bridges-write)). Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a configuration object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`, `rdpConfig`, `kafkaReceiverConfig`, `kafkaSenderConfig`); any attribute omitted takes the event broker default.
 
 | Tool | Destructive | Description |
 |---|---|---|
-| `create-message-vpn` | No | Create a Message VPN. |
-| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. |
+| `create-message-vpn` | No | Create a Message VPN. Replication-bridge passwords and certificates are rejected; set them out of band. |
+| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. Replication-bridge passwords and certificates are rejected; set them out of band. |
 | `delete-message-vpn` | **Yes** | Delete a Message VPN. Fails if it still has active client connections or child endpoints. |
 | `create-queue` | No | Create a queue in a VPN. |
 | `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
@@ -223,6 +223,29 @@ These tools create, update, and delete event broker configuration objects via th
 | `create-rdp` | No | Create a REST Delivery Point in a VPN. Created disabled by default; REST consumers and queue bindings are added separately. |
 | `update-rdp` | **Yes** | Partially update an RDP's attributes (for example, `enabled`, `clientProfileName`). Commonly used to enable an RDP created disabled. |
 | `delete-rdp` | **Yes** | Delete an RDP, along with its REST consumers and queue bindings. |
+
+### Kafka bridges (write)
+
+These tools create, update, and delete Kafka Receivers (Kafka into Solace) and Kafka Senders (Solace out to Kafka) and their bindings. They are write tools gated behind `enable_write_tools`, and every tool's description asks the calling LLM to obtain explicit user confirmation before invocation. Per-tool parameters and the full rules are in the [Tools Reference](tools-reference.md#kafka-bridges-write).
+
+**Secrets never pass through the LLM.** The server rejects passwords, client secrets, access keys, key tabs and client certificates in any argument. Create the bridge with its real authentication scheme and its non-secret settings (such as the username), disabled; the result tells the user which attributes to set on the bridge themselves, using Broker Manager, the CLI, SEMP, or Terraform; when the user confirms, enable the bridge with the update tool and check the status tool (a bridge takes 10 to 40 seconds to come up). A bridge with no authentication can be created and enabled in one call.
+
+**Broker prerequisite.** Kafka bridges need capacity set when the event broker is created (`system_scaling_maxkafkabridgecount`, `system_scaling_maxkafkabrokerconnectioncount`; both default to 0, and with 0 every create fails "Kafka Bridge limit of 0 reached").
+
+`create-kafka-receiver` and `create-kafka-sender` carry `destructiveHint`, unlike other `create-*` tools, because a bridge opens an outbound connection to a host the caller chooses; they are audited like the destructive tools.
+
+| Tool | Destructive | Description |
+|---|---|---|
+| `create-kafka-receiver` | **Yes** | Create a Kafka Receiver (pulls messages from an external Kafka cluster into the VPN). Secrets are rejected; an authenticated receiver is created disabled and handed to the user for its secret. |
+| `update-kafka-receiver` | **Yes** | Partially update a Kafka Receiver; commonly `{"enabled": true}` after the secret is set. A non-none `authenticationScheme` must be sent with `enabled: false`. Cannot re-point the receiver (`bootstrapAddressList`, OAuth token endpoint and `transportTlsEnabled: false` are rejected); delete and recreate instead. |
+| `delete-kafka-receiver` | **Yes** | Delete a Kafka Receiver. Delete its topic bindings first; the broker refuses otherwise. |
+| `create-kafka-receiver-topic-binding` | No | Bind a Kafka topic (or a regular expression starting with `^`) to a Solace topic. Created disabled unless `enabled: true` is passed. |
+| `delete-kafka-receiver-topic-binding` | **Yes** | Delete a receiver's topic binding. |
+| `create-kafka-sender` | **Yes** | Create a Kafka Sender (pushes messages from the VPN's queues out to an external Kafka cluster). Same secret handling as the receiver. |
+| `update-kafka-sender` | **Yes** | Partially update a Kafka Sender; same rules as `update-kafka-receiver`, including no re-pointing. |
+| `delete-kafka-sender` | **Yes** | Delete a Kafka Sender. Delete its queue bindings first; the broker refuses otherwise. |
+| `create-kafka-sender-queue-binding` | No | Bind a queue to a Kafka Sender so its messages go to a Kafka topic. Created disabled unless `enabled: true` is passed; the Kafka topic should already exist. |
+| `delete-kafka-sender-queue-binding` | **Yes** | Delete a sender's queue binding. The queue and its messages are not touched. |
 
 ## Recommended Environments
 
@@ -376,25 +399,35 @@ If the health check fails, the probe prints the reason to stderr — Docker keep
 
 ### macOS Blocks the Downloaded Binary
 
-Opening `solace-broker-mcp` from Finder on macOS shows:
+Launching `solace-broker-mcp` on macOS shows:
 
-> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac.
+> **"solace-broker-mcp" Not Opened** — Apple could not verify "solace-broker-mcp" is free of malware that may harm your Mac or compromise your privacy.
 
-The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and open normally.
+The dialog offers only **Move to Trash** and **Done**. Release binaries are not yet signed with an Apple Developer ID or notarized, so Gatekeeper rejects any copy a browser has marked as downloaded (the `com.apple.quarantine` attribute, which survives extraction). Copies fetched with `gh release download` or `curl` carry no such mark and run normally; [Binary Deployment](../README.md#binary-deployment) shows both commands.
+
+What you see after the dialog depends on how you launched the binary:
+
+| Launch path | Symptom |
+|---|---|
+| Finder (double-click) | The binary does not open. |
+| Terminal (`./solace-broker-mcp`) | The command waits until you dismiss the dialog. After **Done**, the shell reports the process as killed (exit status 137) with no other output. |
+| MCP client | The server is an HTTP service you start yourself, not a subprocess the client launches (see [Limitations and Considerations](#limitations-and-considerations)). Start it from Terminal; the Terminal row applies. A client configured to launch the binary directly shows the same dialog and reports that the connection closed. |
 
 Before overriding the block, confirm the archive is genuine. Run both checks from the directory holding the archive and `checksums-sha256.txt`, using the exact archive filename (replace the version and architecture with yours):
 
 ```bash
 shasum -a 256 -c checksums-sha256.txt --ignore-missing
 
-gh attestation verify solace-broker-mcp-v0.10.0-darwin-arm64.tar.gz \
+gh attestation verify solace-broker-mcp-v1.0.0-darwin-arm64.tar.gz \
   --repo SolaceProducts/solace-broker-mcp \
   --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
 ```
 
 Both must succeed. The attestation check needs the [GitHub CLI](https://cli.github.com/) signed in with `gh auth login`; [Binary Deployment](../README.md#binary-deployment) explains what each check proves. Then use either workaround:
 
-- **System Settings** — Double-click the binary and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to "solace-broker-mcp", click **Open Anyway** again in the confirmation, and authenticate with your password or Touch ID.
+- **System Settings** — Launch the binary from Finder or Terminal and click **Done**. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Allow Anyway** next to "solace-broker-mcp" was blocked to protect your Mac. The button stays for a limited time after the blocked launch (about an hour, per Apple). Launch the binary again from Finder or Terminal: a second dialog, **Open "solace-broker-mcp"?**, offers **Open Anyway**. Click it and authenticate with your password or Touch ID. Later launches run without a dialog.
 - **Terminal** — Remove the quarantine attribute: `xattr -d com.apple.quarantine solace-broker-mcp`
+
+Either workaround clears the block for Finder and Terminal launches, and so for MCP clients connecting to a server started either way.
 
 Right-click → **Open** does not work for this binary on macOS 26; it shows the same dialog.

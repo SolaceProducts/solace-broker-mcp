@@ -17,6 +17,7 @@ These must never appear in log output, in any environment:
 | TLS private keys | If we ever load them |
 | URLs with embedded credentials | `http://user:pass@host` patterns |
 | Full broker config maps | `map[string]*BrokerConfig` contains credentials via `AuthConfig` |
+| Write-only SEMP secrets in tool arguments: the MsgVpn `replicationBridgeAuthenticationBasicPassword`, `…ClientCertContent`, `…ClientCertPassword`, and the Kafka Receiver/Sender `authenticationAwsMskIamSecretAccessKey`, `authenticationBasicPassword`, `authenticationClientCertContent`, `authenticationClientCertPassword`, `authenticationKerberosKeytabContent`, `authenticationOauthClientSecret`, `authenticationScramPassword` | Rejected before they reach the broker by the `rejectMsgVpnSecrets` / `rejectKafkaSecrets` body checks (`internal/composite/bodychecks.go`), on exact field names and whatever param shape carried them; the error names the field and never the value. Also masked in `arguments_hash` by `audit.RedactSensitive`. A new write-only attribute on a shipped config create, update or replace step fails `TestBodyChecks_EveryWriteOnlyFieldIsGuarded` until it is guarded or allowlisted (the test covers those steps only; a tool that writes through any other route needs its own check) |
 
 **What to log instead:** auth method (`basic`/`bearer`), broker alias, broker URL (without credentials).
 

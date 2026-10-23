@@ -36,6 +36,10 @@ type CompositeTool struct {
 	Steps       []Step          `yaml:"steps"`
 	Result      ResultStrategy  `yaml:"result"`
 	Annotations ToolAnnotations `yaml:"annotations"`
+	// StrictParameters rejects input keys not declared in Parameters
+	// (additionalProperties: false), so a misspelled optional parameter
+	// fails validation instead of being silently ignored.
+	StrictParameters bool `yaml:"strictParameters"`
 }
 
 // ParameterDef defines an input parameter for a composite tool. These are
@@ -76,6 +80,14 @@ type Step struct {
 	// with those keys removed; every other error propagates unchanged. Each
 	// entry must be a key of Args (validated at load time). See runSingle.
 	OptionalArgs []string `yaml:"optionalArgs"`
+
+	// BodyChecks names request-body checks (see bodychecks.go) run on the final,
+	// merged request body of a config create, update or replace step, before the
+	// unknown-field check and before the body is attached to the call. A check
+	// rejects the call locally, with no SEMP request. Unknown names, and use on any
+	// operation other than config/create*, config/update* or config/replace*, are
+	// rejected at load time.
+	BodyChecks []string `yaml:"bodyChecks"`
 
 	// compiledArgs and compiledForEachIf cache the parsed *template.Template
 	// form of Args and ForEachIf. They are populated once by

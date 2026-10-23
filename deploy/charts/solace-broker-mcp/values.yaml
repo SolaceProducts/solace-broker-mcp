@@ -1,0 +1,279 @@
+# Default values for solace-broker-mcp.
+#
+# The defaults DO NOT RENDER on their own, by design: the server refuses to
+# start without at least one broker and (under mcp_client_auth.mode: static) a
+# dev token, so `helm install` fails up front instead of "succeeding" into a
+# crash loop. Supply at least `brokers` and `mcpClientAuth.devToken` (or
+# `mcpClientAuth.existingSecret`). See README.md for a complete example.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/solaceproducts/solace-broker-mcp
+  tag: ""                     # defaults to appVersion: a release version without the leading v
+  pullPolicy: IfNotPresent    # null: Kubernetes' default (Always for :latest)
+
+# Two replicas keep one pod serving through rollouts. Above one replica the
+# Service's sessionAffinity: ClientIP is required (MCP sessions live in one
+# pod's memory).
+replicaCount: 2
+
+# Required, at least one entry. Empty here because Helm deep-merges maps: a
+# populated default would merge into every user's install. Example:
+#
+#  my-broker:                 # broker name, as in the server config's brokers: map
+#    url: "https://broker.example.com:943"
+#    insecureSkipVerify: false
+#    envPrefix: ""            # default: name upper-cased, "-" -> "_"
+#    auth:
+#      mode: basic            # basic | bearer
+#      username: ""           # chart-managed (ignored when existingSecret is set)
+#      password: ""
+#      token: ""              # bearer
+#      existingSecret: ""     # keys: username + password (basic) or token (bearer)
+#
+# Credentials reach the pod as <PREFIX>_USERNAME / <PREFIX>_PASSWORD /
+# <PREFIX>_TOKEN env vars, which the rendered config references as ${...}.
+# They are never written into the ConfigMap.
+brokers: {}
+
+# How MCP clients authenticate (docs/authentication.md). static is a shared
+# dev token, so it installs with no identity provider; oauth is the only mode
+# meant to be reachable from outside the cluster, and the only one with
+# per-caller identity in the audit log. Unless noted, null leaves a key out of
+# the rendered config, so the server's own default applies.
+mcpClientAuth:
+  mode: static                # static | oauth
+  # static only (ignored under oauth). Shared client token: any caller that can
+  # reach the Service and presents it gets full broker-admin-backed access.
+  # Treat it like a password and keep the Service ClusterIP.
+  devToken: ""
+  existingSecret: ""          # key: dev-token
+  # oauth only: all three are required under oauth, issuer and resourceUrl
+  # as https:// URLs.
+  issuer: null                # the IdP issuer URL, e.g. "https://idp.example.com"
+  audience: null              # the expected aud claim, e.g. "mcp-server"
+  resourceUrl: null           # this server's public URL, e.g. "https://mcp.example.com/mcp"
+  # Scopes advertised to MCP clients; null = the server default ["openid"].
+  # Microsoft Entra ID needs offline_access here or clients get no refresh
+  # token (docs/authentication.md).
+  scopesSupported: null
+  # Gates each tool by the caller's groups (docs/authentication.md). oauth
+  # only: setting any key under mode: static fails rendering. Under oauth,
+  # enabled must be set explicitly; false lets any authenticated caller invoke
+  # any registered tool.
+  toolAuthorization:
+    enabled: null
+    groupsClaimName: null     # token claim holding the groups; null = "groups"
+    filterToolsList: null     # hide tools the caller cannot invoke from tools/list
+    # Group name to the tools it may invoke; required when enabled is true.
+    # Empty here because Helm deep-merges maps; set a group to null to drop
+    # one a base values file granted. Example:
+    #   mcp-readers: [list-queues, list-vpns]
+    #   mcp-operators: [create-queue]
+    accessLevelGroups: {}
+
+# Registers the write/action tools (create, update, delete). null = the
+# server default (false: a read-only server). Granting a write tool in
+# accessLevelGroups does not register it; this does.
+enableWriteTools: null
+
+# Acknowledges that TLS is terminated at the Ingress or gateway in front of the
+# Service. mcpClientAuth.mode oauth refuses a plaintext listener, so it needs
+# this set to true or in-pod TLS (tls.existingSecret), and the two cannot both
+# be set. The Service's plaintext port must never leave the cluster.
+tlsTerminatedUpstream: null
+
+# In-pod TLS: a kubernetes.io/tls Secret (keys tls.crt and tls.key), mounted
+# read-only at /etc/mcp-server/tls. The server then serves HTTPS on
+# server.port, probes included; the metrics port stays plain HTTP. An Ingress
+# in front must speak HTTPS to the pod (README.md § In-pod TLS). The server
+# reads the files at startup: restart the pods after rotating the Secret.
+tls:
+  existingSecret: ""
+
+# Extra CA certificates (PEM) for outbound TLS: one key of a ConfigMap or a
+# Secret, mounted read-only, with SSL_CERT_FILE pointing at it. The public
+# roots stay trusted. Reaches the identity provider client, the broker SEMP
+# connections, and the OTLP exporter unless observability.otlpTls.certificate
+# is set (README.md § CA bundle). Set one of the two; key defaults to ca.crt.
+# Read at startup: restart the pods after changing it.
+caBundle:
+  configMap: null             # e.g. {name: corp-ca, key: ca.crt}
+  secret: null                # e.g. {name: corp-ca, key: ca.crt}
+
+# Under oauth, accepts a broker with insecureSkipVerify: true (certificate
+# checks off, exposing the broker admin credential to a man-in-the-middle);
+# without it, such a broker fails rendering.
+allowInsecureBrokerTls: null
+
+# Server settings. Setting port or logLevel to null leaves it out of the
+# rendered config, so the server's own default applies.
+server:
+  port: 9090                  # not 9091, the metrics port
+  logLevel: info              # debug | info | warn | error
+  # "0.0.0.0" or "::" only: a pod must bind all interfaces or the Service and
+  # the kubelet probes cannot reach it, and its IP is not known at render time.
+  # Under mcp_client_auth.mode static the server's own default is 127.0.0.1, so
+  # null is rejected here.
+  listenAddress: "0.0.0.0"
+
+# Setting any key below to null leaves it out of the rendered config, so the
+# server's own default applies. Durations are strings ("0s", not 0): the server
+# rejects a bare number.
+semp:                         # defaults mirror deploy/kubernetes/configmap.yaml
+  maxConcurrentPerBroker: 10
+  requestTimeoutDuration: 1m
+  requestMinInterval: 100ms
+  maxQueueWait: 30s
+  fairScheduling: true
+  retries: 10
+  retryMinInterval: 3s
+  retryMaxInterval: 30s
+
+# Memory is capped, CPU deliberately is not: CFS throttling stalls the process
+# at burst, which is this workload's normal shape. 512Mi is sized for the
+# default semp.requestMinInterval (docs/observability.md § "Resource requests
+# and limits").
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# GOMEMLIMIT override. Empty derives it as 75% of resources.limits.memory
+# (integer Mi or Gi only), written in Go's MiB form. Go's suffix is MiB, not
+# Kubernetes' Mi — an unparseable value is fatal at startup, so anything but
+# bytes with an optional B/KiB/MiB/GiB/TiB suffix, or off, fails rendering.
+goMemLimit: ""
+
+# Observability (docs/observability.md). The server's on/off switches are OBS_*
+# env vars, one named value each below. An env var is rendered only when its
+# value differs from the server's default, so these defaults render none. The
+# chart deploys no Prometheus, Grafana or OTel collector: point it at yours.
+observability:
+  # OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC), e.g.
+  # http://otel-collector.observability.svc:4317. Setting it with neither
+  # tracing nor metrics.otlp on fails rendering: nothing would use it. It
+  # must be http(s)://<host>[:port], with no credentials, path or query.
+  otlpEndpoint: ""
+  # TLS files for the OTLP exporter (docs/observability.md § "OTLP Transport
+  # Security"), projected read-only into /etc/mcp-server/otlp, each with its
+  # OTEL_EXPORTER_OTLP_* variable set. Each takes {secret: {name, key}} or
+  # {configMap: {name, key}}; clientKey takes a secret only. Requires
+  # tracing.enabled or metrics.otlp.enabled, and an https:// otlpEndpoint when
+  # one is set; an extraEnv OTEL_EXPORTER_OTLP_*ENDPOINT or *_INSECURE that
+  # leaves an exporting signal on cleartext fails too. The _METRICS_/_TRACES_ variants
+  # are set through extraEnv plus extraVolumes. Read at startup: restart the
+  # pods after rotating them.
+  otlpTls:
+    # OTEL_EXPORTER_OTLP_CERTIFICATE: the collector's CA, which then replaces
+    # the system roots for the collector. key defaults to ca.crt.
+    certificate: null
+    # OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE / _CLIENT_KEY: the mTLS pair, set
+    # together. keys default to tls.crt and tls.key.
+    clientCertificate: null
+    clientKey: null
+  # YAML tunables (docs/configuration.md § "Observability Settings"). null
+  # leaves each out of the rendered config, so the server's default applies.
+  # Integers must be at least 1: the server silently re-defaults anything less.
+  # Seconds the server keeps serving after SIGTERM so the pod is deregistered
+  # first (server default 10). terminationGracePeriodSeconds follows it:
+  # this + 35 (drain 30 + shutdown hooks 3 + 2 buffer), else 45.
+  shutdownDrainDelayS: null
+  # Identity. Each resolves: this value, else the standard OTel env var
+  # (OTEL_SERVICE_NAME or an OTEL_RESOURCE_ATTRIBUTES entry, via extraEnv),
+  # else the default. null lets a cluster-wide injection supply it.
+  serviceName: null           # default "solace-broker-mcp"
+  serviceInstanceId: null     # default: the pod name (POD_NAME), e.g. "${POD_NAME}"
+  deploymentEnvironment: null  # omitted when unset, e.g. "production"
+  cloudRegion: null           # omitted when unset, e.g. "us-east-1"
+  # Queue wait that logs "broker admission slow" (server default 1000).
+  saturationThresholdMs: null
+  # Self-stats reporting interval in seconds (server default 60).
+  otelSelfStatsIntervalS: null
+  correlationId:
+    enabled: true             # OBS_CORRELATION_ID_ENABLED (server default: on)
+  tracing:
+    # OBS_TRACING_ENABLED. With no otlpEndpoint, traces go to localhost:4317
+    # and the server does not warn; NOTES.txt does.
+    enabled: false
+  auditLog:
+    enabled: false            # OBS_AUDIT_LOG_ENABLED
+  saturationEvents:
+    enabled: false            # OBS_SATURATION_EVENTS_ENABLED
+  authFailureCounter:
+    # OBS_AUTH_FAILURE_COUNTER_ENABLED. null = unset: follows the metrics
+    # switches. An explicit false forces it off.
+    enabled: null
+  metrics:
+    # observability.metrics_bind_address; null = the server default ":9091".
+    # The metrics containerPort, Service port and NetworkPolicy port follow it.
+    # Must bind all interfaces (":N", "0.0.0.0:N" or "[::]:N").
+    bindAddress: null
+    scrape:
+      enabled: false          # OBS_METRICS_SCRAPE_ENABLED: the /metrics listener
+    otlp:
+      enabled: false          # OBS_METRICS_OTLP_ENABLED: OTLP metrics push
+  # Prometheus Operator ServiceMonitor (monitoring.coreos.com/v1; the CRD must
+  # be installed). Implies metrics.scrape.enabled.
+  serviceMonitor:
+    enabled: false
+    # kube-prometheus-stack selects only ServiceMonitors labelled
+    # release: <its Helm release> by default.
+    additionalLabels: {}
+
+# Ingress-only policy: the MCP port from anywhere, the metrics port from one
+# namespace. Enforced only by a CNI that implements NetworkPolicy (README.md).
+networkPolicy:
+  enabled: false
+  metricsNamespace: monitoring  # namespace allowed to scrape the metrics port
+
+# maxUnavailable: 1 — evicts one pod at a time during drains.
+podDisruptionBudget:
+  enabled: false
+
+# Publishes the server. Under mcpClientAuth.mode static its only credential
+# is the shared dev token: switch to oauth first, or keep it on a trusted
+# network (README.md § Ingress). Under oauth, clients reach the server at
+# mcpClientAuth.resourceUrl, so set host to its host; the chart does not check it.
+ingress:
+  enabled: false
+  className: nginx            # "" = the cluster's default IngressClass
+  host: ""                    # required when enabled
+  tls:
+    secretName: ""            # "" renders no tls block
+  # ingress-nginx-specific, and required above one replica: an Ingress bypasses
+  # the Service's ClientIP affinity, and MCP sessions live in one pod's memory.
+  # Other controllers ignore these silently and the Ingress then 404s on
+  # session routing: set each key to null and use that controller's
+  # consistent hashing on the client source address, or replicaCount: 1.
+  # Cookie affinity and hashing on Mcp-Session-Id do not work (README.md
+  # § Ingress).
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    # 7200 matches the server's 2h session idle timeout, so the SSE stream on
+    # GET /mcp outlives the session that owns it.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+# Full EnvVar entries (value or valueFrom), appended to the container env.
+# Other OTEL_* settings: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+# OTEL_EXPORTER_OTLP_INSECURE, OTEL_TRACES_SAMPLER(_ARG),
+# OTEL_METRICS_EXEMPLAR_FILTER; HTTP(S)_PROXY, NO_PROXY (README.md § Egress
+# proxy). Certificate files have named values: tls, caBundle and
+# observability.otlpTls; for any other file variable (the OTLP _METRICS_/
+# _TRACES_ certificate variants), mount the file with extraVolumes and
+# extraVolumeMounts. Rendering fails on OBS_*, MCP_SERVER_PORT, or any name
+# the chart already sets.
+extraEnv: []
+
+# Full Volume and VolumeMount entries, appended to the pod's volumes and the
+# container's volumeMounts. The root filesystem is read-only, so a file the
+# server reads must arrive this way. Rendering fails on a volume name or
+# mountPath the chart already uses, or a mountPath above one (/etc/mcp-server).
+extraVolumes: []
+extraVolumeMounts: []

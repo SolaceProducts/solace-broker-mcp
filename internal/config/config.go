@@ -92,6 +92,11 @@ type ServerConfig struct {
 	// this is explicitly true. Ignored in dev modes, where self-signed brokers
 	// are expected.
 	AllowInsecureBrokerTLS bool
+
+	// TransportStateless selects the stateless streamable-HTTP transport. It
+	// loads from MCP_TRANSPORT_STATELESS only; there is no YAML key. Default
+	// false keeps the stateful transport.
+	TransportStateless bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -473,9 +478,7 @@ func (c MCPClientAuthConfig) LogValue() slog.Value {
 }
 
 // SEMPConfig holds settings that control how the MCP server communicates with
-// brokers over the SEMP API. The rate-limit and retry fields below are
-// defined here but not yet consumed -- they will be wired up in Story 5 when
-// the rate limiter and retry policy are implemented.
+// brokers over the SEMP API.
 //
 // Field names match the Solace Terraform provider's naming convention so
 // operators familiar with terraform-provider-solacebroker get a consistent
@@ -1882,6 +1885,20 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 			return fmt.Errorf("MCP_SERVER_PORT: %w", err)
 		}
 		cfg.Port = port
+	}
+
+	// Strict, unlike envBool: this selects the transport mode, so a typo that
+	// silently fell back to stateful would break a multi-replica deployment.
+	// Empty means unset, as for MCP_SERVER_PORT. The value is checked as the
+	// process receives it, with no trimming here: " true" set in the environment
+	// is an error. A value from a .env file was already trimmed and unquoted by
+	// loadEnvFile.
+	if v := os.Getenv("MCP_TRANSPORT_STATELESS"); v != "" {
+		stateless, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid MCP_TRANSPORT_STATELESS %q: must be a boolean", v)
+		}
+		cfg.TransportStateless = stateless
 	}
 
 	// Observability capability flags are env-driven (OBS_*). Applied here so

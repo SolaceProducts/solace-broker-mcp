@@ -1,0 +1,160 @@
+# extraVolumes / extraVolumeMounts: passed through unchanged, for files the
+# named values do not cover (the OTLP _METRICS_/_TRACES_ certificate
+# variants, for one). The defaults render the config volume alone.
+suite: extraVolumes and extraVolumeMounts
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: renders only the config volume and mount by default
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: config
+              configMap:
+                name: RELEASE-NAME-solace-broker-mcp
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: config
+              mountPath: /etc/mcp-server/config.yaml
+              subPath: config.yaml
+              readOnly: true
+
+  - it: passes extraVolumes and extraVolumeMounts through unchanged
+    set:
+      extraVolumes:
+        - name: traces-ca
+          secret:
+            secretName: traces-ca
+            defaultMode: 0444
+      extraVolumeMounts:
+        - name: traces-ca
+          mountPath: /etc/traces-ca
+          readOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: traces-ca
+            secret:
+              secretName: traces-ca
+              defaultMode: 0444
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: traces-ca, mountPath: /etc/traces-ca, readOnly: true}
+
+  - it: fails on an extra volume named like a chart volume
+    set:
+      extraVolumes:
+        - name: config
+          emptyDir: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraVolumes: config is a volume the chart already renders"
+
+  - it: fails on an extra volume named tls while in-pod TLS is on
+    set:
+      tls.existingSecret: mcp-server-tls
+      extraVolumes:
+        - name: tls
+          emptyDir: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraVolumes: tls is a volume the chart already renders"
+
+  - it: allows an extra volume named tls while in-pod TLS is off
+    set:
+      extraVolumes:
+        - name: tls
+          emptyDir: {}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: tls, emptyDir: {}}
+
+  - it: fails on an extra mount at a chart mountPath, trailing slash or not
+    set:
+      caBundle.configMap: {name: corp-ca}
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /etc/mcp-server/ca/}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraVolumeMounts: /etc/mcp-server/ca/ is a mountPath the chart already uses"
+
+  # runc cannot create the chart's mount points inside a read-only volume
+  # mounted above them: the pod fails with RunContainerError.
+  - it: fails on an extra mount above a chart mountPath
+    set:
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /etc/mcp-server/}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraVolumeMounts: /etc/mcp-server/ contains a mountPath the chart already uses"
+
+  - it: fails on an extra mount at the root
+    set:
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraVolumeMounts: / contains a mountPath the chart already uses"
+
+  - it: allows an extra mount nested inside a chart mount
+    set:
+      tls.existingSecret: mcp-server-tls
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /etc/mcp-server/tls/sub}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: other, mountPath: /etc/mcp-server/tls/sub}
+
+  - it: allows an extra mount whose path only shares a string prefix
+    set:
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /etc/mcp-server-extra}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: other, mountPath: /etc/mcp-server-extra}
+
+  - it: allows an extra mount beside the chart's
+    set:
+      caBundle.configMap: {name: corp-ca}
+      extraVolumes:
+        - {name: other, emptyDir: {}}
+      extraVolumeMounts:
+        - {name: other, mountPath: /etc/mcp-server/other}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: other, mountPath: /etc/mcp-server/other}
+
+  - it: fails on an extra volume without a name
+    set:
+      extraVolumes:
+        - emptyDir: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/extraVolumes/0': missing property 'name'"
+
+  - it: fails on an extra mount without a mountPath
+    set:
+      extraVolumeMounts:
+        - name: other
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/extraVolumeMounts/0': missing property 'mountPath'"

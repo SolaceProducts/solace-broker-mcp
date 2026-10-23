@@ -53,7 +53,9 @@ always required.
 
 This applies to both OTLP metrics and traces. TLS is the default. An `http://` endpoint or
 `OTEL_EXPORTER_OTLP_INSECURE=true` switches the exporter to cleartext gRPC without another
-warning. Use an `https://` endpoint to a collector you control.
+warning, unless a CA file or a complete client certificate and key pair below loads for that
+signal: the exporter then uses TLS anyway. Use an `https://` endpoint to a collector you
+control.
 
 For a private CA, set `OTEL_EXPORTER_OTLP_CERTIFICATE` or its
 `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE` / `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` variant.
@@ -62,6 +64,15 @@ For mTLS, set the matching `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and
 credentials to one signal only.
 
 ## Feature Switches
+
+<!-- Parsed by TestObservabilityDocFlagTableMatchesCode (internal/config/observability_doc_flags_test.go).
+     Structural requirements this section must keep:
+     - The heading text stays exactly "Feature Switches", at level ##.
+     - The first table under the heading starts with | Variable | Default | columns.
+     - Each Variable cell is one backticked OBS_*_ENABLED name, one row per flag.
+     - Default cells read `true` or `false` and match the code, except a flag with a derived
+       default (derivedDefaultFlags in the test), whose cell must stay prose, not `true`/`false`.
+     Run: go test ./internal/config -run TestObservabilityDocFlagTableMatchesCode -->
 
 Capability switches are environment variables. They are deliberately not accepted in YAML.
 
@@ -287,8 +298,26 @@ before broker selection.
 |---|---|---|---|
 | `mcp_authz_denied_total` | Counter | `tool`, `reason` | Solace |
 
-This is hop 1: the MCP server refused an authenticated caller before dispatch. The `reason` field is `missing_claim` or `not_permitted`. Series appear only after their first denial; alert on
-`increase()`, not `absent()`.
+This is hop 1: the MCP server refused an authenticated caller before dispatch. The `reason` field is `missing_claim` or `not_permitted`.
+
+Series appear only after their first denial, so `absent()` is not an alert. `increase()` alone also
+misses the first denial on each series: Prometheus has no earlier sample to subtract, so a series
+born at `1` and never moving again reads `increase() == 0`. A new instance, such as a pod restarted
+with a new `instance` label, starts new series; a restart under the same labels resets the existing
+series, which `increase()` handles. Add a clause that matches a series appearing:
+
+```promql
+# any new denial, including the one that creates a series
+increase(mcp_authz_denied_total[5m]) > 0
+  or (mcp_authz_denied_total unless mcp_authz_denied_total offset 5m)
+
+# denials since the process started: read the counter, not increase()
+sum by (tool, reason) (mcp_authz_denied_total)
+```
+
+The appearance clause also matches an existing series that returns after a scrape gap longer than
+five minutes, even though no new denial happened. Check `up` for the target before treating a match
+as a new denial.
 
 ### Broker-Side Authorization Denials
 
@@ -324,8 +353,9 @@ exchange, never reaches the transport and appears only here.
 
 Series appear only after their first rejection, so `absent()` is not an alert. `increase()` alone
 also misses the first rejection on each series: Prometheus has no earlier sample to subtract, so a
-series that is born at `1` and never moves again reads `increase() == 0`, and every process
-restart starts new series. Add a clause that matches a series appearing:
+series that is born at `1` and never moves again reads `increase() == 0`. A new instance, such as a
+pod restarted with a new `instance` label, starts new series; a restart under the same labels resets
+the existing series, which `increase()` handles. Add a clause that matches a series appearing:
 
 ```promql
 # any new rejection, including the one that creates a series
@@ -335,6 +365,10 @@ increase(mcp_owner_validation_total[5m]) > 0
 # rejections since the process started: read the counter, not increase()
 sum by (tool, outcome) (mcp_owner_validation_total)
 ```
+
+The appearance clause also matches an existing series that returns after a scrape gap longer than
+five minutes, even though no new rejection happened. Check `up` for the target before treating a
+match as a new rejection.
 
 Only the two rejection paths are counted. A call that passes the check, or supplies no `owner`,
 is not. For a rejection rate against all calls of the same tool, aggregate both sides first,
@@ -475,8 +509,13 @@ does not increment the drop counter because no write failure is returned.
 An `operation` record is emitted for a tool carrying `destructiveHint` after broker resolution
 and argument validation. It is not a record of every state change. In particular,
 `create-message-vpn`, `create-queue`, `create-queue-subscription`,
-`create-topic-endpoint`, `create-rdp`, `clear-queue-stats`, and `clear-client-stats`
-do not emit an operation record.
+`create-topic-endpoint`, `create-rdp`, `create-kafka-receiver-topic-binding`,
+`create-kafka-sender-queue-binding`, `clear-queue-stats`, and `clear-client-stats`
+do not emit an operation record. `create-kafka-receiver` and `create-kafka-sender` do:
+they are annotated destructive on purpose, because a Kafka bridge opens an outbound
+connection to a host the caller chooses, so their creation is audited. A call they
+reject (a secret in the arguments, or `enabled: true` with an authentication scheme)
+is still audited, as an `operation` record with `outcome=error`.
 
 A missing/unknown broker, unknown tool, or argument-validation failure happens before the
 destructive gate and emits no operation record.
