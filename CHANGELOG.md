@@ -39,17 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get-kafka-receiver-status` and `get-kafka-sender-status` now also name each unexpectedly-down binding and its `failureReason` (new `topicBindings` / `queueBindings` steps and a `summary` with `bindingDownCount`, `byBindingFailureReason` and `failedBindings`). A bridge can read up while a binding is down; before, only the counts showed it. Existing fields are unchanged. Tracked under SOL-156211.
 - A composite tool's result over 64 KiB of indented JSON text now has rows removed from its largest list until it fits, so one wide list cannot overflow a host's token budget. Each trimmed step sets `omittedItems` and a `truncatedMessage`; a `postProcess` summary is unaffected, a result under the cap is unchanged, and native tools such as `describe-semp-schema` are not capped. Tracked under SOL-155577.
 
-### Security
-
-- **BREAKING**: Minimum Go toolchain raised to 1.26.10 (`go.mod`'s `go` directive), so release binaries pick up the `crypto/x509` fix for CVE-2026-111943: certificate chains through eight distrusted eMudhra intermediate CAs now fail verification even on a host whose trust store is not updated. This affects the broker and identity-provider connections that verify against system roots. A source build on Go 1.26.0–1.26.9 with `GOTOOLCHAIN=local` fails with `go.mod requires go >= 1.26.10`. Migration: upgrade the build toolchain to Go 1.26.10 or later, or leave `GOTOOLCHAIN` at its default so Go downloads it. Tracked under SOL-156656.
-- **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
-
 ### Fixed
 
 - `delete-queue-subscription`'s `already_absent` message now shows the subscription topic as written (`mcp/ga/test/>`) instead of the broker's URL-encoded echo (`mcp%2Fga%2Ftest%2F%3E`). Tracked under SOL-155428.
 
 ### Security
 
+- **BREAKING**: Minimum Go toolchain raised to 1.26.10 (`go.mod`'s `go` directive), so release binaries pick up the `crypto/x509` fix for CVE-2026-111943: certificate chains through eight distrusted eMudhra intermediate CAs now fail verification even on a host whose trust store is not updated. This affects the broker and identity-provider connections that verify against system roots. A source build on Go 1.26.0–1.26.9 with `GOTOOLCHAIN=local` fails with `go.mod requires go >= 1.26.10`. Migration: upgrade the build toolchain to Go 1.26.10 or later, or leave `GOTOOLCHAIN` at its default so Go downloads it. Tracked under SOL-156656.
+- **BREAKING**: `create-message-vpn` and `update-message-vpn` now reject `replicationBridgeAuthenticationBasicPassword`, `replicationBridgeAuthenticationClientCertContent` and `replicationBridgeAuthenticationClientCertPassword` in `msgVpnConfig`, so these secrets can no longer pass through the LLM. Migration: set them out of band (Broker Manager, CLI, SEMP or Terraform); a call that includes one now returns an error and sends nothing to the broker. Tracked under SOL-156210.
 - `get-rdp-status` now replaces the query string, fragment, and `user:password@` of each `queueBindings` entry's `postRequestTarget` with `<redacted>`, keeping the path — webhook keys such as `?code=` or `?sig=` reached the LLM verbatim. `/api/orders?code=abc` is now returned as `/api/orders?<redacted>`. Tracked under SOL-156295.
 
 ## [1.0.0] - 2026-10-14
