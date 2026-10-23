@@ -120,7 +120,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 - Access to one or more Solace event brokers, version 10.8.1 LTS or later, with SEMP management enabled
 - [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
 - **For Development / Building from Source:**
-  - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
+  - [Go 1.26.10+](https://go.dev/dl/) — required to build and run the MCP server from source
   - Not needed if using pre-built binaries or Docker images
 
 ## Quickstart
@@ -374,7 +374,7 @@ services:
 
 ### Install with go install
 
-If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install the server directly from source:
+If you have the Go toolchain installed ([Go 1.26.10+](https://go.dev/dl/)), install the server directly from source:
 
 ```bash
 go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
