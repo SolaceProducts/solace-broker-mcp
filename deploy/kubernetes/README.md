@@ -151,7 +151,13 @@ Stateless mode removes the need for affinity: with `MCP_TRANSPORT_STATELESS=true
 no session exists and any replica can serve any request. It is work in
 progress, so leave it off in production for now (see its row in
 [`docs/configuration.md`](../../docs/configuration.md#server-settings)). To try
-it, add the variable to the container's `env` in `deployment.yaml`:
+it, use an image that contains the variable and add it to the container's `env`
+in `deployment.yaml`. No release has it yet: the `:latest` image in
+`deployment.yaml` ignores it and stays stateful, so change `image:` to one that
+has it, such as the development image CI uses
+(`ghcr.io/solaceproducts/solace-broker-mcp-dev:dev`), and confirm the startup
+`config loaded` line shows `transport_stateless` set to `true` before removing any
+session routing:
 
 ```yaml
 - name: MCP_TRANSPORT_STATELESS
@@ -161,7 +167,11 @@ it, add the variable to the container's `env` in `deployment.yaml`:
 `service.yaml` can stay as shipped: affinity is not required in stateless mode
 and does no harm. Delete `sessionAffinity` and `sessionAffinityConfig` if you
 want each client's requests spread across pods. The Ingress annotation is not
-needed either. To return to stateful mode, remove the variable. The
+needed either. To return to stateful mode, first restore what you removed
+(`sessionAffinity: ClientIP` with its `sessionAffinityConfig` on the Service,
+and the `upstream-hash-by` annotation on the Ingress), then remove the variable.
+Removing the variable first leaves the two replicas stateful with no session
+routing, and requests return `404 session not found`. The
 [Helm chart](../charts/solace-broker-mcp/README.md#stateless-mode) sets the
 same variable through `extraEnv`.
 

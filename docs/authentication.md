@@ -612,6 +612,11 @@ environment variable only, with no YAML key. With it set:
 
 The full description, with the value forms the server accepts, is on the
 `MCP_TRANSPORT_STATELESS` row in [Server Settings](configuration.md#server-settings).
+No release contains the variable yet; an image without it ignores it and stays
+stateful, so confirm `transport_stateless` shows `true` on the startup `config
+loaded` line before removing session routing. To go back to stateful mode,
+restore the routing first, then unset the variable.
+
 Stateful mode with session routing stays supported as the fallback. The shipped
 manifests and chart are stateful until the default changes: see
 [`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md#stateless-mode-and-session-affinity)

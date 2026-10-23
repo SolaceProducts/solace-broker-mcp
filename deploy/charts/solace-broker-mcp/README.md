@@ -521,9 +521,25 @@ Stateless mode is work in progress: leave it off in production for now (see the
 it set, no MCP session exists, so any replica can serve any request and
 [session affinity](#ingress) is not required. The Service still renders
 `sessionAffinity: ClientIP` because the chart has no value to turn it off; that
-does no harm. Each replica enforces the event broker limits separately, and in
-stateless mode one client's requests may reach all of them, so divide
-`semp.max_concurrent_per_broker` and multiply `semp.request_min_interval` by the
+does no harm.
+
+**The image must contain the variable.** `MCP_TRANSPORT_STATELESS` is not in
+any release yet, and the chart defaults to the `appVersion` release image
+(`1.0.0`). That image ignores the variable and stays stateful, so an ingress
+without session routing would then return `404 session not found`. Select an
+image that has it, such as the development image CI uses, and confirm the
+startup `config loaded` line shows `transport_stateless` set to `true` before relying on
+it:
+
+```yaml
+image:
+  repository: ghcr.io/solaceproducts/solace-broker-mcp-dev
+  tag: dev
+```
+
+Each replica enforces the event broker limits separately, and in stateless mode
+one client's requests may reach all of them, so divide
+`semp.maxConcurrentPerBroker` and multiply `semp.requestMinInterval` by the
 replica count ([Sharing a Broker Fairly Between Callers](../../../docs/configuration.md#sharing-a-broker-fairly-between-callers)).
 
 A dedicated value, with the affinity setting following it, is deferred until the
