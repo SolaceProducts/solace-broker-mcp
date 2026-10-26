@@ -745,10 +745,10 @@ const plainHTTPToHTTPSPort = "The plain HTTP request was sent to HTTPS port"
 //   - permission denied (SEMPv2 code 72 on a non-401): the login works but
 //     lacks the access level; a more privileged login is needed. A 10.8.1
 //     broker sends this as HTTP 400 with code 72, Solace Cloud as 403, so the
-//     code, not the status, decides it. The code is
-//     sempv2.SEMPCodePermissionDenied, the same constant isBrokerAuthzDenial
-//     in manager.go checks, so the message and the broker_authz_denied audit
-//     agree. A 403 without code 72 (a WAF, ingress or IP allowlist) is left
+//     code, not the status, decides it. isBrokerAuthzDenial in manager.go
+//     checks the same thing, sempv2.SEMPCodePermissionDenied on a non-401, so
+//     the message and the broker_authz_denied audit agree. A 403 without code
+//     72 (a WAF, ingress or IP allowlist) is left
 //     to the caller's usual message.
 //   - 400 carrying the broker's plain-HTTP page: the URL scheme is wrong.
 //

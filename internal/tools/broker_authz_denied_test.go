@@ -30,6 +30,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -41,6 +42,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // brokerAuthzTestManager builds a manager with one destructive and one
@@ -82,6 +84,34 @@ func TestIsBrokerAuthzDenial(t *testing.T) {
 			name: "sempv2 code 72",
 			err:  &sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, Description: "not authorized"},
 			want: true,
+		},
+		{
+			name: "sempv2 400 code 72 (10.8.1 LTS denial)",
+			err:  &sempv2.SEMPError{StatusCode: 400, SEMPCode: 72, SEMPStatus: "UNAUTHORIZED", Description: "Problem with POST: Command prohibited due to Authorization Access Level."},
+			want: true,
+		},
+		{
+			// A broker 401 carries code 72 too (errors_test.go's
+			// TestBuildErrorMessage_BrokerAccess capture), but it is a
+			// rejected login, not a permission denial.
+			name: "sempv2 401 code 72 is not a denial",
+			err:  &sempv2.SEMPError{StatusCode: 401, SEMPCode: 72, SEMPStatus: "UNAUTHORIZED", Description: "Authorization Failed"},
+			want: false,
+		},
+		{
+			name: "sempv2 401 without envelope is not a denial",
+			err:  &sempv2.SEMPError{StatusCode: 401, Body: "Unauthorized"},
+			want: false,
+		},
+		{
+			name: "sempv1 HTTP 401 is not a denial",
+			err:  &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 401},
+			want: false,
+		},
+		{
+			name: "wrapped sempv2 401 code 72 is not a denial",
+			err:  fmt.Errorf("owner check: %w", &sempv2.SEMPError{StatusCode: 401, SEMPCode: 72}),
+			want: false,
 		},
 		{
 			name: "sempv1 execute-fail is not a denial",
@@ -266,6 +296,67 @@ func TestBrokerAuthzDenial_RecordsMetricErrorType(t *testing.T) {
 	}
 	if want := `mcp_broker_authz_denied_total{broker="dev",reason="permission_denied",tool="delete-queue"} 1`; !strings.Contains(body, want) {
 		t.Errorf("scrape missing %q", want)
+	}
+}
+
+// TestBrokerAuthzDenial_Broker401_NotClassifiedAsDenial pins that a broker
+// 401 carrying code 72 (the shape a real broker sends for a rejected login,
+// captured in TestBuildErrorMessage_BrokerAccess) is reported as a failed
+// login end to end: the agent is told the login was rejected, and no
+// broker_authz_denied record, denial counter or broker_permission_denied
+// error_type is produced. A rotated password must not raise a hop-2
+// authorization signal on every call.
+func TestBrokerAuthzDenial_Broker401_NotClassifiedAsDenial(t *testing.T) {
+	p, err := metrics.New("v-test", sdkresource.Default(), config.ObservabilityConfig{MetricsScrapeEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewToolManager(newTestPool(t), WithAuditLog(true), WithToolMetrics(tm))
+	destructive := newStubHandler("delete-queue")
+	yes := true
+	destructive.annotations = Annotations{Destructive: &yes}
+	destructive.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "deleteMsgVpnQueue",
+			StatusCode:  401,
+			SEMPCode:    72,
+			SEMPStatus:  "UNAUTHORIZED",
+			Description: "Authorization Failed",
+		}
+	}
+	mgr.Register(destructive)
+
+	var result *mcp.CallToolResult
+	records := captureAudit(t, slog.LevelDebug, func() {
+		var callErr error
+		result, callErr = mgr.CallTool(auditCtx(t), "delete-queue",
+			map[string]any{"broker": "dev", "msgVpnName": "default", "queueName": "q1"}, idFixture())
+		if callErr != nil {
+			t.Fatalf("CallTool: %v", callErr)
+		}
+	})
+
+	if denials := ofType(records, audit.EventBrokerAuthzDenied); len(denials) != 0 {
+		t.Errorf("broker 401 emitted %d broker_authz_denied record(s), want 0:\n%v", len(denials), records)
+	}
+	sc := result.StructuredContent.(map[string]any)
+	if msg, _ := sc["error"].(string); !strings.HasPrefix(msg, `Broker "dev" rejected the login this server sent (HTTP 401).`) {
+		t.Errorf("error = %q, want the rejected-login message", msg)
+	}
+
+	body := scrape(t, p)
+	if want := `mcp_tool_invocation_total{broker="dev",error_type="execution_error",outcome="error",tool="delete-queue"} 1`; !strings.Contains(body, want) {
+		t.Errorf("scrape missing %q", want)
+	}
+	for _, unwanted := range []string{`error_type="broker_permission_denied"`, `mcp_broker_authz_denied_total{`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("scrape contains %q; a broker 401 was classified as a permission denial", unwanted)
+		}
 	}
 }
 

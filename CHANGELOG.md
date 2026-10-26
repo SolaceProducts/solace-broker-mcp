@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `delete-queue-subscription`'s `already_absent` message now shows the subscription topic as written (`mcp/ga/test/>`) instead of the broker's URL-encoded echo (`mcp%2Fga%2Ftest%2F%3E`). Tracked under SOL-155428.
-- Broker refusals now say what to fix, worded the same by native tools such as `get-broker-status` and composite tools. A rejected login (HTTP 401) returns `Broker "X" rejected the login this server sent (HTTP 401).`, followed by what to check for basic or bearer auth and for OAuth; a login without permission (SEMP code 72) returns `The login for broker "X" is not permitted to perform this operation.` Both used to read `Authorization failed on broker "X".`, or `HTTP 401 error` from native tools. An `http://` URL on the HTTPS port now says to use `https://`. Tracked under SOL-155416.
+- Broker refusals now say what to fix, worded the same by native tools such as `get-broker-status` and composite tools. A rejected login (HTTP 401) returns `Broker "X" rejected the login this server sent (HTTP 401).`, followed by what to check for basic or bearer auth and for OAuth; a login without permission (SEMP code 72) returns `The login for broker "X" is not permitted to perform this operation.` Both used to read `Authorization failed on broker "X".`, or `HTTP 401 error` from native tools. An `http://` URL on the HTTPS port now says to use `https://`. A broker 401 is no longer counted or audited as a broker permission denial, even though it carries SEMP code 72: it is now `error_type="execution_error"`, and it no longer increments `mcp_broker_authz_denied_total` or emits a `broker_authz_denied` audit record. Tracked under SOL-155416.
 
 ### Security
 
