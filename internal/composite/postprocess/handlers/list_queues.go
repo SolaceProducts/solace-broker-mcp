@@ -127,8 +127,10 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	if t, _ := step["truncated"].(bool); t {
 		out["truncated"] = true
 		note := fmt.Sprintf("These counts cover only the %d queues scanned, not the whole VPN.", len(items))
+		// Conditional: the response-size cap runs after this handler and
+		// removes nextCursor from a page it trims (composite.BoundResponse).
 		if _, ok := step["nextCursor"].(string); ok {
-			note += " Pass nextCursor as cursor to scan the next page."
+			note += " If queues.nextCursor is present, pass it as cursor to scan the next page."
 		}
 		out["scopeNote"] = note
 	}

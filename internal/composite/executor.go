@@ -598,9 +598,7 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 		switch {
 		case nextCursor != "":
 			result["nextCursor"] = nextCursor
-			result["truncatedMessage"] = fmt.Sprintf(
-				"Results limited to %d. More exist: pass nextCursor as cursor to get the next page (maxResults up to %d per page).",
-				maxResults, capMax)
+			result["truncatedMessage"] = fmt.Sprintf("Results limited to %d.", maxResults) + cursorAdvice()
 		case pageLimitHit:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"Pagination stopped after %d pages; result is incomplete. This usually indicates a broker issue with a persistent nextPageUri — narrow the query (e.g., by msgVpnName or a where filter) or contact your broker administrator.",

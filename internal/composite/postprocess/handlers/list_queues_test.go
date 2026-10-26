@@ -104,8 +104,10 @@ func TestListQueues_TruncationSurfaced(t *testing.T) {
 		if got["truncated"] != true {
 			t.Errorf("truncated: got %v, want true", got["truncated"])
 		}
-		if note, _ := got["scopeNote"].(string); !strings.Contains(note, "2 queues") || !strings.Contains(note, "nextCursor") {
-			t.Errorf("scopeNote: got %q, want it to say the counts cover only the 2 queues scanned and point at nextCursor", note)
+		// Conditional: the response-size cap runs after this handler and removes
+		// nextCursor from a page it trims, so the note cannot promise one.
+		if note, _ := got["scopeNote"].(string); !strings.Contains(note, "2 queues") || !strings.Contains(note, "If queues.nextCursor is present") {
+			t.Errorf("scopeNote: got %q, want it to say the counts cover only the 2 queues scanned and point at nextCursor if present", note)
 		}
 	})
 	t.Run("truncated without cursor", func(t *testing.T) {

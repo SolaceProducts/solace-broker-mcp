@@ -384,12 +384,124 @@ func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
 		t.Fatalf("precondition: the fetch's own note is %q, want the maxResults advice", before)
 	}
 
-	rep := BoundResponse(tool.Result, res, indentedLen(t, res), 20000)
+	rep := BoundToolResponse(tool, res, indentedLen(t, res), 20000)
 	if !rep.Truncated {
 		t.Fatalf("report %+v, want the step trimmed", rep)
 	}
 	after := res["clientUsernames"].(map[string]any)["truncatedMessage"].(string)
 	if strings.Contains(after, "Use maxResults") || !strings.HasPrefix(after, "Results limited to 100. Response size limit reached") {
 		t.Errorf("message = %q, want the count kept, the advice gone and the size note after it", after)
+	}
+	// No cursor parameter, so no advice to repeat the call with one.
+	if strings.Contains(after, "maxResults at most") {
+		t.Errorf("message = %q gives cursor paging advice for a tool without a cursor", after)
+	}
+}
+
+// shippedTool returns the embedded definition of the named tool and an
+// executor over the real SEMP specs.
+func shippedTool(t *testing.T, name string) (CompositeTool, *CompositeExecutor) {
+	t.Helper()
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range tools {
+		if c.Name == name {
+			return c, NewCompositeExecutor(ops)
+		}
+	}
+	t.Fatalf("tool %s not found", name)
+	return CompositeTool{}, nil
+}
+
+// boundLimitForCursorTests is small enough that a 500-row list-queues page in
+// worst-case widths is always trimmed, and large enough to keep some rows.
+const boundLimitForCursorTests = 20000
+
+// A resumable step's nextCursor points past the last row fetched. When the
+// valve trims rows off that page, following the cursor would skip them, so the
+// cursor goes, the fetch's "pass nextCursor" advice goes with it, and the note
+// says which maxResults returns exactly the rows kept (SOL-155415 review).
+func TestBoundResponse_DropsCursorOfTrimmedStep(t *testing.T) {
+	tool, ce := shippedTool(t, "list-queues")
+	res, err := ce.Execute(context.Background(), tool, &genClient{total: 600, worst: true},
+		map[string]any{"msgVpnName": "default", "maxResults": float64(500)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := res["queues"].(map[string]any)["nextCursor"].(string); c == "" {
+		t.Fatal("precondition: a truncated list-queues page carries nextCursor")
+	}
+
+	rep := BoundToolResponse(tool, res, indentedLen(t, res), boundLimitForCursorTests)
+	if !rep.Truncated {
+		t.Fatalf("report %+v, want the step trimmed", rep)
+	}
+	step := res["queues"].(map[string]any)
+	if c, ok := step["nextCursor"]; ok {
+		t.Errorf("nextCursor = %v kept on a trimmed step", c)
+	}
+	kept := len(step["data"].([]any))
+	msg := step["truncatedMessage"].(string)
+	if !strings.Contains(msg, fmt.Sprintf("maxResults at most %d", kept)) || strings.Contains(msg, "pass nextCursor") {
+		t.Errorf("message = %q, want the retry advice for %d rows and no nextCursor advice", msg, kept)
+	}
+}
+
+// Following the valve's advice reaches every queue exactly once, in order. The
+// caller here does what the notes say: on a trimmed page it repeats the call
+// with the same cursor and maxResults set to the rows kept; otherwise it passes
+// nextCursor on. The expected names come from genClient, not from the tool.
+func TestBoundResponse_RetryAdviceReachesEveryRow(t *testing.T) {
+	const total = 600
+	tool, ce := shippedTool(t, "list-queues")
+	g := &genClient{total: total, worst: true}
+	want := make([]any, total)
+	for i := range want {
+		want[i] = g.val("queueName", i)
+	}
+
+	var got []any
+	cursor, maxResults, trims := "", capMax, 0
+	for call := 0; call < 50 && len(got) <= total; call++ {
+		params := map[string]any{"msgVpnName": "default", "maxResults": float64(maxResults)}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		res, err := ce.Execute(context.Background(), tool, g, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		BoundToolResponse(tool, res, indentedLen(t, res), boundLimitForCursorTests)
+		step := res["queues"].(map[string]any)
+		data := step["data"].([]any)
+		if _, trimmed := step["omittedItems"]; trimmed {
+			trims++
+			msg := step["truncatedMessage"].(string)
+			if !strings.Contains(msg, fmt.Sprintf("maxResults at most %d", len(data))) {
+				t.Fatalf("trimmed page note %q gives no retry size", msg)
+			}
+			maxResults = len(data)
+			continue
+		}
+		for _, row := range data {
+			got = append(got, row.(map[string]any)["queueName"])
+		}
+		next, _ := step["nextCursor"].(string)
+		if next == "" {
+			break
+		}
+		cursor, maxResults = next, capMax
+	}
+	if trims == 0 {
+		t.Fatal("no page was trimmed, so the retry advice was never followed")
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paged %d names, want all %d once each, in order", len(got), total)
 	}
 }
