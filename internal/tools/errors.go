@@ -737,13 +737,19 @@ const plainHTTPToHTTPSPort = "The plain HTTP request was sent to HTTPS port"
 // refused the request at the access layer, shared by SEMPv1 and SEMPv2 so
 // native and composite tools word it the same (SOL-155416):
 //
-//   - 401: the credentials were rejected; the operator fixes the config.
-//   - permission denied (SEMPv2 code 72 on a non-401, or HTTP 403): the login
-//     works but lacks the access level; a more privileged login is needed.
-//     A 10.8.1 broker sends this as HTTP 400 with code 72, Solace Cloud as
-//     403, so the code, not the status, decides it. The code is
+//   - 401: the broker rejected the login. Worded for every auth mode: on an
+//     OAuth broker the 401 only arrives after the token was re-exchanged and
+//     retried, so the broker refused a fresh token and the fix is its OAuth
+//     profile, not adding static credentials to our config. It must not open
+//     like tokenexchange.ExchangeError.AgentMessage, which blames the exchange.
+//   - permission denied (SEMPv2 code 72 on a non-401): the login works but
+//     lacks the access level; a more privileged login is needed. A 10.8.1
+//     broker sends this as HTTP 400 with code 72, Solace Cloud as 403, so the
+//     code, not the status, decides it. The code is
 //     sempv2.SEMPCodePermissionDenied, the same constant isBrokerAuthzDenial
-//     in manager.go checks.
+//     in manager.go checks, so the message and the broker_authz_denied audit
+//     agree. A 403 without code 72 (a WAF, ingress or IP allowlist) is left
+//     to the caller's usual message.
 //   - 400 carrying the broker's plain-HTTP page: the URL scheme is wrong.
 //
 // The code-72 hint is deliberately not attached: it points at management
@@ -758,8 +764,10 @@ func brokerAccessMessage(brokerAlias string, status int, permissionDenied bool, 
 	}
 	switch {
 	case status == http.StatusUnauthorized:
-		return fmt.Sprintf("Authentication failed for broker %q: check the configured credentials.", brokerAlias), true
-	case permissionDenied || status == http.StatusForbidden:
+		return fmt.Sprintf("Broker %q rejected the login this server sent (HTTP 401). "+
+			"With basic or bearer auth, check the configured username, password or token; "+
+			"with OAuth, check that the broker's OAuth profile accepts the exchanged token's issuer and audience.", brokerAlias), true
+	case permissionDenied:
 		return fmt.Sprintf("The login for broker %q is not permitted to perform this operation.", brokerAlias), true
 	case status == http.StatusBadRequest && strings.Contains(body, plainHTTPToHTTPSPort):
 		return fmt.Sprintf("Broker %q rejected a plain HTTP request on its HTTPS port: "+
