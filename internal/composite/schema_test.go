@@ -169,6 +169,27 @@ func TestBuildStrictOutputSchema_PaginatedStep(t *testing.T) {
 	if r := validateAgainst(t, schema, unknownWrapperKey); r.Valid() {
 		t.Error("expected rejection for an unknown key on the server-built paginated wrapper")
 	}
+
+	// SOL-155577: a step the response-size cap trimmed also carries omittedItems.
+	// It must validate, or the cap would turn an oversized success into an
+	// output-validation error for a strict-schema tool; and it must stay typed.
+	trimmed := map[string]any{"queues": map[string]any{
+		"data":             []any{},
+		"truncated":        true,
+		"truncatedMessage": "Response size limit reached.",
+		"omittedItems":     float64(3),
+	}}
+	if r := validateAgainst(t, schema, trimmed); !r.Valid() {
+		t.Errorf("expected a size-trimmed paginated step to validate, got errors: %v", r.Errors())
+	}
+	badOmitted := map[string]any{"queues": map[string]any{
+		"data":         []any{},
+		"truncated":    true,
+		"omittedItems": "3",
+	}}
+	if r := validateAgainst(t, schema, badOmitted); r.Valid() {
+		t.Error("expected rejection when omittedItems is not an integer")
+	}
 }
 
 func TestBuildStrictOutputSchema_FanOutStep(t *testing.T) {

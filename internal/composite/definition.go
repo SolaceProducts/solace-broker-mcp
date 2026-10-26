@@ -140,7 +140,9 @@ type ResultStrategy struct {
 	// for a tool whose postprocessor summary is already self-sufficient (does
 	// not need the raw per-item data downstream), to avoid the response-size
 	// blowup of carrying both (SOL-155426). Has no effect when
-	// Strategy != "postProcess".
+	// Strategy != "postProcess". Independent of the response-size cap: a tool
+	// that sets this still passes through composite.BoundResponse, which has
+	// nothing to trim once the raw rows are gone (SOL-155577).
 	OmitRawSteps bool `yaml:"omitRawSteps"`
 }
 

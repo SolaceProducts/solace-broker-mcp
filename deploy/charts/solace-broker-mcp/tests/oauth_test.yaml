@@ -125,8 +125,8 @@ tests:
           path: data["config.yaml"]
           pattern: "allow_insecure_broker_tls"
 
-  # The chart has no in-pod TLS yet (SOL-156417), so oauth's plaintext
-  # listener needs the acknowledgment or the server refuses to start.
+  # Without in-pod TLS (tls.existingSecret; tests/tls_test.yaml), oauth's
+  # plaintext listener needs the acknowledgment or the server refuses to start.
   - it: fails under oauth without tlsTerminatedUpstream
     set:
       tlsTerminatedUpstream: null

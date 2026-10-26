@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-10-20 with
+**Generated** 2026-10-23 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -67,8 +67,8 @@ under MPL-2.0.
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
 | `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
 | `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
-| `github.com/prometheus/client_golang` | v1.24.1 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.24.1/LICENSE) |
-| `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.24.1 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.24.1/internal/github.com/golang/gddo/LICENSE) |
+| `github.com/prometheus/client_golang` | v1.25.0 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/LICENSE) |
+| `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.25.0 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/internal/github.com/golang/gddo/LICENSE) |
 | `github.com/prometheus/client_model` | v0.6.3 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.3/LICENSE) |
 | `github.com/prometheus/common` | v0.72.0 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.72.0/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |

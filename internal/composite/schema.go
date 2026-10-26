@@ -118,11 +118,13 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 	case step.FollowPages:
 		// fetchPaginated always sets data + truncated; truncatedMessage only
 		// appears when truncated is true, and nextCursor only on a truncated
-		// resumable step. See executor.go.
+		// resumable step. BoundResponse (SOL-155577) also sets omittedItems on
+		// a step it trims. See executor.go and bound.go.
 		properties := map[string]any{
 			"data":             map[string]any{"type": "array", "items": item},
 			"truncated":        map[string]any{"type": "boolean"},
 			"truncatedMessage": map[string]any{"type": "string"},
+			"omittedItems":     map[string]any{"type": "integer"},
 		}
 		if step.Resumable {
 			properties["nextCursor"] = map[string]any{"type": "string"}
