@@ -816,14 +816,23 @@ func connectionFailureMessage(e *resilience.RetriesExhaustedError, brokerAlias s
 // errno has this value, so checking it everywhere is harmless.
 const wsaECONNREFUSED = syscall.Errno(10061)
 
+// tlsHandshakeTimeoutText is the text of net/http's unexported
+// tlsHandshakeTimeoutError. There is no exported type to match, so each error
+// in the chain is compared against this text.
+const tlsHandshakeTimeoutText = "net/http: TLS handshake timeout"
+
 // connectFailureCause names why the connection could not be set up, or returns
 // "" when the cause is not a recognized connect-phase failure.
+//
+// Over TCP, a fatal alert from the server arrives as
+// *net.OpError{Op: "remote error"} with an unexported alert type, not as
+// tls.AlertError (QUIC only). A failed dial through a proxy is wrapped as
+// *net.OpError{Op: "proxyconnect"}, which errors.As finds before the inner dial.
 func connectFailureCause(err error) string {
 	var dnsErr *net.DNSError
 	var opErr *net.OpError
 	var certErr *tls.CertificateVerificationError
 	var recordErr tls.RecordHeaderError
-	var alertErr tls.AlertError
 	var authorityErr x509.UnknownAuthorityError
 	var hostnameErr x509.HostnameError
 	var invalidErr x509.CertificateInvalidError
@@ -832,13 +841,39 @@ func connectFailureCause(err error) string {
 		return "host name could not be resolved"
 	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaECONNREFUSED):
 		return "connection refused"
-	case errors.As(err, &certErr), errors.As(err, &recordErr), errors.As(err, &alertErr),
+	case errors.Is(err, http.ErrSchemeMismatch):
+		return "the port serves plain HTTP, not HTTPS: use http://"
+	case isTLSHandshakeTimeout(err):
+		return "TLS handshake timed out"
+	case errors.As(err, &certErr), errors.As(err, &recordErr), isRemoteTLSAlert(err),
 		errors.As(err, &authorityErr), errors.As(err, &hostnameErr), errors.As(err, &invalidErr):
 		return "TLS handshake failed"
-	case errors.As(err, &opErr) && opErr.Op == "dial" && opErr.Timeout():
+	case errors.As(err, &opErr) && (opErr.Op == "dial" || opErr.Op == "proxyconnect") && opErr.Timeout():
 		return "connection timed out"
 	}
 	return ""
+}
+
+// isRemoteTLSAlert reports whether the server ended the TLS session with a
+// fatal alert. It walks the whole chain because a proxy wrapper can sit above it.
+func isRemoteTLSAlert(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "remote error" {
+			return true
+		}
+	}
+	return false
+}
+
+// isTLSHandshakeTimeout reports whether net/http gave up waiting for the TLS
+// handshake (Transport.TLSHandshakeTimeout).
+func isTLSHandshakeTimeout(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if err.Error() == tlsHandshakeTimeoutText {
+			return true
+		}
+	}
+	return false
 }
 
 // buildSEMPv1Message builds the message the agent sees for a SEMPv1 error.

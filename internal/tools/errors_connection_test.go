@@ -16,11 +16,13 @@ package tools
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -94,6 +96,58 @@ func droppingListener(t *testing.T) string {
 	return "http://" + ln.Addr().String() + "/"
 }
 
+// stallingListener accepts each connection and holds it open without writing,
+// so a TLS client waits for a ServerHello that never comes.
+func stallingListener(t *testing.T) string {
+	t.Helper()
+	return rawListener(t, func(net.Conn) {})
+}
+
+// garbageListener answers each connection with bytes that are neither TLS nor
+// HTTP, the way a non-HTTP service (such as the SMF port) does.
+func garbageListener(t *testing.T) string {
+	t.Helper()
+	return rawListener(t, func(c net.Conn) { _, _ = c.Write([]byte("SMF\x00\x01\x02\x03\x04")) })
+}
+
+// rawListener runs serve on each accepted connection and keeps the connection
+// open until the test ends. It returns the listener's host:port.
+func rawListener(t *testing.T, serve func(net.Conn)) string {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done); _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				serve(c)
+				<-done
+				_ = c.Close()
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// clientCertServer is a TLS server that demands a client certificate, capped
+// at maxVersion. Its own Client() trusts the server but sends no certificate,
+// so the server rejects the handshake with a fatal alert.
+func clientCertServer(t *testing.T, maxVersion uint16) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, MaxVersion: maxVersion}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // SOL-155417: a request that never got an HTTP response used to be reported as
 // "(HTTP 0)", which names no cause. Each case below drives a real failure
 // through net/http and checks that the agent is told what went wrong, in words,
@@ -105,6 +159,8 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 	t.Cleanup(tlsSrv.Close)
 	hang := hangingServer(t)
 	liveAddr := hang.Listener.Addr().String()
+	tls12 := clientCertServer(t, tls.VersionTLS12)
+	tls13 := clientCertServer(t, tls.VersionTLS13)
 
 	tests := []struct {
 		name string
@@ -126,10 +182,11 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 			want: `Could not connect to broker "dev" (connection refused) after 3 attempts.` + tail,
 		},
 		{
-			// .invalid is reserved by RFC 2606 and never resolves.
+			// .invalid is reserved by RFC 2606 and never resolves. The transport
+			// has no Proxy, so an HTTP_PROXY on the runner cannot answer for it.
 			name: "host name not resolvable",
 			err: func(t *testing.T) error {
-				return realDoErr(t, &http.Client{}, "http://solace-broker-mcp-test.invalid/SEMP")
+				return realDoErr(t, &http.Client{Transport: &http.Transport{}}, "http://solace-broker-mcp-test.invalid/SEMP")
 			},
 			want: `Could not connect to broker "dev" (host name could not be resolved) after 3 attempts.` + tail,
 		},
@@ -150,6 +207,72 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 				return realDoErr(t, &http.Client{}, tlsSrv.URL)
 			},
 			want: `Could not connect to broker "dev" (TLS handshake failed) after 3 attempts.` + tail,
+		},
+		{
+			// Over TCP a server alert is a *net.OpError{Op: "remote error"}, not
+			// tls.AlertError (QUIC only). TLS 1.2 rejects during the handshake.
+			name: "server rejected the handshake (TLS 1.2)",
+			err: func(t *testing.T) error {
+				return realDoErr(t, tls12.Client(), tls12.URL)
+			},
+			want: `Could not connect to broker "dev" (TLS handshake failed) after 3 attempts.` + tail,
+		},
+		{
+			// TLS 1.3 sends the rejection after the client's handshake completes,
+			// so the alert surfaces on the first read instead.
+			name: "server rejected the handshake (TLS 1.3)",
+			err: func(t *testing.T) error {
+				return realDoErr(t, tls13.Client(), tls13.URL)
+			},
+			want: `Could not connect to broker "dev" (TLS handshake failed) after 3 attempts.` + tail,
+		},
+		{
+			// Client.Do replaces the RecordHeaderError with http.ErrSchemeMismatch.
+			name: "https URL on a plain-HTTP port",
+			err: func(t *testing.T) error {
+				return realDoErr(t, &http.Client{}, "https://"+liveAddr+"/")
+			},
+			want: `Could not connect to broker "dev" (the port serves plain HTTP, not HTTPS: use http://) after 3 attempts.` + tail,
+		},
+		{
+			// Bytes that do not start with "HTTP/" stay a tls.RecordHeaderError.
+			name: "https URL on a port that speaks neither TLS nor HTTP",
+			err: func(t *testing.T) error {
+				return realDoErr(t, &http.Client{}, "https://"+garbageListener(t)+"/")
+			},
+			want: `Could not connect to broker "dev" (TLS handshake failed) after 3 attempts.` + tail,
+		},
+		{
+			name: "TLS handshake timed out",
+			err: func(t *testing.T) error {
+				tr := &http.Transport{TLSHandshakeTimeout: 50 * time.Millisecond}
+				return realDoErr(t, &http.Client{Transport: tr}, "https://"+stallingListener(t)+"/")
+			},
+			want: `Could not connect to broker "dev" (TLS handshake timed out) after 3 attempts.` + tail,
+		},
+		{
+			// net/http wraps a failed proxy dial as *net.OpError{Op: "proxyconnect"}.
+			name: "proxy connection timed out",
+			err: func(t *testing.T) error {
+				tr := &http.Transport{
+					Proxy:       http.ProxyURL(&url.URL{Scheme: "http", Host: liveAddr}),
+					DialContext: (&net.Dialer{Timeout: time.Nanosecond}).DialContext,
+				}
+				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
+			},
+			want: `Could not connect to broker "dev" (connection timed out) after 3 attempts.` + tail,
+		},
+		{
+			name: "proxy refused the connection",
+			err: func(t *testing.T) error {
+				proxy, err := url.Parse(closedPortURL(t, "tcp4", "127.0.0.1"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
+				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
+			},
+			want: `Could not connect to broker "dev" (connection refused) after 3 attempts.` + tail,
 		},
 		{
 			// The production transport sets ResponseHeaderTimeout below the
@@ -210,7 +333,8 @@ func assertNoConnectionLeak(t *testing.T, msg string, cause error) {
 	if strings.Contains(msg, "HTTP 0") {
 		t.Errorf("message %q still says HTTP 0", msg)
 	}
-	for _, leak := range []string{"127.0.0.1", "::1", ".invalid", "dial tcp", "x509", "EOF", "Get \""} {
+	for _, leak := range []string{"127.0.0.1", "::1", ".invalid", "dial tcp", "x509", "EOF", "Get \"",
+		"remote error", "proxyconnect", "handshake timeout", "broker.example"} {
 		if strings.Contains(msg, leak) {
 			t.Errorf("message %q leaks %q from the raw cause %v", msg, leak, cause)
 		}
