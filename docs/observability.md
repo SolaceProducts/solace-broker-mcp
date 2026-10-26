@@ -1009,9 +1009,13 @@ all callers at once.
 endpoint so the refresh fails quietly.
 
 **Tell them apart.** Both causes produce the same `reason`. The `token verification failed`
-WARN log carries the underlying error: when the JWKS fetch failed, its `error` field
-contains `fetching keys`, followed by the HTTP or network error. A genuinely bad
-signature does not contain that text.
+WARN log carries the underlying error: when the verifier tried to re-fetch JWKS and the
+fetch failed, its `error` field contains `fetching keys`, followed by the HTTP or network
+error. That is evidence the JWKS endpoint was unreachable or returned an error, not proof
+that the rejected token was valid: any token the cached keys cannot verify triggers a
+re-fetch, including one with a genuinely bad signature. Many `fetching keys` errors across
+callers at once point to an IdP or network outage; check JWKS reachability from the pod.
+Without that text, the keys were fetched and the signature still did not verify.
 
 **First response.** Do not restart the pod. The verifier re-fetches JWKS when it meets an
 unknown `kid`, and keeps the keys it already has while the IdP is unreachable, so a running
