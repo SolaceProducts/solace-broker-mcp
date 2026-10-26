@@ -303,6 +303,38 @@ tests:
       - failedTemplate:
           errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
 
+  # Unicode whitespace too: url.Parse keeps a no-break space in the path, so
+  # the server's URL check passes and OIDC discovery then fails at startup.
+  - it: fails on an issuer with a trailing no-break space, without echoing it
+    set:
+      mcpClientAuth.issuer: "https://idp.example.com/realms/QQQ\u00a0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>\\[:port\\]\\[/path\\] with no credentials or whitespace"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a resourceUrl with an ideographic space in the path
+    set:
+      mcpClientAuth.resourceUrl: "https://mcp.example.com/m\u3000cp"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.resourceUrl must be https://<host>"
+
+  - it: fails on a ${VAR_NAME} issuer with a trailing no-break space
+    set:
+      mcpClientAuth.issuer: "${IDP_ISSUER}\u00a0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "mcpClientAuth.issuer must be https://<host>"
+
+  - it: accepts an issuer with a non-ASCII letter in the path
+    set:
+      mcpClientAuth.issuer: "https://idp.example.com/realms/caf\u00e9"
+    asserts:
+      - hasDocuments:
+          count: 1
+
   # The server substitutes ${VAR_NAME} before it validates, so the chart cannot
   # know what a reference expands to and checks only what holds either way.
   - it: renders an issuer whose host is a ${VAR_NAME} reference

@@ -1,6 +1,6 @@
 module github.com/SolaceProducts/solace-broker-mcp/test/e2e-basic-mcp/agent
 
-go 1.25.0
+go 1.26.10
 
 require github.com/modelcontextprotocol/go-sdk v1.8.0
 

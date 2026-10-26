@@ -175,3 +175,30 @@ tests:
     asserts:
       - notMatchRegexRaw:
           pattern: "tls.existingSecret serves HTTPS in the pod"
+
+  # The server only logs a WARN for broker_oauth with no oauth broker
+  # (validateBrokerOAuthConfig); these notes mirror it.
+  - it: warns about brokerOAuth with no oauth broker
+    values:
+      - ../ci/broker-oauth-values.yaml
+    set:
+      brokers.sso-broker: null
+    asserts:
+      - matchRegexRaw:
+          pattern: "WARNING: brokerOAuth is set but no broker uses auth.mode oauth"
+
+  - it: does not warn about brokerOAuth with an oauth broker
+    values:
+      - ../ci/broker-oauth-values.yaml
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "brokerOAuth is set but"
+
+  - it: says the checksum covers a chart-managed brokerOAuth client secret
+    values:
+      - ../ci/broker-oauth-values.yaml
+    set:
+      brokers.my-broker: null
+    asserts:
+      - matchRegexRaw:
+          pattern: "checksum/secret annotation is a hash of the chart-managed"

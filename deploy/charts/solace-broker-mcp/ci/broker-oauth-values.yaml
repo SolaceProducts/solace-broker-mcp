@@ -1,0 +1,41 @@
+# Broker-side OAuth (Hop 2): one oauth broker next to a basic one, with every
+# brokerOAuth value set. deploy/kubernetes/ carries no broker_oauth, so the
+# drift check cannot see it. Used by `ct lint`, the kubeconform step, and
+# tests/broker_oauth_test.yaml.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: ci-only-placeholder
+  sso-broker:
+    url: "https://sso-broker.example.com:943"
+    auth:
+      mode: oauth
+      target: solace-broker-sso
+mcpClientAuth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: mcp-server
+  resourceUrl: "https://mcp.example.com/mcp"
+  toolAuthorization:
+    enabled: false
+tlsTerminatedUpstream: true
+brokerOAuth:
+  idpTokenEndpoint: "https://idp.example.com/oauth2/token"
+  mcpServerClientId: mcp-server
+  grantType: "urn:ietf:params:oauth:grant-type:token-exchange"
+  clientAuthMethod: client_secret_basic
+  clientSecret: ci-only-placeholder
+  tokenExpiryFallback: 1h
+  circuitBreaker:
+    enabled: true
+    failureRateWindow: 30s
+    minimumRequests: 10
+    failureRateThresholdPercent: 50
+    consecutiveFailureThreshold: 5
+    openStateDuration: 30s
+    halfOpenProbeRequests: 2
+  retryAfter:
+    maxHonoredDuration: 60s

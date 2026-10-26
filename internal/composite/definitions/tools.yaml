@@ -420,7 +420,9 @@ tools:
     description: >
       List queues in a VPN with spooledMsgCount, unacked count
       (txUnackedMsgCount), bindCount, congestion state, and rates. Returns up to
-      100 by default (max 500 via maxResults). IMPORTANT: spooledMsgCount is the
+      100 by default (max 500 via maxResults). When more queues exist, the
+      result includes nextCursor: pass it back as cursor to get the next page.
+      Summary counts cover only the queues on this page. IMPORTANT: spooledMsgCount is the
       cumulative lifetime count of messages ever spooled to each queue (it only
       increases since queue creation / last stats clear) — it is NOT the current
       number of messages in the queue and does NOT decrease as messages are
@@ -448,6 +450,10 @@ tools:
         type: integer
         required: false
         description: "Maximum number of queues to return (default 100, max 500)"
+      - name: cursor
+        type: string
+        required: false
+        description: "nextCursor from a previous list-queues call on the same VPN, to get the next page"
     steps:
       - id: vpn
         operation: monitor/getMsgVpn
@@ -458,6 +464,7 @@ tools:
       - id: queues
         operation: monitor/getMsgVpnQueues
         followPages: true
+        resumable: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
@@ -482,8 +489,9 @@ tools:
   - name: list-clients
     description: >
       List active clients in a VPN with rates, uptime, and the slowSubscriber
-      field. Returns up to 100 by default (max 500 via maxResults).
-      slowSubscriber=true flags TCP-egress stalls (mainly relevant to direct
+      field. Returns up to 100 by default (max 500 via maxResults). When more
+      clients exist, the result includes nextCursor: pass it back as cursor to
+      get the next page. slowSubscriber=true flags TCP-egress stalls (mainly relevant to direct
       messaging) — it does not flip for slow guaranteed-message consumers. To
       scan a VPN for slow guaranteed consumers, use list-queues and look for
       queues with growing spooledMsgCount, high txUnackedMsgCount, and rxMsgRate
@@ -503,6 +511,10 @@ tools:
         type: integer
         required: false
         description: "Maximum number of clients to return (default 100, max 500)"
+      - name: cursor
+        type: string
+        required: false
+        description: "nextCursor from a previous list-clients call on the same VPN, to get the next page"
     steps:
       - id: vpn
         operation: monitor/getMsgVpn
@@ -513,6 +525,7 @@ tools:
       - id: clients
         operation: monitor/getMsgVpnClients
         followPages: true
+        resumable: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"

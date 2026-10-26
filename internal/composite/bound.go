@@ -48,6 +48,14 @@ func maxResultsAdvice() string {
 	return fmt.Sprintf(" Use maxResults (up to %d) to retrieve more.", capMax)
 }
 
+// cursorAdvice is the sentence fetchPaginated appends to the "Results limited
+// to N." note when it returns a nextCursor. BoundResponse removes it, and the
+// cursor, from a step it trims: the cursor points past the last row fetched,
+// so following it would skip the rows the cap omitted.
+func cursorAdvice() string {
+	return fmt.Sprintf(" More exist: pass nextCursor as cursor to get the next page (maxResults up to %d per page).", capMax)
+}
+
 // boundItemIndent is the indentation of a row inside "data" in the indented
 // text: result object (2) + step object (4) + data array (6). It only has to be
 // close; the exact size is re-measured before anything is trimmed for good.
@@ -114,6 +122,24 @@ func textSize(v any) (int, bool) {
 // Step maps are copied before being modified, since they are shared with the
 // executor's step results.
 func BoundResponse(strategy ResultStrategy, out map[string]any, size, limit int) BoundReport {
+	return boundResponse(strategy, nil, out, size, limit)
+}
+
+// BoundToolResponse is BoundResponse for a result of tool. It also knows which
+// steps are resumable: a trimmed resumable step's note says how to page on
+// without skipping the omitted rows, even on a page that had no nextCursor
+// (the last page of a scan, or a first page that reached the end).
+func BoundToolResponse(tool CompositeTool, out map[string]any, size, limit int) BoundReport {
+	resumable := map[string]bool{}
+	for _, s := range tool.Steps {
+		if s.Resumable {
+			resumable[s.ID] = true
+		}
+	}
+	return boundResponse(tool.Result, resumable, out, size, limit)
+}
+
+func boundResponse(strategy ResultStrategy, resumable map[string]bool, out map[string]any, size, limit int) BoundReport {
 	if size <= limit {
 		return BoundReport{}
 	}
@@ -167,7 +193,7 @@ func BoundResponse(strategy ResultStrategy, out map[string]any, size, limit int)
 		}
 		for _, c := range cands {
 			if c.keep < len(c.items) {
-				cp[c.id] = trimmedStep(c, limit, hasSummary)
+				cp[c.id] = trimmedStep(c, limit, hasSummary, resumable[c.id])
 			}
 		}
 		return cp
@@ -245,25 +271,36 @@ func BoundResponse(strategy ResultStrategy, out map[string]any, size, limit int)
 
 // trimmedStep returns a copy of c's step cut to c.keep rows and flagged. The
 // data slice is always non-nil, so a step with every row omitted serializes as
-// [] and not null.
-func trimmedStep(c *boundCandidate, limit int, hasSummary bool) map[string]any {
+// [] and not null. A nextCursor is removed: it resumes after the last row
+// fetched, not the last row kept. resumable is true when the tool declares the
+// step resumable; a step carrying a nextCursor is treated as resumable too.
+func trimmedStep(c *boundCandidate, limit int, hasSummary, resumable bool) map[string]any {
 	trimmed := make(map[string]any, len(c.step)+3)
 	for k, v := range c.step {
 		trimmed[k] = v
 	}
+	_, hadCursor := trimmed["nextCursor"]
+	delete(trimmed, "nextCursor")
 	trimmed["data"] = append(make([]any, 0, c.keep), c.items[:c.keep]...)
 	trimmed["truncated"] = true
 	trimmed["omittedItems"] = len(c.items) - c.keep
 	prev, _ := c.step["truncatedMessage"].(string)
-	trimmed["truncatedMessage"] = boundNote(prev, c.keep, len(c.items), limit, hasSummary)
+	trimmed["truncatedMessage"] = boundNote(prev, c.keep, len(c.items), limit, hasSummary, resumable || hadCursor)
 	return trimmed
 }
 
 // boundNote builds the step's truncatedMessage: any earlier note, minus advice
-// the size cap makes wrong, followed by the size note.
-func boundNote(prev string, kept, total, limit int, hasSummary bool) string {
+// the size cap makes wrong, followed by the size note. For a resumable step it
+// adds how to page on without skipping rows, unless no rows were kept:
+// maxResults below 1 falls back to the default, so no smaller call exists to
+// suggest.
+func boundNote(prev string, kept, total, limit int, hasSummary, resumable bool) string {
 	note := boundMessage(kept, total, limit, hasSummary)
+	if resumable && kept > 0 {
+		note += fmt.Sprintf(" To page on without skipping them, repeat this call with the same cursor (none for the first page) and maxResults at most %d; its nextCursor starts right after the rows returned.", kept)
+	}
 	prev = strings.TrimSuffix(prev, maxResultsAdvice())
+	prev = strings.TrimSuffix(prev, cursorAdvice())
 	if prev == "" {
 		return note
 	}

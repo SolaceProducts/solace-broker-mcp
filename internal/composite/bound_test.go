@@ -465,3 +465,50 @@ func TestBoundResponse_MessageHasNoRowOrCallerContent(t *testing.T) {
 		t.Fatalf("message %q echoes row content", msg)
 	}
 }
+
+// cursorStep is a resumable step as fetchPaginated returns it when maxResults
+// cut it short: the broker's cursor and the note telling the caller to use it.
+func cursorStep(data []any, cursor string) map[string]any {
+	return map[string]any{
+		"data":       data,
+		"truncated":  true,
+		"nextCursor": cursor,
+		"truncatedMessage": fmt.Sprintf("Results limited to %d. More exist: pass nextCursor as cursor to get the next page (maxResults up to 500 per page).",
+			len(data)),
+	}
+}
+
+// A step that is not trimmed keeps its cursor and note: the valve only
+// changes what it cuts.
+func TestBoundResponse_CursorKeptWhenNotTrimmed(t *testing.T) {
+	out := map[string]any{"queues": cursorStep(rows(40, 100), "C40")}
+	want := fmt.Sprint(out)
+	if rep := composite.BoundResponse(collectStrategy, out, textLen(t, out), 1<<20); rep.Truncated {
+		t.Fatalf("report %+v, want nothing trimmed", rep)
+	}
+	if got := fmt.Sprint(out); got != want {
+		t.Fatalf("untrimmed step changed:\n got %s\nwant %s", got, want)
+	}
+}
+
+// When every row is omitted there is no maxResults that returns fewer rows
+// (maxResults below 1 falls back to the default), so the cursor goes and no
+// retry size is suggested. The cursor value itself never reaches the message.
+func TestBoundResponse_EveryRowOmittedDropsCursorWithoutRetryAdvice(t *testing.T) {
+	const marker = "CURSOR-MARKER-5c1e"
+	out := map[string]any{"queues": cursorStep(rows(1, 3000), marker)}
+	rep := composite.BoundResponse(collectStrategy, out, textLen(t, out), 1000)
+	if !rep.Truncated || rowCount(t, out, "queues") != 0 {
+		t.Fatalf("report %+v, rows left %d: want every row omitted", rep, rowCount(t, out, "queues"))
+	}
+	step := out["queues"].(map[string]any)
+	if c, ok := step["nextCursor"]; ok {
+		t.Errorf("nextCursor = %v kept on a step with every row omitted", c)
+	}
+	msg := step["truncatedMessage"].(string)
+	for _, bad := range []string{"maxResults at most", "pass nextCursor", marker} {
+		if strings.Contains(msg, bad) {
+			t.Errorf("message %q contains %q", msg, bad)
+		}
+	}
+}

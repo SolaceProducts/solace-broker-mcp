@@ -1,0 +1,574 @@
+# Broker-side OAuth (Hop 2) failures and schema rules. Each failure case
+# mirrors a server startup error (internal/config/config.go validateBroker,
+# validateBrokerOAuthConfig, validateHop1Hop2Alignment), so `helm install`
+# fails instead of crash-looping. configmap.yaml alone, so each failure is
+# attributed to the one template rendered.
+suite: broker-side oauth validation
+templates:
+  - configmap.yaml
+values:
+  - ../ci/broker-oauth-values.yaml
+tests:
+  # --- oauth brokers ---
+  # jwt-bearer sends target as the required scope: the server loads a config
+  # without one, then fails every exchange for that broker before any HTTP
+  # call (internal/tokenexchange/request.go setTarget). "" counts as unset.
+  - it: fails on an oauth broker with no target under jwt-bearer
+    set:
+      brokerOAuth.grantType: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      brokers.sso-broker.auth.target: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.target is required when brokerOAuth.grantType is urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+  - it: fails on an oauth broker with an empty target under jwt-bearer
+    set:
+      brokerOAuth.grantType: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      brokers.sso-broker.auth.target: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.target is required when brokerOAuth.grantType is urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+  - it: renders an oauth broker with a ${VAR_NAME} target under jwt-bearer
+    set:
+      brokerOAuth.grantType: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      brokers.sso-broker.auth.target: "${SSO_BROKER_SCOPE}"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "target: \"\\$\\{SSO_BROKER_SCOPE\\}\""
+
+  - it: renders an oauth broker with no target under token-exchange
+    set:
+      brokers.sso-broker.auth.target: null
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: renders jwt-bearer with no oauth broker
+    set:
+      brokerOAuth.grantType: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+      brokers.sso-broker: null
+    asserts:
+      - notFailedTemplate: {}
+
+
+  - it: fails on a username on an oauth broker, naming the broker
+    set:
+      brokers.sso-broker.auth.username: QQQ
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.username must not be set when brokers.sso-broker.auth.mode is oauth"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a password on an oauth broker, naming the broker
+    set:
+      brokers.sso-broker.auth.password: QQQ
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.password must not be set when brokers.sso-broker.auth.mode is oauth"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a token on an oauth broker, naming the broker
+    set:
+      brokers.sso-broker.auth.token: QQQ
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.token must not be set when brokers.sso-broker.auth.mode is oauth"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an existingSecret on an oauth broker, naming the broker
+    set:
+      brokers.sso-broker.auth.existingSecret: semp-creds
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.existingSecret must not be set when brokers.sso-broker.auth.mode is oauth"
+
+  # An empty string is how the values.yaml example leaves a credential unset.
+  - it: accepts empty credentials on an oauth broker
+    set:
+      brokers.sso-broker.auth:
+        username: ""
+        password: ""
+        token: ""
+        existingSecret: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails on a whitespace-only target
+    set:
+      brokers.sso-broker.auth.target: "   "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.target must not be empty or whitespace-only"
+
+  - it: accepts an empty target on an oauth broker
+    set:
+      brokers.sso-broker.auth.target: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails on a target on a basic broker
+    set:
+      brokers.my-broker.auth.target: solace-broker
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.target is only used when brokers.my-broker.auth.mode is oauth"
+
+  - it: fails on a target on a bearer broker
+    set:
+      brokers.my-broker.auth: {mode: bearer, username: null, password: null, token: tok, target: solace-broker}
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.auth.target is only used when brokers.my-broker.auth.mode is oauth"
+
+  - it: fails on an oauth broker under mcpClientAuth.mode static
+    set:
+      mcpClientAuth:
+        mode: static
+        devToken: tok
+        issuer: null
+        audience: null
+        resourceUrl: null
+        toolAuthorization: {enabled: null}
+      tlsTerminatedUpstream: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.sso-broker.auth.mode is oauth but mcpClientAuth.mode is \"static\""
+
+  - it: fails on an oauth broker with no brokerOAuth
+    set:
+      brokerOAuth: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth is required when a broker uses auth.mode oauth \\(brokers.sso-broker\\)"
+
+  # Only a set value counts: the defaults (every key null, empty secrets) are
+  # no brokerOAuth at all.
+  - it: fails on an oauth broker with every brokerOAuth value at its default
+    set:
+      brokerOAuth:
+        idpTokenEndpoint: null
+        mcpServerClientId: null
+        grantType: null
+        clientAuthMethod: null
+        clientSecret: ""
+        existingSecret: ""
+        tokenExpiryFallback: null
+        circuitBreaker: {enabled: null, failureRateWindow: null, minimumRequests: null, failureRateThresholdPercent: null, consecutiveFailureThreshold: null, openStateDuration: null, halfOpenProbeRequests: null}
+        retryAfter: {maxHonoredDuration: null}
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth is required when a broker uses auth.mode oauth"
+
+  # --- failures: brokerOAuth ---
+
+  - it: fails on a missing idpTokenEndpoint
+    set:
+      brokerOAuth.idpTokenEndpoint: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint is required"
+
+  - it: fails on a blank idpTokenEndpoint
+    set:
+      brokerOAuth.idpTokenEndpoint: "  "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint is required"
+
+  - it: fails on a missing mcpServerClientId
+    set:
+      brokerOAuth.mcpServerClientId: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.mcpServerClientId is required"
+
+  - it: fails on a blank mcpServerClientId
+    set:
+      brokerOAuth.mcpServerClientId: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.mcpServerClientId is required"
+
+  - it: fails on a missing grantType
+    set:
+      brokerOAuth.grantType: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.grantType is required"
+
+  - it: fails on a missing clientAuthMethod
+    set:
+      brokerOAuth.clientAuthMethod: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.clientAuthMethod is required"
+
+  - it: fails on a missing client secret
+    set:
+      brokerOAuth.clientSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.clientSecret or brokerOAuth.existingSecret is required"
+
+  - it: fails on a blank client secret, without echoing it
+    set:
+      brokerOAuth.clientSecret: "   "
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.clientSecret or brokerOAuth.existingSecret is required"
+
+  - it: accepts an existingSecret with no chart-managed client secret
+    set:
+      brokerOAuth.clientSecret: ""
+      brokerOAuth.existingSecret: idp-client
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # Stray values only: brokerOAuth counts as present, so it is validated.
+  - it: fails on a lone circuitBreaker value with no IdP coordinates
+    set:
+      brokers.sso-broker: null
+      brokerOAuth:
+        idpTokenEndpoint: null
+        mcpServerClientId: null
+        grantType: null
+        clientAuthMethod: null
+        clientSecret: ""
+        tokenExpiryFallback: null
+        circuitBreaker: {enabled: null, failureRateWindow: null, minimumRequests: null, failureRateThresholdPercent: null, consecutiveFailureThreshold: null, openStateDuration: null, halfOpenProbeRequests: 3}
+        retryAfter: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint is required"
+
+  - it: fails on a lone chart-managed client secret with no IdP coordinates, without echoing it
+    set:
+      brokers.sso-broker: null
+      brokerOAuth:
+        idpTokenEndpoint: null
+        mcpServerClientId: null
+        grantType: null
+        clientAuthMethod: null
+        clientSecret: QQQ
+        tokenExpiryFallback: null
+        circuitBreaker: null
+        retryAfter: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint is required"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  # --- failures: idpTokenEndpoint shape, never echoing the value ---
+
+  # Unlike mcpClientAuth.issuer, the endpoint must be written out: a ${VAR_NAME}
+  # reference is refused with its own message.
+  - it: fails on a ${VAR_NAME} host in idpTokenEndpoint
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://${IDP_HOST}/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be a literal URL: \\$\\{VAR_NAME\\} references are not supported"
+
+  - it: fails on a whole-value ${VAR_NAME} idpTokenEndpoint
+    set:
+      brokerOAuth.idpTokenEndpoint: "${IDP_TOKEN_URL}"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be a literal URL"
+
+  - it: accepts an idpTokenEndpoint with a literal $ in the path
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/a$b/token"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "idp_token_endpoint: \"https://idp.example.com/a\\$b/token\""
+
+  - it: fails on an idpTokenEndpoint carrying credentials, without echoing them
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://client:QQQ@idp.example.com/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must not include credentials"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an idpTokenEndpoint carrying a username only
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://client@idp.example.com/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must not include credentials"
+
+  - it: fails on an idpTokenEndpoint with a query string, without echoing it
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/token?client_secret=QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must not include a query string or fragment"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an idpTokenEndpoint with a fragment
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/token#QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must not include a query string or fragment"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an idpTokenEndpoint with no scheme, without echoing it
+    set:
+      brokerOAuth.idpTokenEndpoint: "idp.example.com/QQQ"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an idpTokenEndpoint with a non-http scheme
+    set:
+      brokerOAuth.idpTokenEndpoint: "ftp://idp.example.com/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+
+  - it: fails on an idpTokenEndpoint with no host
+    set:
+      brokerOAuth.idpTokenEndpoint: "https:///token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+
+  - it: fails on an idpTokenEndpoint with whitespace, without echoing it
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/QQQ token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  # Unicode whitespace too, as the scopesSupported check: url.Parse keeps a
+  # no-break space in the path, so every exchange would miss the endpoint.
+  - it: fails on an idpTokenEndpoint with a trailing no-break space, without echoing it
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/QQQ/token\u00a0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\] with no whitespace"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: accepts an idpTokenEndpoint with a non-ASCII letter in the path
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/r\u00e9alm/token"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails on a credentialed idpTokenEndpoint with a non-http scheme, without echoing it
+    set:
+      brokerOAuth.idpTokenEndpoint: "ftp://client:QQQ@idp.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an http idpTokenEndpoint under mcpClientAuth.mode oauth
+    set:
+      brokerOAuth.idpTokenEndpoint: "http://idp.example.com/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be https:// when mcpClientAuth.mode is oauth"
+
+  # The server allows http outside its production mode.
+  - it: accepts an http idpTokenEndpoint under mcpClientAuth.mode static with no oauth broker
+    set:
+      brokers.sso-broker: null
+      mcpClientAuth:
+        mode: static
+        devToken: tok
+        issuer: null
+        audience: null
+        resourceUrl: null
+        toolAuthorization: {enabled: null}
+      tlsTerminatedUpstream: null
+      brokerOAuth.idpTokenEndpoint: "http://idp.example.com/token"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "idp_token_endpoint: \"http://idp.example.com/token\""
+
+  # The server parses the endpoint with url.Parse, which refuses these; each
+  # would otherwise render and crash-loop the pod.
+  - it: fails on an idpTokenEndpoint with a non-numeric port
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com:abc/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+
+  - it: fails on an idpTokenEndpoint with an unclosed IPv6 bracket
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://[::1/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+
+  - it: fails on an idpTokenEndpoint with a malformed %-escape in the path
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/QQQ%zz"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on an idpTokenEndpoint with a %-escape in the host
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp%41.example.com/token"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokerOAuth.idpTokenEndpoint must be http\\(s\\)://<host>\\[:port\\]\\[/path\\]"
+
+  - it: accepts an idpTokenEndpoint on a bracketed IPv6 host with a port
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://[::1]:8443/token"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "idp_token_endpoint: \"https://\\[::1\\]:8443/token\""
+
+  - it: accepts an idpTokenEndpoint with a well-formed %-escape in the path
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com/realms/a%20b/token"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: accepts an idpTokenEndpoint with a port, path and an @ in the path
+    set:
+      brokerOAuth.idpTokenEndpoint: "https://idp.example.com:8443/realms/a@b/token"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # --- schema ---
+
+  - it: rejects an unknown grantType
+    set:
+      brokerOAuth.grantType: client_credentials
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts the jwt-bearer grantType
+    set:
+      brokerOAuth.grantType: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "grant_type: \"urn:ietf:params:oauth:grant-type:jwt-bearer\""
+
+  - it: rejects an unknown clientAuthMethod
+    set:
+      brokerOAuth.clientAuthMethod: private_key_jwt
+    asserts:
+      - failedTemplate: {}
+
+  # yaml.v3 refuses an integer into time.Duration.
+  - it: rejects a bare-number tokenExpiryFallback
+    set:
+      brokerOAuth.tokenExpiryFallback: 3600
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a bare-number circuitBreaker duration
+    set:
+      brokerOAuth.circuitBreaker.openStateDuration: 30
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a bare-number retryAfter.maxHonoredDuration
+    set:
+      brokerOAuth.retryAfter.maxHonoredDuration: 60
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects minimumRequests 0
+    set:
+      brokerOAuth.circuitBreaker.minimumRequests: 0
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts minimumRequests 1000000
+    set:
+      brokerOAuth.circuitBreaker.minimumRequests: 1000000
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "minimum_requests: 1000000\n"
+
+  - it: rejects minimumRequests above 1000000
+    set:
+      brokerOAuth.circuitBreaker.minimumRequests: 1000001
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects failureRateThresholdPercent 0
+    set:
+      brokerOAuth.circuitBreaker.failureRateThresholdPercent: 0
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts failureRateThresholdPercent 100 and a fraction
+    set:
+      brokerOAuth.circuitBreaker.failureRateThresholdPercent: 0.5
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "failure_rate_threshold_percent: 0.5\n"
+
+  - it: rejects failureRateThresholdPercent above 100
+    set:
+      brokerOAuth.circuitBreaker.failureRateThresholdPercent: 100.5
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects consecutiveFailureThreshold above 1000
+    set:
+      brokerOAuth.circuitBreaker.consecutiveFailureThreshold: 1001
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects halfOpenProbeRequests 0
+    set:
+      brokerOAuth.circuitBreaker.halfOpenProbeRequests: 0
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects halfOpenProbeRequests above 10
+    set:
+      brokerOAuth.circuitBreaker.halfOpenProbeRequests: 11
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects an unknown brokerOAuth key
+    set:
+      brokerOAuth.audience: x
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects auth.mode values the server does not know
+    set:
+      brokers.sso-broker.auth.mode: oidc
+    asserts:
+      - failedTemplate: {}

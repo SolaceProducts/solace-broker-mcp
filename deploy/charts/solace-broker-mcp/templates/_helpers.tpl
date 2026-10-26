@@ -100,8 +100,11 @@ two ports with one number either way. */}}
 {{- end }}
 {{- $oauth := eq $mcaMode "oauth" }}
 {{- $lowerNames := dict }}
+{{- $brokerCount := 0 }}
+{{- $oauthBrokers := list }}
 {{- range $name, $broker := .Values.brokers }}
 {{- if kindIs "invalid" $broker }}{{ continue }}{{ end }}
+{{- $brokerCount = add1 $brokerCount }}
 {{- if hasKey $lowerNames (lower $name) }}
 {{- fail (printf "broker names %q and %q collide: names are compared case-insensitively; rename one" (get $lowerNames (lower $name)) $name) }}
 {{- end }}
@@ -124,7 +127,9 @@ A secret in the path cannot be detected; README.md says the url must hold none. 
 {{- if regexMatch "[?#]" $url }}
 {{- fail (printf "brokers.%s.url must not include a query string or fragment: the server appends SEMP paths to it; put credentials in brokers.%s.auth (or auth.existingSecret)" $name $name) }}
 {{- end }}
-{{- if or (not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#]+" $url)) (regexMatch "\\s" $url) }}
+{{- /* Whitespace by Unicode rules, as for scopesSupported: url.Parse refuses a
+no-break space after the port and keeps one in the path. */}}
+{{- if or (not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#]+" $url)) (regexMatch "[\\s\\x0B\\x{85}\\p{Z}\\x00-\\x1f\\x7f]" $url) }}
 {{- fail (printf "brokers.%s.url must be http(s)://<host>[:port][/path] with no whitespace" $name) }}
 {{- end }}
 {{- /* oauth is the server's production mode: it refuses a plain http broker
@@ -139,16 +144,38 @@ certificate check (config.go validateBrokerURL, validate). */}}
 {{- end }}
 {{- end }}
 {{- $auth := $broker.auth | default dict }}
+{{- $mode := $auth.mode | default "" | toString }}
+{{- /* An oauth broker has no credentials of its own: the server exchanges each
+caller's token for a broker token (brokerOAuth). So it renders no env var and
+needs no envPrefix, and a credential left on it fails rather than being
+silently dropped. An empty string is unset, as in the values.yaml example. No
+message echoes a value. */}}
+{{- if eq $mode "oauth" }}
+{{- range (list "username" "password" "token" "existingSecret") }}
+{{- if get $auth . | default "" | toString }}
+{{- fail (printf "brokers.%s.auth.%s must not be set when brokers.%s.auth.mode is oauth: the server exchanges each caller's token for a broker token (brokerOAuth)" $name . $name) }}
+{{- end }}
+{{- end }}
+{{- /* config.go validateBroker: a set target must not be blank. */}}
+{{- $target := $auth.target | default "" | toString }}
+{{- if and $target (not (trim $target)) }}
+{{- fail (printf "brokers.%s.auth.target must not be empty or whitespace-only: set it, or null to leave it out" $name) }}
+{{- end }}
+{{- $oauthBrokers = append $oauthBrokers $name }}
+{{- continue }}
+{{- end }}
+{{- if not (kindIs "invalid" $auth.target) }}
+{{- fail (printf "brokers.%s.auth.target is only used when brokers.%s.auth.mode is oauth: remove it, or set it to null" $name $name) }}
+{{- end }}
 {{- $existing := $auth.existingSecret | default "" | toString | trim }}
 {{- $prefix := include "solace-broker-mcp.envPrefix" (dict "name" $name "broker" $broker) }}
 {{- $fields := list }}
-{{- $mode := $auth.mode | default "" | toString }}
 {{- if eq $mode "basic" }}
 {{- $fields = list "username" "password" }}
 {{- else if eq $mode "bearer" }}
 {{- $fields = list "token" }}
 {{- else }}
-{{- fail (printf "brokers.%s.auth.mode must be basic or bearer, got %q" $name $mode) }}
+{{- fail (printf "brokers.%s.auth.mode must be basic, bearer or oauth, got %q" $name $mode) }}
 {{- end }}
 {{- range $fields }}
 {{- if and (not $existing) (not (get $auth . | default "" | toString | trim)) }}
@@ -157,11 +184,12 @@ certificate check (config.go validateBrokerURL, validate). */}}
 {{- $creds = append $creds (dict "name" (printf "%s_%s" $prefix (upper .)) "key" . "existingSecret" $existing "value" (get $auth . | default "" | toString)) }}
 {{- end }}
 {{- end }}
-{{- if not $creds }}
+{{- if not $brokerCount }}
 {{- fail "brokers: at least one broker is required (see values.yaml or README.md for an example)" }}
 {{- end }}
 {{- $_ := include "solace-broker-mcp.fileMounts" . }}
 {{- include "solace-broker-mcp.validateClientAuth" . }}
+{{- include "solace-broker-mcp.validateBrokerOAuth" (dict "root" . "oauthBrokers" $oauthBrokers) }}
 {{- /* Under oauth the dev token is not used: a devToken or existingSecret left
 over from a shared base values file is ignored, never rendered. */}}
 {{- if not $oauth }}
@@ -170,6 +198,12 @@ over from a shared base values file is ignored, never rendered. */}}
 {{- fail "mcpClientAuth.devToken or mcpClientAuth.existingSecret is required when mcpClientAuth.mode is static" }}
 {{- end }}
 {{- $creds = append $creds (dict "name" "DEV_TOKEN" "key" "dev-token" "existingSecret" $mcaExisting "value" ($mca.devToken | default "" | toString)) }}
+{{- end }}
+{{- /* The server defines no name of its own; this one matches the
+${MCP_SERVER_CLIENT_SECRET} in docs/authentication.md and docs/configuration.md. */}}
+{{- if include "solace-broker-mcp.brokerOAuthSet" . }}
+{{- $bo := .Values.brokerOAuth }}
+{{- $creds = append $creds (dict "name" "MCP_SERVER_CLIENT_SECRET" "key" "client-secret" "existingSecret" ($bo.existingSecret | default "" | toString | trim) "value" ($bo.clientSecret | default "" | toString)) }}
 {{- end }}
 {{- $seen := dict }}
 {{- range $creds }}
@@ -235,7 +269,10 @@ reference expands to is unknown here. */}}
 the scheme: a scheme written out in the value is known here. */}}
 {{- $badShape = not (regexMatch "^(\\$\\{[A-Z0-9_]+\\}|[Hh][Tt][Tt][Pp][Ss]://)" $u) }}
 {{- end }}
-{{- if or (regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $u) $badShape (regexMatch "[\\s\\x00-\\x1f\\x7f]" $u) }}
+{{- /* Whitespace by Unicode rules: url.Parse keeps a no-break space in the
+path, so the server's URL check passes and such an issuer then fails OIDC
+discovery, stopping the server at startup. */}}
+{{- if or (regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $u) $badShape (regexMatch "[\\s\\x0B\\x{85}\\p{Z}\\x00-\\x1f\\x7f]" $u) }}
 {{- fail (printf "mcpClientAuth.%s must be https://<host>[:port][/path] with no credentials or whitespace when mcpClientAuth.mode is oauth" .) }}
 {{- end }}
 {{- end }}
@@ -269,6 +306,112 @@ class do, so a no-break space fails here rather than at startup. */}}
 {{- range $i, $scope := ($mca.scopesSupported | default list) }}
 {{- if or (not $scope) (regexMatch "[\\s\\x0B\\x{85}\\p{Z}]" (toString $scope)) }}
 {{- fail (printf "mcpClientAuth.scopesSupported[%d] must be non-empty with no whitespace" $i) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+"true" when brokerOAuth is set, so broker_oauth renders; empty otherwise. Any
+non-null value counts, including one under circuitBreaker or retryAfter, and
+so does a non-blank clientSecret or existingSecret: the defaults (every key
+null, both secrets "") are no brokerOAuth at all.
+*/}}
+{{- define "solace-broker-mcp.brokerOAuthSet" -}}
+{{- $bo := .Values.brokerOAuth | default dict }}
+{{- $set := false }}
+{{- range (list "idpTokenEndpoint" "mcpServerClientId" "grantType" "clientAuthMethod" "tokenExpiryFallback") }}
+{{- if not (kindIs "invalid" (index $bo .)) }}{{ $set = true }}{{ end }}
+{{- end }}
+{{- range (list "clientSecret" "existingSecret") }}
+{{- if index $bo . | default "" | toString | trim }}{{ $set = true }}{{ end }}
+{{- end }}
+{{- range (list "circuitBreaker" "retryAfter") }}
+{{- range $_, $v := (index $bo . | default dict) }}
+{{- if not (kindIs "invalid" $v) }}{{ $set = true }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if $set }}true{{ end }}
+{{- end }}
+
+{{/*
+Validates brokerOAuth and the oauth brokers that need it, mirroring the
+server's startup errors (internal/config/config.go validateHop1Hop2Alignment
+and validateBrokerOAuthConfig). Called from credentials, so every template
+runs it. No message echoes a value: the token endpoint may carry credentials,
+and the client secret is one.
+Call with (dict "root" $ "oauthBrokers" <names of the oauth brokers>).
+*/}}
+{{- define "solace-broker-mcp.validateBrokerOAuth" -}}
+{{- $root := .root }}
+{{- $set := include "solace-broker-mcp.brokerOAuthSet" $root }}
+{{- $mcaMode := ($root.Values.mcpClientAuth | default dict).mode | default "" | toString }}
+{{- if .oauthBrokers }}
+{{- /* The exchange consumes the caller's Hop 1 token, which only
+mcp_client_auth.mode oauth provides. */}}
+{{- if ne $mcaMode "oauth" }}
+{{- fail (printf "brokers.%s.auth.mode is oauth but mcpClientAuth.mode is %q: the server exchanges the caller's own token for a broker token, so mcpClientAuth.mode must be oauth" (first .oauthBrokers) $mcaMode) }}
+{{- end }}
+{{- if not $set }}
+{{- fail (printf "brokerOAuth is required when a broker uses auth.mode oauth (brokers.%s): set idpTokenEndpoint, mcpServerClientId, grantType, clientAuthMethod and the client secret" (join ", brokers." .oauthBrokers)) }}
+{{- end }}
+{{- end }}
+{{- if $set }}
+{{- $bo := $root.Values.brokerOAuth }}
+{{- if not (index $bo "idpTokenEndpoint" | default "" | toString | trim) }}
+{{- fail "brokerOAuth.idpTokenEndpoint is required when brokerOAuth is set" }}
+{{- end }}
+{{- /* The broker url checks: a query string or fragment would be sent to the
+IdP with every exchange and may carry a credential, so both are refused
+outright. The server also refuses an http endpoint in its production mode
+(mcp_client_auth.mode oauth), and anything url.Parse refuses: a host character
+outside RFC 3986, a non-numeric port, an unclosed IPv6 bracket, a malformed
+%-escape, a control character. Whitespace is refused by Unicode rules, as for
+scopesSupported: url.Parse keeps a no-break space. $shape mirrors that, as the issuer check in
+validateClientAuth does; it is slightly stricter (a %-escape in the host, an
+IPv6 zone). */}}
+{{- $url := index $bo "idpTokenEndpoint" | toString }}
+{{- $shape := "^[Hh][Tt][Tt][Pp][Ss]?://([A-Za-z0-9._~!$&'()*+,;=-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]*)?(/([^?#%]|%[0-9A-Fa-f]{2})*)?$" }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@" $url }}
+{{- fail "brokerOAuth.idpTokenEndpoint must not include credentials: set the client secret in brokerOAuth.clientSecret (or brokerOAuth.existingSecret)" }}
+{{- end }}
+{{- if regexMatch "[?#]" $url }}
+{{- fail "brokerOAuth.idpTokenEndpoint must not include a query string or fragment" }}
+{{- end }}
+{{- /* Unlike mcpClientAuth.issuer, no ${VAR_NAME} reference: the server
+would substitute one, but the chart checks the endpoint as written. */}}
+{{- if regexMatch "\\$\\{" $url }}
+{{- fail "brokerOAuth.idpTokenEndpoint must be a literal URL: ${VAR_NAME} references are not supported" }}
+{{- end }}
+{{- if or (not (regexMatch $shape $url)) (regexMatch "[\\s\\x0B\\x{85}\\p{Z}\\x00-\\x1f\\x7f]" $url) }}
+{{- fail "brokerOAuth.idpTokenEndpoint must be http(s)://<host>[:port][/path] with no whitespace" }}
+{{- end }}
+{{- if and (eq $mcaMode "oauth") (not (regexMatch "^[Hh][Tt][Tt][Pp][Ss]://" $url)) }}
+{{- fail "brokerOAuth.idpTokenEndpoint must be https:// when mcpClientAuth.mode is oauth" }}
+{{- end }}
+{{- range (list "mcpServerClientId" "grantType" "clientAuthMethod") }}
+{{- if not (index $bo . | default "" | toString | trim) }}
+{{- fail (printf "brokerOAuth.%s is required when brokerOAuth is set" .) }}
+{{- end }}
+{{- end }}
+{{- /* clientAuthMethod is rendered as a YAML key, unquoted, so the schema
+enum alone is not enough: under --skip-schema-validation a crafted value could
+write a literal secret into the ConfigMap. */}}
+{{- if not (has (index $bo "clientAuthMethod" | toString) (list "client_secret_basic" "client_secret_post")) }}
+{{- fail "brokerOAuth.clientAuthMethod must be client_secret_basic or client_secret_post" }}
+{{- end }}
+{{- if not (or (index $bo "clientSecret" | default "" | toString | trim) (index $bo "existingSecret" | default "" | toString | trim)) }}
+{{- fail "brokerOAuth.clientSecret or brokerOAuth.existingSecret is required when brokerOAuth is set" }}
+{{- end }}
+{{- /* jwt-bearer sends target as the required scope. The server loads a
+config without one, then fails every exchange for that broker before any HTTP
+call (internal/tokenexchange/request.go setTarget); "" counts as unset. */}}
+{{- $grant := index $bo "grantType" | toString }}
+{{- if eq $grant "urn:ietf:params:oauth:grant-type:jwt-bearer" }}
+{{- range $.oauthBrokers }}
+{{- if not ((index $root.Values.brokers .).auth.target | default "" | toString) }}
+{{- fail (printf "brokers.%s.auth.target is required when brokerOAuth.grantType is %s: it is sent as the scope" . $grant) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -554,17 +697,47 @@ semp:
 brokers:
 {{- range $name, $broker := .Values.brokers }}
 {{- if kindIs "invalid" $broker }}{{ continue }}{{ end }}
-{{- $prefix := include "solace-broker-mcp.envPrefix" (dict "name" $name "broker" $broker) }}
   {{ toJson $name }}:
 {{- include "solace-broker-mcp.kv" (list "    " "url" $broker.url) }}
 {{- include "solace-broker-mcp.kv" (list "    " "insecure_skip_verify" $broker.insecureSkipVerify) }}
     auth:
 {{- include "solace-broker-mcp.kv" (list "      " "mode" $broker.auth.mode) }}
+{{- if eq $broker.auth.mode "oauth" }}
+{{- include "solace-broker-mcp.kv" (list "      " "target" $broker.auth.target) }}
+{{- else }}
+{{- $prefix := include "solace-broker-mcp.envPrefix" (dict "name" $name "broker" $broker) }}
 {{- if eq $broker.auth.mode "basic" }}
       username: {{ printf "${%s_USERNAME}" $prefix | toJson }}
       password: {{ printf "${%s_PASSWORD}" $prefix | toJson }}
 {{- else }}
       token: {{ printf "${%s_TOKEN}" $prefix | toJson }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if include "solace-broker-mcp.brokerOAuthSet" . }}
+{{- $bo := .Values.brokerOAuth }}
+broker_oauth:
+{{- include "solace-broker-mcp.kv" (list "  " "idp_token_endpoint" $bo.idpTokenEndpoint) }}
+{{- include "solace-broker-mcp.kv" (list "  " "mcp_server_client_id" $bo.mcpServerClientId) }}
+  mcp_server_client_auth:
+    {{ $bo.clientAuthMethod }}:
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
+{{- include "solace-broker-mcp.kv" (list "  " "grant_type" $bo.grantType) }}
+{{- include "solace-broker-mcp.kv" (list "  " "token_expiry_fallback" $bo.tokenExpiryFallback) }}
+{{- $cb := $bo.circuitBreaker | default dict }}
+{{- $cbLines := "" }}
+{{- $cbKeys := dict "enabled" "enabled" "failure_rate_window" "failureRateWindow" "minimum_requests" "minimumRequests" "failure_rate_threshold_percent" "failureRateThresholdPercent" "consecutive_failure_threshold" "consecutiveFailureThreshold" "open_state_duration" "openStateDuration" "half_open_probe_requests" "halfOpenProbeRequests" }}
+{{- range (list "enabled" "failure_rate_window" "minimum_requests" "failure_rate_threshold_percent" "consecutive_failure_threshold" "open_state_duration" "half_open_probe_requests") }}
+{{- $cbLines = printf "%s%s" $cbLines (include "solace-broker-mcp.kv" (list "    " . (index $cb (get $cbKeys .)))) }}
+{{- end }}
+{{- if $cbLines }}
+  circuit_breaker:
+{{- $cbLines }}
+{{- end }}
+{{- $raLine := include "solace-broker-mcp.kv" (list "    " "max_honored_duration" (index ($bo.retryAfter | default dict) "maxHonoredDuration")) }}
+{{- if $raLine }}
+  retry_after:
+{{- $raLine }}
 {{- end }}
 {{- end }}
 {{- $obs := .Values.observability | default dict }}

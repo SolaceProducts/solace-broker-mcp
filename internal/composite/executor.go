@@ -512,7 +512,19 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 	allItems := make([]any, 0)
 	truncated := false
 	pageLimitHit := false
+	nextCursor := ""
 	args := baseArgs
+	pageSize := 0
+	resumed := false
+	if step.Resumable {
+		// loader.go guarantees a resumable step's count is an integer literal.
+		countArg, _ := baseArgs["count"].(string)
+		pageSize, _ = strconv.Atoi(countArg)
+		if c, _ := execCtx.Params["cursor"].(string); c != "" {
+			args = appendCursor(baseArgs, c)
+			resumed = true
+		}
+	}
 
 	for pageCount := 0; ; pageCount++ {
 		if pageCount >= ce.maxPages {
@@ -528,6 +540,18 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 			break
 		}
 
+		remaining := maxResults - len(allItems)
+		if step.Resumable && remaining < pageSize {
+			// Ask for no more than is still wanted, so the call ends on a
+			// page boundary and the broker's next cursor starts at item
+			// maxResults+1. This assumes a SEMP cursor marks a position, not
+			// a page size, so it stays valid with a different count. A caller
+			// resuming with another maxResults relies on that, and so does
+			// the size cap's advice to repeat a cursor with a smaller one
+			// (boundNote). The E2E paging test varies maxResults to check it.
+			args = withArg(args, "count", strconv.Itoa(remaining))
+		}
+
 		result, err := client.Execute(ctx, op, args)
 		if err != nil {
 			return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
@@ -538,11 +562,19 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 			break
 		}
 
-		remaining := maxResults - len(allItems)
 		if len(items) >= remaining {
 			allItems = append(allItems, items[:remaining]...)
 			// Truncated if the page had more items than we needed, or if more pages exist.
-			truncated = len(items) > remaining || extractNextPageURI(result.Data) != ""
+			nextURI := extractNextPageURI(result.Data)
+			truncated = len(items) > remaining || nextURI != ""
+			// A page larger than asked (a broker ignoring count) means the
+			// broker's cursor would skip the dropped items, so offer none.
+			if step.Resumable && len(items) == remaining && nextURI != "" {
+				nextCursor, err = cursorFromNextURI(nextURI)
+				if err != nil {
+					return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
+				}
+			}
 			break
 		}
 
@@ -553,12 +585,9 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 			break
 		}
 
-		cursor, parseErr := parseCursorFromURI(nextURI)
-		if parseErr != nil {
-			return nil, fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, parseErr)
-		}
-		if cursor == "" {
-			return nil, fmt.Errorf("tool step %s: empty pagination cursor extracted from nextPageUri %q", step.ID, nextURI)
+		cursor, err := cursorFromNextURI(nextURI)
+		if err != nil {
+			return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 		}
 
 		args = appendCursor(baseArgs, cursor)
@@ -568,8 +597,15 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 		"data":      allItems,
 		"truncated": truncated,
 	}
+	if resumed {
+		// A later page of a scan: a summary over data covers only this page.
+		result["resumed"] = true
+	}
 	if truncated {
 		switch {
+		case nextCursor != "":
+			result["nextCursor"] = nextCursor
+			result["truncatedMessage"] = fmt.Sprintf("Results limited to %d.", maxResults) + cursorAdvice()
 		case pageLimitHit:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"Pagination stopped after %d pages; result is incomplete. This usually indicates a broker issue with a persistent nextPageUri — narrow the query (e.g., by msgVpnName or a where filter) or contact your broker administrator.",
@@ -658,14 +694,33 @@ func parseCursorFromURI(rawURI string) (string, error) {
 	return u.Query().Get("cursor"), nil
 }
 
+// cursorFromNextURI returns the cursor in a non-empty nextPageUri. Both the
+// page-following loop and a resumable call's nextCursor use it, so a
+// nextPageUri without a cursor is an error on either path.
+func cursorFromNextURI(nextURI string) (string, error) {
+	cursor, err := parseCursorFromURI(nextURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse pagination cursor from nextPageUri %q: %w", nextURI, err)
+	}
+	if cursor == "" {
+		return "", fmt.Errorf("empty pagination cursor extracted from nextPageUri %q", nextURI)
+	}
+	return cursor, nil
+}
+
 // appendCursor returns a copy of baseArgs with the cursor key added for the
 // next paginated SEMP request.
 func appendCursor(baseArgs map[string]any, cursor string) map[string]any {
-	next := make(map[string]any, len(baseArgs)+1)
-	for k, v := range baseArgs {
+	return withArg(baseArgs, "cursor", cursor)
+}
+
+// withArg returns a copy of args with key set to value, leaving args intact.
+func withArg(args map[string]any, key string, value any) map[string]any {
+	next := make(map[string]any, len(args)+1)
+	for k, v := range args {
 		next[k] = v
 	}
-	next["cursor"] = cursor
+	next[key] = value
 	return next
 }
 

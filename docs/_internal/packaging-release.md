@@ -80,7 +80,7 @@ docker build --build-arg VERSION=0.1.0 -t solace-broker-mcp:0.1.0 .
 
 The Dockerfile uses a multi-stage build:
 
-- **Builder stage** (`golang:1.25-alpine`): compiles the binary with ldflags
+- **Builder stage** (`golang:1.26-alpine`): compiles the binary with ldflags
 - **Runtime stage** (`gcr.io/distroless/static-debian12:nonroot`): ~2 MB base,
   includes CA certificates for TLS/OIDC, runs as non-root UID 65532
 - **HEALTHCHECK**: uses the binary's `--health` flag (no shell or curl needed)

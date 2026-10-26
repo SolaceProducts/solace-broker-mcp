@@ -46,17 +46,17 @@ tests:
 
   - it: rejects an unsupported broker auth mode (schema)
     set:
-      brokers.my-broker.auth.mode: oauth
+      brokers.my-broker.auth.mode: oidc
     asserts:
       - failedTemplate:
-          errorPattern: "value must be one of 'basic', 'bearer'"
+          errorPattern: "value must be one of 'basic', 'bearer', 'oauth'"
 
   - it: fails when a broker has no auth.mode
     set:
       brokers.my-broker.auth.mode: null
     asserts:
       - failedTemplate:
-          errorPattern: "brokers.my-broker.auth.mode must be basic or bearer"
+          errorPattern: "brokers.my-broker.auth.mode must be basic, bearer or oauth"
 
   - it: fails on chart-managed basic auth with no password
     set:
@@ -444,6 +444,39 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "^[^Q]*$"
+
+  # Unicode whitespace too. url.Parse refuses a no-break space after the port,
+  # so the pod would crash-loop, but keeps one in or after the host (the server
+  # starts and every SEMP call fails to connect) and one in the path.
+  - it: fails on a broker url with a trailing no-break space, without echoing it
+    set:
+      brokers.my-broker.url: "https://QQQ.example.com:943\u00a0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>\\[:port\\]\\[/path\\] with no whitespace"
+      - failedTemplate:
+          errorPattern: "^[^Q]*$"
+
+  - it: fails on a broker url with a no-break space in the host
+    set:
+      brokers.my-broker.url: "https://broker\u00a0.example.com:943"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>\\[:port\\]\\[/path\\] with no whitespace"
+
+  - it: fails on a broker url with an ideographic space in the path
+    set:
+      brokers.my-broker.url: "https://broker:943/a\u3000b"
+    asserts:
+      - failedTemplate:
+          errorPattern: "brokers.my-broker.url must be http\\(s\\)://<host>\\[:port\\]\\[/path\\] with no whitespace"
+
+  - it: accepts a broker url with a non-ASCII letter in the path
+    set:
+      brokers.my-broker.url: "https://broker:943/r\u00e9gion"
+    asserts:
+      - hasDocuments:
+          count: 1
 
   # The dev modes reject tool_authorization outright (config.go).
   - it: fails on toolAuthorization.enabled under mode static

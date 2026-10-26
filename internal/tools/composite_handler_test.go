@@ -753,3 +753,29 @@ func TestRealCatalog_StrictParametersSet(t *testing.T) {
 		t.Errorf("strictParameters tools = %v, want %v", got, want)
 	}
 }
+
+// The handler bounds with the tool definition, not only its result strategy, so
+// a trimmed resumable step without a nextCursor (the last page of a scan) still
+// says how to page on without skipping the omitted rows.
+func TestCompositeToolHandler_BoundResponseKnowsResumableSteps(t *testing.T) {
+	tool := composite.CompositeTool{
+		Name:   "paged",
+		Steps:  []composite.Step{{ID: "queues", FollowPages: true, Resumable: true}},
+		Result: composite.ResultStrategy{Strategy: "collect"},
+	}
+	data := make([]any, 50)
+	for i := range data {
+		data[i] = map[string]any{"queueName": strings.Repeat("q", 100)}
+	}
+	result := map[string]any{"queues": map[string]any{"data": data, "truncated": false}}
+
+	// Any size over the limit starts trimming; the exact pass measures the rest.
+	rep := NewCompositeToolHandler(tool, nil).BoundResponse(result, 2001, 2000)
+	if !rep.Truncated {
+		t.Fatalf("report %+v, want the step trimmed", rep)
+	}
+	msg := result["queues"].(map[string]any)["truncatedMessage"].(string)
+	if !strings.Contains(msg, "maxResults at most") {
+		t.Errorf("message = %q, want the resumable step's paging advice", msg)
+	}
+}

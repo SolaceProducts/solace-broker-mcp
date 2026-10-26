@@ -1,0 +1,260 @@
+# Broker-side OAuth (Hop 2): brokers.<name>.auth.mode oauth and brokerOAuth.
+# deploy/kubernetes/ carries no broker_oauth, so the drift check cannot see
+# it: these cases cover it instead. Failures and schema rules:
+# broker_oauth_validation_test.yaml.
+suite: broker-side oauth
+templates:
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+values:
+  - ../ci/broker-oauth-values.yaml
+release:
+  name: rel
+tests:
+  - it: renders the broker_oauth block, with the client secret only as a reference
+    template: configmap.yaml
+    asserts:
+      - equal:
+          path: data["config.yaml"]
+          value: |
+            port: 9090
+            log_level: "info"
+            listen_address: "0.0.0.0"
+            tls_terminated_upstream: true
+            mcp_client_auth:
+              mode: "oauth"
+              issuer: "https://idp.example.com"
+              audience: "mcp-server"
+              resource_url: "https://mcp.example.com/mcp"
+              tool_authorization:
+                enabled: false
+            semp:
+              max_concurrent_per_broker: 10
+              request_timeout_duration: "1m"
+              request_min_interval: "100ms"
+              max_queue_wait: "30s"
+              fair_scheduling: true
+              retries: 10
+              retry_min_interval: "3s"
+              retry_max_interval: "30s"
+            brokers:
+              "my-broker":
+                url: "https://broker.example.com:943"
+                auth:
+                  mode: "basic"
+                  username: "${MY_BROKER_USERNAME}"
+                  password: "${MY_BROKER_PASSWORD}"
+              "sso-broker":
+                url: "https://sso-broker.example.com:943"
+                auth:
+                  mode: "oauth"
+                  target: "solace-broker-sso"
+            broker_oauth:
+              idp_token_endpoint: "https://idp.example.com/oauth2/token"
+              mcp_server_client_id: "mcp-server"
+              mcp_server_client_auth:
+                client_secret_basic:
+                  secret: "${MCP_SERVER_CLIENT_SECRET}"
+              grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+              token_expiry_fallback: "1h"
+              circuit_breaker:
+                enabled: true
+                failure_rate_window: "30s"
+                minimum_requests: 10
+                failure_rate_threshold_percent: 50
+                consecutive_failure_threshold: 5
+                open_state_duration: "30s"
+                half_open_probe_requests: 2
+              retry_after:
+                max_honored_duration: "60s"
+
+  - it: never writes the client secret into the ConfigMap
+    template: configmap.yaml
+    set:
+      brokerOAuth.clientSecret: QQQ-client-secret
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "QQQ"
+
+  - it: renders client_secret_post as the only sub-block when chosen
+    template: configmap.yaml
+    set:
+      brokerOAuth.clientAuthMethod: client_secret_post
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "  mcp_server_client_auth:\n    client_secret_post:\n      secret: \"\\$\\{MCP_SERVER_CLIENT_SECRET\\}\"\n  grant_type:"
+
+  - it: renders only the required keys when the optional ones are null
+    template: configmap.yaml
+    set:
+      brokerOAuth:
+        tokenExpiryFallback: null
+        circuitBreaker: null
+        retryAfter: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?s)broker_oauth:\n  idp_token_endpoint: \"https://idp.example.com/oauth2/token\"\n  mcp_server_client_id: \"mcp-server\"\n  mcp_server_client_auth:\n    client_secret_basic:\n      secret: \"\\$\\{MCP_SERVER_CLIENT_SECRET\\}\"\n  grant_type: \"urn:ietf:params:oauth:grant-type:token-exchange\"\n?$"
+
+  # false and 0 are values, not absence (the rendering rule).
+  - it: renders circuitBreaker.enabled false and a zero consecutive threshold
+    template: configmap.yaml
+    set:
+      brokerOAuth.circuitBreaker:
+        enabled: false
+        failureRateWindow: null
+        minimumRequests: null
+        failureRateThresholdPercent: null
+        consecutiveFailureThreshold: 0
+        openStateDuration: null
+        halfOpenProbeRequests: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "  circuit_breaker:\n    enabled: false\n    consecutive_failure_threshold: 0\n  retry_after:"
+
+  - it: renders an oauth broker with no target
+    template: configmap.yaml
+    set:
+      brokers.sso-broker.auth.target: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "\"sso-broker\":\n    url: \"https://sso-broker.example.com:943\"\n    auth:\n      mode: \"oauth\"\nbroker_oauth:"
+
+  # An oauth broker has no credentials, so it needs no envPrefix: a name
+  # starting with a digit renders, and a leftover envPrefix is ignored.
+  - it: renders an oauth broker whose name starts with a digit
+    template: configmap.yaml
+    set:
+      brokers:
+        1st-broker:
+          url: "https://first.example.com:943"
+          envPrefix: "not a valid prefix"
+          auth: {mode: oauth}
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "\"1st-broker\":\n    url: \"https://first.example.com:943\"\n    auth:\n      mode: \"oauth\"\n"
+
+  - it: holds the chart-managed client secret next to the basic broker's credentials, and none for the oauth broker
+    template: secret.yaml
+    asserts:
+      - equal:
+          path: stringData
+          value:
+            MY_BROKER_USERNAME: admin
+            MY_BROKER_PASSWORD: ci-only-placeholder
+            MCP_SERVER_CLIENT_SECRET: ci-only-placeholder
+
+  - it: renders a Secret for the client secret alone when every broker is oauth
+    template: secret.yaml
+    set:
+      brokers.my-broker: null
+    asserts:
+      - equal:
+          path: stringData
+          value:
+            MCP_SERVER_CLIENT_SECRET: ci-only-placeholder
+
+  - it: injects an existingSecret client secret with secretKeyRef, not the chart Secret
+    template: deployment.yaml
+    set:
+      brokerOAuth.existingSecret: idp-client
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MCP_SERVER_CLIENT_SECRET
+            valueFrom: {secretKeyRef: {name: idp-client, key: client-secret}}
+
+  - it: leaves an existingSecret client secret out of the chart Secret, even with clientSecret left set
+    template: secret.yaml
+    set:
+      brokerOAuth.existingSecret: idp-client
+    asserts:
+      - equal:
+          path: stringData
+          value:
+            MY_BROKER_USERNAME: admin
+            MY_BROKER_PASSWORD: ci-only-placeholder
+
+  - it: renders no Secret when the client secret is external and every broker is oauth
+    template: secret.yaml
+    set:
+      brokers.my-broker: null
+      brokerOAuth.existingSecret: idp-client
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Pinned as in deployment_test.yaml; regenerate with:
+  #   helm template rel . -f ci/broker-oauth-values.yaml -s templates/deployment.yaml | grep checksum
+  #   (and again with --set brokerOAuth.existingSecret=idp-client)
+  - it: pins the config and Secret checksums for the broker-oauth values
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: fbcd4c4e1596a779f924ed14a3e02cbb79fb316878172127cdfd2105b6a8334b
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 9b23ff8780bd27176c281c29c4c5db868db55d6fe39dd79f893214f1f62e3040
+
+  - it: changes only the Secret checksum when the chart-managed client secret rotates
+    template: deployment.yaml
+    set:
+      brokerOAuth.clientSecret: rotated
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/config"]
+          value: fbcd4c4e1596a779f924ed14a3e02cbb79fb316878172127cdfd2105b6a8334b
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 9b23ff8780bd27176c281c29c4c5db868db55d6fe39dd79f893214f1f62e3040
+
+  # A clientSecret set alongside existingSecret is not rendered, so it must not
+  # reach the (unsalted, readable) hash either.
+  - it: keeps an existingSecret client secret out of the Secret checksum
+    template: deployment.yaml
+    set:
+      brokerOAuth.existingSecret: idp-client
+      brokerOAuth.clientSecret: rotated
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 0d1a36d7a1304d32eb3ff9f7f75fa01b257e0b9a23bdf939d1bb9127960d1ce6
+
+  - it: refuses MCP_SERVER_CLIENT_SECRET in extraEnv
+    template: deployment.yaml
+    set:
+      extraEnv:
+        - name: MCP_SERVER_CLIENT_SECRET
+          value: x
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: MCP_SERVER_CLIENT_SECRET is already set by the chart"
+
+  - it: refuses MCP_SERVER_CLIENT_SECRET in extraEnv when the secret is external
+    template: deployment.yaml
+    set:
+      brokerOAuth.existingSecret: idp-client
+      extraEnv:
+        - name: MCP_SERVER_CLIENT_SECRET
+          valueFrom: {secretKeyRef: {name: other, key: k}}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: MCP_SERVER_CLIENT_SECRET is already set by the chart"
+
+  # brokerOAuth with no oauth broker only logs a server WARN; it renders.
+  - it: renders broker_oauth with no oauth broker
+    template: configmap.yaml
+    set:
+      brokers.sso-broker: null
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "\nbroker_oauth:\n"
