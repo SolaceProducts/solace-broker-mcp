@@ -27,15 +27,18 @@ replicaCount: 2
 #    insecureSkipVerify: false
 #    envPrefix: ""            # default: name upper-cased, "-" -> "_"
 #    auth:
-#      mode: basic            # basic | bearer
+#      mode: basic            # basic | bearer | oauth
 #      username: ""           # chart-managed (ignored when existingSecret is set)
 #      password: ""
 #      token: ""              # bearer
 #      existingSecret: ""     # keys: username + password (basic) or token (bearer)
+#      target: null           # oauth only: this broker's API at the IdP (required under jwt-bearer)
 #
 # Credentials reach the pod as <PREFIX>_USERNAME / <PREFIX>_PASSWORD /
 # <PREFIX>_TOKEN env vars, which the rendered config references as ${...}.
-# They are never written into the ConfigMap.
+# They are never written into the ConfigMap. An oauth broker has none: the
+# server exchanges each caller's token for a broker token (brokerOAuth), and
+# setting username, password, token or existingSecret on it fails rendering.
 brokers: {}
 
 # How MCP clients authenticate (docs/authentication.md). static is a shared
@@ -73,6 +76,41 @@ mcpClientAuth:
     #   mcp-readers: [list-queues, list-vpns]
     #   mcp-operators: [create-queue]
     accessLevelGroups: {}
+
+# Broker-side OAuth (Hop 2): the identity provider the server exchanges each
+# caller's token at, for brokers with auth.mode: oauth (README.md § Broker-side
+# OAuth). Required when any broker uses oauth, which also needs
+# mcpClientAuth.mode: oauth. Rendered as broker_oauth when any value below is
+# set; null leaves a key out, so the server's own default applies
+# (docs/configuration.md § Event Broker OAuth). A privately signed token
+# endpoint needs caBundle.
+brokerOAuth:
+  # Required once any value is set. https:// under mcpClientAuth.mode oauth,
+  # with no credentials, query string, fragment or ${VAR_NAME} reference.
+  idpTokenEndpoint: null      # e.g. "https://idp.example.com/oauth2/token"
+  mcpServerClientId: null     # this server's client_id at the IdP
+  # urn:ietf:params:oauth:grant-type:token-exchange (RFC 8693) or
+  # urn:ietf:params:oauth:grant-type:jwt-bearer (RFC 7523, Entra On-Behalf-Of)
+  grantType: null
+  clientAuthMethod: null      # client_secret_basic | client_secret_post
+  # The client secret reaches the pod as MCP_SERVER_CLIENT_SECRET, never the
+  # ConfigMap. One of the two is required.
+  clientSecret: ""            # chart-managed (ignored when existingSecret is set)
+  existingSecret: ""          # key: client-secret
+  # Durations are strings ("1h", not 3600). Defaults: docs/configuration.md
+  # § Circuit Breaker and § Retry-After Gate. The schema checks the integer
+  # bounds; duration ranges are checked by the server at startup.
+  tokenExpiryFallback: null   # null: fail closed when the IdP returns no expires_in
+  circuitBreaker:
+    enabled: null
+    failureRateWindow: null
+    minimumRequests: null
+    failureRateThresholdPercent: null
+    consecutiveFailureThreshold: null
+    openStateDuration: null
+    halfOpenProbeRequests: null
+  retryAfter:
+    maxHonoredDuration: null
 
 # Registers the write/action tools (create, update, delete). null = the
 # server default (false: a read-only server). Granting a write tool in
