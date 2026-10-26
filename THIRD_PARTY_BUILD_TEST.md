@@ -327,6 +327,17 @@ refuses outright rather than guess at anything it doesn't recognize —
 review its diff and commit as usual. A Dependabot PR still needs a human to
 run it; Dependabot itself cannot execute post-update scripts (SOL-152956).
 
+When the `SolaceDev/solace-public-workflows` pin moves, the same run rewrites
+the prose below the [Solace-internal table](#solace-internal-composite-actions):
+the pin, the re-pin date and the prior pin. Pass the Dependabot PR's number as
+`REFRESH_PR_NUMBER=<n> make refresh-third-party-inventory` so the sentence can
+cite it; without it the sentence says `(#N)` for you to fill in. Pass it only on
+the re-pin PR itself. The run refuses, writing nothing, when the re-pin would
+leave these rows on more than one pin or on anything but a commit SHA, or when
+it cannot find the sentence to update. Only a re-pin to a new commit rewrites
+this prose: when the rows end up on a pin it does not name any other way (rows
+re-pinned by hand, say), the run leaves it alone and warns.
+
 The following commands are what that target runs under the hood, kept here for
 anyone auditing the inventory by hand rather than trusting the script.
 These four commands print what the preceding tables must contain, one per source.

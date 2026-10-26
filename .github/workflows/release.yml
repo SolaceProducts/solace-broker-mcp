@@ -59,7 +59,11 @@ jobs:
           cache: false
       - name: Self-test the licence check
         run: .github/scripts/licenses-check.test.sh
+      # `if: always()` so a red self-test cannot hide the real drift lines: the
+      # job is red either way, but without it this step is skipped and the log
+      # shows only the self-test (PR #538, same as ci-pr.yaml).
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
+        if: always()
         run: .github/scripts/licenses-check.sh
       # Verified at the tag for the same reason as the check above it: a pull
       # request can merge with this red until it is a required status check.
