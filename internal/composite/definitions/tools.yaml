@@ -1157,7 +1157,8 @@ tools:
       backpressure. Does NOT flip for slow guaranteed-message consumers (slow
       to ACK), because the broker self-throttles via the transmit window
       before TCP egress can stall. To find slow guaranteed consumers, use
-      list-queues / get-queue-metrics. Server-side filtered via SEMP where
+      list-queues / get-queue-metrics, then list-queue-consumers on the
+      queue to see which bound consumer is not ACKing. Server-side filtered via SEMP where
       clause — only matching clients are returned. The response includes a
       summary block with byClientProfile, byPlatform (grouped counts),
       and totalTxDiscardedMsgCount (cumulative lifetime discards across
@@ -1719,6 +1720,85 @@ tools:
           msgVpnName: "{{.Params.msgVpnName}}"
           queueName: "{{.Params.queueName}}"
           count: "100"
+    result:
+      strategy: collect
+
+  # SOL-156294: per-consumer flow state for slow-consumer triage.
+  - name: list-queue-consumers
+    description: >
+      List the consumers bound to a queue, one entry per flow: clientName,
+      sessionName (transacted sessions only), flowId, bindTime,
+      activityState, deliveryState, selector, and the window and ACK
+      counters. Returns up to 100 by default (max 500 via maxResults). Use
+      this to find which consumer is slowing a queue whose backlog is
+      growing. Two separate signals, both read per flow: (1) stalled on
+      application ACKs: unackedMsgCount at or near
+      queue.data.maxDeliveredUnackedMsgsPerFlow in this same response; the
+      broker sends the flow nothing more until the application ACKs.
+      windowSize does not cap unackedMsgCount, so a count above windowSize is
+      normal. (2) transport window full: usedWindowSize equal to windowSize,
+      with windowClosedCount rising between two calls; or windowSize of 0:
+      the client has closed its window and the broker sends nothing until it
+      reopens; windowClosedCount stays flat while the window stays closed. A
+      maxUnackedMsgsExceededMsgCount or windowClosedCount that rises between
+      two calls means the stall keeps recurring (both are cumulative
+      counters). deliveryState deliver-from-input-stream is normal
+      streaming; deliver-from-memory (throttled) or deliver-from-spool
+      (stalled, per SEMP) means the flow is no longer streaming. In testing,
+      both a never-ACK consumer and a slow-ACK consumer showed
+      deliver-from-memory. Verifies the queue exists before listing, so a
+      nonexistent queue is reported as an error rather than an empty list.
+    annotations:
+      readOnly: true
+    strictParameters: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to list consumers for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of consumers to return (default 100, max 500)"
+    steps:
+      # Preflight: same reason as list-queue-subscriptions. The tx-flows
+      # collection GET answers 200 with data: [] for a missing queue, which
+      # would read as "no consumers bound". It also returns the per-flow ACK
+      # limit each flow's unackedMsgCount is compared against.
+      - id: queue
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+        select:
+          - queueName
+          - maxDeliveredUnackedMsgsPerFlow
+      - id: consumers
+        operation: monitor/getMsgVpnQueueTxFlows
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          count: "100"
+        select:
+          - clientName
+          - sessionName
+          - flowId
+          - bindTime
+          - activityState
+          - deliveryState
+          - unackedMsgCount
+          - windowSize
+          - usedWindowSize
+          - windowClosedCount
+          - maxUnackedMsgsExceededMsgCount
+          - redeliveredMsgCount
+          - ackedMsgCount
+          - selector
     result:
       strategy: collect
 

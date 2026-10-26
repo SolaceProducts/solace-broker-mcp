@@ -39,13 +39,13 @@ This server is one of several Solace MCP servers. To see all of them, go to [Sol
 
 ## Overview
 
-solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 57 tools: 29 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 28 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
+solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 58 tools: 30 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 28 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
 MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **29 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, client usernames and profiles, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
+- **30 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, client usernames and profiles, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
 - **28 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points, and Kafka Receivers and Senders with their bindings; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no authentication), static bearer tokens, or OAuth 2.1/OpenID Connect (OIDC) with JSON Web Token (JWT) validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured event brokers
@@ -91,7 +91,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Event broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and high availability (HA) and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
 | Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
-| Queues | `list-queues`, `get-queue-metrics`, `list-queue-subscriptions` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates; list a queue's topic subscriptions |
+| Queues | `list-queues`, `get-queue-metrics`, `list-queue-subscriptions`, `list-queue-consumers` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates; list a queue's topic subscriptions; list the consumers bound to a queue with their window and ACK counters |
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Bridges | `list-bridges`, `get-bridge-status` | List bridges with inbound/outbound connection state; inspect a single bridge's connection establisher and failure category |
@@ -101,14 +101,14 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-queue-subscription`, `delete-queue-subscription`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated (except the two Kafka bridge creates below). |
 | Kafka bridges (write) | `create-kafka-receiver`, `update-kafka-receiver`, `delete-kafka-receiver`, `create-kafka-receiver-topic-binding`, `delete-kafka-receiver-topic-binding`, `create-kafka-sender`, `update-kafka-sender`, `delete-kafka-sender`, `create-kafka-sender-queue-binding`, `delete-kafka-sender-queue-binding` | Create, update, and delete Kafka Receivers and Senders and their topic/queue bindings. Passwords, client secrets and other credentials are rejected by the server and must be set out of band; the create result tells the user how. `create-kafka-receiver` and `create-kafka-sender` are annotated `destructiveHint` (unlike other `create-*` tools) because a bridge opens an outbound connection to a host the caller chooses, so they are audited. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 28 write tools in total (four action, 24 management), on top of the 29 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 28 write tools in total (four action, 24 management), on top of the 30 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol; whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 57 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 58 tools
 - [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, rate-limit/retry settings, and outbound HTTP proxy support
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
