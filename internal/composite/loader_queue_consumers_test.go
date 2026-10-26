@@ -34,9 +34,9 @@ var queueConsumerFields = []string{
 }
 
 // queuePreflightFields is the select list of the queue preflight: the
-// per-flow ACK limit an agent compares unackedMsgCount against, and the
-// backlog, so one call answers "which consumer is stalling this queue".
-var queuePreflightFields = []string{"queueName", "maxDeliveredUnackedMsgsPerFlow", "spooledMsgCount"}
+// per-flow ACK limit an agent compares unackedMsgCount against, so one call
+// answers "which consumer is stalling this queue".
+var queuePreflightFields = []string{"queueName", "maxDeliveredUnackedMsgsPerFlow"}
 
 // TestLoadTools_ListQueueConsumers checks the shipped definition, not a
 // hand-built copy: preflight on the queue, then the paginated tx-flow list.

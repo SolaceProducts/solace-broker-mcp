@@ -56,7 +56,6 @@ func queuePreflightOK() *sempv2.Result {
 	return &sempv2.Result{StatusCode: 200, Data: map[string]any{"data": map[string]any{
 		"queueName":                      "q1",
 		"maxDeliveredUnackedMsgsPerFlow": float64(10000),
-		"spooledMsgCount":                float64(42),
 	}}}
 }
 

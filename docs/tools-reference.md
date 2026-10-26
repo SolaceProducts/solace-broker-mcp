@@ -514,9 +514,9 @@ How to read a flow:
 | `maxResults` | integer | no | Max consumers to return (default 100, max 500). |
 
 **Returns:** step-keyed envelope, steps `queue` (existence check, with the
-queue's `maxDeliveredUnackedMsgsPerFlow` and `spooledMsgCount`) and
-`consumers` (array of flows). Each flow carries `clientName`, `flowId`,
-`bindTime`, `activityState`, `deliveryState`, `unackedMsgCount`, `windowSize`,
+queue's `maxDeliveredUnackedMsgsPerFlow`) and `consumers` (array of
+flows). Each flow carries `clientName`, `flowId`, `bindTime`,
+`activityState`, `deliveryState`, `unackedMsgCount`, `windowSize`,
 `usedWindowSize`, `windowClosedCount`, `maxUnackedMsgsExceededMsgCount`,
 `redeliveredMsgCount`, `ackedMsgCount`, and `selector`, plus `sessionName` for
 a transacted session (the event broker omits it otherwise). An empty `consumers` array means the queue exists and nothing is

@@ -1764,7 +1764,6 @@ tools:
         select:
           - queueName
           - maxDeliveredUnackedMsgsPerFlow
-          - spooledMsgCount
       - id: consumers
         operation: monitor/getMsgVpnQueueTxFlows
         followPages: true
