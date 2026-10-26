@@ -55,7 +55,7 @@ tests:
               mcp_server_client_id: "mcp-server"
               mcp_server_client_auth:
                 client_secret_basic:
-                  secret: "${BROKER_OAUTH_CLIENT_SECRET}"
+                  secret: "${MCP_SERVER_CLIENT_SECRET}"
               grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
               token_expiry_fallback: "1h"
               circuit_breaker:
@@ -85,7 +85,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: "  mcp_server_client_auth:\n    client_secret_post:\n      secret: \"\\$\\{BROKER_OAUTH_CLIENT_SECRET\\}\"\n  grant_type:"
+          pattern: "  mcp_server_client_auth:\n    client_secret_post:\n      secret: \"\\$\\{MCP_SERVER_CLIENT_SECRET\\}\"\n  grant_type:"
 
   - it: renders only the required keys when the optional ones are null
     template: configmap.yaml
@@ -97,7 +97,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: "(?s)broker_oauth:\n  idp_token_endpoint: \"https://idp.example.com/oauth2/token\"\n  mcp_server_client_id: \"mcp-server\"\n  mcp_server_client_auth:\n    client_secret_basic:\n      secret: \"\\$\\{BROKER_OAUTH_CLIENT_SECRET\\}\"\n  grant_type: \"urn:ietf:params:oauth:grant-type:token-exchange\"\n?$"
+          pattern: "(?s)broker_oauth:\n  idp_token_endpoint: \"https://idp.example.com/oauth2/token\"\n  mcp_server_client_id: \"mcp-server\"\n  mcp_server_client_auth:\n    client_secret_basic:\n      secret: \"\\$\\{MCP_SERVER_CLIENT_SECRET\\}\"\n  grant_type: \"urn:ietf:params:oauth:grant-type:token-exchange\"\n?$"
 
   # false and 0 are values, not absence (the rendering rule).
   - it: renders circuitBreaker.enabled false and a zero consecutive threshold
@@ -148,7 +148,7 @@ tests:
           value:
             MY_BROKER_USERNAME: admin
             MY_BROKER_PASSWORD: ci-only-placeholder
-            BROKER_OAUTH_CLIENT_SECRET: ci-only-placeholder
+            MCP_SERVER_CLIENT_SECRET: ci-only-placeholder
 
   - it: renders a Secret for the client secret alone when every broker is oauth
     template: secret.yaml
@@ -158,7 +158,7 @@ tests:
       - equal:
           path: stringData
           value:
-            BROKER_OAUTH_CLIENT_SECRET: ci-only-placeholder
+            MCP_SERVER_CLIENT_SECRET: ci-only-placeholder
 
   - it: injects an existingSecret client secret with secretKeyRef, not the chart Secret
     template: deployment.yaml
@@ -168,7 +168,7 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: BROKER_OAUTH_CLIENT_SECRET
+            name: MCP_SERVER_CLIENT_SECRET
             valueFrom: {secretKeyRef: {name: idp-client, key: client-secret}}
 
   - it: leaves an existingSecret client secret out of the chart Secret, even with clientSecret left set
@@ -199,10 +199,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 48e23ec1a966302a081df228ce8204c8512b418ac2fe58404e076a92479cd82d
+          value: fbcd4c4e1596a779f924ed14a3e02cbb79fb316878172127cdfd2105b6a8334b
       - equal:
           path: spec.template.metadata.annotations["checksum/secret"]
-          value: 80e10493a868902ca56975f9aea4da9201fed3d6a848f8d2652a8ea0e9bf2d33
+          value: 9b23ff8780bd27176c281c29c4c5db868db55d6fe39dd79f893214f1f62e3040
 
   - it: changes only the Secret checksum when the chart-managed client secret rotates
     template: deployment.yaml
@@ -211,10 +211,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.metadata.annotations["checksum/config"]
-          value: 48e23ec1a966302a081df228ce8204c8512b418ac2fe58404e076a92479cd82d
+          value: fbcd4c4e1596a779f924ed14a3e02cbb79fb316878172127cdfd2105b6a8334b
       - notEqual:
           path: spec.template.metadata.annotations["checksum/secret"]
-          value: 80e10493a868902ca56975f9aea4da9201fed3d6a848f8d2652a8ea0e9bf2d33
+          value: 9b23ff8780bd27176c281c29c4c5db868db55d6fe39dd79f893214f1f62e3040
 
   # A clientSecret set alongside existingSecret is not rendered, so it must not
   # reach the (unsalted, readable) hash either.
@@ -228,26 +228,26 @@ tests:
           path: spec.template.metadata.annotations["checksum/secret"]
           value: 0d1a36d7a1304d32eb3ff9f7f75fa01b257e0b9a23bdf939d1bb9127960d1ce6
 
-  - it: refuses BROKER_OAUTH_CLIENT_SECRET in extraEnv
+  - it: refuses MCP_SERVER_CLIENT_SECRET in extraEnv
     template: deployment.yaml
     set:
       extraEnv:
-        - name: BROKER_OAUTH_CLIENT_SECRET
+        - name: MCP_SERVER_CLIENT_SECRET
           value: x
     asserts:
       - failedTemplate:
-          errorPattern: "extraEnv: BROKER_OAUTH_CLIENT_SECRET is already set by the chart"
+          errorPattern: "extraEnv: MCP_SERVER_CLIENT_SECRET is already set by the chart"
 
-  - it: refuses BROKER_OAUTH_CLIENT_SECRET in extraEnv when the secret is external
+  - it: refuses MCP_SERVER_CLIENT_SECRET in extraEnv when the secret is external
     template: deployment.yaml
     set:
       brokerOAuth.existingSecret: idp-client
       extraEnv:
-        - name: BROKER_OAUTH_CLIENT_SECRET
+        - name: MCP_SERVER_CLIENT_SECRET
           valueFrom: {secretKeyRef: {name: other, key: k}}
     asserts:
       - failedTemplate:
-          errorPattern: "extraEnv: BROKER_OAUTH_CLIENT_SECRET is already set by the chart"
+          errorPattern: "extraEnv: MCP_SERVER_CLIENT_SECRET is already set by the chart"
 
   # brokerOAuth with no oauth broker only logs a server WARN; it renders.
   - it: renders broker_oauth with no oauth broker

@@ -199,11 +199,11 @@ over from a shared base values file is ignored, never rendered. */}}
 {{- end }}
 {{- $creds = append $creds (dict "name" "DEV_TOKEN" "key" "dev-token" "existingSecret" $mcaExisting "value" ($mca.devToken | default "" | toString)) }}
 {{- end }}
-{{- /* The env var name is a chart convention: the config references it as
-${BROKER_OAUTH_CLIENT_SECRET}, and the server defines no name of its own. */}}
+{{- /* The server defines no name of its own; this one matches the
+${MCP_SERVER_CLIENT_SECRET} in docs/authentication.md and docs/configuration.md. */}}
 {{- if include "solace-broker-mcp.brokerOAuthSet" . }}
 {{- $bo := .Values.brokerOAuth }}
-{{- $creds = append $creds (dict "name" "BROKER_OAUTH_CLIENT_SECRET" "key" "client-secret" "existingSecret" ($bo.existingSecret | default "" | toString | trim) "value" ($bo.clientSecret | default "" | toString)) }}
+{{- $creds = append $creds (dict "name" "MCP_SERVER_CLIENT_SECRET" "key" "client-secret" "existingSecret" ($bo.existingSecret | default "" | toString | trim) "value" ($bo.clientSecret | default "" | toString)) }}
 {{- end }}
 {{- $seen := dict }}
 {{- range $creds }}
@@ -393,6 +393,12 @@ would substitute one, but the chart checks the endpoint as written. */}}
 {{- if not (index $bo . | default "" | toString | trim) }}
 {{- fail (printf "brokerOAuth.%s is required when brokerOAuth is set" .) }}
 {{- end }}
+{{- end }}
+{{- /* clientAuthMethod is rendered as a YAML key, unquoted, so the schema
+enum alone is not enough: under --skip-schema-validation a crafted value could
+write a literal secret into the ConfigMap. */}}
+{{- if not (has (index $bo "clientAuthMethod" | toString) (list "client_secret_basic" "client_secret_post")) }}
+{{- fail "brokerOAuth.clientAuthMethod must be client_secret_basic or client_secret_post" }}
 {{- end }}
 {{- if not (or (index $bo "clientSecret" | default "" | toString | trim) (index $bo "existingSecret" | default "" | toString | trim)) }}
 {{- fail "brokerOAuth.clientSecret or brokerOAuth.existingSecret is required when brokerOAuth is set" }}
@@ -715,7 +721,7 @@ broker_oauth:
 {{- include "solace-broker-mcp.kv" (list "  " "mcp_server_client_id" $bo.mcpServerClientId) }}
   mcp_server_client_auth:
     {{ $bo.clientAuthMethod }}:
-      secret: "${BROKER_OAUTH_CLIENT_SECRET}"
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
 {{- include "solace-broker-mcp.kv" (list "  " "grant_type" $bo.grantType) }}
 {{- include "solace-broker-mcp.kv" (list "  " "token_expiry_fallback" $bo.tokenExpiryFallback) }}
 {{- $cb := $bo.circuitBreaker | default dict }}

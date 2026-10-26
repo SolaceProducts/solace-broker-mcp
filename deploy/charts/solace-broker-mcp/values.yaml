@@ -93,7 +93,7 @@ brokerOAuth:
   # urn:ietf:params:oauth:grant-type:jwt-bearer (RFC 7523, Entra On-Behalf-Of)
   grantType: null
   clientAuthMethod: null      # client_secret_basic | client_secret_post
-  # The client secret reaches the pod as BROKER_OAUTH_CLIENT_SECRET, never the
+  # The client secret reaches the pod as MCP_SERVER_CLIENT_SECRET, never the
   # ConfigMap. One of the two is required.
   clientSecret: ""            # chart-managed (ignored when existingSecret is set)
   existingSecret: ""          # key: client-secret

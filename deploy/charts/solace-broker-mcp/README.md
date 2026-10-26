@@ -308,8 +308,8 @@ brokerOAuth:
 ```
 
 `clientSecret` sets a chart-managed secret instead of `existingSecret`. Either
-way it reaches the pod as `BROKER_OAUTH_CLIENT_SECRET`, which the config
-references as `${BROKER_OAUTH_CLIENT_SECRET}` under the one
+way it reaches the pod as `MCP_SERVER_CLIENT_SECRET`, which the config
+references as `${MCP_SERVER_CLIENT_SECRET}` under the one
 `mcp_server_client_auth` method `clientAuthMethod` names; it is never written
 into the ConfigMap. A chart-managed secret is covered by the pod template's
 `checksum/secret`, so changing it rolls the pods, with the same exposure as
@@ -324,7 +324,8 @@ The chart fails rendering on these setups, which the server would refuse at
 startup: an oauth broker under `mcpClientAuth.mode: static`; an oauth broker
 with no `brokerOAuth`; a `brokerOAuth` missing `idpTokenEndpoint`,
 `mcpServerClientId`, `grantType`, `clientAuthMethod`, or both `clientSecret`
-and `existingSecret`; an `idpTokenEndpoint` that is not
+and `existingSecret`; a `clientAuthMethod` other than `client_secret_basic` or
+`client_secret_post`, even under `--skip-schema-validation`; an `idpTokenEndpoint` that is not
 `http(s)://<host>[:port][/path]`, or not `https://` under
 `mcpClientAuth.mode: oauth`; and a whitespace-only `target`. It also refuses
 an `idpTokenEndpoint` with credentials, a query string or a fragment, which
@@ -350,7 +351,7 @@ references as `${...}`. Credentials are never written into the ConfigMap.
 | Broker password (`basic`) | `<PREFIX>_PASSWORD` | `password` |
 | Broker token (`bearer`) | `<PREFIX>_TOKEN` | `token` |
 | MCP dev token (`static` only) | `DEV_TOKEN` | `dev-token` |
-| IdP client secret (`brokerOAuth`) | `BROKER_OAUTH_CLIENT_SECRET` | `client-secret` |
+| IdP client secret (`brokerOAuth`) | `MCP_SERVER_CLIENT_SECRET` | `client-secret` |
 
 `<PREFIX>` is the broker's `envPrefix`, by default its name upper-cased with
 `-` replaced by `_` (`my-broker` → `MY_BROKER`). A custom `envPrefix` must

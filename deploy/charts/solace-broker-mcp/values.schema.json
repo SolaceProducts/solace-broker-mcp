@@ -283,7 +283,7 @@
             "string",
             "null"
           ],
-          "description": "Chart-managed client secret (ignored when existingSecret is set). Reaches the pod as BROKER_OAUTH_CLIENT_SECRET, never the ConfigMap."
+          "description": "Chart-managed client secret (ignored when existingSecret is set). Reaches the pod as MCP_SERVER_CLIENT_SECRET, never the ConfigMap."
         },
         "existingSecret": {
           "type": [
