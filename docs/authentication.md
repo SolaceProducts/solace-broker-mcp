@@ -905,13 +905,28 @@ The server fails closed: it never admits a request whose token signature it coul
 
 | Situation | Behaviour |
 |---|---|
-| IdP unreachable when the server starts | The server cannot fetch the discovery document (bounded by the 10-second IdP HTTP timeout), logs `failed to create auth middleware`, and exits before it serves any endpoint, probes included. It does not retry. In Kubernetes the pod crash-loops until the IdP is reachable, and `CrashLoopBackOff` can delay its recovery by up to five minutes after the IdP returns. This applies to every pod created during the outage: rollouts, scale-ups, evictions, and node drains. |
-| IdP goes down after startup, token signed with a key the pod has already fetched | The token keeps validating. Signature, issuer, audience, and expiry checks need no IdP call, and the pod keeps its fetched keys while refreshes fail. Running pods stay live and ready: neither probe depends on the IdP. |
-| IdP goes down after startup, token signed with a key the pod has not fetched | Rejected for as long as the outage lasts. Each such request re-tries the JWKS fetch, waits up to the 10-second IdP HTTP timeout, and fails; failures are not cached. This covers every token on a pod that had not yet verified a token before the outage (keys are fetched lazily), and every token signed with a key the IdP rotated in. |
-| Hop 2 token exchange (`broker_oauth` configured) | A cached broker token keeps working while its cache entry lasts and the caller's Hop 1 token still validates. An entry can end before the token's expiry: the server deducts a 30-second clock-skew margin, caps residency at 24 hours, evicts entries when the cache is full, and evicts an entry when the event broker rejects it with `401`. The next tool call then needs an exchange against the unavailable IdP. Each exchange makes up to three 5-second attempts until the circuit breaker opens, then fails fast; with `broker_oauth.circuit_breaker.enabled: false` it never fails fast. See *What a cache miss can fail with* under [How It Works](#how-it-works). Whether the event broker itself keeps validating the token depends on the broker's own OAuth configuration. |
+| IdP unreachable when the server starts | The server cannot fetch the discovery document, logs `failed to create auth middleware`, and exits before serving any endpoint, probes included. It does not retry. See *Pods created during an outage* below. |
+| IdP goes down after startup, token signed with a key the pod has already fetched | The token keeps validating: signature, issuer, audience, and expiry checks need no IdP call, and the pod keeps its fetched keys while refreshes fail. Running pods stay live and ready, because neither probe depends on the IdP. |
+| IdP goes down after startup, token signed with a key the pod has not fetched | Rejected for as long as the outage lasts. Each such request re-tries the JWKS fetch and waits up to the 10-second IdP HTTP timeout; failures are not cached. This covers every token on a pod that had not yet verified one before the outage (keys are fetched lazily), and every token signed with a key the IdP rotated in. |
+| Hop 2 token exchange (`broker_oauth` configured) | A cached broker token keeps working while its cache entry lasts and the caller's Hop 1 token still validates. A cache miss needs an exchange against the unavailable IdP and fails. See *Hop 2 cache entries can end early* below. |
 | MCP client renewing its access token | Not possible while the IdP is down. The server never refreshes tokens, so each client keeps working only until its current access token expires. |
 
-How long a client can keep authenticating to this server (Hop 1) during an outage is therefore at most the remaining lifetime of its current access token — a limit set by the access-token lifetime configured on the IdP, not by this server — and only on a pod that fetched the token's signing key before the outage. A pod that had not yet verified a token, or a new pod, admits no one until the IdP is back. With Hop 2 enabled, broker access can end sooner, as soon as the cached broker token for that event broker is gone.
+How long a client can keep authenticating to this server (Hop 1) during an outage is at most the remaining lifetime of its current access token — a limit set by the access-token lifetime configured on the IdP, not by this server — and only on a pod that fetched the token's signing key before the outage. A pod that had not yet verified a token, or a new pod, admits no one until the IdP is back. With Hop 2 enabled, broker access can end sooner, as soon as the cached broker token for that event broker is gone.
+
+**Pods created during an outage.**
+
+- Every pod created while the IdP is unreachable crash-loops until it is reachable. That includes rollouts, scale-ups, evictions, and node drains.
+- Discovery is bounded by the 10-second IdP HTTP timeout, so each start attempt fails within about 10 seconds.
+- Kubernetes `CrashLoopBackOff` can delay a pod's recovery by up to five minutes after the IdP returns.
+
+**Hop 2 cache entries can end early.** An entry can end before the broker token's expiry, because the server:
+
+- deducts a 30-second clock-skew margin;
+- caps residency at 24 hours;
+- evicts entries when the cache is full;
+- evicts an entry when the event broker rejects it with `401`.
+
+During an outage, each exchange makes up to three 5-second attempts until the circuit breaker opens, then fails fast. With `broker_oauth.circuit_breaker.enabled: false` it never fails fast. See *What a cache miss can fail with* under [How It Works](#how-it-works). Whether the event broker itself keeps validating the token depends on the broker's own OAuth configuration.
 
 A token rejected because the JWKS could not be fetched gets the same response as any other verification failure: HTTP `401 Unauthorized` with body `invalid token: verification failed`, not `503`. Audit records and `mcp_auth_failure_total` count it as `reason=signature_invalid`. To tell an outage apart from a bad signature, see [Signature Verification Failing After a Key Rotation](observability.md#signature-verification-failing-after-a-key-rotation) in the observability runbook.
 
