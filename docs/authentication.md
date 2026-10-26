@@ -277,7 +277,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 | Field | Description |
 |-------|-------------|
-| `issuer` | The OIDC issuer URL of the IdP. The server fetches JWKS keys from here for token validation. |
+| `issuer` | The OIDC issuer URL of the IdP. The server fetches the discovery document from here at startup, and the JWKS signing keys on demand for token validation. |
 | `audience` | Must exactly match the audience value configured in the IdP in step 1.2. |
 | `resource_url` | The public URL of the MCP server endpoint, advertised to MCP clients for OAuth discovery. |
 | `scopes_supported` | Ordered string list advertised as PRM `scopes_supported`. Omitted, `null`, or `[]` becomes `["openid"]`. A non-empty list is advertised as written (order and duplicates kept). An empty string or any entry that contains whitespace is a load error (`mcp_client_auth.scopes_supported[N] must be a non-empty string without whitespace`). Scopes are public identifiers, not secrets. **Entra:** include `offline_access` — Entra issues a refresh token only when the authorization request carries it, so a client that requests the advertised list has none to renew with and falls back to an interactive login at each access-token expiry. Hop 1 only; it does not belong in `brokers.*.auth.target`. Full field table: [Configuration](configuration.md#client-authentication-settings). |
@@ -792,7 +792,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
    ◀───────────── 5 ─────────────▶              │       5. Browser login: Authorization Code + PKCE
    ◀───────────── 6 ─────────────│              │       6. Access token (JWT, aud = configured audience)
    │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
-   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │───── 8 ──────▶              │       8. Validate JWT — cached JWKS, fetched on unknown key (sig, iss, aud, exp)
    │              │───────────── 9 ─────────────▶       9. Tool call → SEMP (broker auth: basic/bearer)
    │              ◀──────────── 10 ─────────────│       10. SEMP response
    ◀──── 11 ──────│              │              │       11. Tool result
@@ -813,7 +813,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
    │              │              │              │          `groups_claim_name`, aud = configured
    │              │              │              │          audience)
    │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
-   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │───── 8 ──────▶              │       8. Validate JWT — cached JWKS, fetched on unknown key (sig, iss, aud, exp)
    │              │──┐           │              │       9. Read `groups_claim_name` from JWT
    │              │  │ 9         │              │          → run policy: is tool granted?
    │              │◀─┘           │              │          → allow → emit `tool authorization` INFO,
@@ -901,19 +901,19 @@ On success, the server logs: `"using JWT token for authentication — production
 
 ### When the IdP Is Unavailable
 
-The server fails closed: it never admits a request whose token signature it could not verify. What still works during an IdP outage depends on what the server has already fetched:
+The server fails closed: it never admits a request whose token signature it could not verify. What still works during an IdP outage depends on what each pod has already fetched — every replica keeps its own key cache:
 
 | Situation | Behaviour |
 |---|---|
-| IdP unreachable when the server starts | The server cannot fetch the discovery document, logs `failed to create auth middleware`, and exits. It does not retry. In Kubernetes the pod restarts repeatedly until the IdP is reachable. |
-| IdP goes down after startup, token signed with a key the server has already fetched | The token keeps validating. Signature, issuer, audience, and expiry checks need no IdP call, and the server keeps its fetched keys while refreshes fail. |
-| IdP goes down after startup, token signed with a key the server has not fetched | The server tries to fetch the JWKS, waits up to the 10-second IdP HTTP timeout, and rejects the request. This covers the first request after startup (keys are fetched lazily) and the first request after the IdP rotates its signing key. |
-| Hop 2 token exchange (`broker_oauth` configured) | A cached broker token keeps working while its cache entry lasts. An entry can end before the IdP-reported expiry: the server deducts a 30-second clock-skew margin, caps residency at 24 hours, and evicts entries when the cache is full. The next tool call for that (agent, event broker) pair then needs an exchange against the unavailable IdP, which fails fast once the circuit breaker opens — see [What a cache miss can fail with](#how-it-works). |
+| IdP unreachable when the server starts | The server cannot fetch the discovery document (bounded by the 10-second IdP HTTP timeout), logs `failed to create auth middleware`, and exits before it serves any endpoint, probes included. It does not retry. In Kubernetes the pod crash-loops until the IdP is reachable, and `CrashLoopBackOff` can delay its recovery by up to five minutes after the IdP returns. This applies to every pod created during the outage: rollouts, scale-ups, evictions, and node drains. |
+| IdP goes down after startup, token signed with a key the pod has already fetched | The token keeps validating. Signature, issuer, audience, and expiry checks need no IdP call, and the pod keeps its fetched keys while refreshes fail. Running pods stay live and ready: neither probe depends on the IdP. |
+| IdP goes down after startup, token signed with a key the pod has not fetched | Rejected for as long as the outage lasts. Each such request re-tries the JWKS fetch, waits up to the 10-second IdP HTTP timeout, and fails; failures are not cached. This covers every token on a pod that had not yet verified a token before the outage (keys are fetched lazily), and every token signed with a key the IdP rotated in. |
+| Hop 2 token exchange (`broker_oauth` configured) | A cached broker token keeps working while its cache entry lasts and the caller's Hop 1 token still validates. An entry can end before the token's expiry: the server deducts a 30-second clock-skew margin, caps residency at 24 hours, evicts entries when the cache is full, and evicts an entry when the event broker rejects it with `401`. The next tool call then needs an exchange against the unavailable IdP. Each exchange makes up to three 5-second attempts until the circuit breaker opens, then fails fast; with `broker_oauth.circuit_breaker.enabled: false` it never fails fast. See *What a cache miss can fail with* under [How It Works](#how-it-works). Whether the event broker itself keeps validating the token depends on the broker's own OAuth configuration. |
 | MCP client renewing its access token | Not possible while the IdP is down. The server never refreshes tokens, so each client keeps working only until its current access token expires. |
 
-How long a client can keep authenticating to this server (Hop 1) during an outage is therefore set by the access-token lifetime configured on the IdP, not by this server. With Hop 2 enabled, broker access can end sooner, as soon as the cached broker token for that event broker is gone.
+How long a client can keep authenticating to this server (Hop 1) during an outage is therefore at most the remaining lifetime of its current access token — a limit set by the access-token lifetime configured on the IdP, not by this server — and only on a pod that fetched the token's signing key before the outage. A pod that had not yet verified a token, or a new pod, admits no one until the IdP is back. With Hop 2 enabled, broker access can end sooner, as soon as the cached broker token for that event broker is gone.
 
-A token rejected because the JWKS could not be fetched gets the same `401 invalid_token` response as a token with a bad signature. Audit records and `mcp_auth_failure_total` count it as `reason=signature_invalid`. To tell the two apart, see [Signature Verification Failing After a Key Rotation](observability.md#signature-verification-failing-after-a-key-rotation) in the observability runbook.
+A token rejected because the JWKS could not be fetched gets the same response as any other verification failure: HTTP `401 Unauthorized` with body `invalid token: verification failed`, not `503`. Audit records and `mcp_auth_failure_total` count it as `reason=signature_invalid`. To tell an outage apart from a bad signature, see [Signature Verification Failing After a Key Rotation](observability.md#signature-verification-failing-after-a-key-rotation) in the observability runbook.
 
 ---
 

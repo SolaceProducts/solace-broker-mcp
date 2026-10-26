@@ -1006,7 +1006,7 @@ health and SEMP load.
 all callers at once.
 
 **Likely cause.** IdP signing-key rotation while JWKS is stale, or an unreachable JWKS
-endpoint so the refresh fails quietly.
+endpoint so the refresh fails (WARN `token verification failed`).
 
 **Tell them apart.** Both causes produce the same `reason`. The `token verification failed`
 WARN log carries the underlying error: when the verifier tried to re-fetch JWKS and the
@@ -1015,17 +1015,22 @@ error. That is evidence the JWKS endpoint was unreachable or returned an error, 
 that the rejected token was valid: any token the cached keys cannot verify triggers a
 re-fetch, including one with a genuinely bad signature. Many `fetching keys` errors across
 callers at once point to an IdP or network outage; check JWKS reachability from the pod.
-Without that text, the keys were fetched and the signature still did not verify.
+`fetching keys context canceled` means the caller disconnected during the fetch, not that
+the IdP failed. Without `fetching keys`, the keys were fetched and the signature still did
+not verify. Signature is checked before expiry, so during an outage an expired token with
+an unfetched key is also counted here, not as `expired`.
 
 **First response.** Do not restart the pod. The verifier re-fetches JWKS when it meets an
 unknown `kid`, and keeps the keys it already has while the IdP is unreachable, so a running
-pod still accepts tokens signed with those keys. A restarted pod cannot start until the IdP
-is reachable: it fetches the IdP's discovery document at startup and exits if that fails. If
-failures persist: confirm the published JWKS contains that `kid`, that the pod can reach the
-JWKS endpoint, and that `iss` mismatches are not being counted separately as `invalid_token`.
-Callers receive `401 invalid_token` during an outage, not `503`, so a client may discard its
-token and try to log in again against the unreachable IdP. See
-[When the IdP Is Unavailable](authentication.md#when-the-idp-is-unavailable).
+pod still accepts tokens signed with those keys. Its liveness and readiness probes do not
+depend on the IdP, so Kubernetes leaves it running. A new or restarted pod cannot start
+until the IdP is reachable: it fetches the IdP's discovery document at startup and exits if
+that fails. Hold rollouts, scale-ups, and node drains until the IdP is back. If failures
+persist: confirm the published JWKS contains that `kid`, that the pod can reach the JWKS
+endpoint, and that `iss` mismatches are not being counted separately as `invalid_token`.
+Callers whose token needs a JWKS fetch receive `401 Unauthorized` during an outage, not
+`503`, so a client may discard its token and try to log in again against the unreachable
+IdP. See [When the IdP Is Unavailable](authentication.md#when-the-idp-is-unavailable).
 
 ### IdP Unreachable or Token Exchange Failing
 
