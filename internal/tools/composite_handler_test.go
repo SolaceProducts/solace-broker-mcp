@@ -722,7 +722,7 @@ func TestRealCatalog_StrictParametersSet(t *testing.T) {
 		"list-bridges", "list-client-profiles", "list-client-subscriptions",
 		"list-client-usernames", "list-clients", "list-kafka-receivers",
 		"list-kafka-senders", "list-queue-consumers", "list-queue-discards", "list-queue-subscriptions",
-		"list-queues", "list-rdps", "list-slow-subscribers", "list-vpns",
+		"list-queues", "list-rdps", "list-slow-subscribers", "list-topic-endpoints", "list-vpns",
 	}
 
 	var got []string

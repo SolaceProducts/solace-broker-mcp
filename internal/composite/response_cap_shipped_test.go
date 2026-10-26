@@ -204,7 +204,7 @@ func measureShippedTools(t *testing.T, uniqueText bool, only string) []measuredC
 				params := map[string]any{
 					"msgVpnName": "default", "clientName": "c1", "queueName": "q1", "restDeliveryPointName": "r",
 					"bridgeName": "b", "bridgeVirtualRouter": "auto", "kafkaReceiverName": "k", "kafkaSenderName": "k",
-					"clientUsername": "u", "clientProfileName": "p",
+					"clientUsername": "u", "clientProfileName": "p", "topicEndpointName": "te",
 				}
 				if declaresMax {
 					params["maxResults"] = float64(n)
