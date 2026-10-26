@@ -352,6 +352,50 @@ tools:
           count: "{{.Params.n}}"`,
 			wantSub: "resumable requires args.count",
 		},
+		{
+			// The executor reads cursor only as a string; any other type would
+			// silently restart every call from the first page.
+			name: "cursor parameter not a string",
+			params: `      - name: cursor
+        type: integer`,
+			step: `        followPages: true
+        resumable: true
+        args:
+          count: "100"`,
+			wantSub: `resumable requires the "cursor" parameter to be type string`,
+		},
+		{
+			// One cursor parameter cannot resume two scans.
+			name:   "two resumable steps",
+			params: cursorParam,
+			step: `        followPages: true
+        resumable: true
+        args:
+          count: "100"
+      - id: s2
+        operation: monitor/getVpn
+        followPages: true
+        resumable: true
+        args:
+          count: "100"`,
+			wantSub: "step s2: resumable is already set on step s1",
+		},
+		{
+			// Every fan-out iteration would be seeded from the same cursor.
+			name:   "inside forEach",
+			params: cursorParam,
+			step: `        args:
+          count: "100"
+      - id: s2
+        operation: monitor/getVpn
+        forEach: s1
+        forEachKey: msgVpnName
+        followPages: true
+        resumable: true
+        args:
+          count: "100"`,
+			wantSub: "step s2: resumable cannot be combined with forEach",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

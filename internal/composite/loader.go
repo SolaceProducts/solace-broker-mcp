@@ -78,6 +78,7 @@ func validateTool(tool *CompositeTool) error {
 
 	stepIDs := make(map[string]bool, len(tool.Steps))
 	stepSelects := make(map[string][]string, len(tool.Steps))
+	resumableStep := ""
 	for _, step := range tool.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step ID is required")
@@ -108,8 +109,11 @@ func validateTool(tool *CompositeTool) error {
 		if err := validateOptionalArgs(step); err != nil {
 			return err
 		}
-		if err := validateResumable(step, tool.Parameters); err != nil {
+		if err := validateResumable(step, tool.Parameters, resumableStep); err != nil {
 			return err
+		}
+		if step.Resumable {
+			resumableStep = step.ID
 		}
 		if err := validateBodyChecks(step); err != nil {
 			return err
@@ -208,8 +212,12 @@ func validateOptionalArgs(step Step) error {
 
 // validateResumable checks what fetchPaginated relies on for a resumable step:
 // it paginates, its page size is a fixed integer it can clamp against, and the
-// tool declares the cursor parameter that nextCursor is fed back through.
-func validateResumable(step Step, params []ParameterDef) error {
+// tool declares the cursor parameter that nextCursor is fed back through, as a
+// string (the executor reads it only as one). The one cursor parameter seeds
+// one scan, so a tool has at most one resumable step (priorResumable names an
+// earlier one) and it is not a forEach step, whose iterations would all start
+// from the same cursor.
+func validateResumable(step Step, params []ParameterDef, priorResumable string) error {
 	if !step.Resumable {
 		return nil
 	}
@@ -219,8 +227,17 @@ func validateResumable(step Step, params []ParameterDef) error {
 	if n, err := strconv.Atoi(step.Args["count"]); err != nil || n <= 0 {
 		return fmt.Errorf("step %s: resumable requires args.count to be a positive integer literal", step.ID)
 	}
+	if step.ForEach != "" {
+		return fmt.Errorf("step %s: resumable cannot be combined with forEach", step.ID)
+	}
+	if priorResumable != "" {
+		return fmt.Errorf("step %s: resumable is already set on step %s; a tool has one cursor parameter, so at most one resumable step", step.ID, priorResumable)
+	}
 	for _, p := range params {
 		if p.Name == "cursor" {
+			if p.Type != "string" {
+				return fmt.Errorf("step %s: resumable requires the \"cursor\" parameter to be type string", step.ID)
+			}
 			return nil
 		}
 	}
