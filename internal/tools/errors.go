@@ -15,12 +15,17 @@
 package tools
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
@@ -665,6 +670,9 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			}
 			return msg, nil
 		}
+		if retriesErr.StatusCode == 0 {
+			return connectionFailureMessage(retriesErr, brokerAlias), nil
+		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",
 			retriesErr.Attempts, retriesErr.StatusCode), nil
@@ -774,6 +782,63 @@ func brokerAccessMessage(brokerAlias string, status int, permissionDenied bool, 
 			"change the configured broker URL to use https://.", brokerAlias), true
 	}
 	return "", false
+}
+
+// connectionFailureMessage describes a retry-exhausted request that never got
+// an HTTP response, so there is no status to report (SOL-155417: it used to
+// print "HTTP 0"). The raw cause is never shown — a *url.Error names the URL
+// and a dial error names the host and address — so it is mapped to a fixed
+// phrase instead. A timeout after the connection opened gets its own sentence:
+// it points at a slow broker, not at the network path.
+func connectionFailureMessage(e *resilience.RetriesExhaustedError, brokerAlias string) string {
+	const tail = " Internal retries exhausted; try again later."
+	broker, subject := "the broker", "The broker"
+	if brokerAlias != "" {
+		broker = fmt.Sprintf("broker %q", brokerAlias)
+		subject = fmt.Sprintf("Broker %q", brokerAlias)
+	}
+	attempts := fmt.Sprintf("%d attempts", e.Attempts)
+	if e.Attempts == 1 {
+		attempts = "1 attempt"
+	}
+	if cause := connectFailureCause(e.Err); cause != "" {
+		return fmt.Sprintf("Could not connect to %s (%s) after %s.", broker, cause, attempts) + tail
+	}
+	var netErr net.Error
+	if errors.Is(e.Err, context.DeadlineExceeded) || (errors.As(e.Err, &netErr) && netErr.Timeout()) {
+		return fmt.Sprintf("%s did not respond within the request timeout after %s.", subject, attempts) + tail
+	}
+	return fmt.Sprintf("The connection to %s failed after %s.", broker, attempts) + tail
+}
+
+// wsaECONNREFUSED is Windows' WSAECONNREFUSED. A refused dial on Windows
+// carries this code, which syscall.ECONNREFUSED does not match there. No Unix
+// errno has this value, so checking it everywhere is harmless.
+const wsaECONNREFUSED = syscall.Errno(10061)
+
+// connectFailureCause names why the connection could not be set up, or returns
+// "" when the cause is not a recognized connect-phase failure.
+func connectFailureCause(err error) string {
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	var certErr *tls.CertificateVerificationError
+	var recordErr tls.RecordHeaderError
+	var alertErr tls.AlertError
+	var authorityErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+	switch {
+	case errors.As(err, &dnsErr):
+		return "host name could not be resolved"
+	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaECONNREFUSED):
+		return "connection refused"
+	case errors.As(err, &certErr), errors.As(err, &recordErr), errors.As(err, &alertErr),
+		errors.As(err, &authorityErr), errors.As(err, &hostnameErr), errors.As(err, &invalidErr):
+		return "TLS handshake failed"
+	case errors.As(err, &opErr) && opErr.Op == "dial" && opErr.Timeout():
+		return "connection timed out"
+	}
+	return ""
 }
 
 // buildSEMPv1Message builds the message the agent sees for a SEMPv1 error.
