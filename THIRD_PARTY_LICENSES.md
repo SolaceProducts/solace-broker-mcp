@@ -62,7 +62,7 @@ under MPL-2.0.
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [license](https://github.com/google/uuid/blob/v1.6.0/LICENSE) |
 | `github.com/gowebpki/jcs` | v1.0.2 | Apache-2.0 | [license](https://github.com/gowebpki/jcs/blob/v1.0.2/LICENSE) |
 | `github.com/grpc-ecosystem/grpc-gateway/v2` | v2.31.0 | BSD-3-Clause | [license](https://github.com/grpc-ecosystem/grpc-gateway/blob/v2.31.0/LICENSE) |
-| `github.com/maypok86/otter/v2` | v2.3.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.3.0/LICENSE) |
+| `github.com/maypok86/otter/v2` | v2.4.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.4.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/LICENSE) |
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
 | `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
@@ -77,7 +77,6 @@ under MPL-2.0.
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/LICENSE) |
-| `github.com/stretchr/testify` | v1.12.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.12.1/LICENSE) |
 | `github.com/xeipuuv/gojsonpointer` | 4e3ac2762d5f | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonpointer/blob/4e3ac2762d5f/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonreference` | bd5ef7bd5415 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonreference/blob/bd5ef7bd5415/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonschema` | v1.2.0 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonschema/blob/v1.2.0/LICENSE-APACHE-2.0.txt) |
@@ -95,7 +94,6 @@ under MPL-2.0.
 | `go.opentelemetry.io/otel/sdk/metric` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/metric/v1.47.0/LICENSE) |
 | `go.opentelemetry.io/otel/trace` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.47.0/LICENSE) |
 | `go.opentelemetry.io/proto/otlp` | v1.11.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.1/otlp/LICENSE) |
-| `go.yaml.in/yaml/v3` | v3.0.5 | MIT | [license](https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE) |
 | `golang.org/x/net` | v0.61.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.61.0:LICENSE) |
 | `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
 | `golang.org/x/sync` | v0.24.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.24.0:LICENSE) |
