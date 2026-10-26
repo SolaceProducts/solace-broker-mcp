@@ -139,7 +139,8 @@ test_cache_invalidation_on_401() {
 
 # ── Scenario 4: Insufficient permission ─────────────────────────────────────
 # test-readonly-user (solace-readonly) calls a write tool -> SEMP code=72 ->
-# "Authorization failed on broker "prod-us"." with no other detail leaked.
+# "The login for broker "prod-us" is not permitted to perform this operation."
+# with no other detail leaked.
 test_insufficient_permission() {
     local token args resp msg
     token=$(mint_token "$TEST_READONLY_USER" "$TEST_USER_PASSWORD") || return 1
@@ -147,7 +148,7 @@ test_insufficient_permission() {
     resp=$(mcp_call_tool_as "$token" "clear-queue-stats" "$args") || { log_fail "clear-queue-stats transport failure"; return 1; }
     msg=$(jq -r '.result.content[0].text // .error.message // ""' <<<"$resp")
 
-    assert_contains "$msg" "Authorization failed on broker \"${BROKER_A_ALIAS}\"." \
+    assert_contains "$msg" "The login for broker \"${BROKER_A_ALIAS}\" is not permitted to perform this operation." \
         "readonly user's write-tool call should be denied with the alias-tagged message"
 }
 
@@ -170,7 +171,7 @@ test_audience_isolation() {
 # broker rejects the exchanged token. Exercises the real Hop-2 exchange code
 # path rather than a raw curl bypassing the MCP server.
 test_wrong_audience_denied() {
-    local token args resp is_err jrpc_err
+    local token args resp is_err jrpc_err msg
     token=$(mint_token "$TEST_ADMIN_USER" "$TEST_USER_PASSWORD") || return 1
     args=$(jq -nc '{broker:"test-us-wrong-audience",maxResults:500}')
     resp=$(mcp_call_tool_as "$token" "list-vpns" "$args") || { log_fail "call transport failure"; return 1; }
@@ -181,7 +182,12 @@ test_wrong_audience_denied() {
         log_fail "expected the wrong-audience call to fail, but it succeeded"
         return 1
     fi
-    return 0
+
+    # The broker refused a freshly exchanged token, so the message must point
+    # at the broker's OAuth profile, not read like an IdP exchange failure.
+    msg=$(jq -r '.result.content[0].text // .error.message // ""' <<<"$resp")
+    assert_contains "$msg" "Broker \"test-us-wrong-audience\" rejected the login" \
+        "wrong-audience call should get the broker-401 message"
 }
 
 # ── Run ──────────────────────────────────────────────────────────────────────

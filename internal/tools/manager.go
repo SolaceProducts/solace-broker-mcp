@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -823,6 +824,10 @@ const brokerAuthzDeniedReasonPermission = "permission_denied"
 // of this change: internal/tools/errors.go's translatedErrorCodes map has
 // carried a 72 -> permission-denied hint since well before this file existed.
 //
+// A 401 is excluded even when it carries code 72, as a real broker's 401
+// does: that is a rejected login, not a permission denial, and auditing it as
+// one would raise a hop-2 signal on every call after a password rotation.
+//
 // The one predicate both this classification and the agent-facing message
 // (buildErrorMessage's own permission-denial branch, errors.go) check against
 // the same constant, so "this is a broker permission denial" is spelled once
@@ -833,7 +838,8 @@ func isBrokerAuthzDenial(err error) bool {
 		return true
 	}
 	var sempv2Err *sempv2.SEMPError
-	if errors.As(err, &sempv2Err) && sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied {
+	if errors.As(err, &sempv2Err) && sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied &&
+		sempv2Err.StatusCode != http.StatusUnauthorized {
 		return true
 	}
 	return false
