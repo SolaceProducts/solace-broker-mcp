@@ -913,6 +913,7 @@ are off by default. Several failures present as silence rather than an error.
 | Callers see `401`; auth failures rising | [Caller tokens rejected](#caller-tokens-rejected) |
 | Auth failures rising, all `signature_invalid` | [Signature verification failing after a key rotation](#signature-verification-failing-after-a-key-rotation) |
 | Token exchange failing; breaker `open` | [IdP unreachable or token exchange failing](#idp-unreachable-or-token-exchange-failing) |
+| Pods crash-looping with `failed to create auth middleware` | [IdP unreachable or token exchange failing](#idp-unreachable-or-token-exchange-failing) |
 | `mcp_panic_recovered_total` rising | [Panic recovered](#panic-recovered) |
 | Container restarting; `OOMKilled` | [Pod OOM-killed](#pod-oom-killed) |
 | Pod takes the full grace period to terminate | [SIGTERM never reaches the process](#sigterm-never-reaches-the-process) |
@@ -1006,12 +1007,31 @@ health and SEMP load.
 all callers at once.
 
 **Likely cause.** IdP signing-key rotation while JWKS is stale, or an unreachable JWKS
-endpoint so the refresh fails quietly.
+endpoint so the refresh fails (WARN `token verification failed`).
+
+**Tell them apart.** Both causes produce the same `reason`. The `token verification failed`
+WARN log carries the underlying error: when the verifier tried to re-fetch JWKS and the
+fetch failed, its `error` field contains `fetching keys`, followed by the HTTP or network
+error. That is evidence the JWKS endpoint was unreachable or returned an error, not proof
+that the rejected token was valid: any token the cached keys cannot verify triggers a
+re-fetch, including one with a genuinely bad signature. Many `fetching keys` errors across
+callers at once point to an IdP or network outage; check JWKS reachability from the pod.
+`fetching keys context canceled` means the caller disconnected during the fetch, not that
+the IdP failed. Without `fetching keys`, the keys were fetched and the signature still did
+not verify. Signature is checked before expiry, so during an outage an expired token with
+an unfetched key is also counted here, not as `expired`.
 
 **First response.** Do not restart the pod. The verifier re-fetches JWKS when it meets an
-unknown `kid`. If failures persist: confirm the published JWKS contains that `kid`, that
-the pod can reach the JWKS endpoint, and that `iss` mismatches are not being counted
-separately as `invalid_token`.
+unknown `kid`, and keeps the keys it already has while the IdP is unreachable, so a running
+pod still accepts tokens signed with those keys. A server process started during the outage
+— a new pod or a container restart — cannot start until the IdP is reachable: it fetches the
+IdP's discovery document at startup and exits if that fails. Readiness does not reflect
+whether a pod holds keys, so a ready pod can still reject every token. If failures persist:
+confirm the published JWKS contains that `kid`, that the pod can reach the JWKS endpoint,
+and that `iss` mismatches are not being counted separately as `invalid_token`. Callers whose
+token needs a JWKS fetch receive `401 Unauthorized` during an outage, not `503`, so a client
+may discard its token and try to log in again against the unreachable IdP. See
+[When the IdP Is Unavailable](authentication.md#when-the-idp-is-unavailable).
 
 ### IdP Unreachable or Token Exchange Failing
 
@@ -1019,10 +1039,18 @@ separately as `invalid_token`.
 The family is one-hot per process. It is absent when Hop-2 OAuth is inactive, metrics are
 off, or the breaker is disabled — absence is not closed.
 
+**Symptom (Hop 1).** Pods crash-loop, logging `failed to create auth middleware` with
+`failed to connect to identity provider at … (is it reachable?)`.
+
 **Likely cause.** IdP down, token endpoint rejecting client credentials, or blocked egress.
+Hop 1 depends on `mcp_client_auth.issuer` and Hop 2 on `broker_oauth.idp_token_endpoint`;
+they can fail independently.
 
 **First response.** Check IdP health, DNS, and credentials. The breaker recovers on
-successful exchanges; do not restart to force it. At DEBUG,
+successful exchanges; do not restart to force it. Restarting also makes a Hop 1 outage
+worse: a restarted server cannot start until the IdP is reachable. For what keeps working,
+what to hold off on, and the PodDisruptionBudget recommendation, see
+[When the IdP Is Unavailable](authentication.md#when-the-idp-is-unavailable). At DEBUG,
 `waited for concurrent broker token exchange` names followers of a shared exchange; that
 is attribution, not saturation.
 

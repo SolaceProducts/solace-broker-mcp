@@ -91,7 +91,11 @@ failed to load config error="validating config:
 ```
 
 Every startup refusal names the offending configuration key, so the log line is
-the fastest route to the cause.
+the fastest route to the cause. One exception: under `mode: oauth`, an identity
+provider the pod cannot reach is reported as `failed to connect to identity
+provider at <issuer URL> (is it reachable?)`, naming the issuer URL instead. The
+pod keeps restarting until the IdP is reachable — see
+[When the IdP Is Unavailable](../../docs/authentication.md#when-the-idp-is-unavailable).
 
 ## Client authentication
 
