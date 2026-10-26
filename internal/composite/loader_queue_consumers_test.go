@@ -16,6 +16,7 @@ package composite
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
@@ -106,5 +107,39 @@ func TestLoadTools_ListQueueConsumers(t *testing.T) {
 
 	if tool.Result.Strategy != "collect" {
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+}
+
+// TestListQueueConsumersDescriptionSignals pins the flow-reading guidance
+// against what a 10.8.1.594 broker showed (SOL-156294): a slow-ACK consumer
+// sat at windowSize 0 with windowClosedCount flat, and both stall shapes
+// reported deliver-from-memory, never deliver-from-spool.
+func TestListQueueConsumersDescriptionSignals(t *testing.T) {
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools(definitions.FS): %v", err)
+	}
+	tool := findTool(tools, "list-queue-consumers")
+	if tool == nil {
+		t.Fatal("list-queue-consumers not found in the embedded catalog")
+	}
+	desc := strings.Join(strings.Fields(tool.Description), " ")
+
+	for _, want := range []string{
+		"windowSize of 0",
+		"windowClosedCount stays flat while the window stays closed",
+		"deliver-from-input-stream is normal streaming",
+		"deliver-from-memory (throttled)",
+		"deliver-from-spool (stalled, per SEMP)",
+		"both a never-ACK consumer and a slow-ACK consumer showed deliver-from-memory",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description missing %q", want)
+		}
+	}
+	// The old sentence made deliver-from-spool the stall signal; testing
+	// never produced that state.
+	if strings.Contains(desc, "delivering its messages from the spool") {
+		t.Error("description still claims a stalled flow is delivered from the spool")
 	}
 }

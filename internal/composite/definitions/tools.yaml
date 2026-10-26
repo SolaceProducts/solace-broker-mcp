@@ -1724,13 +1724,17 @@ tools:
       broker sends the flow nothing more until the application ACKs.
       windowSize does not cap unackedMsgCount, so a count above windowSize is
       normal. (2) transport window full: usedWindowSize equal to windowSize,
-      with windowClosedCount rising between two calls. A
+      with windowClosedCount rising between two calls; or windowSize of 0:
+      the client has closed its window and the broker sends nothing until it
+      reopens; windowClosedCount stays flat while the window stays closed. A
       maxUnackedMsgsExceededMsgCount or windowClosedCount that rises between
       two calls means the stall keeps recurring (both are cumulative
-      counters). deliveryState deliver-from-spool means the flow stalled and
-      the broker is now delivering its messages from the spool. Verifies the
-      queue exists before listing, so a nonexistent queue is reported as an
-      error rather than an empty list.
+      counters). deliveryState deliver-from-input-stream is normal
+      streaming; deliver-from-memory (throttled) or deliver-from-spool
+      (stalled, per SEMP) means the flow is no longer streaming. In testing,
+      both a never-ACK consumer and a slow-ACK consumer showed
+      deliver-from-memory. Verifies the queue exists before listing, so a
+      nonexistent queue is reported as an error rather than an empty list.
     annotations:
       readOnly: true
     strictParameters: true

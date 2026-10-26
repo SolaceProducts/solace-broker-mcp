@@ -494,10 +494,15 @@ How to read a flow:
 - `usedWindowSize` equal to `windowSize`, with `windowClosedCount` rising
   between two calls: the transport window is full. This is a separate signal
   from the one above.
+- `windowSize` of 0: the client has closed its window and the event broker
+  sends nothing until it reopens. `windowClosedCount` stays flat while the
+  window stays closed.
 - `maxUnackedMsgsExceededMsgCount` or `windowClosedCount` rising between two
   calls: the stall keeps recurring. Both are cumulative counters.
-- `deliveryState` of `deliver-from-spool`: the flow stalled, and the event
-  broker is now delivering its messages from the spool.
+- `deliveryState` of `deliver-from-input-stream` is normal streaming.
+  `deliver-from-memory` (throttled) or `deliver-from-spool` (stalled, per SEMP)
+  means the flow is no longer streaming. In testing, both a never-ACK consumer
+  and a slow-ACK consumer showed `deliver-from-memory`.
 
 **Parameters:**
 
