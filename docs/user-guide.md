@@ -36,7 +36,7 @@ The Solace Broker MCP Server requires:
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
 | **OAuth provider** (production only) | An OpenID Connect (OIDC)-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `mcp_client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
-| **Go 1.25+** (development only) | Only required if building from source. Go is not required for binary or Docker deployments. |
+| **Go 1.26.10+** (development only) | Only required if building from source. Go is not required for binary or Docker deployments. |
 
 ## Limitations and Considerations
 
@@ -276,6 +276,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 - **SEMP not enabled** — Verify the event broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
 - **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`. For OAuth mode, verify the `broker_oauth:` block — see [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2).
 - **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the event broker configuration. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
+- **`x509: no valid chains built` with a certificate that looks valid** — Since Go 1.26.10 the server rejects any chain that passes through one of eight distrusted eMudhra intermediate CAs (CVE-2026-111943). The error gives no further detail, and the same certificate still looks fine in `openssl s_client` and to clients on older trust stores. Run `openssl s_client -connect <host>:<port> -showcerts` against the event broker (or the identity provider) and look for an eMudhra issuer in the chain. If there is one, have the certificate reissued from a different CA. Adding the intermediate to a custom CA bundle does not help, and `insecure_skip_verify` turns off certificate verification altogether.
 
 ### Tool Returns an Error
 

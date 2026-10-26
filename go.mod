@@ -1,6 +1,6 @@
 module github.com/SolaceProducts/solace-broker-mcp
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/getkin/kin-openapi v0.149.0
