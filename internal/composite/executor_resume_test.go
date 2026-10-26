@@ -146,19 +146,26 @@ func TestFetchPaginated_Resumable_SeedsFirstRequestFromCursorParam(t *testing.T)
 	if _, ok := queues["nextCursor"]; ok {
 		t.Errorf("nextCursor = %v, want absent on the last page", queues["nextCursor"])
 	}
+	// Marks the result as a later page, so a summary over it can say so.
+	if queues["resumed"] != true {
+		t.Errorf("resumed = %v, want true on a call started from a cursor", queues["resumed"])
+	}
 }
 
 func TestFetchPaginated_Resumable_EmptyCursorParamIsNoCursor(t *testing.T) {
 	client := newSeqMockClient()
 	client.addResponses("getMsgVpnQueues", pageResult(makeQueueItems(5), ""))
 
-	runQueues(t, resumableListQueuesTool(), client, map[string]any{
+	queues := runQueues(t, resumableListQueuesTool(), client, map[string]any{
 		"msgVpnName": "default",
 		"cursor":     "",
 	})
 
 	if _, ok := client.calls[0].args["cursor"]; ok {
 		t.Errorf("first request cursor = %v, want absent", client.calls[0].args["cursor"])
+	}
+	if _, ok := queues["resumed"]; ok {
+		t.Errorf("resumed = %v, want absent when the cursor is empty", queues["resumed"])
 	}
 }
 
@@ -177,6 +184,9 @@ func TestFetchPaginated_Resumable_LastPageExactlyFills(t *testing.T) {
 	}
 	if _, ok := queues["nextCursor"]; ok {
 		t.Errorf("nextCursor = %v, want absent", queues["nextCursor"])
+	}
+	if _, ok := queues["resumed"]; ok {
+		t.Errorf("resumed = %v, want absent on a first page", queues["resumed"])
 	}
 }
 
@@ -240,6 +250,9 @@ func TestFetchPaginated_NotResumable_Unchanged(t *testing.T) {
 	if _, ok := queues["nextCursor"]; ok {
 		t.Errorf("nextCursor = %v, want absent on a non-resumable step", queues["nextCursor"])
 	}
+	if _, ok := queues["resumed"]; ok {
+		t.Errorf("resumed = %v, want absent on a non-resumable step", queues["resumed"])
+	}
 }
 
 // The last page exactly fills maxResults with more pages behind it: the one
@@ -269,6 +282,7 @@ func TestBuildStrictOutputSchema_ResumableStepAllowsNextCursor(t *testing.T) {
 		"data":       []any{},
 		"truncated":  true,
 		"nextCursor": "c1",
+		"resumed":    true,
 	}}
 
 	resumable := CompositeTool{

@@ -75,7 +75,8 @@ func init() {
 // includes scanned (the count of items observed), truncated: true, and a
 // scopeNote saying the counts are partial and how to continue, so the LLM sees
 // the partial-scan reality next to the counts rather than only on the raw
-// data block.
+// data block. A cursor-resumed call (step resumed: true) gets the scopeNote
+// too, even on its last page: its counts exclude the earlier pages.
 //
 // A queue whose required fields are missing or the wrong type is skipped from
 // every counter and tallied into skipped (surfaced when non-zero). One odd row
@@ -124,9 +125,16 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	if skipped > 0 {
 		out["skipped"] = skipped
 	}
-	if t, _ := step["truncated"].(bool); t {
+	truncated, _ := step["truncated"].(bool)
+	resumed, _ := step["resumed"].(bool)
+	if truncated {
 		out["truncated"] = true
+	}
+	if truncated || resumed {
 		note := fmt.Sprintf("These counts cover only the %d queues scanned, not the whole VPN.", len(items))
+		if resumed {
+			note += " They exclude the earlier pages of this scan."
+		}
 		// Conditional: the response-size cap runs after this handler and
 		// removes nextCursor from a page it trims (composite.BoundResponse).
 		if _, ok := step["nextCursor"].(string); ok {

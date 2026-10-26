@@ -515,12 +515,14 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 	nextCursor := ""
 	args := baseArgs
 	pageSize := 0
+	resumed := false
 	if step.Resumable {
 		// loader.go guarantees a resumable step's count is an integer literal.
 		countArg, _ := baseArgs["count"].(string)
 		pageSize, _ = strconv.Atoi(countArg)
 		if c, _ := execCtx.Params["cursor"].(string); c != "" {
 			args = appendCursor(baseArgs, c)
+			resumed = true
 		}
 	}
 
@@ -590,6 +592,10 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 	result := map[string]any{
 		"data":      allItems,
 		"truncated": truncated,
+	}
+	if resumed {
+		// A later page of a scan: a summary over data covers only this page.
+		result["resumed"] = true
 	}
 	if truncated {
 		switch {

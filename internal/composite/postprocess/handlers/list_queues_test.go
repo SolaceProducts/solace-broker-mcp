@@ -142,6 +142,41 @@ func TestListQueues_TruncationSurfaced(t *testing.T) {
 			t.Errorf("scopeNote should be omitted when not truncated, got %v", got["scopeNote"])
 		}
 	})
+	// The last page of a cursor-resumed scan is not truncated, but its counts
+	// still cover only that page.
+	t.Run("resumed last page", func(t *testing.T) {
+		got, err := ListQueues(map[string]map[string]any{
+			"queues": {"data": items, "truncated": false, "resumed": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, present := got["truncated"]; present {
+			t.Errorf("truncated key should be omitted when false, got %v", got["truncated"])
+		}
+		note, _ := got["scopeNote"].(string)
+		if !strings.Contains(note, "2 queues") || !strings.Contains(note, "earlier pages") {
+			t.Errorf("scopeNote: got %q, want it to say the counts cover only these 2 queues and not the earlier pages", note)
+		}
+		if strings.Contains(note, "nextCursor") {
+			t.Errorf("scopeNote: got %q, must not point at a nextCursor on the last page", note)
+		}
+	})
+	t.Run("resumed and truncated", func(t *testing.T) {
+		got, err := ListQueues(map[string]map[string]any{
+			"queues": {"data": items, "truncated": true, "resumed": true, "nextCursor": "c2"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["truncated"] != true {
+			t.Errorf("truncated: got %v, want true", got["truncated"])
+		}
+		note, _ := got["scopeNote"].(string)
+		if !strings.Contains(note, "earlier pages") || !strings.Contains(note, "If queues.nextCursor is present") {
+			t.Errorf("scopeNote: got %q, want it to mention the earlier pages and point at nextCursor if present", note)
+		}
+	})
 }
 
 func TestListQueues_Empty(t *testing.T) {

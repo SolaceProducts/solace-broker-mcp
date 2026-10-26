@@ -60,7 +60,8 @@ they can page past 500 objects:
 A truncated step leaves out `nextCursor` when following it could skip objects,
 for example when the [response size cap](#response-size-cap) trimmed the page;
 its `truncatedMessage` says what to do instead. The `list-queues` `summary`
-counts cover only the queues that call fetched; when the step is truncated, the
+counts cover only the queues that call fetched. A call made with `cursor`
+carries `resumed: true` on its step. When the step is truncated or resumed, the
 summary adds a `scopeNote` saying so.
 
 The other list tools take no `cursor`. On those, an event broker with more than
