@@ -564,9 +564,9 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 			// A page larger than asked (a broker ignoring count) means the
 			// broker's cursor would skip the dropped items, so offer none.
 			if step.Resumable && len(items) == remaining && nextURI != "" {
-				nextCursor, err = parseCursorFromURI(nextURI)
+				nextCursor, err = cursorFromNextURI(nextURI)
 				if err != nil {
-					return nil, fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, err)
+					return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 				}
 			}
 			break
@@ -579,12 +579,9 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 			break
 		}
 
-		cursor, parseErr := parseCursorFromURI(nextURI)
-		if parseErr != nil {
-			return nil, fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, parseErr)
-		}
-		if cursor == "" {
-			return nil, fmt.Errorf("tool step %s: empty pagination cursor extracted from nextPageUri %q", step.ID, nextURI)
+		cursor, err := cursorFromNextURI(nextURI)
+		if err != nil {
+			return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 		}
 
 		args = appendCursor(baseArgs, cursor)
@@ -685,6 +682,20 @@ func parseCursorFromURI(rawURI string) (string, error) {
 		return "", err
 	}
 	return u.Query().Get("cursor"), nil
+}
+
+// cursorFromNextURI returns the cursor in a non-empty nextPageUri. Both the
+// page-following loop and a resumable call's nextCursor use it, so a
+// nextPageUri without a cursor is an error on either path.
+func cursorFromNextURI(nextURI string) (string, error) {
+	cursor, err := parseCursorFromURI(nextURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse pagination cursor from nextPageUri %q: %w", nextURI, err)
+	}
+	if cursor == "" {
+		return "", fmt.Errorf("empty pagination cursor extracted from nextPageUri %q", nextURI)
+	}
+	return cursor, nil
 }
 
 // appendCursor returns a copy of baseArgs with the cursor key added for the

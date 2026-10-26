@@ -400,6 +400,39 @@ func TestExecute_ListQueues_EmptyCursorInNextPageURI(t *testing.T) {
 	}
 }
 
+// The exact-fill path (a resumable page that holds exactly maxResults) reads
+// the cursor for nextCursor, and must reject an empty one as the loop path
+// above does, rather than return the page without a cursor.
+func TestExecute_ListQueues_EmptyCursorInNextPageURI_ExactFill(t *testing.T) {
+	for name, nextURI := range map[string]string{
+		"no cursor param":    "/SEMP/v2/monitor/msgVpns/default/queues?count=10",
+		"empty cursor param": "/SEMP/v2/monitor/msgVpns/default/queues?count=10&cursor=",
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := newSeqMockClient()
+			client.addResponses("getMsgVpnQueues", &sempv2.Result{
+				Data: map[string]any{
+					"data": makeQueueItems(10),
+					"meta": map[string]any{"paging": map[string]any{"nextPageUri": nextURI}},
+				},
+				StatusCode: 200,
+			})
+
+			executor := NewCompositeExecutor(testOperations())
+			_, err := executor.Execute(context.Background(), resumableListQueuesTool(), client, map[string]any{
+				"msgVpnName": "default",
+				"maxResults": float64(10),
+			})
+			if err == nil {
+				t.Fatal("expected error for empty cursor in nextPageUri, got nil")
+			}
+			if !contains(err.Error(), "empty pagination cursor") {
+				t.Errorf("expected error mentioning 'empty pagination cursor', got: %v", err)
+			}
+		})
+	}
+}
+
 func TestExecute_ListQueues_UnparsableNextPageURI(t *testing.T) {
 	// nextPageUri cannot be parsed by url.Parse — executor must return an error.
 	response := &sempv2.Result{
