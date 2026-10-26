@@ -1008,10 +1008,20 @@ all callers at once.
 **Likely cause.** IdP signing-key rotation while JWKS is stale, or an unreachable JWKS
 endpoint so the refresh fails quietly.
 
+**Tell them apart.** Both causes produce the same `reason`. The `token verification failed`
+WARN log carries the underlying error: when the JWKS fetch failed, its `error` field
+contains `fetching keys`, followed by the HTTP or network error. A genuinely bad
+signature does not contain that text.
+
 **First response.** Do not restart the pod. The verifier re-fetches JWKS when it meets an
-unknown `kid`. If failures persist: confirm the published JWKS contains that `kid`, that
-the pod can reach the JWKS endpoint, and that `iss` mismatches are not being counted
-separately as `invalid_token`.
+unknown `kid`, and keeps the keys it already has while the IdP is unreachable, so a running
+pod still accepts tokens signed with those keys. A restarted pod cannot start until the IdP
+is reachable: it fetches the IdP's discovery document at startup and exits if that fails. If
+failures persist: confirm the published JWKS contains that `kid`, that the pod can reach the
+JWKS endpoint, and that `iss` mismatches are not being counted separately as `invalid_token`.
+Callers receive `401 invalid_token` during an outage, not `503`, so a client may discard its
+token and try to log in again against the unreachable IdP. See
+[When the IdP Is Unavailable](authentication.md#when-the-idp-is-unavailable).
 
 ### IdP Unreachable or Token Exchange Failing
 

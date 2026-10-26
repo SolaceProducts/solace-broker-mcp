@@ -899,6 +899,22 @@ The numbered steps in detail:
 
 On success, the server logs: `"using JWT token for authentication — production mode"`
 
+### When the IdP Is Unavailable
+
+The server fails closed: it never admits a request whose token signature it could not verify. What still works during an IdP outage depends on what the server has already fetched:
+
+| Situation | Behaviour |
+|---|---|
+| IdP unreachable when the server starts | The server cannot fetch the discovery document, logs `failed to create auth middleware`, and exits. It does not retry. In Kubernetes the pod restarts repeatedly until the IdP is reachable. |
+| IdP goes down after startup, token signed with a key the server has already fetched | The token keeps validating. Signature, issuer, audience, and expiry checks need no IdP call, and the server keeps its fetched keys while refreshes fail. |
+| IdP goes down after startup, token signed with a key the server has not fetched | The server tries to fetch the JWKS, waits up to the 10-second IdP HTTP timeout, and rejects the request. This covers the first request after startup (keys are fetched lazily) and the first request after the IdP rotates its signing key. |
+| Hop 2 token exchange (`broker_oauth` configured) | A cached broker token keeps working until it expires. A cache miss fails fast once the circuit breaker opens — see [What a cache miss can fail with](#how-it-works). |
+| MCP client renewing its access token | Not possible while the IdP is down. The server never refreshes tokens, so each client keeps working only until its current access token expires. |
+
+How long clients survive an outage is therefore set by the access-token lifetime configured on the IdP, not by this server.
+
+A token rejected because the JWKS could not be fetched gets the same `401 invalid_token` response as a token with a bad signature. Audit records and `mcp_auth_failure_total` count it as `reason=signature_invalid`. To tell the two apart, see [Signature Verification Failing After a Key Rotation](observability.md#signature-verification-failing-after-a-key-rotation) in the observability runbook.
+
 ---
 
 ## Troubleshooting
@@ -931,7 +947,7 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 - Verify the `issuer` URL is correct and reachable from the server
 - If using Keycloak locally, ensure the container is running and healthy before starting the MCP server
-- The MCP server connects to the issuer's `/.well-known/openid-configuration` at startup to fetch JWKS keys
+- The MCP server fetches the issuer's `/.well-known/openid-configuration` discovery document at startup and exits if it cannot. It does not fetch the JWKS signing keys at startup; it fetches them when the first token arrives. In Kubernetes a pod that cannot reach the IdP restarts repeatedly until the IdP is reachable — see [When the IdP Is Unavailable](#when-the-idp-is-unavailable)
 - If egress to a cloud IdP requires an HTTP proxy, set `HTTPS_PROXY` — see [Outbound HTTP proxy](configuration.md#outbound-http-proxy). The same variable also governs broker SEMP traffic, so use `NO_PROXY` to keep internal brokers direct
 
 ### Entra `AADSTS9010010` After Claude Fetches PRM
