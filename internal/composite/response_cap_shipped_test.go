@@ -355,6 +355,9 @@ func (g *genClient) rowsFor(n int, fields ...string) []any {
 // call with a larger maxResults is trimmed back to the same rows), while the
 // count it carried stays. Driven through the real executor so the text the
 // valve strips is the text the fetch produces, not a copy of it in a test.
+// list-client-usernames has no cursor, so its fetch writes the maxResults
+// advice; a resumable step's cursor note is covered by
+// TestBoundResponse_DropsCursorOfTrimmedStep.
 func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -366,7 +369,7 @@ func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
 	}
 	var tool CompositeTool
 	for _, c := range tools {
-		if c.Name == "list-queues" {
+		if c.Name == "list-client-usernames" {
 			tool = c
 		}
 	}
@@ -375,7 +378,7 @@ func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := res["queues"].(map[string]any)
+	step := res["clientUsernames"].(map[string]any)
 	before, _ := step["truncatedMessage"].(string)
 	if !strings.Contains(before, "Use maxResults") {
 		t.Fatalf("precondition: the fetch's own note is %q, want the maxResults advice", before)
@@ -385,7 +388,7 @@ func TestBoundResponse_StripsTheRealMaxResultsAdvice(t *testing.T) {
 	if !rep.Truncated {
 		t.Fatalf("report %+v, want the step trimmed", rep)
 	}
-	after := res["queues"].(map[string]any)["truncatedMessage"].(string)
+	after := res["clientUsernames"].(map[string]any)["truncatedMessage"].(string)
 	if strings.Contains(after, "Use maxResults") || !strings.HasPrefix(after, "Results limited to 100. Response size limit reached") {
 		t.Errorf("message = %q, want the count kept, the advice gone and the size note after it", after)
 	}
