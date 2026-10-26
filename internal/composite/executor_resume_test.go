@@ -16,6 +16,7 @@ package composite
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -30,6 +31,48 @@ func resumableListQueuesTool() CompositeTool {
 	tool.Parameters = append(tool.Parameters, ParameterDef{Name: "cursor", Type: "string"})
 	tool.Steps[0].Resumable = true
 	return tool
+}
+
+// The shipped list-clients definition pages like list-queues: a truncated
+// result carries clients.nextCursor, and passing it back as cursor walks every
+// client once, in order. The expected names come from genClient, not from the
+// tool, so this fails if tools.yaml loses resumable or the cursor parameter.
+func TestExecute_ShippedListClients_PagesByCursor(t *testing.T) {
+	const total = 250
+	tool, ce := shippedTool(t, "list-clients")
+	g := &genClient{total: total}
+	want := make([]any, total)
+	for i := range want {
+		want[i] = g.val("clientName", i)
+	}
+
+	var got []any
+	cursor, pages := "", 0
+	for ; pages < 10; pages++ {
+		params := map[string]any{"msgVpnName": "default", "maxResults": float64(100)}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		res, err := ce.Execute(context.Background(), tool, g, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step := res["clients"].(map[string]any)
+		for _, row := range step["data"].([]any) {
+			got = append(got, row.(map[string]any)["clientName"])
+		}
+		next, _ := step["nextCursor"].(string)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if pages != 2 {
+		t.Errorf("finished after %d cursor follow-ups, want 2 (250 clients at 100 per page)", pages)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paged %d client names, want all %d once each, in order", len(got), total)
+	}
 }
 
 func runQueues(t *testing.T, tool CompositeTool, client *seqMockClient, params map[string]any) map[string]any {
