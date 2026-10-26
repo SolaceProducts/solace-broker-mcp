@@ -182,12 +182,14 @@ test_get_queue_metrics_broker_a() {
     assert_contains "$response" "test-queue" "Response should mention the queue name" || return 1
 }
 
-# list-queues cursor paging (SOL-155415): page with maxResults=40, passing each
-# nextCursor back as cursor, and check the pages join into exactly the unpaged
-# list — no gaps, no duplicates, same order. 95 extra queues plus test-queue
-# make three pages (40/40/16) while staying under the standard edition's
-# 100-queue-per-VPN limit.
+# list-queues cursor paging (SOL-155415): page with maxResults 40, then 17,
+# then 60, passing each nextCursor back as cursor, and check the pages join
+# into exactly the unpaged list — no gaps, no duplicates, same order. Changing
+# maxResults between calls checks that a SEMP cursor does not depend on the
+# count it was issued under. 95 extra queues plus test-queue make three pages
+# (40/17/39) while staying under the standard edition's 100-queue-per-VPN limit.
 PAGING_QUEUE_COUNT=95
+PAGING_PAGE_SIZES=(40 17 60)
 
 test_list_queues_paging() {
     local i rc=0
@@ -213,15 +215,16 @@ _list_queues_paging_check() {
         return 1
     fi
 
-    local got="" cursor="" page=0 args count next
+    local got="" cursor="" page=0 args count next size
     while :; do
         page=$((page + 1))
-        if [ "$page" -gt 10 ]; then
-            log_fail "paging did not finish within 10 pages"
+        if [ "$page" -gt "${#PAGING_PAGE_SIZES[@]}" ]; then
+            log_fail "paging did not finish within ${#PAGING_PAGE_SIZES[@]} pages"
             return 1
         fi
-        args=$(jq -nc --arg c "$cursor" \
-            '{broker:"broker-a",msgVpnName:"default",maxResults:40} + (if $c == "" then {} else {cursor:$c} end)')
+        size=${PAGING_PAGE_SIZES[$((page - 1))]}
+        args=$(jq -nc --arg c "$cursor" --argjson n "$size" \
+            '{broker:"broker-a",msgVpnName:"default",maxResults:$n} + (if $c == "" then {} else {cursor:$c} end)')
         response=$(mcp_call_tool "list-queues" "$args") || return 1
         count=$(jq '.result.structuredContent.queues.data | length' <<<"$response")
         next=$(jq -r '.result.structuredContent.queues.nextCursor // ""' <<<"$response")
@@ -229,8 +232,8 @@ _list_queues_paging_check() {
         if [ -z "$next" ]; then
             break
         fi
-        if [ "$count" -ne 40 ]; then
-            log_fail "page $page returned $count queues with a nextCursor, want 40"
+        if [ "$count" -ne "$size" ]; then
+            log_fail "page $page returned $count queues with a nextCursor, want $size"
             return 1
         fi
         cursor="$next"
@@ -238,7 +241,7 @@ _list_queues_paging_check() {
     got=$(grep . <<<"$got")
 
     if [ "$page" -ne 3 ]; then
-        log_fail "paging took $page pages for $total queues at 40 per page, want 3"
+        log_fail "paging took $page pages for $total queues at ${PAGING_PAGE_SIZES[*]} per page, want 3"
         return 1
     fi
     local dups

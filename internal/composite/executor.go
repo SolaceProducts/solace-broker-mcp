@@ -544,7 +544,11 @@ func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, clie
 		if step.Resumable && remaining < pageSize {
 			// Ask for no more than is still wanted, so the call ends on a
 			// page boundary and the broker's next cursor starts at item
-			// maxResults+1.
+			// maxResults+1. This assumes a SEMP cursor marks a position, not
+			// a page size, so it stays valid with a different count. A caller
+			// resuming with another maxResults relies on that, and so does
+			// the size cap's advice to repeat a cursor with a smaller one
+			// (boundNote). The E2E paging test varies maxResults to check it.
 			args = withArg(args, "count", strconv.Itoa(remaining))
 		}
 
