@@ -4,8 +4,9 @@ description: Solace Broker MCP server — monitor and manage Solace brokers over
 type: application
 # 1.0.0: at parity with deploy/kubernetes/, which the helm-chart CI job keeps
 # in step (.github/scripts/helm-parity-check.sh, SOL-156330). 1.1.0: certificate
-# file mounts (SOL-156417).
-version: 1.1.0
+# file mounts (SOL-156417). 1.1.1: stateless mode documented, set through
+# extraEnv (SOL-156383).
+version: 1.1.1
 # The latest published release, without the leading v — the form release
 # images are tagged with. Kept current on each release by SOL-156336.
 appVersion: "1.0.0"

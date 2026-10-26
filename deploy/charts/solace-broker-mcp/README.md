@@ -504,6 +504,59 @@ sets (`CONFIG_FILE`, `POD_NAME`, `GOMEMLIMIT`, a credential variable,
 [certificate file](#certificate-files) variable when its value is set), or the
 same name twice: Kubernetes would keep only the last one, silently.
 
+### Stateless mode
+
+The chart runs the server in its default stateful mode. It has no dedicated
+value for stateless mode; set the server's variable through `extraEnv`:
+
+```yaml
+extraEnv:
+  - name: MCP_TRANSPORT_STATELESS
+    value: "true"
+```
+
+Stateless mode is work in progress: leave it off in production for now (see the
+`MCP_TRANSPORT_STATELESS` row in
+[`docs/configuration.md`](../../../docs/configuration.md#server-settings)). With
+it set, no MCP session exists, so any replica can serve any request and
+[session affinity](#ingress) is not required. The Service still renders
+`sessionAffinity: ClientIP` because the chart has no value to turn it off. That
+does not affect correctness, but kube-proxy then keeps each client address on
+one pod, so the chart gives no spreading in stateless mode. Spreading needs
+affinity removed, as in [`deploy/kubernetes/`](../../kubernetes/README.md#stateless-mode-and-session-affinity),
+or a chart value, which waits for the default to change.
+
+**The image must contain the variable.** `MCP_TRANSPORT_STATELESS` is not in
+any release yet, and the chart defaults to the `appVersion` release image
+(`1.0.0`). That image ignores the variable and stays stateful, so an ingress
+without session routing would then return `404 session not found`. Select an
+image that has it, such as the development image CI uses, and confirm the
+startup `config loaded` line shows `transport_stateless` set to `true` before
+relying on it. Use an immutable `dev-<short sha>` tag from that package, not the
+moving `dev` tag: `dev` is retagged nightly, and with the default
+`pullPolicy: IfNotPresent` a node can keep running an older cached build.
+
+```yaml
+image:
+  repository: ghcr.io/solaceproducts/solace-broker-mcp-dev
+  tag: dev-<short sha>      # a published dev-<short sha> tag
+```
+
+To go back to stateful mode, first restore the Ingress `upstream-hash-by`
+annotation if you removed it, then remove the `extraEnv` entry. Removing the
+entry first leaves the replicas stateful with no session routing, and the next
+request returns `404 session not found`.
+
+Each replica enforces the event broker limits separately, and in stateless mode
+one client's requests may reach all of them, so divide
+`semp.maxConcurrentPerBroker` and multiply `semp.requestMinInterval` by the
+replica count, and redo both when `replicaCount` changes
+([Sharing a Broker Fairly Between Callers](../../../docs/configuration.md#sharing-a-broker-fairly-between-callers)).
+
+A dedicated value, with the affinity setting following it, is deferred until the
+default changes. Until then `deploy/kubernetes/` and this chart stay in step:
+both ship stateful.
+
 ### Egress proxy
 
 The server routes outbound HTTP through the standard `HTTP_PROXY`,

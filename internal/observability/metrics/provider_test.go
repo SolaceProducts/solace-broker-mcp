@@ -113,6 +113,9 @@ func TestGoldenSchema(t *testing.T) {
 	// the one above, only renders after it is observed, so a fixed sample seeds
 	// it into the fixture.
 	tm.RecordOwnerValidation(context.Background(), "test-tool", "test-broker", OwnerValidationRejectedNotFound)
+	// mcp_response_bounded_total (SOL-155577): conditional like the counter
+	// above, seeded the same way.
+	tm.RecordResponseBounded(context.Background(), "test-tool", "test-broker", ResponseBoundTruncated)
 
 	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
 	// labels and a 5ms duration keep the fixture stable.

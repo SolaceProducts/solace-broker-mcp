@@ -52,6 +52,10 @@ type ToolManager struct {
 	auditLog bool
 	// securityMetrics is nil when the security counters are off; all uses are nil-safe.
 	securityMetrics *metrics.SecurityMetrics
+	// responseCap is the indented-text size above which a ResponseBounder
+	// handler's result is trimmed (SOL-155577). Always composite.ResponseCapBytes
+	// in production; a field so a test can exercise the boundary cheaply.
+	responseCap int
 }
 
 // ManagerOption configures a ToolManager at construction. Variadic so the
@@ -110,8 +114,9 @@ type registeredTool struct {
 // given pool. Tools are registered via Register() before use.
 func NewToolManager(pool *semp.BrokerPool, opts ...ManagerOption) *ToolManager {
 	mgr := &ToolManager{
-		pool:  pool,
-		tools: make(map[string]*registeredTool),
+		pool:        pool,
+		tools:       make(map[string]*registeredTool),
+		responseCap: composite.ResponseCapBytes,
 	}
 	for _, opt := range opts {
 		// A nil ManagerOption panics if called directly, unlike a nil
@@ -401,7 +406,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			return buildLocalErrorResult(toolErr), nil
 		}
 
-		result, valErr := m.buildValidatedResult(rt, name, toolResult.StructuredContent, toolResult.IsError)
+		result, valErr := m.buildValidatedResult(ctx, rt, name, brokerAlias, toolResult.StructuredContent, toolResult.IsError)
 		if valErr != nil {
 			toolErr = valErr
 			if errors.Is(valErr, errOutputSchemaInvalid) {
@@ -565,7 +570,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			applyAlreadyExistsHint(name, outcome)
 			desiredOutcome = outcome
 			toolErr = nil
-			result, valErr := m.buildValidatedResult(rt, name, desiredStateStructuredContent(outcome), false)
+			result, valErr := m.buildValidatedResult(ctx, rt, name, brokerAlias, desiredStateStructuredContent(outcome), false)
 			if valErr != nil {
 				toolErr = valErr
 				// Literal, direct assignments (not fed from buildValidatedResult's
@@ -598,7 +603,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return buildLocalErrorResult(toolErr), nil
 	}
 
-	result, valErr := m.buildValidatedResult(rt, name, toolResult.StructuredContent, toolResult.IsError)
+	result, valErr := m.buildValidatedResult(ctx, rt, name, brokerAlias, toolResult.StructuredContent, toolResult.IsError)
 	if valErr != nil {
 		toolErr = valErr
 		if errors.Is(valErr, errOutputSchemaInvalid) {
@@ -608,6 +613,51 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		}
 	}
 	return result, nil
+}
+
+// boundResult applies the response-size cap to a result whose text exceeded it
+// (size bytes), records the outcome, and returns the new indented text, or nil
+// when the result was left as it was. A trimmed result is validated again,
+// since BoundResponse added keys to it; a failure there is reported like any
+// other output-schema violation.
+//
+// The log line and the metric carry the tool, the canonical broker label and
+// counts only — never a parameter value or a row (docs/_internal/
+// secure-logging-rules.md).
+func (m *ToolManager) boundResult(ctx context.Context, bounder ResponseBounder, rt *registeredTool, name, brokerAlias string, structuredContent map[string]any, size int) (*bytes.Buffer, error) {
+	report := bounder.BoundResponse(structuredContent, size, m.responseCap)
+	broker := canonicalBrokerLabel(m.pool, brokerAlias)
+	switch {
+	case report.Truncated:
+		compact, err := validateAgainstCompiledSchema(structuredContent, rt.output, "output validation failed")
+		if err != nil {
+			// Nothing was sent: this call fails as an output-schema violation, and
+			// recording a trim that never reached the caller would misreport it.
+			return nil, err
+		}
+		var indented bytes.Buffer
+		if err := json.Indent(&indented, compact, "", "  "); err != nil {
+			return nil, err
+		}
+		m.metrics.RecordResponseBounded(ctx, name, broker, metrics.ResponseBoundTruncated)
+		slog.WarnContext(ctx, "response exceeded the size cap; rows omitted",
+			slog.String("tool", name),
+			slog.String("broker", broker),
+			slog.Int("original_bytes", size),
+			slog.Int("returned_bytes", indented.Len()),
+			slog.Int("limit_bytes", m.responseCap),
+			slog.Int("omitted_items", report.OmittedItems),
+			slog.Any("trimmed_steps", report.TrimmedSteps))
+		return &indented, nil
+	case report.Unbounded:
+		m.metrics.RecordResponseBounded(ctx, name, broker, metrics.ResponseBoundUnbounded)
+		slog.WarnContext(ctx, "response exceeded the size cap and has no rows to omit; returned as built",
+			slog.String("tool", name),
+			slog.String("broker", broker),
+			slog.Int("original_bytes", size),
+			slog.Int("limit_bytes", m.responseCap))
+	}
+	return nil, nil
 }
 
 // errOutputSchemaInvalid and errOutputMarshalFailed distinguish
@@ -634,7 +684,13 @@ var (
 // out of sync with the declared output schema unnoticed the way the noop
 // path once did (SOL-153341 review: it used to build and return its own
 // CallToolResult directly, bypassing this validation entirely).
-func (m *ToolManager) buildValidatedResult(rt *registeredTool, name string, structuredContent map[string]any, isError bool) (*mcp.CallToolResult, error) {
+//
+// A result whose indented text is over the response-size cap is handed to the
+// handler's BoundResponse, when it has one (SOL-155577). The cap is measured on
+// that text — what the model reads, and the larger of the two copies sent —
+// from the buffer built here for TextContent anyway, so a result under the cap,
+// which is nearly every result, costs one integer comparison.
+func (m *ToolManager) buildValidatedResult(ctx context.Context, rt *registeredTool, name, brokerAlias string, structuredContent map[string]any, isError bool) (*mcp.CallToolResult, error) {
 	// Re-indent those same bytes for the TextContent fallback — byte-for-byte
 	// what json.MarshalIndent(structuredContent, "", "  ") would have
 	// produced (MarshalIndent is itself Marshal followed by Indent), but
@@ -648,6 +704,16 @@ func (m *ToolManager) buildValidatedResult(rt *registeredTool, name string, stru
 	if err := json.Indent(&indented, resultJSON, "", "  "); err != nil {
 		wrapped := fmt.Errorf("tool %q: %w: %w", name, errOutputMarshalFailed, err)
 		return buildLocalErrorResult(wrapped), wrapped
+	}
+	if bounder, ok := rt.handler.(ResponseBounder); ok && !isError && indented.Len() > m.responseCap {
+		bounded, err := m.boundResult(ctx, bounder, rt, name, brokerAlias, structuredContent, indented.Len())
+		if err != nil {
+			wrapped := fmt.Errorf("tool %q: %w: %w", name, errOutputSchemaInvalid, err)
+			return buildLocalErrorResult(wrapped), wrapped
+		}
+		if bounded != nil {
+			indented = *bounded
+		}
 	}
 	return &mcp.CallToolResult{
 		StructuredContent: structuredContent,
