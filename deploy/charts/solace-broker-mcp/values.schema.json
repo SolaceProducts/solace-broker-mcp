@@ -243,7 +243,42 @@
         "boolean",
         "null"
       ],
-      "description": "tls_terminated_upstream; required true under oauth (no in-pod TLS in this chart)."
+      "description": "tls_terminated_upstream; under oauth, required true unless tls.existingSecret is set, and never with it."
+    },
+    "tls": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "In-pod TLS.",
+      "properties": {
+        "existingSecret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$",
+          "description": "A kubernetes.io/tls Secret, mounted at /etc/mcp-server/tls; renders tls_cert_file and tls_key_file."
+        }
+      }
+    },
+    "caBundle": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Extra CA certificates behind SSL_CERT_FILE. configMap or secret, not both (enforced in the templates); key defaults to ca.crt.",
+      "properties": {
+        "configMap": {
+          "$ref": "#/definitions/configMapKey"
+        },
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      }
     },
     "server": {
       "type": [
@@ -353,6 +388,28 @@
         "otlpEndpoint": {
           "type": "string",
           "description": "OTEL_EXPORTER_OTLP_ENDPOINT (OTLP/gRPC)."
+        },
+        "otlpTls": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "OTLP exporter TLS files, projected into /etc/mcp-server/otlp. The client pair is set together, and needs tracing or metrics.otlp (enforced in the templates).",
+          "properties": {
+            "certificate": {
+              "$ref": "#/definitions/fileRef",
+              "description": "OTEL_EXPORTER_OTLP_CERTIFICATE; key defaults to ca.crt."
+            },
+            "clientCertificate": {
+              "$ref": "#/definitions/fileRef",
+              "description": "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE; key defaults to tls.crt."
+            },
+            "clientKey": {
+              "$ref": "#/definitions/secretFileRef",
+              "description": "OTEL_EXPORTER_OTLP_CLIENT_KEY; key defaults to tls.key."
+            }
+          }
         },
         "shutdownDrainDelayS": {
           "type": [
@@ -586,6 +643,126 @@
           }
         }
       }
+    },
+    "extraVolumes": {
+      "type": "array",
+      "description": "Full Kubernetes Volume entries, appended to the pod's volumes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "description": "Full Kubernetes VolumeMount entries, appended to the container's volumeMounts.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "mountPath"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mountPath": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "configMapKey": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      },
+      "description": "One key of a ConfigMap: name, and key (optional; each value documents its default)."
+    },
+    "secretKey": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 253,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      },
+      "description": "One key of a Secret: name, and key (optional; each value documents its default)."
+    },
+    "fileRef": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "configMap": {
+          "$ref": "#/definitions/configMapKey"
+        },
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      },
+      "description": "A file from one key of a ConfigMap or a Secret. Exactly one of the two is enforced in the templates."
+    },
+    "secretFileRef": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "secret": {
+          "$ref": "#/definitions/secretKey"
+        }
+      },
+      "description": "A file from one key of a Secret; a ConfigMap is refused for private keys."
     }
   }
 }

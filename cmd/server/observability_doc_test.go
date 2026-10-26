@@ -146,6 +146,10 @@ func buildLiveRegistry(t *testing.T) http.Handler {
 	// triggered end-to-end rejection.
 	tm.RecordOwnerValidation(context.Background(), "test-tool", "test-broker", metrics.OwnerValidationRejectedNotFound)
 
+	// mcp_response_bounded_total (SOL-155577): conditional like the counter
+	// above, seeded the same way.
+	tm.RecordResponseBounded(context.Background(), "test-tool", "test-broker", metrics.ResponseBoundTruncated)
+
 	// mcp_audit_events_dropped_total (SOL-154569): seeded at zero on
 	// registration, so registering it is enough — main.go's buildAuditMetrics
 	// does exactly this and nothing more.

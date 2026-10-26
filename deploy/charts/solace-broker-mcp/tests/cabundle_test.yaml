@@ -1,0 +1,108 @@
+# caBundle: one key of a ConfigMap or Secret, mounted read-only as
+# /etc/mcp-server/ca/ca.crt, with SSL_CERT_FILE pointing at it.
+suite: CA bundle
+templates:
+  - deployment.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: mounts a ConfigMap key and sets SSL_CERT_FILE
+    set:
+      caBundle.configMap: {name: corp-ca, key: bundle.pem}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-bundle
+            configMap:
+              name: corp-ca
+              items:
+                - {key: bundle.pem, path: ca.crt}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: ca-bundle, mountPath: /etc/mcp-server/ca, readOnly: true}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SSL_CERT_FILE, value: /etc/mcp-server/ca/ca.crt}
+
+  - it: mounts a Secret key and sets SSL_CERT_FILE
+    set:
+      caBundle.secret: {name: corp-ca, key: bundle.pem}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-bundle
+            secret:
+              secretName: corp-ca
+              items:
+                - {key: bundle.pem, path: ca.crt}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SSL_CERT_FILE, value: /etc/mcp-server/ca/ca.crt}
+
+  - it: defaults the key to ca.crt
+    set:
+      caBundle.configMap: {name: corp-ca}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-bundle
+            configMap:
+              name: corp-ca
+              items:
+                - {key: ca.crt, path: ca.crt}
+
+  - it: fails with both configMap and secret
+    set:
+      caBundle.configMap: {name: corp-ca}
+      caBundle.secret: {name: corp-ca}
+    asserts:
+      - failedTemplate:
+          errorPattern: "caBundle: set configMap or secret, not both"
+
+  - it: fails without a name
+    set:
+      caBundle.configMap: {key: ca.crt}
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/caBundle/configMap': missing property 'name'"
+
+  - it: fails on a key Kubernetes would reject
+    set:
+      caBundle.configMap: {name: corp-ca, key: "ca/bundle.pem"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "at '/caBundle/configMap/key': 'ca/bundle.pem' does not match pattern"
+
+  - it: renders nothing for a null configMap
+    set:
+      caBundle.configMap: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SSL_CERT_FILE, value: /etc/mcp-server/ca/ca.crt}
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+
+  # The chart owns SSL_CERT_FILE once it sets it; without caBundle,
+  # extraEnv plus extraVolumes may still set it.
+  - it: refuses SSL_CERT_FILE in extraEnv when caBundle is set
+    set:
+      caBundle.configMap: {name: corp-ca}
+      extraEnv:
+        - {name: SSL_CERT_FILE, value: /etc/other/ca.crt}
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraEnv: SSL_CERT_FILE is already set by the chart"
+
+  - it: allows SSL_CERT_FILE in extraEnv without caBundle
+    set:
+      extraEnv:
+        - {name: SSL_CERT_FILE, value: /etc/other/ca.crt}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SSL_CERT_FILE, value: /etc/other/ca.crt}
