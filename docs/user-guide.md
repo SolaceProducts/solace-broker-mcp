@@ -41,7 +41,7 @@ The Solace Broker MCP Server requires:
 ## Limitations and Considerations
 
 - **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
-- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Event brokers with more than 500 queues, clients, or VPNs require multiple queries.
+- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. `list-queues` and `list-clients` page past 500 with the `cursor` parameter ([Pagination](tools-reference.md#pagination)); for the other list tools, an event broker with more than 500 matching objects requires a narrower query.
 - **Response size cap** — The result of a composite (YAML-defined) tool is capped at 64 KiB of JSON text. A larger one has rows removed from its largest list, and the step reports `omittedItems` and a `truncatedMessage`. Native tools such as `describe-semp-schema` are not capped. See [Tools Reference → Response Size Cap](tools-reference.md#response-size-cap).
 - **OAuth required in production** — Production deployments use `mcp_client_auth.mode: oauth`; the boot banner flags `disabled` and `static` as insecure modes. All MCP client connections must present a valid OAuth or JSON Web Token (JWT). Plan your identity provider integration before deploying to shared environments.
 
@@ -131,7 +131,7 @@ The server exposes 29 read-only tools plus 28 write tools (57 total when write t
 
 | Tool | Description |
 |---|---|
-| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
+| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500 per call; `cursor` gets the next page. |
 | `get-queue-metrics` | Detailed metrics for a specific queue. Returns `liveDepth.currentMsgCount` — the **authoritative current queue depth** (messages in the queue right now, decreases as they are consumed; sourced from SEMPv1) — plus a `queueMetrics` block with throughput rates, spool usage, configuration, and cumulative counters. Note `queueMetrics.spooledMsgCount` is a lifetime counter (messages ever spooled), not the current depth. |
 | `list-queue-subscriptions` | Topic subscriptions attached to a queue. Verifies the queue exists first, so a nonexistent queue reports an error rather than an empty list. Default 100 results, max 500. |
 
@@ -139,7 +139,7 @@ The server exposes 29 read-only tools plus 28 write tools (57 total when write t
 
 | Tool | Description |
 |---|---|
-| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |
+| `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500 per call; `cursor` gets the next page. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Verifies the client exists first, so a nonexistent client reports an error rather than an empty list. Default 100 results, max 500. |
 | `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does **not** flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Verifies the VPN exists first, so a nonexistent VPN reports an error rather than an empty list. Default 100 results, max 500. |

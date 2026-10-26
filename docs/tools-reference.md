@@ -47,11 +47,27 @@ broker before trying the call.
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
 (`defaultMax`/`capMax` in the composite executor). The server pages through the
-event broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items. Event brokers
-with more than 500 matching objects require a narrower query. Applies to:
-`list-vpns`, `list-queues`, `list-clients`, `list-client-subscriptions`,
-`list-slow-subscribers`, `list-client-usernames`, `list-client-profiles`,
-`list-rdps`, `list-queue-discards`.
+event broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items.
+
+`list-queues` and `list-clients` also accept an optional `cursor` string, so
+they can page past 500 objects:
+
+1. Call the tool. If more objects exist, the `queues` or `clients` step carries
+   `nextCursor`.
+2. Call it again on the same Message VPN with `cursor` set to that value.
+3. Repeat until the step's `truncated` is `false`.
+
+A truncated step leaves out `nextCursor` when following it could skip objects,
+for example when the [response size cap](#response-size-cap) trimmed the page;
+its `truncatedMessage` says what to do instead. The `list-queues` `summary`
+counts cover only the queues that call fetched. A call made with `cursor`
+carries `resumed: true` on its step. When the step is truncated or resumed, the
+summary adds a `scopeNote` saying so.
+
+The other list tools take no `cursor`. On those, an event broker with more than
+500 matching objects requires a narrower query: `list-vpns`,
+`list-client-subscriptions`, `list-slow-subscribers`, `list-client-usernames`,
+`list-client-profiles`, `list-rdps`, `list-queue-discards`.
 
 ### Response Size Cap
 
@@ -72,13 +88,21 @@ list until it fits, and says so on each step that lost rows:
 |---|---|
 | `omittedItems` | How many rows were removed from that step. **Present only when the size cap trimmed the step.** |
 | `truncated` | `true`. Also set when `maxResults` or the page limit stopped the fetch, so on its own it does not mean the cap trimmed anything. |
-| `truncatedMessage` | What happened and how to narrow the query. Appended after an earlier note; the "Use `maxResults` ... to retrieve more" advice is dropped from that note, since a larger `maxResults` would be trimmed back to the same rows. |
+| `truncatedMessage` | What happened and how to narrow the query. Appended after an earlier note; the "Use `maxResults` ... to retrieve more" advice is dropped from that note, since a larger `maxResults` would be trimmed back to the same rows, and so is the "pass `nextCursor`" advice. |
+| `nextCursor` | Removed from a trimmed step: it points past the rows that were removed, so following it would skip them. |
 
 The rows kept are the first ones the event broker returned. A `postProcess`
 tool's `summary` is computed from every row fetched before any are removed, so
-its counts stay complete. Rows that were removed are not available through
-this tool; narrow the query (a single queue, client or Message VPN) to see
-them. The cap is fixed and is not configurable.
+its counts stay complete. To reach the removed rows:
+
+- **`list-queues` and `list-clients`:** repeat the call with the same `cursor`
+  (none for the first page) and `maxResults` at most the number of rows kept,
+  as `truncatedMessage` says. That call's `nextCursor` starts right after the
+  rows it returns.
+- **Other tools:** removed rows are not available through the tool; narrow the
+  query (a single queue, client or Message VPN) to see them.
+
+The cap is fixed and is not configurable.
 
 ### Rate Limiting and Retries
 
@@ -411,6 +435,7 @@ empty list.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
+| `cursor` | string | no | `nextCursor` from a previous `list-queues` call on the same VPN, to get the next page. See [Pagination](#pagination). |
 
 **Returns:** step-keyed envelope, steps `vpn` (existence check) and `queues`
 (array). Selected fields per queue:
@@ -498,6 +523,7 @@ error rather than an empty list.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max clients to return (default 100, max 500). |
+| `cursor` | string | no | `nextCursor` from a previous `list-clients` call on the same VPN, to get the next page. See [Pagination](#pagination). |
 
 **Returns:** step-keyed envelope, steps `vpn` (existence check) and `clients`
 (array). Selected fields per client: `clientName`, `clientUsername`,

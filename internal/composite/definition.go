@@ -89,6 +89,13 @@ type Step struct {
 	// rejected at load time.
 	BodyChecks []string `yaml:"bodyChecks"`
 
+	// Resumable lets a followPages step continue a previous call: the tool's
+	// cursor parameter seeds the first request, each request asks for at most
+	// the items still wanted so the call ends on a SEMP page boundary, and a
+	// truncated result carries nextCursor. Requires followPages, an integer
+	// args.count, and a declared cursor parameter (validated at load time).
+	Resumable bool `yaml:"resumable"`
+
 	// compiledArgs and compiledForEachIf cache the parsed *template.Template
 	// form of Args and ForEachIf. They are populated once by
 	// compileStepTemplates, called from validateTool during LoadTools —
