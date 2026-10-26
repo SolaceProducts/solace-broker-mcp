@@ -17,6 +17,7 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -569,9 +570,9 @@ func requestBodyErrorText(err error) (string, bool) {
 // Server-suppressed (5xx, except 503) errors get no object-level guidance.
 //
 // brokerAlias is the caller's own config label for the invocation (never a
-// host, URL, or IP). When non-empty it is echoed back on the code-72
-// (permission-denied) path so a multi-broker operator can tell which broker
-// denied the request from the agent's output alone.
+// host, URL, or IP). When non-empty it is echoed back on the broker-access
+// paths (brokerAccessMessage) so a multi-broker operator can tell which broker
+// refused the request from the agent's output alone.
 func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	// The executor's own text for a request body it rejected before sending the
 	// step's write (package-authored, no wrapped cause), so it is safe to show as
@@ -693,10 +694,21 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			nil
 
 	case errors.As(err, &sempv2Err):
+		permissionDenied := sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied
+		if msg, ok := brokerAccessMessage(brokerAlias, sempv2Err.StatusCode, permissionDenied, sempv2Err.Body); ok {
+			return msg, nil
+		}
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
 		message = buildSEMPv2Message(sempv2Err)
 
 	case errors.As(err, &sempv1Err):
+		// Only HTTP-layer failures: a <permission-error> envelope keeps its own
+		// broker text, which names the refused command.
+		if sempv1Err.Kind == sempv1.ErrorKindHTTP {
+			if msg, ok := brokerAccessMessage(brokerAlias, sempv1Err.StatusCode, false, string(sempv1Err.Body)); ok {
+				return msg, nil
+			}
+		}
 		status, code = sempv1Err.StatusCode, sempv1Err.ReasonCode
 		message = buildSEMPv1Message(sempv1Err)
 
@@ -710,34 +722,50 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	if !brokerTextMayBeShown(status) {
 		return message, nil
 	}
-	// SEMPv2 permission denial (meta.error.code == sempv2.SEMPCodePermissionDenied,
-	// the same constant isBrokerAuthzDenial in manager.go checks, so this
-	// classification is spelled once rather than as a second bare 72 — see
-	// that function's comment for why this is a bare numeric-code comparison
-	// rather than isSEMPStatus's status-string preference): when the
-	// caller's broker alias is known, replace the broker's own text with an
-	// alias-tagged authorization message and suppress the generic code-72
-	// hint. That hint points at management role and VPN scope — the
-	// Basic-auth knobs — which actively misleads an OAuth operator, where
-	// authorization is governed by the oauthProfile accessLevelGroups
-	// mapping instead. When the alias is empty the behavior is unchanged:
-	// the broker's own message plus the generic hint below.
-	//
-	// sempv2Err can be nil here (a SEMPv1 error reaching this shared
-	// suggestions section) — guarded rather than assumed, since SEMPv1
-	// permission errors (ErrorKindPermission) deliberately keep their own
-	// broker text here instead — TestCallTool_SEMPv1Error_IsErrorResult pins
-	// that — even though isBrokerAuthzDenial treats both as the same hop-2
-	// denial for audit/metric purposes; unifying the two message paths too
-	// would drop that detail, which is a real behavior change beyond what
-	// closing the duplicated-classification gap requires.
-	if sempv2Err != nil && sempv2Err.SEMPCode == sempv2.SEMPCodePermissionDenied && brokerAlias != "" {
-		return fmt.Sprintf("Authorization failed on broker %q.", brokerAlias), nil
-	}
 	if info, ok := translatedErrorCodes[code]; ok && info.hint != "" {
 		return message, []string{info.hint}
 	}
 	return message, nil
+}
+
+// plainHTTPToHTTPSPort is the text of the broker's (nginx) 400 page when a
+// plain http:// request reaches its TLS SEMP port. Same page for SEMPv1 and
+// SEMPv2, on a 10.8.1 broker and on Solace Cloud (SOL-155416).
+const plainHTTPToHTTPSPort = "The plain HTTP request was sent to HTTPS port"
+
+// brokerAccessMessage returns the alias-tagged message for a broker that
+// refused the request at the access layer, shared by SEMPv1 and SEMPv2 so
+// native and composite tools word it the same (SOL-155416):
+//
+//   - 401: the credentials were rejected; the operator fixes the config.
+//   - permission denied (SEMPv2 code 72 on a non-401, or HTTP 403): the login
+//     works but lacks the access level; a more privileged login is needed.
+//     A 10.8.1 broker sends this as HTTP 400 with code 72, Solace Cloud as
+//     403, so the code, not the status, decides it. The code is
+//     sempv2.SEMPCodePermissionDenied, the same constant isBrokerAuthzDenial
+//     in manager.go checks.
+//   - 400 carrying the broker's plain-HTTP page: the URL scheme is wrong.
+//
+// The code-72 hint is deliberately not attached: it points at management
+// role and VPN scope, the Basic-auth knobs, which misleads an OAuth operator
+// whose access is governed by the oauthProfile accessLevelGroups mapping.
+//
+// ok is false when brokerAlias is empty (only no-broker tools, which never
+// reach SEMP) or nothing matches; the caller then keeps its usual message.
+func brokerAccessMessage(brokerAlias string, status int, permissionDenied bool, body string) (string, bool) {
+	if brokerAlias == "" {
+		return "", false
+	}
+	switch {
+	case status == http.StatusUnauthorized:
+		return fmt.Sprintf("Authentication failed for broker %q: check the configured credentials.", brokerAlias), true
+	case permissionDenied || status == http.StatusForbidden:
+		return fmt.Sprintf("The login for broker %q is not permitted to perform this operation.", brokerAlias), true
+	case status == http.StatusBadRequest && strings.Contains(body, plainHTTPToHTTPSPort):
+		return fmt.Sprintf("Broker %q rejected a plain HTTP request on its HTTPS port: "+
+			"change the configured broker URL to use https://.", brokerAlias), true
+	}
+	return "", false
 }
 
 // buildSEMPv1Message builds the message the agent sees for a SEMPv1 error.

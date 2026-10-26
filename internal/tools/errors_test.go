@@ -669,7 +669,7 @@ func TestBuildErrorMessage(t *testing.T) {
 			"sempv2 code 72 with alias tags broker, drops hint",
 			&sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, Description: "not authorized"},
 			"broker-oauth",
-			`Authorization failed on broker "broker-oauth".`,
+			`The login for broker "broker-oauth" is not permitted to perform this operation.`,
 			nil,
 		},
 		// SEMPv1 permission errors deliberately do NOT get the alias-tagged
@@ -890,6 +890,65 @@ func TestIsRetryable_BrokerBusy(t *testing.T) {
 	})
 	if !isRetryable(err) {
 		t.Error("isRetryable = false, want true — a shed request never reached the broker")
+	}
+}
+
+// SOL-155416: a wrong password (401) and a login without permission must get
+// different, actionable messages, and native SEMPv1 tools must word them the
+// same way composite SEMPv2 tools do. Bodies are the raw responses captured
+// from a 10.8.1 broker. A permission denial there is HTTP 400 with code 72;
+// Solace Cloud (10.26) sends 403. Both must read as a permission problem.
+func TestBuildErrorMessage_BrokerAccess(t *testing.T) {
+	const (
+		authn     = `Authentication failed for broker "ucd": check the configured credentials.`
+		authz     = `The login for broker "ucd" is not permitted to perform this operation.`
+		plainHTTP = `Broker "ucd" rejected a plain HTTP request on its HTTPS port: change the configured broker URL to use https://.`
+	)
+	nginxBody := "<html>\n<head><title>400 The plain HTTP request was sent to HTTPS port</title></head>\n" +
+		"<body>\n<center><h1>400 Bad Request</h1></center>\n<center>The plain HTTP request was sent to HTTPS port</center>\n" +
+		"<hr><center>nginx</center>\n</body>\n</html>\n"
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"sempv2 401 code 72", &sempv2.SEMPError{StatusCode: 401, SEMPCode: 72, SEMPStatus: "UNAUTHORIZED", Description: "Authorization Failed"}, authn},
+		{"sempv2 401 without envelope", &sempv2.SEMPError{StatusCode: 401, Body: "Unauthorized"}, authn},
+		{"sempv2 400 code 72 (10.8.1 LTS denial)", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 72, SEMPStatus: "UNAUTHORIZED", Description: "Problem with POST: Command prohibited due to Authorization Access Level."}, authz},
+		{"sempv2 403 code 72 (Solace Cloud denial)", &sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, SEMPStatus: "UNAUTHORIZED", Description: "Authorization Failed"}, authz},
+		{"sempv2 400 plain HTTP to HTTPS port", &sempv2.SEMPError{StatusCode: 400, Body: nginxBody}, plainHTTP},
+		{"sempv1 HTTP 401", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 401}, authn},
+		{"sempv1 HTTP 403", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 403}, authz},
+		{"sempv1 400 plain HTTP to HTTPS port", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 400, Body: []byte(nginxBody)}, plainHTTP},
+
+		// Must not be hijacked: an ordinary 400 keeps its own text.
+		{"sempv2 400 validation error keeps broker text", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 11, Description: "Invalid queue name"}, "Invalid queue name"},
+		{"sempv1 400 other body stays bare", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 400, Body: []byte("bad request")}, "HTTP 400 error"},
+		{"sempv1 404 stays bare", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 404}, "HTTP 404 error"},
+		// The broker's own <permission-error> text already names the refused
+		// command, so it is kept rather than replaced.
+		{"sempv1 permission-error keeps broker text", &sempv1.Error{Kind: sempv1.ErrorKindPermission, StatusCode: 200, Message: "Command prohibited due to Authorization Access Level"}, "permission error: Command prohibited due to Authorization Access Level"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, _ := buildErrorMessage(tt.err, "ucd"); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// Without an alias (only no-broker tools, which never reach SEMP) the
+	// pre-existing fallback is kept.
+	if got, _ := buildErrorMessage(&sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 401}, ""); got != "HTTP 401 error" {
+		t.Errorf("empty alias: got %q, want the unchanged fallback", got)
+	}
+
+	// The alias is the operator's own label, but it is still quoted with %q so
+	// a quote or a U+2028 line separator in it cannot break the message apart.
+	got, _ := buildErrorMessage(&sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 401}, "a\"b\u2028c")
+	if want := "Authentication failed for broker \"a\\\"b\\u2028c\": check the configured credentials."; got != want {
+		t.Errorf("odd alias: got %q, want %q", got, want)
 	}
 }
 

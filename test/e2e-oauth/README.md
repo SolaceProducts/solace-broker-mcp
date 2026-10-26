@@ -234,7 +234,7 @@ scenario assertions.
 | 1 | Admin path | `test-admin-user` calls `list-vpns` on `prod-us` → succeeds (Hop 1 + Hop 2 both work for the happy path) |
 | 2 | Cache hit | 2 consecutive calls by the same user → exactly 1 new `TOKEN_EXCHANGE` event (the 2nd call reuses the cached Hop-2 token) |
 | 3 | Cache invalidation on 401 | Poison `prod-us`'s required audience via SEMP (invalidates the cached token's validity) → restore it → next call succeeds with a fresh exchange. Deliberately doesn't assert the poisoning call's own pass/fail, since whether the auth layer's in-flight retry succeeds silently is an implementation detail |
-| 4 | Insufficient permission | `test-readonly-user` calls a write tool (`clear-queue-stats`) → `Authorization failed on broker "prod-us".`, no other detail leaked |
+| 4 | Insufficient permission | `test-readonly-user` calls a write tool (`clear-queue-stats`) → `The login for broker "prod-us" is not permitted to perform this operation.`, no other detail leaked |
 | 5 | Audience isolation | `test-admin-user` calls a tool on `test-us` (audience `solace-broker-second`) → succeeds, proving the per-broker custom-audience mapper selects the right audience |
 | 6 | Wrong audience denied | A tool call against a deliberately-misconfigured `test-us-wrong-audience` broker alias (same URL as `test-us`, but configured with `prod-us`'s audience) → broker rejects the exchanged token. Exercises the real Hop-2 exchange code path rather than a raw curl bypassing the MCP server |
 
