@@ -226,7 +226,7 @@ helm-check: ## Helm chart lint, kubeconform, helm-unittest and drift check vs de
 # tracked separately (the target's script logic is what such automation would
 # call; only the trigger and a bot credential are missing).
 .PHONY: refresh-third-party-inventory
-refresh-third-party-inventory: ## Regenerate THIRD_PARTY_LICENSES.md and THIRD_PARTY_BUILD_TEST.md from what the repo actually uses; review the diff, then commit
+refresh-third-party-inventory: ## Regenerate THIRD_PARTY_LICENSES.md and THIRD_PARTY_BUILD_TEST.md from what the repo actually uses; review the diff, then commit. REFRESH_PR_NUMBER=<n> cites the PR in the re-pin prose
 	@rc=0; \
 	.github/scripts/refresh-licenses-inventory.sh || rc=1; \
 	.github/scripts/refresh-build-test-inventory.sh || rc=1; \

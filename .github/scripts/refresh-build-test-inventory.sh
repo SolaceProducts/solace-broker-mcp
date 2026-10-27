@@ -91,8 +91,10 @@ fi
 
 # Checked before anything runs: the value lands in a Legal document, so a typo
 # must stop the run rather than be written in. Spelled-out ASCII sets, here
-# and in the SHA checks below: under a UTF-8 locale bash's [0-9] also matches
-# other scripts' digits, which the next re-pin could not read back.
+# and in the SHA checks below: whether bash's [0-9] also matches other scripts'
+# digits depends on the C library's collation. Under en_US.UTF-8 it does on
+# glibc 2.31 (Ubuntu 20.04, bash 5.0); it does not on glibc 2.43 or macOS. A
+# digit like that could not be read back by the next re-pin.
 ASCII_DIGIT='[0123456789]'
 ASCII_HEX='[0123456789abcdef]'
 pr_number="${REFRESH_PR_NUMBER:-}"

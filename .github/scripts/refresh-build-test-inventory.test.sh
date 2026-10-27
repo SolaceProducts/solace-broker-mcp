@@ -1020,19 +1020,22 @@ REFRESH_PR_NUMBER="540x" assert_refresh "a malformed REFRESH_PR_NUMBER is refuse
     repin_solace_workflows "$REPIN_SHA"
 REFRESH_PR_NUMBER="0" assert_refresh "REFRESH_PR_NUMBER=0 is refused" 1 - \
     repin_solace_workflows "$REPIN_SHA"
-# Under a UTF-8 locale bash's [0-9] also matches other scripts' digits; the
-# number lands in a Legal document and the next re-pin must be able to read
-# it back, so only ASCII digits pass. Skipped, not passed, without a UTF-8
-# locale, where the case could not tell the two apart. en_US first: C.UTF-8
-# collates by codepoint, so its [0-9] is already ASCII-only and would let the
-# case pass without the fix.
+# On some C libraries bash's [0-9] also matches other scripts' digits under
+# a UTF-8 locale (glibc 2.31 does; glibc 2.43 and macOS do not). The number
+# lands in a Legal document and the next re-pin must be able to read it back,
+# so only ASCII digits pass. The value starts with an ASCII digit so that
+# ASCII_DIGIT, not the spelled-out leading-digit set, is what refuses it.
+# Only on a library whose [0-9] matches `０` can this case fail without the
+# fix; elsewhere it still checks the refusal. Skipped, not passed, without an
+# en_US UTF-8 locale. en_US rather than C.UTF-8: C.UTF-8 collates by
+# codepoint, so its [0-9] is ASCII-only everywhere.
 utf8_locale=$(locale -a 2>/dev/null | grep -iE '^en_us\.utf-?8$' | head -n 1 || true)
 if [ -n "$utf8_locale" ]; then
-    LC_ALL="$utf8_locale" REFRESH_PR_NUMBER="５４０" assert_refresh \
-        "full-width digits in REFRESH_PR_NUMBER are refused under a UTF-8 locale" 1 - \
+    LC_ALL="$utf8_locale" REFRESH_PR_NUMBER="54０" assert_refresh \
+        "a full-width digit in REFRESH_PR_NUMBER is refused under a UTF-8 locale" 1 - \
         repin_solace_workflows "$REPIN_SHA"
 else
-    echo "  skip     full-width digits in REFRESH_PR_NUMBER are refused under a UTF-8 locale (no en_US UTF-8 locale)"
+    echo "  skip     a full-width digit in REFRESH_PR_NUMBER is refused under a UTF-8 locale (no en_US UTF-8 locale)"
     skip=$((skip + 1))
 fi
 assert_refresh "a re-pin with the Re-pinned sentence reworded is refused, not half-applied" 1 - \
