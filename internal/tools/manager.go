@@ -515,6 +515,21 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// is decided below, exactly as before.
 		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr)
 
+		// SOL-154703: a confirmed owner rejection gets its own audit record,
+		// emitted whether or not the tool is destructive, exactly as the hop-2
+		// denial below: the operation record of a destructive update tool
+		// coexists with it, and a non-destructive create produces only this one.
+		// Gated on the audit log alone. Only the confirmed rejection
+		// (ownerNotFoundError) qualifies, not an inconclusive check — see
+		// isOwnerValidationRejection. No ordering dependency on the
+		// desired-state classification below: ownerNotFoundError carries no
+		// SEMPError, so that branch can never match it. It sits beside
+		// recordOwnerValidation, its metric counterpart, and ahead of the
+		// hop-2 branch only because that is where the owner classification is.
+		if m.auditLog && isOwnerValidationRejection(handleErr) {
+			emitOwnerValidationRejectedAudit(ctx, name, brokerAlias)
+		}
+
 		// Hop-2 (broker-side) authorization denial (SOL-153332, Story 49):
 		// classified here, at the tools layer, because this is where tool,
 		// broker, and ctx (principal, correlation) are all in scope — the
