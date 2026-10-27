@@ -102,8 +102,8 @@ add_unparseable_row() { # <tmp> — an error class this script must refuse
     printf '| `weird thing` | v0.1.0 (vendored) | Apache-2.0 | [license](x) |\n' >>"$1/$DOC"
 }
 
-add_new_container_image() { # <tmp> — Dependabot cannot cause this (no docker
-    # ecosystem in dependabot.yml), but the refusal must hold regardless.
+add_new_container_image() { # <tmp> — Dependabot cannot cause this (its docker
+    # entry only moves a digest), but the refusal must hold regardless.
     printf '      image: example.invalid/never-pulled-image:v1\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 

@@ -31,8 +31,10 @@
 # doesn't change who publishes the image, so that case IS handled; a novel
 # image reference has no LICENSE-file or GitHub-API equivalent this script can
 # check). In practice this refusal is close to theoretical for images and npm:
-# .github/dependabot.yml has neither a `docker` nor an `npm` ecosystem entry,
-# so a Dependabot PR cannot structurally add or remove either kind today.
+# .github/dependabot.yml has no `npm` ecosystem entry, and its `docker` entry
+# only moves the Dockerfile runtime base's digest, which the inventory does not
+# record (a digest pinned to a tag is checked at its tag). So a Dependabot PR
+# cannot structurally add or remove either kind today.
 #
 # If build-test-licenses-check.sh reports anything else this script does not
 # recognise (a duplicate row, an unparseable row, `go list` failing, a missing

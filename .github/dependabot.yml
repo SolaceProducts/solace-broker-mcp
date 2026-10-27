@@ -132,3 +132,19 @@ updates:
         exclude-patterns:
           - "Solace*"
     open-pull-requests-limit: 10
+
+  # The Dockerfile's runtime base is pinned by digest (SOL-156816); this entry
+  # proposes each new digest of its tag. The builder stage is not covered:
+  # `golang:${GO_VERSION}-alpine` takes its version from go.mod, which moves
+  # only when the `go` directive is raised.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 14
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10

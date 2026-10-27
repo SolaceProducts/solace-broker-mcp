@@ -1,5 +1,12 @@
+# The builder's Go version is go.mod's `go` directive, passed in by every build
+# (Makefile `docker`, build-image.yaml, dev-build.yaml, release.yml), so the image
+# and the release tarballs are built by the same toolchain. No default on
+# purpose: a floating `golang:1.26-alpine` is what let them diverge. The error
+# text cannot contain spaces, which would split the FROM line.
+ARG GO_VERSION
+
 # Stage 1: Build
-FROM golang:1.26-alpine AS builder
+FROM golang:${GO_VERSION:?pass-build-arg-GO_VERSION-set-to-the-go-directive-in-go.mod}-alpine AS builder
 
 ARG VERSION=dev
 
@@ -14,7 +21,9 @@ RUN CGO_ENABLED=0 go build \
     ./cmd/server
 
 # Stage 2: Runtime
-FROM gcr.io/distroless/static-debian12:nonroot
+# Pinned by digest so a rebuild reproduces the published image; Dependabot's
+# docker entry proposes each new digest of the tag.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 LABEL org.opencontainers.image.source=https://github.com/SolaceProducts/solace-broker-mcp
 

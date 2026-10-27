@@ -59,6 +59,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # The Dockerfile's builder runs go.mod's `go` directive, the toolchain
+      # setup-go gives the release tarballs. It has no default, so this is required.
+      - name: Read Go version from go.mod
+        id: go
+        run: echo "version=$(awk '$1 == "go" { print $2; exit }' go.mod)" >> "$GITHUB_OUTPUT"
+
       - name: Build and save for scanning
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -67,6 +73,7 @@ jobs:
           tags: ${{ inputs.image_name }}:${{ inputs.scan_tag }}
           outputs: type=docker,dest=/tmp/image.tar
           build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
             VERSION=${{ inputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

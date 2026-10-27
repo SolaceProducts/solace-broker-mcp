@@ -75,13 +75,20 @@ images (distroless, scratch) and cross-compilation.
 ### Docker image
 
 ```bash
-docker build --build-arg VERSION=0.1.0 -t solace-broker-mcp:0.1.0 .
+docker build \
+  --build-arg GO_VERSION="$(awk '$1 == "go" { print $2; exit }' go.mod)" \
+  --build-arg VERSION=0.1.0 -t solace-broker-mcp:0.1.0 .
 ```
+
+`make docker` passes both for you.
 
 The Dockerfile uses a multi-stage build:
 
-- **Builder stage** (`golang:1.26-alpine`): compiles the binary with ldflags
-- **Runtime stage** (`gcr.io/distroless/static-debian12:nonroot`): ~2 MB base,
+- **Builder stage** (`golang:${GO_VERSION}-alpine`): compiles the binary with
+  ldflags. `GO_VERSION` is required and has no default: it is `go.mod`'s `go`
+  directive, so the image and the release binaries are built with the same Go.
+- **Runtime stage** (`gcr.io/distroless/static-debian12:nonroot`, pinned by
+  digest; Dependabot proposes updates): ~2 MB base,
   includes CA certificates for TLS/OIDC, runs as non-root UID 65532
 - **HEALTHCHECK**: uses the binary's `--health` flag (no shell or curl needed)
 
