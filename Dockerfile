@@ -12,6 +12,13 @@ ARG VERSION=dev
 
 WORKDIR /src
 COPY go.mod go.sum ./
+# A toolchain line would split the image from the release binaries: setup-go
+# builds those with it, while this image (GOTOOLCHAIN=local) builds with
+# GO_VERSION from the go line. Raise the go line instead.
+RUN if grep -qE '^toolchain[[:space:]]' go.mod; then \
+        echo "go.mod has a toolchain line; the image and the release binaries would ship different Go versions. Raise the go line instead and remove it." >&2; \
+        exit 1; \
+    fi
 RUN go mod download
 COPY . .
 

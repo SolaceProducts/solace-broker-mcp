@@ -167,7 +167,7 @@ jobs:
           # budget; a third writer would evict entries the release build and every
           # PR scan hit. That is the one way this could slow the release path
           # without touching release.yml. The compile layer never cache-hits
-          # anyway — VERSION is in the `RUN go build` at Dockerfile:18-21.
+          # anyway — VERSION is in the `RUN go build` at Dockerfile:25-28.
           cache-from: type=gha
 
       - name: Summary
