@@ -10,9 +10,10 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null | grep -
 # Deferred (=) so $(shell git describe) only runs for targets that actually use LDFLAGS.
 LDFLAGS      = -s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=$(VERSION)
 # The Dockerfile builder's Go version: go.mod's `go` directive, as CI passes it.
-# `:=`, not `?=`: an exported GO_VERSION (toolchain managers and CI images set
+# `=`, not `?=`: an exported GO_VERSION (toolchain managers and CI images set
 # one) must not override go.mod. `make docker GO_VERSION=...` still can.
-GO_VERSION  := $(shell .github/scripts/go-version.sh)
+# Deferred, like LDFLAGS, so only targets that use it read go.mod.
+GO_VERSION   = $(shell .github/scripts/go-version.sh)
 IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
 E2E_DIR     := test/e2e-basic-mcp

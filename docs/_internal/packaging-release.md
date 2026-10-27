@@ -87,6 +87,12 @@ The Dockerfile uses a multi-stage build:
 - **Builder stage** (`golang:${GO_VERSION}-alpine`): compiles the binary with
   ldflags. `GO_VERSION` is required and has no default: it is `go.mod`'s `go`
   directive, so the image and the release binaries are built with the same Go.
+  Without it the build fails, naming
+  `pass-build-arg-GO_VERSION-set-to-the-go-directive-in-go.mod` in the error.
+  Docker (BuildKit) reports `GO_VERSION: pass-build-arg-…`; podman and other
+  builders may instead report a failed pull of an image tagged with that text.
+  `.github/scripts/go-version.sh` refuses a `go` line without a patch version
+  and a `toolchain` line, either of which would split the two again.
 - **Runtime stage** (`gcr.io/distroless/static-debian12:nonroot`, pinned by
   digest; Dependabot proposes updates): ~2 MB base,
   includes CA certificates for TLS/OIDC, runs as non-root UID 65532
