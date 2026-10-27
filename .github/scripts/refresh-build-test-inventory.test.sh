@@ -522,6 +522,26 @@ split_pins_by_hand() { # <tmp> — one workflow ref and its row on a second pin
             "$REPIN_SHORT"
 }
 
+# PROSE_DOC: the converged document with its Re-pinned paragraph naming the
+# rows' shared pin. The prose cases below test the rewrite, so they start from
+# prose that agrees with its table, whatever state the committed prose is in:
+# a re-pin merged without its prose (as #552 was) leaves the converged prose
+# naming an older pin, and every re-pin case would then be refused for that,
+# not for what it tests.
+PROSE_DOC="$SUITE_TMP/prose-$DOC"
+make_prose_doc() {
+    local rows_pin prose_pin
+    rows_pin=$(awk -F' \\| ' 'index($1, "| `SolaceDev/solace-public-workflows/") == 1 { r = $2; gsub(/`/, "", r); print r }' \
+        "$CONVERGED_DOC" | sort -u)
+    prose_pin=$(solace_section "$CONVERGED_DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    if [ "$(grep -c . <<<"$rows_pin")" -ne 1 ] || [ -z "$prose_pin" ]; then
+        echo "  FATAL    the converged document has no single Solace-internal pin and branch-commit sentence"
+        exit 1
+    fi
+    sed "s/^\`${prose_pin}\` is a branch commit/\`${rows_pin}\` is a branch commit/" "$CONVERGED_DOC" >"$PROSE_DOC"
+}
+make_prose_doc
+
 # test_repin_rewrites_prose <desc> <pr-number-or-empty> <expected-reference> [<how>]
 #   Starts from the converged document, where table and prose agree, re-pins
 #   the workflows, and checks the result field by field: every row on the new
@@ -535,10 +555,10 @@ test_repin_rewrites_prose() {
     local tmp out_file
     tmp=$(mktemp -d)
     out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
 
     local old_pin
-    old_pin=$(solace_section "$CONVERGED_DOC" | sed -nE 's/^`([0-9a-f]{7,40})` is a branch commit.*/\1/p')
+    old_pin=$(solace_section "$PROSE_DOC" | sed -nE 's/^`([0-9a-f]{7,40})` is a branch commit.*/\1/p')
     if [ -z "$old_pin" ] || ! repin_solace_workflows "$tmp" "$REPIN_SHA"; then
         echo "  ERROR    $desc (fixture assumption broke: no prose pin, or the re-pin mutation failed)"
         fail=$((fail + 1))
@@ -591,9 +611,9 @@ test_repin_rewrites_prose() {
     old_count=$(grep -oF "\`${old_pin}\`" <<<"$section" | wc -l | tr -d ' ')
     [ "$old_count" -eq 1 ] ||
         problems+=("\`$old_pin\` appears $old_count time(s) in the section; only the prior-pin mention should remain")
-    [ "$(solace_section "$CONVERGED_DOC" | wc -l)" -eq "$(solace_section "$tmp/$DOC" | wc -l)" ] ||
+    [ "$(solace_section "$PROSE_DOC" | wc -l)" -eq "$(solace_section "$tmp/$DOC" | wc -l)" ] ||
         problems+=("the section's line count changed; the rewrite must keep the existing line breaks")
-    diff -q <(outside_solace_section "$CONVERGED_DOC") <(outside_solace_section "$tmp/$DOC") >/dev/null ||
+    diff -q <(outside_solace_section "$PROSE_DOC") <(outside_solace_section "$tmp/$DOC") >/dev/null ||
         problems+=("lines outside the Solace-internal section changed")
     if [ "$want_ref" = "#N" ] && ! grep -q '^::warning::.*REFRESH_PR_NUMBER' "$out_file"; then
         problems+=("no ::warning:: naming REFRESH_PR_NUMBER while (#N) remains")
@@ -624,7 +644,7 @@ test_repin_rewrites_prose "a re-pin rewrites the prose, (#N) left without the PR
 test_repin_leaves_other_paragraphs() {
     local desc="a re-pin leaves a later paragraph naming the old pin as it was" tmp got=0 old_pin note
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     old_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
     note="History: \`${old_pin}\` was the pin this note was written against."
     # The note goes in as its own paragraph just before "Two entries have
@@ -674,7 +694,7 @@ assert_noop() {
     shift
     local tmp got=0
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     if ! "$@" "$tmp"; then
         echo "  ERROR    $desc (the test's own mutation '$1' failed)"
         fail=$((fail + 1))
@@ -738,7 +758,7 @@ hand_repin_reworded_then_drop() { # <tmp> — an unrelated drop over prose that 
 test_unreconciled_prose_warns() {
     local desc="$1" mutation="$2" want_file="$3" tmp got=0
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     if ! "$mutation" "$tmp"; then
         echo "  ERROR    $desc (the test's own mutation failed)"
         fail=$((fail + 1))
@@ -772,7 +792,7 @@ test_unreconciled_prose_warns "prose lagging a table re-pinned by hand is left a
 test_hand_repin_warning_text() {
     local desc="the hand re-pin warning names the prose's pin once" tmp prose_pin
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     prose_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
     if [ -z "$prose_pin" ] || ! hand_repin "$tmp"; then
         echo "  ERROR    $desc (fixture assumption broke)"
@@ -857,7 +877,7 @@ split_then_typo() { # <tmp>
 assert_split_change() {
     local desc="$1" want="$2" mutation="$3" tmp got=0 problems=()
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     if ! "$mutation" "$tmp"; then
         echo "  ERROR    $desc (the test's own mutation '$mutation' failed)"
         fail=$((fail + 1))
@@ -873,7 +893,7 @@ assert_split_change() {
         problems+=("the mistyped row was not fixed back")
     fi
     grep -q '0000000' "$tmp/$DOC" && problems+=("the mistyped ref is still in the file")
-    diff -q <(solace_section "$CONVERGED_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
+    diff -q <(solace_section "$PROSE_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
         problems+=("the prose below the table changed")
     if [ "${#problems[@]}" -gt 0 ]; then
         echo "  NOT OK   $desc"
@@ -903,7 +923,7 @@ split_then_third_pin() { # <tmp> — five of six moved to a third SHA
 split_then_remove_all() { # <tmp>
     split_pins_by_hand "$1" && remove_solace_workflows "$1"
 }
-INVENTORY_SOURCE="$CONVERGED_DOC"
+INVENTORY_SOURCE="$PROSE_DOC"
 assert_refresh "a re-pin to a tag from rows already on two pins is refused" 1 - split_then_tag
 assert_refresh "a re-pin to a third SHA from rows already on two pins is refused" 1 - split_then_third_pin
 unset INVENTORY_SOURCE
@@ -924,7 +944,7 @@ test_drop_all_solace_rows() {
     local desc="$1" mutation="$2"
     local tmp got=0 problems=()
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     if ! "$mutation" "$tmp"; then
         echo "  ERROR    $desc (the test's own mutation failed)"
         fail=$((fail + 1))
@@ -935,7 +955,7 @@ test_drop_all_solace_rows() {
     [ "$got" -eq 0 ] || problems+=("expected exit 0, got $got")
     ! grep -qE '^\| `SolaceDev/solace-public-workflows/' "$tmp/$DOC" ||
         problems+=("Solace-internal rows are still listed")
-    diff -q <(solace_section "$CONVERGED_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
+    diff -q <(solace_section "$PROSE_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
         problems+=("the prose below the table changed")
     grep -q '^::warning::Every SolaceDev/solace-public-workflows row was dropped' "$tmp/out" ||
         problems+=("no ::warning:: that the prose needs a person")
@@ -971,7 +991,7 @@ REFRESH_PR_NUMBER=4242 assert_noop "a PR number with no re-pin is a clean no-op"
 test_clean_run_is_quiet() {
     local desc="a run over consistent rows and prose prints no warning" tmp got=0 n
     tmp=$(mktemp -d)
-    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
     if ! concrete_ref "$tmp"; then
         echo "  ERROR    $desc (the test's own mutation failed)"
         fail=$((fail + 1))
@@ -995,7 +1015,7 @@ test_clean_run_is_quiet
 
 # Refusals: each leaves the file exactly as the mutation left it (asserted by
 # assert_refresh's want=1 branch), so no half-rewritten table is left behind.
-INVENTORY_SOURCE="$CONVERGED_DOC"
+INVENTORY_SOURCE="$PROSE_DOC"
 REFRESH_PR_NUMBER="540x" assert_refresh "a malformed REFRESH_PR_NUMBER is refused before anything is written" 1 - \
     repin_solace_workflows "$REPIN_SHA"
 REFRESH_PR_NUMBER="0" assert_refresh "REFRESH_PR_NUMBER=0 is refused" 1 - \

@@ -207,9 +207,9 @@ All six come from one repository and now share a single pin.
 | `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `878b2f3` | Solace |
 | `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `878b2f3` | Solace |
 
-`a9fb775` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-10-23 by the Dependabot
-`internal-reusable-workflows` group update (#540); the prior pin was `fc6b754`.
+`878b2f3` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-10-27 by the Dependabot
+`internal-reusable-workflows` group update (#552); the prior pin was `a9fb775`.
 
 The 2026-10-23 update (#540) collapsed `update-manifest.yaml` into the shared
 pin, so the separate-pin note that once stood here no longer applies.
