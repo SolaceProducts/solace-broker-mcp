@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-10-23; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-10-27; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -200,12 +200,12 @@ All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `a9fb775` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `a9fb775` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `a9fb775` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `a9fb775` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `a9fb775` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `a9fb775` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `878b2f3` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `878b2f3` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `878b2f3` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `878b2f3` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `878b2f3` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `878b2f3` | Solace |
 
 `a9fb775` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0. Re-pinned 2026-10-23 by the Dependabot
