@@ -33,17 +33,19 @@ own machine, use [Method B](#method-b--mcp-remote-bridge).
 1. Start the MCP server (binary, Docker, or `go run`).
 2. In Claude Desktop, select **Settings → Connectors → Add custom connector**.
 3. Set the URL to the public `/mcp` endpoint, for example `https://mcp.example.com/mcp`.
-4. If the server runs in `mode: oauth`, Claude Desktop runs the browser login on
+4. Run the server in `mode: oauth`. Claude Desktop runs the browser login on
    first use (the server advertises its authorization server via
-   `/.well-known/oauth-protected-resource`). In `mode: disabled` or `static`, no
-   browser flow runs.
+   `/.well-known/oauth-protected-resource`). For `mode: disabled` or `static`,
+   use [Method B](#method-b--mcp-remote-bridge): those modes have no real client
+   authentication and must not be reachable from the internet.
 
 No configuration file editing required.
 
 ### Method B — `mcp-remote` Bridge
 
-Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm bridge when
-you want file-based configuration. Edit `claude_desktop_config.json`:
+Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm bridge for a
+server on your own machine, or when you want file-based configuration. Edit
+`claude_desktop_config.json`:
 
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
