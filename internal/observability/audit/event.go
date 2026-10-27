@@ -49,7 +49,8 @@ type EventType string
 
 // The closed set of audit record types. Grown to seven by SOL-153332
 // (Story 49), which added EventBrokerAuthzDenied for a hop-2 (broker-side)
-// authorization denial, paired with hop 1's EventAuthzDenied.
+// authorization denial, paired with hop 1's EventAuthzDenied, and to eight by
+// SOL-154703, which added EventOwnerValidationRejected.
 const (
 	// EventOperation records one completed tool invocation: what ran, against
 	// which broker, on whose behalf, and how it ended.
@@ -67,6 +68,15 @@ const (
 	// coexists with the EventOperation record for the same call rather than
 	// replacing it, because execution had already started (SOL-153332).
 	EventBrokerAuthzDenied EventType = "broker_authz_denied"
+	// EventOwnerValidationRejected records a create or update the server refused
+	// because its "owner" does not name an existing client username in the target
+	// Message VPN (SOL-153080). It is the owner-check counterpart of
+	// EventBrokerAuthzDenied: a dedicated record emitted whether or not the tool
+	// is annotated destructive, coexisting with the operation record of a
+	// destructive call (SOL-154703). Only a confirmed rejection is recorded; a
+	// check that could not complete is an ordinary transient failure, not a
+	// denial.
+	EventOwnerValidationRejected EventType = "owner_validation_rejected"
 	// EventBrokerAuthRetry records a broker-side authentication retry.
 	EventBrokerAuthRetry EventType = "broker_auth_retry"
 	// EventAuditDrop records that an audit record could not be written. It
@@ -147,7 +157,7 @@ func EventTypes() []string {
 	return out
 }
 
-// The reason vocabularies. There are three, one per record type that carries
+// The reason vocabularies. There are four, one per record type that carries
 // reason, and they are validated separately: an authentication reason on an
 // authorization record (or a hop-1 reason on a hop-2 record) is a bug that
 // would corrupt a reviewer's query, so the constructor rejects it rather than
@@ -156,7 +166,7 @@ func EventTypes() []string {
 // authFailureReasons is derived rather than written out: the auth_failure
 // reasons are also mcp_auth_failure_total's counter labels, so the vocabulary
 // is owned by internal/observability/schema and read from there by every
-// signal that renders it (SOL-154163). The other two are rendered by an audit
+// signal that renders it (SOL-154163). The other three are rendered by an audit
 // record only, so they stay written here.
 var (
 	authFailureReasons = authFailureReasonSet(schema.AuthFailureReasons())
@@ -166,6 +176,12 @@ var (
 	}
 	brokerAuthzDeniedReasons = map[string]struct{}{
 		"permission_denied": {},
+	}
+	// ownerValidationRejectedReasons has one member today: the pre-flight check
+	// completed and the supplied owner is absent from the target VPN (SOL-154703).
+	// A check that could not complete is not a rejection and has no reason here.
+	ownerValidationRejectedReasons = map[string]struct{}{
+		"owner_not_found": {},
 	}
 )
 
@@ -235,13 +251,15 @@ var retryOutcomes = map[Outcome]struct{}{
 // the authority on audit record shape. docs/observability.md renders the same
 // table for customers; change both together.
 //
-// Reading the rows: auth_success, auth_failure, authz_denied and
-// broker_authz_denied carry NO outcome, because the record type already says
-// what happened. authz_denied carries tool but no arguments_hash, because the
-// call was refused before its arguments were dispatched; broker_authz_denied
-// differs from it in exactly one column, broker, which is set because a hop-2
-// denial names the broker that refused. audit_drop carries only the common
-// fields.
+// Reading the rows: auth_success, auth_failure, authz_denied,
+// broker_authz_denied and owner_validation_rejected carry NO outcome, because
+// the record type already says what happened. authz_denied carries tool but no
+// arguments_hash, because the call was refused before its arguments were
+// dispatched; broker_authz_denied differs from it in exactly one column,
+// broker, which is set because a hop-2 denial names the broker that refused.
+// owner_validation_rejected has exactly broker_authz_denied's shape: the
+// refusal is the server's, but it names the broker the write was aimed at.
+// audit_drop carries only the common fields.
 //
 // identity is fieldOptional rather than fieldRequired everywhere it applies:
 // with auth mode "disabled" there is no principal to name, and a constructor
@@ -275,6 +293,12 @@ var applicabilityByType = map[EventType]rules{
 	EventBrokerAuthzDenied: {
 		outcome: fieldForbidden, errorType: fieldForbidden,
 		reason: fieldRequired, reasonVocab: brokerAuthzDeniedReasons,
+		tool: fieldRequired, argumentsHash: fieldForbidden,
+		broker: fieldRequired, timing: fieldForbidden, identity: fieldOptional,
+	},
+	EventOwnerValidationRejected: {
+		outcome: fieldForbidden, errorType: fieldForbidden,
+		reason: fieldRequired, reasonVocab: ownerValidationRejectedReasons,
 		tool: fieldRequired, argumentsHash: fieldForbidden,
 		broker: fieldRequired, timing: fieldForbidden, identity: fieldOptional,
 	},
@@ -383,13 +407,14 @@ func (e Event) Attrs() []slog.Attr {
 // total silence the notice exists to prevent, on a configuration we support.
 // The record is also honestly an error condition — an audit record was lost.
 var levelByType = map[EventType]slog.Level{
-	EventOperation:         slog.LevelInfo,
-	EventAuthSuccess:       slog.LevelInfo,
-	EventAuthFailure:       slog.LevelWarn,
-	EventAuthzDenied:       slog.LevelWarn,
-	EventBrokerAuthzDenied: slog.LevelWarn,
-	EventBrokerAuthRetry:   slog.LevelInfo,
-	EventAuditDrop:         slog.LevelError,
+	EventOperation:               slog.LevelInfo,
+	EventAuthSuccess:             slog.LevelInfo,
+	EventAuthFailure:             slog.LevelWarn,
+	EventAuthzDenied:             slog.LevelWarn,
+	EventBrokerAuthzDenied:       slog.LevelWarn,
+	EventOwnerValidationRejected: slog.LevelWarn,
+	EventBrokerAuthRetry:         slog.LevelInfo,
+	EventAuditDrop:               slog.LevelError,
 }
 
 // NewEvent validates f against the field-applicability table for f.Type and

@@ -148,7 +148,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 Two versions identify the published contract:
 
 - `metrics_schema` is **1.11**, exposed by `mcp_schema_version`.
-- `audit_schema` is **1.2**, exposed by `mcp_schema_version` and by
+- `audit_schema` is **1.3**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
 Within a major version, changes are additive. A new metric, field, or closed-set value bumps
@@ -383,6 +383,9 @@ sum by (tool) (rate(mcp_owner_validation_total[1h]))
 `rate()` has the same blind spot for a series' first sample, so treat a rate over a short window on
 a quiet system as approximate.
 
+With the audit log on, a `rejected_not_found` call also emits an `owner_validation_rejected` audit
+record (see [Audit Trail](#audit-trail)); `rejected_check_failed` does not.
+
 A blocked call is also an ordinary failed invocation in `mcp_tool_invocation_total`
 (`outcome="error"`, `error_type="execution_error"`). When the failed read was itself refused by
 the broker (SEMP code 72), it is `error_type="broker_permission_denied"` and
@@ -560,13 +563,20 @@ authorization denial also produces `broker_authz_denied`; therefore a destructiv
 produce two audit records. Query by `audit_event_type`, not by counting records per
 correlation ID.
 
+A `create-queue`, `update-queue`, `create-topic-endpoint`, or `update-topic-endpoint` call that
+the owner-existence check blocks (the supplied `owner` does not exist in the target Message
+VPN) emits `owner_validation_rejected`, whether or not the tool carries `destructiveHint`. So
+a `create-queue` call, which emits no `operation` record, still leaves an audit record when it
+is blocked this way, and a blocked `update-queue` call produces both. A check that could not
+complete (a timeout, a 5xx) is not a rejection and emits no `owner_validation_rejected`.
+
 ### Event Fields
 
 | Field | Meaning | Type |
 |---|---|---|
 | `event` | Routing tag, always `audit` | string |
 | `audit_event_type` | Record discriminator | closed-set string |
-| `audit_schema_version` | Audit contract version | string (`1.2`) |
+| `audit_schema_version` | Audit contract version | string (`1.3`) |
 | `timestamp_utc` | Record time | RFC 3339 UTC |
 | `correlation_id` | Join key; omitted when unavailable | string |
 | `started_at_utc` | Operation start | RFC 3339 UTC |
@@ -579,11 +589,11 @@ correlation ID.
 | `error_type` | Failure cause on an error operation | closed-set string |
 | `panic_recovered` | Recovered destructive-handler panic | boolean |
 | `arguments_hash` | SHA-256 over redacted, canonicalized arguments | lowercase hex |
-| `reason` | Authentication/authorization failure reason | closed-set string |
+| `reason` | Authentication, authorization, or owner-validation reason | closed-set string |
 | `dropped_audit_event_type` | Record type that could not be emitted | closed-set string |
 
 The `audit_event_type` field is one of `operation`, `auth_success`, `auth_failure`, `authz_denied`,
-`broker_authz_denied`, `broker_auth_retry`, or `audit_drop`.
+`broker_authz_denied`, `owner_validation_rejected`, `broker_auth_retry`, or `audit_drop`.
 
 | `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | timing | `broker` | identity | dropped type | panic |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -592,6 +602,7 @@ The `audit_event_type` field is one of `operation`, `auth_success`, `auth_failur
 | `auth_failure` | — | — | yes | — | — | — | — | optional | — | — |
 | `authz_denied` | — | — | yes | yes | — | — | — | optional | — | — |
 | `broker_authz_denied` | — | — | yes | yes | — | — | yes | optional | — | — |
+| `owner_validation_rejected` | — | — | yes | yes | — | — | yes | optional | — | — |
 | `broker_auth_retry` | yes | — | — | — | — | optional | yes | optional | — | — |
 | `audit_drop` | — | — | — | optional | — | — | optional | — | optional | — |
 
@@ -605,7 +616,7 @@ record.
 
 ### Authentication Events
 
-The following are authentication events:
+The following events record authentication and access-control decisions:
 
 - `auth_success`: verified request, with identity when available.
 - `auth_failure`: rejected credential. `reason` uses the same five values as
@@ -614,6 +625,10 @@ The following are authentication events:
   `not_permitted`.
 - `broker_authz_denied`: hop-2 broker refusal, with `tool`, `broker`, and reason
   `permission_denied`.
+- `owner_validation_rejected`: a create or update the server refused because its `owner` names
+  no existing client username in the target Message VPN, with `tool`, `broker`, and reason
+  `owner_not_found`. It names neither the owner nor the VPN; the `tool invoked` record for the
+  same call does, and joins to it by `correlation_id` when correlation is enabled.
 - `broker_auth_retry`: broker 401 recovery attempt; its outcome says whether the credential
   problem recovered, not whether the whole tool call ultimately succeeded.
 
@@ -625,15 +640,17 @@ Plan SIEM volume accordingly.
 Use the version emitted by your deployment:
 
 ```text
-event="audit" AND audit_schema_version="1.2" AND audit_event_type="operation"
-event="audit" AND audit_schema_version="1.2" AND audit_event_type="auth_failure"
-event="audit" AND audit_schema_version="1.2" AND audit_event_type="authz_denied"
-event="audit" AND audit_schema_version="1.2" AND audit_event_type="broker_authz_denied"
-event="audit" AND audit_schema_version="1.2" AND audit_event_type="audit_drop"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="operation"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="auth_failure"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="authz_denied"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="broker_authz_denied"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="owner_validation_rejected"
+event="audit" AND audit_schema_version="1.3" AND audit_event_type="audit_drop"
 ```
 
 A complete authorization-refusal review requires both `authz_denied` and
-`broker_authz_denied`.
+`broker_authz_denied`. To review attempts to bind a queue or topic endpoint to a nonexistent
+owner, add `owner_validation_rejected`.
 
 ## Distributed Tracing
 
@@ -811,7 +828,9 @@ Notes:
   failed read has its own status, the record also has that error's `http_status`, `semp_code`, and
   `operation`. These are the agent-facing result's `owner`, `msgVpnName`, and `objectKind` in
   snake_case. `owner` and `msg_vpn` are caller-supplied and cut at 200 characters, ending in `…`
-  when cut. To find these, search `tool invoked` records for `error_source="owner_validation"` or
+  when cut. A confirmed rejection (`error_source="owner_validation"`) also emits an
+  `owner_validation_rejected` audit record when the audit log is on, joined by `correlation_id`.
+  To find these, search `tool invoked` records for `error_source="owner_validation"` or
   `error_stage="owner_validation_check"`. Abridged record (other fields omitted):
 
   ```json
