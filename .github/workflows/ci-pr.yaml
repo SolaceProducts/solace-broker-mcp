@@ -120,7 +120,11 @@ jobs:
           go-version-file: 'go.mod'
       - name: Self-test the licence check
         run: .github/scripts/licenses-check.test.sh
+      # `if: always()` so a red self-test cannot hide the real drift lines: the
+      # job is red either way, but without it this step is skipped and the log
+      # shows only the self-test (PR #538).
       - name: Verify THIRD_PARTY_LICENSES.md matches the binary
+        if: always()
         run: .github/scripts/licenses-check.sh
       # The second of the two lists the Solace public-repository Legal checklist
       # requires. Same job rather than a new one: they are one obligation split

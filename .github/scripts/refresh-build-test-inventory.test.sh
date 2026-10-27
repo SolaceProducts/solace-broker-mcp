@@ -23,7 +23,11 @@
 # two deliberate refusals (a brand-new container image, a brand-new npm
 # package) and the "don't guess when something else is also wrong" case.
 #
-# SKIP_NETWORK_TESTS=1 skips the three cases (of fifteen) that need `go run
+# The Re-pinned prose below the Solace-internal table (SOL-156741) is covered
+# with and without REFRESH_PR_NUMBER, plus the cases it must refuse: a
+# malformed number, prose it cannot find, and rows left on two pins.
+#
+# SKIP_NETWORK_TESTS=1 skips the three cases that need `go run
 # github.com/google/go-licenses` or `gh api` for a genuinely new row's
 # licence — everything else here (fixes, drops, and every refusal) resolves
 # from local files and the already-warm module cache. Unset/0 by default so a
@@ -35,6 +39,10 @@
 # Usage: .github/scripts/refresh-build-test-inventory.test.sh
 
 set -uo pipefail
+
+# The suite controls REFRESH_PR_NUMBER per case; an inherited value would
+# change what every other case expects.
+unset REFRESH_PR_NUMBER
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 REFRESH="$REPO_ROOT/.github/scripts/refresh-build-test-inventory.sh"
@@ -465,6 +473,607 @@ assert_refresh "a re-pinned Solace-internal action's row is fixed" 0 \
 assert_refresh "a missing Solace-internal action row is re-added, byte-identical" 0 \
     "SolaceDev/solace-public-workflows/.github/actions/fossa-guard" \
     drop_row "SolaceDev/solace-public-workflows/.github/actions/fossa-guard"
+
+# --- Solace-internal re-pin prose (SOL-156741) ---------------------------
+# A real re-pin moves every SolaceDev/solace-public-workflows ref at once, so
+# the fixture rewrites the workflows, not the document: the check then reports
+# all six rows as drifted, exactly as it does on a Dependabot
+# `internal-reusable-workflows` PR. The synthetic SHA needs no network — the
+# Solace-internal rows carry no licence or tag to look up.
+REPIN_SHA="1234567890abcdef1234567890abcdef12345678"
+REPIN_SHORT="${REPIN_SHA:0:7}"
+
+# repin_solace_workflows <tmp> <new-full-sha> [<name-regex>]
+#   Re-pins every solace-public-workflows `uses:` matching <name-regex>
+#   (default: all of them) to <new-full-sha>. Written via a temp file and mv,
+#   not `sed -i`, so it runs unchanged on the macOS leg.
+repin_solace_workflows() {
+    local tmp="$1" sha="$2" name_re="${3:-[^@[:space:]]+}" f
+    for f in "$tmp"/.github/workflows/*.yaml "$tmp"/.github/workflows/*.yml; do
+        [ -f "$f" ] || continue
+        sed -E "s#(SolaceDev/solace-public-workflows/${name_re})@[0-9a-f]{40}#\\1@${sha}#g" "$f" >"$f.t" && mv "$f.t" "$f"
+    done
+    grep -rqE "SolaceDev/solace-public-workflows/[^@[:space:]]+@${sha}" "$tmp/.github/workflows"
+}
+
+reword_repin_prose() { # <tmp> — the sentence the rewrite anchors on, reworded
+    sed 's/Re-pinned /Pinned again /' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -qF 'Pinned again ' "$1/$DOC"
+}
+
+reword_and_repin() { # <tmp>
+    reword_repin_prose "$1" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+
+# solace_section <file> / outside_solace_section <file>
+#   The "Solace-internal composite actions" section (heading to the next
+#   heading), and everything else minus the **Generated** line.
+solace_section() {
+    awk '/^#/ { s = ($0 == "### Solace-internal composite actions") } s' "$1"
+}
+outside_solace_section() {
+    awk '/^#/ { s = ($0 == "### Solace-internal composite actions") } !s' "$1" | grep -v '^\*\*Generated\*\*'
+}
+
+split_pins_by_hand() { # <tmp> — one workflow ref and its row on a second pin
+    repin_solace_workflows "$1" "$REPIN_SHA" 'guardian-db-sync' &&
+        change_field "$1" "SolaceDev/solace-public-workflows/guardian-db-sync" \
+            "$(get_row_field "$1/$DOC" "SolaceDev/solace-public-workflows/guardian-db-sync" 2 | tr -d '`')" \
+            "$REPIN_SHORT"
+}
+
+# PROSE_DOC: the converged document with its Re-pinned paragraph naming the
+# rows' shared pin. The prose cases below test the rewrite, so they start from
+# prose that agrees with its table, whatever state the committed prose is in:
+# a re-pin merged without its prose (as #552 was) leaves the converged prose
+# naming an older pin, and every re-pin case would then be refused for that,
+# not for what it tests.
+PROSE_DOC="$SUITE_TMP/prose-$DOC"
+make_prose_doc() {
+    local rows_pin prose_pin
+    rows_pin=$(awk -F' \\| ' 'index($1, "| `SolaceDev/solace-public-workflows/") == 1 { r = $2; gsub(/`/, "", r); print r }' \
+        "$CONVERGED_DOC" | sort -u)
+    prose_pin=$(solace_section "$CONVERGED_DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    if [ "$(grep -c . <<<"$rows_pin")" -ne 1 ] || [ -z "$prose_pin" ]; then
+        echo "  FATAL    the converged document has no single Solace-internal pin and branch-commit sentence"
+        exit 1
+    fi
+    sed "s/^\`${prose_pin}\` is a branch commit/\`${rows_pin}\` is a branch commit/" "$CONVERGED_DOC" >"$PROSE_DOC"
+}
+make_prose_doc
+
+# test_repin_rewrites_prose <desc> <pr-number-or-empty> <expected-reference> [<how>]
+#   Starts from the converged document, where table and prose agree, re-pins
+#   the workflows, and checks the result field by field: every row on the new
+#   pin, the Re-pinned sentence carrying today's date, the PR reference and the
+#   old pin as the prior one, no other mention of the old pin left, the line
+#   breaks kept, and nothing outside the section touched. <how>:
+#     (empty)  one refresh run, with <pr-number-or-empty>
+#     rerun    a first run without a PR number, then the run under test
+test_repin_rewrites_prose() {
+    local desc="$1" pr="$2" want_ref="$3" how="${4:-}"
+    local tmp out_file
+    tmp=$(mktemp -d)
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+
+    local old_pin
+    old_pin=$(solace_section "$PROSE_DOC" | sed -nE 's/^`([0-9a-f]{7,40})` is a branch commit.*/\1/p')
+    if [ -z "$old_pin" ] || ! repin_solace_workflows "$tmp" "$REPIN_SHA"; then
+        echo "  ERROR    $desc (fixture assumption broke: no prose pin, or the re-pin mutation failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    local day_before day_after got=0
+    day_before=$(date -u +%Y-%m-%d)
+    if [ "$how" = "rerun" ]; then
+        (cd "$tmp" && "$REFRESH" >/dev/null 2>&1) || true
+        if ! grep -qF '(#N)' "$tmp/$DOC"; then
+            echo "  ERROR    $desc (fixture assumption broke: the first run left no (#N))"
+            fail=$((fail + 1))
+            rm -rf "$tmp"
+            return
+        fi
+    fi
+    if [ -n "$pr" ]; then
+        (cd "$tmp" && REFRESH_PR_NUMBER="$pr" "$REFRESH" >"$out_file" 2>&1) || got=$?
+    else
+        (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
+    fi
+    day_after=$(date -u +%Y-%m-%d)
+
+    local problems=() section flat
+    if [ "$got" -ne 0 ]; then
+        problems+=("expected exit 0, got $got")
+    fi
+    section=$(solace_section "$tmp/$DOC")
+    flat=$(tr '\n' ' ' <<<"$section" | tr -s ' ')
+
+    local rows on_new
+    rows=$(grep -cE '^\| `SolaceDev/solace-public-workflows/' <<<"$section" || true)
+    on_new=$(grep -cE "^\\| \`SolaceDev/solace-public-workflows/[^\`]+\` \\| \`${REPIN_SHORT}\` \\|" <<<"$section" || true)
+    if [ "$rows" -eq 0 ] || [ "$rows" -ne "$on_new" ]; then
+        problems+=("$on_new of $rows Solace-internal rows on \`$REPIN_SHORT\`")
+    fi
+    grep -qF "\`${REPIN_SHORT}\` is a branch commit, not a tag" <<<"$flat" ||
+        problems+=("the branch-commit sentence does not name \`$REPIN_SHORT\`")
+    local sentence_ok=0 day
+    for day in "$day_before" "$day_after"; do
+        if grep -qF "Re-pinned ${day} by the Dependabot \`internal-reusable-workflows\` group update (${want_ref}); the prior pin was \`${old_pin}\`." <<<"$flat"; then
+            sentence_ok=1
+        fi
+    done
+    [ "$sentence_ok" -eq 1 ] ||
+        problems+=("no 'Re-pinned ${day_after} … (${want_ref}); the prior pin was \`${old_pin}\`.' sentence")
+    local old_count
+    old_count=$(grep -oF "\`${old_pin}\`" <<<"$section" | wc -l | tr -d ' ')
+    [ "$old_count" -eq 1 ] ||
+        problems+=("\`$old_pin\` appears $old_count time(s) in the section; only the prior-pin mention should remain")
+    [ "$(solace_section "$PROSE_DOC" | wc -l)" -eq "$(solace_section "$tmp/$DOC" | wc -l)" ] ||
+        problems+=("the section's line count changed; the rewrite must keep the existing line breaks")
+    diff -q <(outside_solace_section "$PROSE_DOC") <(outside_solace_section "$tmp/$DOC") >/dev/null ||
+        problems+=("lines outside the Solace-internal section changed")
+    if [ "$want_ref" = "#N" ] && ! grep -q '^::warning::.*REFRESH_PR_NUMBER' "$out_file"; then
+        problems+=("no ::warning:: naming REFRESH_PR_NUMBER while (#N) remains")
+    fi
+
+    if [ "${#problems[@]}" -gt 0 ]; then
+        echo "  NOT OK   $desc"
+        printf '           - %s\n' "${problems[@]}"
+        echo "           --- section after refresh ---"
+        solace_section "$tmp/$DOC" | sed 's/^/           /'
+        echo "           --- refresh output ---"
+        sed 's/^/           /' "$out_file"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_repin_rewrites_prose "a re-pin rewrites the prose, with the PR number" 4242 "#4242"
+test_repin_rewrites_prose "a re-pin rewrites the prose, (#N) left without the PR number" "" "#N"
+
+# Only the Re-pinned paragraph is the re-pin's to rewrite. A later paragraph
+# in the same section that names the old pin records something else (which
+# update did what), so the new pin must not be written into it.
+test_repin_leaves_other_paragraphs() {
+    local desc="a re-pin leaves a later paragraph naming the old pin as it was" tmp got=0 old_pin note
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    old_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    note="History: \`${old_pin}\` was the pin this note was written against."
+    # The note goes in as its own paragraph just before "Two entries have
+    # been dropped", still inside the Solace-internal section.
+    if [ -z "$old_pin" ] || ! grep -q '^Two entries have been dropped' "$tmp/$DOC" ||
+        ! awk -v note="$note" '/^Two entries have been dropped/ && !done { print note; print ""; done = 1 } { print }' \
+            "$tmp/$DOC" >"$tmp/t" || ! mv "$tmp/t" "$tmp/$DOC" || ! repin_solace_workflows "$tmp" "$REPIN_SHA"; then
+        echo "  ERROR    $desc (fixture assumption broke)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && REFRESH_PR_NUMBER=4242 "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    if [ "$got" -ne 0 ] || ! grep -qxF "$note" "$tmp/$DOC" ||
+        ! grep -q "^\`${REPIN_SHORT}\` is a branch commit" "$tmp/$DOC"; then
+        echo "  NOT OK   $desc (exit $got; the note must be unchanged and the branch-commit sentence re-pinned)"
+        solace_section "$tmp/$DOC" | sed 's/^/           /'
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_repin_leaves_other_paragraphs
+# The number is used only by the run that re-pins; a later run is not one,
+# so a "(#N)" an earlier run left stays for a person (or a fresh re-pin run).
+test_repin_rewrites_prose "a re-run with the PR number does not fill the (#N), and warns" 4242 "#N" rerun
+test_repin_rewrites_prose "a re-run without the PR number keeps (#N) and warns again" "" "#N" rerun
+
+# A "(#N)" already in the prose belongs to an earlier re-pin: a run that does
+# not re-pin never writes its PR number into it, so an unrelated PR cannot be
+# credited with someone else's re-pin. The accept side is the re-pin cases
+# above, which do write the number.
+stale_placeholder() { # <tmp> — the Re-pinned sentence says (#N), dated in the past
+    sed -E 's/(Re-pinned )[0-9]{4}-[0-9]{2}-[0-9]{2}/\12020-01-02/; s/group update \(#[0-9]+\)/group update (#N)/' \
+        "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -qF 'Re-pinned 2020-01-02' "$1/$DOC" && grep -qF '(#N)' "$1/$DOC"
+}
+
+# assert_noop <desc> <mutation fn + args>
+#   Runs refresh on the converged document after <mutation>, and requires
+#   exit 0 with the file byte-for-byte as the mutation left it.
+assert_noop() {
+    local desc="$1"
+    shift
+    local tmp got=0
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    if ! "$@" "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation '$1' failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    cp "$tmp/$DOC" "$tmp/pre"
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    if [ "$got" -ne 0 ] || ! diff -u "$tmp/pre" "$tmp/$DOC" >"$tmp/diff" 2>&1; then
+        echo "  NOT OK   $desc (want exit 0 and the file untouched; got exit $got)"
+        sed 's/^/           /' "$tmp/diff" "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+
+# Accept side of the case above: rows already on two pins (both matching
+# the workflows) have no one pin to name, so a run with nothing to fix leaves
+# the prose alone rather than refusing.
+assert_noop "rows already on two pins with nothing to fix stay a clean no-op" split_pins_by_hand
+REFRESH_PR_NUMBER=4242 assert_noop "a PR number on a run that does not re-pin leaves an existing (#N)" stale_placeholder
+
+# Nothing to fix, rows on one pin the prose does not name, and the prose not
+# found: still a no-op (exit 0), but not a silent one.
+hand_repin() { # <tmp> — workflows and rows re-pinned by hand, prose left behind
+    local old
+    old=$(get_row_field "$1/$DOC" "SolaceDev/solace-public-workflows/guardian-db-sync" 2 | tr -d '`')
+    repin_solace_workflows "$1" "$REPIN_SHA" &&
+        sed -E "/^\| \`SolaceDev\/solace-public-workflows\//s/\| \`${old}\` \|/| \`${REPIN_SHORT}\` |/" \
+            "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+}
+hand_repin_reworded() { # <tmp>
+    hand_repin "$1" && reword_repin_prose "$1"
+}
+reword_branch_commit() { # <tmp> — the sentence the prose pin is read from, reworded
+    sed 's/is a branch commit/is a commit on a branch/' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -qF 'is a commit on a branch' "$1/$DOC"
+}
+hand_repin_reworded_branch() { # <tmp>
+    hand_repin_reworded "$1" || return 1
+    # Undo hand_repin_reworded's Re-pinned rewording; reword the other sentence.
+    sed 's/Pinned again /Re-pinned /' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    reword_branch_commit "$1"
+}
+hand_repin_reworded_then_drop() { # <tmp> — an unrelated drop over prose that already lagged
+    hand_repin_reworded "$1" || return 1
+    local f
+    for f in "$1"/.github/workflows/*.yaml "$1"/.github/workflows/*.yml; do
+        [ -f "$f" ] || continue
+        grep -v 'SolaceDev/solace-public-workflows/prisma-cloud-scan@' "$f" >"$f.t" || true
+        mv "$f.t" "$f"
+    done
+}
+# test_unreconciled_prose_warns <desc> <mutation> <want-file: same|changed>
+#   Only a re-pin rewrites the prose. Any other run that leaves the rows on a
+#   pin the prose does not name exits 0, leaves the prose as it was, and warns.
+test_unreconciled_prose_warns() {
+    local desc="$1" mutation="$2" want_file="$3" tmp got=0
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    if ! "$mutation" "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    cp "$tmp/$DOC" "$tmp/pre"
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    local same=1 prose_same=1
+    diff -q "$tmp/pre" "$tmp/$DOC" >/dev/null || same=0
+    diff -q <(solace_section "$tmp/pre" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
+        prose_same=0
+    if [ "$got" -ne 0 ] || [ "$prose_same" -ne 1 ] || { [ "$want_file" = "same" ] && [ "$same" -ne 1 ]; } ||
+        { [ "$want_file" = "changed" ] && [ "$same" -ne 0 ]; } ||
+        ! grep -q "^::warning::.*\`${REPIN_SHORT}\`" "$tmp/out"; then
+        echo "  NOT OK   $desc (want exit 0, prose untouched, file $want_file and a ::warning:: naming \`$REPIN_SHORT\`; got exit $got)"
+        sed 's/^/           /' "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_unreconciled_prose_warns "prose lagging a table re-pinned by hand is left alone, with a warning" \
+    hand_repin same
+
+# The warning is quoted verbatim to a person by the skill, so its text is
+# checked, not just its presence: the prose's pin once printed twice.
+test_hand_repin_warning_text() {
+    local desc="the hand re-pin warning names the prose's pin once" tmp prose_pin
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    prose_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    if [ -z "$prose_pin" ] || ! hand_repin "$tmp"; then
+        echo "  ERROR    $desc (fixture assumption broke)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || true
+    if ! grep -qF "names \`${prose_pin}\`. The prose is rewritten only on a re-pin" "$tmp/out"; then
+        echo "  NOT OK   $desc"
+        grep '^::warning::' "$tmp/out" | sed 's/^/           /'
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_hand_repin_warning_text
+test_unreconciled_prose_warns "a hand re-pin whose prose cannot be found warns, exit 0" \
+    hand_repin_reworded same
+test_unreconciled_prose_warns "a hand re-pin whose branch-commit sentence cannot be found warns, exit 0" \
+    hand_repin_reworded_branch same
+test_unreconciled_prose_warns "a drop over prose that already lagged is not refused, and warns" \
+    hand_repin_reworded_then_drop changed
+
+# Rows on two pins contradict prose that says they share one, so that state
+# warns too, with every pin on the one line, and the prose is left alone.
+test_unreconciled_prose_warns "rows already on two pins warn that the prose names one pin" \
+    split_pins_by_hand same
+
+# Rows joining a pin the table already uses write no new pin, so this is not
+# a re-pin: the rows are fixed, the prose is left alone, and the run warns.
+split_then_join() { # <tmp>
+    split_pins_by_hand "$1" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+split_reword_then_join() { # <tmp>
+    split_pins_by_hand "$1" && reword_repin_prose "$1" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+split_reword_branch_then_join() { # <tmp>
+    split_pins_by_hand "$1" && reword_branch_commit "$1" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+test_unreconciled_prose_warns "rows joining a pin the table already uses leave the prose, with a warning" \
+    split_then_join changed
+test_unreconciled_prose_warns "rows joining a pin, with the Re-pinned sentence reworded, warn" \
+    split_reword_then_join changed
+test_unreconciled_prose_warns "rows joining a pin, with the branch-commit sentence reworded, warn" \
+    split_reword_branch_then_join changed
+
+# The prose names the same commit as the rows, written at 8 characters. Read
+# as a different pin, a run with nothing to fix would replace the real re-pin
+# history with today's date and "(#N)". Only a 7-character pin is read.
+long_prose_pin() { # <tmp>
+    local pin
+    pin=$(solace_section "$1/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    [ -n "$pin" ] || return 1
+    sed "s/^\`${pin}\` is a branch commit/\`${pin}0\` is a branch commit/" "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -q "^\`${pin}0\` is a branch commit" "$1/$DOC"
+}
+assert_noop "a prose pin not written at 7 characters is not read as a different pin" long_prose_pin
+
+# Rows that were already on two pins are a state a run accepts (above), so a
+# later change to them that moves no pin must not be refused for it. The
+# accept side is "a re-pin that leaves the rows on two different pins is
+# refused", which starts from one shared pin.
+split_then_drop() { # <tmp>
+    split_pins_by_hand "$1" || return 1
+    local f
+    for f in "$1"/.github/workflows/*.yaml "$1"/.github/workflows/*.yml; do
+        [ -f "$f" ] || continue
+        grep -v 'SolaceDev/solace-public-workflows/prisma-cloud-scan@' "$f" >"$f.t" || true
+        mv "$f.t" "$f"
+    done
+}
+split_then_typo() { # <tmp>
+    split_pins_by_hand "$1" &&
+        change_field "$1" "SolaceDev/solace-public-workflows/prisma-cloud-scan" \
+            "$(get_row_field "$1/$DOC" "SolaceDev/solace-public-workflows/prisma-cloud-scan" 2 | tr -d '`')" '0000000'
+}
+# assert_split_change <desc> <want-prisma-row: absent|present> <mutation>
+assert_split_change() {
+    local desc="$1" want="$2" mutation="$3" tmp got=0 problems=()
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    if ! "$mutation" "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation '$mutation' failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    [ "$got" -eq 0 ] || problems+=("expected exit 0, got $got")
+    local row
+    row=$(grep -cE '^\| `SolaceDev/solace-public-workflows/prisma-cloud-scan`' "$tmp/$DOC" || true)
+    if [ "$want" = "absent" ] && [ "$row" -ne 0 ]; then problems+=("the dropped row is still listed"); fi
+    if [ "$want" = "present" ] && ! grep -qE '^\| `SolaceDev/solace-public-workflows/prisma-cloud-scan` \| `[0-9a-f]{7}` \|' "$tmp/$DOC"; then
+        problems+=("the mistyped row was not fixed back")
+    fi
+    grep -q '0000000' "$tmp/$DOC" && problems+=("the mistyped ref is still in the file")
+    diff -q <(solace_section "$PROSE_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
+        problems+=("the prose below the table changed")
+    if [ "${#problems[@]}" -gt 0 ]; then
+        echo "  NOT OK   $desc"
+        printf '           - %s\n' "${problems[@]}"
+        sed 's/^/           /' "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+assert_split_change "a row dropped from rows already on two pins is not refused" absent split_then_drop
+assert_split_change "a mistyped row among rows already on two pins is fixed, not refused" present split_then_typo
+
+# The refuse side of the case above: rows already on two pins do not excuse
+# a fix that brings in a pin they did not carry.
+split_then_tag() { # <tmp>
+    split_pins_by_hand "$1" && repin_solace_workflows "$1" "v9.9.9"
+}
+split_then_third_pin() { # <tmp> — five of six moved to a third SHA
+    split_pins_by_hand "$1" &&
+        repin_solace_workflows "$1" "fedcba9876543210fedcba9876543210fedcba98" \
+            '[^@[:space:]]*(fossa-guard|sca-scan|update-manifest|prisma-cloud-scan|vulnerability-gate)'
+}
+split_then_remove_all() { # <tmp>
+    split_pins_by_hand "$1" && remove_solace_workflows "$1"
+}
+INVENTORY_SOURCE="$PROSE_DOC"
+assert_refresh "a re-pin to a tag from rows already on two pins is refused" 1 - split_then_tag
+assert_refresh "a re-pin to a third SHA from rows already on two pins is refused" 1 - split_then_third_pin
+unset INVENTORY_SOURCE
+
+# Every Solace-internal reference removed: the rows go, as before, and the
+# prose is left for a person with a warning — there is no pin to name.
+remove_solace_workflows() { # <tmp>
+    local f
+    for f in "$1"/.github/workflows/*.yaml "$1"/.github/workflows/*.yml; do
+        [ -f "$f" ] || continue
+        grep -v 'SolaceDev/solace-public-workflows/' "$f" >"$f.t" || true
+        mv "$f.t" "$f"
+    done
+    ! grep -rq 'SolaceDev/solace-public-workflows/' "$1/.github/workflows"
+}
+# test_drop_all_solace_rows <desc> <mutation>
+test_drop_all_solace_rows() {
+    local desc="$1" mutation="$2"
+    local tmp got=0 problems=()
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    if ! "$mutation" "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    [ "$got" -eq 0 ] || problems+=("expected exit 0, got $got")
+    ! grep -qE '^\| `SolaceDev/solace-public-workflows/' "$tmp/$DOC" ||
+        problems+=("Solace-internal rows are still listed")
+    diff -q <(solace_section "$PROSE_DOC" | grep -v '^|') <(solace_section "$tmp/$DOC" | grep -v '^|') >/dev/null ||
+        problems+=("the prose below the table changed")
+    grep -q '^::warning::Every SolaceDev/solace-public-workflows row was dropped' "$tmp/out" ||
+        problems+=("no ::warning:: that the prose needs a person")
+    if [ "${#problems[@]}" -gt 0 ]; then
+        echo "  NOT OK   $desc"
+        printf '           - %s\n' "${problems[@]}"
+        sed 's/^/           /' "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_drop_all_solace_rows "dropping every Solace-internal row leaves the prose, with a warning" \
+    remove_solace_workflows
+test_drop_all_solace_rows "dropping every row from rows already on two pins still warns" \
+    split_then_remove_all
+
+# Accept side of REFRESH_PR_NUMBER: a valid number with nothing re-pinned
+# changes nothing. Starts from the converged rows with a concrete PR
+# reference: on an unrefreshed re-pin PR the converged document itself says
+# "(#N)" dated today, which a run with a number would rightly fill.
+concrete_ref() { # <tmp>
+    sed -E 's/group update \(#(N|[0-9]+)\)/group update (#540)/' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -qF 'group update (#540)' "$1/$DOC"
+}
+REFRESH_PR_NUMBER=4242 assert_noop "a PR number with no re-pin is a clean no-op" concrete_ref
+
+# A consistent table and prose produce no warning at all: the warnings below
+# are worth reading only if they never fire on a clean run.
+test_clean_run_is_quiet() {
+    local desc="a run over consistent rows and prose prints no warning" tmp got=0 n
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$PROSE_DOC" setup_refresh_fixture "$tmp"
+    if ! concrete_ref "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && REFRESH_PR_NUMBER=4242 "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    n=$(grep -c '^::warning::' "$tmp/out" || true)
+    if [ "$got" -ne 0 ] || [ "$n" -ne 0 ]; then
+        echo "  NOT OK   $desc (exit $got, $n warning(s))"
+        sed 's/^/           /' "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_clean_run_is_quiet
+
+# Refusals: each leaves the file exactly as the mutation left it (asserted by
+# assert_refresh's want=1 branch), so no half-rewritten table is left behind.
+INVENTORY_SOURCE="$PROSE_DOC"
+REFRESH_PR_NUMBER="540x" assert_refresh "a malformed REFRESH_PR_NUMBER is refused before anything is written" 1 - \
+    repin_solace_workflows "$REPIN_SHA"
+REFRESH_PR_NUMBER="0" assert_refresh "REFRESH_PR_NUMBER=0 is refused" 1 - \
+    repin_solace_workflows "$REPIN_SHA"
+# On some C libraries bash's [0-9] also matches other scripts' digits under
+# a UTF-8 locale (glibc 2.31 does; glibc 2.43 and macOS do not). The number
+# lands in a Legal document and the next re-pin must be able to read it back,
+# so only ASCII digits pass. The value starts with an ASCII digit so that
+# ASCII_DIGIT, not the spelled-out leading-digit set, is what refuses it.
+# Only on a library whose [0-9] matches `０` can this case fail without the
+# fix; elsewhere it still checks the refusal. Skipped, not passed, without an
+# en_US UTF-8 locale. en_US rather than C.UTF-8: C.UTF-8 collates by
+# codepoint, so its [0-9] is ASCII-only everywhere.
+utf8_locale=$(locale -a 2>/dev/null | grep -iE '^en_us\.utf-?8$' | head -n 1 || true)
+if [ -n "$utf8_locale" ]; then
+    LC_ALL="$utf8_locale" REFRESH_PR_NUMBER="54０" assert_refresh \
+        "a full-width digit in REFRESH_PR_NUMBER is refused under a UTF-8 locale" 1 - \
+        repin_solace_workflows "$REPIN_SHA"
+else
+    echo "  skip     a full-width digit in REFRESH_PR_NUMBER is refused under a UTF-8 locale (no en_US UTF-8 locale)"
+    skip=$((skip + 1))
+fi
+assert_refresh "a re-pin with the Re-pinned sentence reworded is refused, not half-applied" 1 - \
+    reword_and_repin
+# The prose already named a pin no row carried before the re-pin: the
+# "prior pin" and the other mentions it would rewrite are not the rows' own,
+# so the re-pin is refused rather than written as if they were.
+stale_prose_then_repin() { # <tmp>
+    local pin
+    pin=$(solace_section "$1/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    [ -n "$pin" ] || return 1
+    sed "s/^\`${pin}\` is a branch commit/\`0000000\` is a branch commit/" "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC" &&
+        grep -q '^`0000000` is a branch commit' "$1/$DOC" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+assert_refresh "a re-pin over prose naming a pin no row carried is refused" 1 - \
+    stale_prose_then_repin
+reword_branch_and_repin() { # <tmp>
+    reword_branch_commit "$1" && repin_solace_workflows "$1" "$REPIN_SHA"
+}
+assert_refresh "a re-pin with the branch-commit sentence not found is refused" 1 - \
+    reword_branch_and_repin
+assert_refresh "a re-pin that leaves the rows on two different pins is refused" 1 - \
+    repin_solace_workflows "$REPIN_SHA" 'guardian-db-sync'
+# The prose calls the pin a branch commit and the next re-pin looks for a hex
+# SHA there; the accept side is every 40-hex re-pin case above.
+assert_refresh "a re-pin to a tag is refused, not written in as a branch commit" 1 - \
+    repin_solace_workflows "v1.0.0"
+# Refs whose first seven characters are hex: only the full ref says it is not
+# a commit SHA, so the check must not run on the 7-character cell value.
+assert_refresh "a re-pin to a branch with a hex-looking prefix is refused" 1 - \
+    repin_solace_workflows "deadbeef-fix"
+assert_refresh "a re-pin to an 8-character abbreviation is refused" 1 - \
+    repin_solace_workflows "cafe1234"
+# Exactly 7 hex characters looks like the cell value, but a `uses:` ref that
+# short is a branch or tag name, never a commit SHA.
+assert_refresh "a re-pin to a 7-character hex ref is refused" 1 - \
+    repin_solace_workflows "cafe123"
+unset INVENTORY_SOURCE
 
 # A brand-new UNPINNED action: exit code alone can't tell "refused via the
 # specific not-SHA-pinned message" apart from "refused via the generic

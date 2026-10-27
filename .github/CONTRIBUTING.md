@@ -500,8 +500,11 @@ diffs against the two checks' own diagnostics, rewrites only the row(s) that
 drifted, reads each new licence fresh rather than inferring one, and refuses
 outright (leaving the file untouched) on anything it doesn't recognize (a
 brand-new container image or npm package, a strong-copyleft licence, a
-duplicate or unparseable row) rather than guess. Review its diff and commit as
-usual.
+duplicate or unparseable row) rather than guess. When the PR re-pins
+`SolaceDev/solace-public-workflows`, it also rewrites the re-pin note below that
+table and needs the PR number for it: see
+[Rebuilding This File](../THIRD_PARTY_BUILD_TEST.md#rebuilding-this-file) for
+`REFRESH_PR_NUMBER`. Review its diff and commit as usual.
 
 If it refuses, that's not a bug to work around: it's telling you the
 remaining fix needs a human decision. Run the underlying check

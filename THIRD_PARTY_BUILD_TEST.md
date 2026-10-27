@@ -207,13 +207,12 @@ All six come from one repository and now share a single pin.
 | `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `878b2f3` | Solace |
 | `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `878b2f3` | Solace |
 
-`a9fb775` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-10-23 by the Dependabot
-`internal-reusable-workflows` group update (#540); the prior pin was `fc6b754`.
+`878b2f3` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-10-27 by the Dependabot
+`internal-reusable-workflows` group update (#552); the prior pin was `a9fb775`.
 
-This update collapsed `update-manifest.yaml` into the shared pin: all six now
-agree on `a9fb775`, so the separate-pin note that once stood here no longer
-applies.
+The 2026-10-23 update (#540) collapsed `update-manifest.yaml` into the shared
+pin, so the separate-pin note that once stood here no longer applies.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
@@ -326,6 +325,20 @@ actually drifted (reading each new license fresh, never inferring one), and
 refuses outright rather than guess at anything it doesn't recognize —
 review its diff and commit as usual. A Dependabot PR still needs a human to
 run it; Dependabot itself cannot execute post-update scripts (SOL-152956).
+
+When the `SolaceDev/solace-public-workflows` pin moves, the same run rewrites
+the prose below the [Solace-internal table](#solace-internal-composite-actions):
+the pin, the re-pin date and the prior pin, in that paragraph only. Pass the
+Dependabot PR's number as
+`REFRESH_PR_NUMBER=<n> make refresh-third-party-inventory` so the sentence can
+cite it; without it the sentence says `(#N)` for you to fill in. Only the run
+that re-pins uses the number, so it is safe to pass on any PR. The run refuses, writing nothing, when the re-pin would
+leave these rows on more than one pin or on anything but a commit SHA, or when
+it cannot find the sentence to update. Only a re-pin to a new commit rewrites
+this prose: when the rows end up on a pin it does not name any other way (rows
+re-pinned by hand, say), the run leaves it alone and warns. Every such warning
+means the prose needs a person before the change is committed: the check never
+reads the prose, so an unattended run must treat any warning as a failure.
 
 The following commands are what that target runs under the hood, kept here for
 anyone auditing the inventory by hand rather than trusting the script.

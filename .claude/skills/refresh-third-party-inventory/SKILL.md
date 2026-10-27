@@ -91,13 +91,18 @@ nothing further, for exactly the same-repository case Check 1 above just confirm
 
 ### Step 4: Run the refresh
 
-`make refresh-third-party-inventory` from the repo root.
+`REFRESH_PR_NUMBER=<PR> make refresh-third-party-inventory` from the repo root, with the PR number
+from Step 1. When the PR re-pins `SolaceDev/solace-public-workflows`, the refresh also rewrites the
+"Re-pinned … (#<PR>)" prose below that table and cites this number; on any other PR the script
+ignores it.
 
 - **If `make` itself fails because the target doesn't exist** ("No rule to make target..."): this
   means SOL-152956 (which ships the target) hasn't reached this branch — say so plainly and stop.
   This is not the same thing as the refusal case below; don't describe it as "the script refused."
-- **If it exits 0 with no file changes:** the inventory already matches. Report that, restore the
-  original branch (Step 8), and stop — the check is failing for a reason this skill doesn't cover
+- **If it exits 0 with no file changes:** the table already matches. First quote every
+  `::warning::` line from the run verbatim: a matching table can still sit beside prose that needs a
+  human edit (rows re-pinned by hand, or a `(#N)` an earlier run left), and that repair is the
+  person's to make. Then report it, restore the original branch (Step 8), and stop — the check is failing for a reason this skill doesn't cover
   (back to Step 2's judgment call).
 - **If it exits 0 with changes:** proceed to Step 5.
 - **If it exits nonzero for any other reason:** the underlying scripts refused to guess at
@@ -114,7 +119,11 @@ nothing further, for exactly the same-repository case Check 1 above just confirm
 
 ### Step 5: Show the diff and stop
 
-`git diff`. Present it clearly — which file(s) changed, which rows, old value → new value.
+`git diff`. Present it clearly — which file(s) changed, which rows, old value → new value, and on a
+`SolaceDev/solace-public-workflows` re-pin the "Re-pinned …" prose below that table. Then quote every
+`::warning::` line from Step 4's output verbatim. A warning there means a human edit is still needed
+before this can be committed (a `(#N)` still in the prose, or prose that no longer names the rows'
+pin): say so, and do not treat the diff as ready until the person has dealt with it.
 **Wait for explicit confirmation before proceeding.** "Looks right" or equivalent from the person
 who asked for this is the checkpoint; do not infer consent from silence or move on unprompted.
 
