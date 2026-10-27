@@ -15,8 +15,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -277,44 +279,59 @@ func TestCountOpenFDsChildProcessIsNotCorrected(t *testing.T) {
 	// outliving a panic.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sleep", "30")
+	//
+	// The child is cat, not sleep, so the test can tell when it has finished
+	// starting. A freshly exec'd process is still opening and closing the
+	// loader's and locale's descriptors, and no amount of polling /proc can
+	// tell "settled" from "between an open and its close" — two back-to-back
+	// reads agreeing was the old heuristic, and it still flaked (6 vs 5 in
+	// CI). cat echoing a line back proves it is past startup and blocked in
+	// read(0), after which its descriptor table does not change.
+	cmd := exec.CommandContext(ctx, "cat")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot start a child process to sample: %v", err)
 	}
+	// cmd.Wait, not cmd.Process.Wait: only cmd.Wait closes our ends of the two
+	// pipes. Leaked, they get closed later by finalizers at an arbitrary
+	// moment — mid-way through TestCountOpenFDsSelfExcludesItsOwnHandle's two
+	// reads of /proc/self/fd, which is how a leak here fails that test.
 	t.Cleanup(func() {
 		cancel()
-		_, _ = cmd.Process.Wait()
+		_ = cmd.Wait()
 	})
 	pid := cmd.Process.Pid
 	fdDir := fmt.Sprintf("/proc/%d/fd", pid)
 
-	// Wait for the child's descriptor table to settle before comparing.
-	//
-	// A freshly started process is still closing the loader's descriptors, so
-	// sampling it once and comparing against a second read taken a moment
-	// later compares two different instants — which made this test flake (a
-	// 4-vs-3 disagreement on one run in seven). Poll until two consecutive
-	// direct reads agree, then compare that settled count against the
-	// function's answer.
-	var settled int
-	for attempt := 0; attempt < 50; attempt++ {
-		first, err := os.ReadDir(fdDir)
-		if err != nil {
-			t.Fatalf("reading %s: %v", fdDir, err)
-		}
-		second, err := os.ReadDir(fdDir)
-		if err != nil {
-			t.Fatalf("reading %s: %v", fdDir, err)
-		}
-		if len(first) == len(second) {
-			settled = len(first)
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if _, err := io.WriteString(stdin, "ready\n"); err != nil {
+		t.Fatalf("writing to child: %v", err)
 	}
-	if settled == 0 {
-		t.Skip("the child's descriptor table never settled; nothing to compare against")
+	echoed := make(chan error, 1)
+	go func() {
+		_, err := bufio.NewReader(stdout).ReadString('\n')
+		echoed <- err
+	}()
+	select {
+	case err := <-echoed:
+		if err != nil {
+			t.Fatalf("reading child's echo: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("child never echoed; cannot tell when its descriptor table is stable")
 	}
+
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", fdDir, err)
+	}
+	settled := len(entries)
 
 	got, err := countOpenFDs(pid)
 	if err != nil {
