@@ -59,10 +59,11 @@ func newServerOptions(cfg *config.ServerConfig) *mcp.ServerOptions {
 //
 // SetCacheable also fires for server/discover and every other list method.
 // Those are left alone: discover is the same for every caller, and the server
-// registers no prompts or resources. The type switch is what keeps this change
+// registers no prompts or resources. The type assertion is what keeps this change
 // to tools/list.
 //
-// Runs with the server's mutex held, so it must not call back into the server.
+// The SDK calls it with the server's mutex held for the four list methods, so it
+// must not call back into the server.
 func toolsListCacheable(toolAuthorization bool) func(context.Context, mcp.Request, *mcp.Cacheable) {
 	return func(_ context.Context, req mcp.Request, c *mcp.Cacheable) {
 		if !toolAuthorization {

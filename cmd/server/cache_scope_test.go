@@ -144,10 +144,20 @@ func (r *bodyRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func (r *bodyRecorder) wireContains(sub string) bool {
+// toolsListBodies returns only the recorded tools/list responses. The first
+// response of every session, server/discover or initialize, carries the same
+// cache fields, so matching against all bodies would pass on that one alone and
+// prove nothing about tools/list.
+func (r *bodyRecorder) toolsListBodies() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.ContainsFunc(r.bodies, func(b string) bool { return strings.Contains(b, sub) })
+	var out []string
+	for _, b := range r.bodies {
+		if strings.Contains(b, `"tools":[`) {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // connectAs serves server over HTTP behind a verifier that yields group "Ops"
@@ -247,13 +257,19 @@ func TestToolsListCacheScope_EveryPageOnTheWire(t *testing.T) {
 				}
 
 				// The same fields as they crossed the wire, which is what a
-				// gateway sees: present for this protocol revision, not merely
-				// decoded by the client.
-				if !rec.wireContains(`"cacheScope":"` + tt.wantScope + `"`) {
-					t.Errorf("no response body carries cacheScope %q", tt.wantScope)
+				// gateway sees: present on every tools/list response for this
+				// protocol revision, not merely decoded by the client.
+				bodies := rec.toolsListBodies()
+				if len(bodies) != pages {
+					t.Fatalf("recorded %d tools/list response bodies for %d pages", len(bodies), pages)
 				}
-				if !rec.wireContains(`"ttlMs":0`) {
-					t.Error("no response body carries ttlMs 0")
+				for i, b := range bodies {
+					if !strings.Contains(b, `"cacheScope":"`+tt.wantScope+`"`) {
+						t.Errorf("page %d body has no cacheScope %q: %s", i+1, tt.wantScope, b)
+					}
+					if !strings.Contains(b, `"ttlMs":0`) {
+						t.Errorf("page %d body has no ttlMs 0: %s", i+1, b)
+					}
 				}
 			})
 		}
@@ -290,13 +306,19 @@ func TestToolsListHiddenToolStillDeniedOnCall(t *testing.T) {
 	}
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      hidden,
-		Arguments: map[string]any{"broker": "dev"},
+		Name: hidden,
+		// msgVpnName is required by list-queues. Without it a missing-wrapper
+		// regression would still return IsError, from parameter validation.
+		Arguments: map[string]any{"broker": "dev", "msgVpnName": "default"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool %q: protocol error %v, want a tool-level denial", hidden, err)
 	}
-	if !res.IsError {
-		t.Fatalf("hidden tool %q was not denied on tools/call: %+v", hidden, res)
+	// The caller-facing denial is one fixed message, the same for not_permitted
+	// and missing_claim by design, so assert it rather than any tool error.
+	const denied = "You are not authorized to use this tool."
+	payload, ok := res.StructuredContent.(map[string]any)
+	if !res.IsError || !ok || payload["error"] != denied {
+		t.Fatalf("hidden tool %q did not return the authorization denial %q: %+v", hidden, denied, res)
 	}
 }
