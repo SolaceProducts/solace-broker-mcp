@@ -96,10 +96,10 @@ The rows kept are the first ones the event broker returned. A `postProcess`
 tool's `summary` is computed from every row fetched before any are removed, so
 its counts stay complete. To reach the removed rows:
 
-- **`list-queues` and `list-clients`:** repeat the call with the same `cursor`
-  (none for the first page) and `maxResults` at most the number of rows kept,
-  as `truncatedMessage` says. That call's `nextCursor` starts right after the
-  rows it returns.
+- **`list-queues`, `list-topic-endpoints` and `list-clients`:** repeat the call
+  with the same `cursor` (none for the first page) and `maxResults` at most the
+  number of rows kept, as `truncatedMessage` says. That call's `nextCursor`
+  starts right after the rows it returns.
 - **Other tools:** removed rows are not available through the tool; narrow the
   query (a single queue, client or Message VPN) to see them.
 
