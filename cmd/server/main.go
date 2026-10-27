@@ -1395,7 +1395,7 @@ func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
-	}, nil)
+	}, newServerOptions(cfg))
 
 	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a
