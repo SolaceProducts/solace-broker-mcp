@@ -63,7 +63,7 @@ jobs:
       # setup-go gives the release tarballs. It has no default, so this is required.
       - name: Read Go version from go.mod
         id: go
-        run: echo "version=$(awk '$1 == "go" { print $2; exit }' go.mod)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(.github/scripts/go-version.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Build and save for scanning
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

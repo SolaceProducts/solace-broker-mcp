@@ -509,7 +509,7 @@ jobs:
       # tarballs of one release ship one Go. It has no default, so this is required.
       - name: Read Go version from go.mod
         id: go
-        run: echo "version=$(awk '$1 == "go" { print $2; exit }' go.mod)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(.github/scripts/go-version.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta

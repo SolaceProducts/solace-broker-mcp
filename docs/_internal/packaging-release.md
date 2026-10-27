@@ -76,7 +76,7 @@ images (distroless, scratch) and cross-compilation.
 
 ```bash
 docker build \
-  --build-arg GO_VERSION="$(awk '$1 == "go" { print $2; exit }' go.mod)" \
+  --build-arg GO_VERSION="$(.github/scripts/go-version.sh)" \
   --build-arg VERSION=0.1.0 -t solace-broker-mcp:0.1.0 .
 ```
 
