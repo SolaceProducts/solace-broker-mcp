@@ -579,8 +579,6 @@ test_repin_rewrites_prose() {
     fi
     grep -qF "\`${REPIN_SHORT}\` is a branch commit, not a tag" <<<"$flat" ||
         problems+=("the branch-commit sentence does not name \`$REPIN_SHORT\`")
-    grep -qF "agree on \`${REPIN_SHORT}\`" <<<"$flat" ||
-        problems+=("the shared-pin sentence does not name \`$REPIN_SHORT\`")
     local sentence_ok=0 day
     for day in "$day_before" "$day_after"; do
         if grep -qF "Re-pinned ${day} by the Dependabot \`internal-reusable-workflows\` group update (${want_ref}); the prior pin was \`${old_pin}\`." <<<"$flat"; then
@@ -597,8 +595,8 @@ test_repin_rewrites_prose() {
         problems+=("the section's line count changed; the rewrite must keep the existing line breaks")
     diff -q <(outside_solace_section "$CONVERGED_DOC") <(outside_solace_section "$tmp/$DOC") >/dev/null ||
         problems+=("lines outside the Solace-internal section changed")
-    if [ -z "$pr" ] && ! grep -q '^::warning::.*REFRESH_PR_NUMBER' "$out_file"; then
-        problems+=("no ::warning:: naming REFRESH_PR_NUMBER when it was not given")
+    if [ "$want_ref" = "#N" ] && ! grep -q '^::warning::.*REFRESH_PR_NUMBER' "$out_file"; then
+        problems+=("no ::warning:: naming REFRESH_PR_NUMBER while (#N) remains")
     fi
 
     if [ "${#problems[@]}" -gt 0 ]; then
@@ -619,12 +617,49 @@ test_repin_rewrites_prose() {
 }
 test_repin_rewrites_prose "a re-pin rewrites the prose, with the PR number" 4242 "#4242"
 test_repin_rewrites_prose "a re-pin rewrites the prose, (#N) left without the PR number" "" "#N"
-test_repin_rewrites_prose "a re-run with the PR number fills the (#N) an earlier run left" 4242 "#4242" rerun
+
+# Only the Re-pinned paragraph is the re-pin's to rewrite. A later paragraph
+# in the same section that names the old pin records something else (which
+# update did what), so the new pin must not be written into it.
+test_repin_leaves_other_paragraphs() {
+    local desc="a re-pin leaves a later paragraph naming the old pin as it was" tmp got=0 old_pin note
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    old_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    note="History: \`${old_pin}\` was the pin this note was written against."
+    # The note goes in as its own paragraph just before "Two entries have
+    # been dropped", still inside the Solace-internal section.
+    if [ -z "$old_pin" ] || ! grep -q '^Two entries have been dropped' "$tmp/$DOC" ||
+        ! awk -v note="$note" '/^Two entries have been dropped/ && !done { print note; print ""; done = 1 } { print }' \
+            "$tmp/$DOC" >"$tmp/t" || ! mv "$tmp/t" "$tmp/$DOC" || ! repin_solace_workflows "$tmp" "$REPIN_SHA"; then
+        echo "  ERROR    $desc (fixture assumption broke)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && REFRESH_PR_NUMBER=4242 "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    if [ "$got" -ne 0 ] || ! grep -qxF "$note" "$tmp/$DOC" ||
+        ! grep -q "^\`${REPIN_SHORT}\` is a branch commit" "$tmp/$DOC"; then
+        echo "  NOT OK   $desc (exit $got; the note must be unchanged and the branch-commit sentence re-pinned)"
+        solace_section "$tmp/$DOC" | sed 's/^/           /'
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_repin_leaves_other_paragraphs
+# The number is used only by the run that re-pins; a later run is not one,
+# so a "(#N)" an earlier run left stays for a person (or a fresh re-pin run).
+test_repin_rewrites_prose "a re-run with the PR number does not fill the (#N), and warns" 4242 "#N" rerun
 test_repin_rewrites_prose "a re-run without the PR number keeps (#N) and warns again" "" "#N" rerun
 
-# A "(#N)" from an earlier day is someone else's re-pin: a later, unrelated
-# PR's number must not be written into it. The accept side is the same-day
-# "re-run with the PR number fills the (#N)" case above.
+# A "(#N)" already in the prose belongs to an earlier re-pin: a run that does
+# not re-pin never writes its PR number into it, so an unrelated PR cannot be
+# credited with someone else's re-pin. The accept side is the re-pin cases
+# above, which do write the number.
 stale_placeholder() { # <tmp> — the Re-pinned sentence says (#N), dated in the past
     sed -E 's/(Re-pinned )[0-9]{4}-[0-9]{2}-[0-9]{2}/\12020-01-02/; s/group update \(#[0-9]+\)/group update (#N)/' \
         "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
@@ -664,7 +699,7 @@ assert_noop() {
 # the workflows) have no one pin to name, so a run with nothing to fix leaves
 # the prose alone rather than refusing.
 assert_noop "rows already on two pins with nothing to fix stay a clean no-op" split_pins_by_hand
-REFRESH_PR_NUMBER=4242 assert_noop "a PR number does not fill an earlier day's (#N)" stale_placeholder
+REFRESH_PR_NUMBER=4242 assert_noop "a PR number on a run that does not re-pin leaves an existing (#N)" stale_placeholder
 
 # Nothing to fix, rows on one pin the prose does not name, and the prose not
 # found: still a no-op (exit 0), but not a silent one.
@@ -731,6 +766,33 @@ test_unreconciled_prose_warns() {
 }
 test_unreconciled_prose_warns "prose lagging a table re-pinned by hand is left alone, with a warning" \
     hand_repin same
+
+# The warning is quoted verbatim to a person by the skill, so its text is
+# checked, not just its presence: the prose's pin once printed twice.
+test_hand_repin_warning_text() {
+    local desc="the hand re-pin warning names the prose's pin once" tmp prose_pin
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    prose_pin=$(solace_section "$tmp/$DOC" | sed -nE 's/^`([0-9a-f]{7})` is a branch commit.*/\1/p')
+    if [ -z "$prose_pin" ] || ! hand_repin "$tmp"; then
+        echo "  ERROR    $desc (fixture assumption broke)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && "$REFRESH" >"$tmp/out" 2>&1) || true
+    if ! grep -qF "names \`${prose_pin}\`. The prose is rewritten only on a re-pin" "$tmp/out"; then
+        echo "  NOT OK   $desc"
+        grep '^::warning::' "$tmp/out" | sed 's/^/           /'
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_hand_repin_warning_text
 test_unreconciled_prose_warns "a hand re-pin whose prose cannot be found warns, exit 0" \
     hand_repin_reworded same
 test_unreconciled_prose_warns "a hand re-pin whose branch-commit sentence cannot be found warns, exit 0" \
@@ -742,21 +804,6 @@ test_unreconciled_prose_warns "a drop over prose that already lagged is not refu
 # warns too, with every pin on the one line, and the prose is left alone.
 test_unreconciled_prose_warns "rows already on two pins warn that the prose names one pin" \
     split_pins_by_hand same
-
-# A same-day "(#N)" is filled only when the rows still share the pin the
-# prose names: here they were re-pinned by hand since, so a PR number passed
-# now would be attributed to a re-pin it did not make. The accept side is
-# "a re-run with the PR number fills the (#N) an earlier run left".
-sameday_placeholder_then_hand_repin() { # <tmp>
-    local today
-    today=$(date -u +%Y-%m-%d)
-    sed -E "s/(Re-pinned )[0-9]{4}-[0-9]{2}-[0-9]{2}/\\1${today}/; s/group update \\(#(N|[0-9]+)\\)/group update (#N)/" \
-        "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC" &&
-        grep -qF "Re-pinned ${today}" "$1/$DOC" && grep -qF 'group update (#N)' "$1/$DOC" &&
-        hand_repin "$1"
-}
-REFRESH_PR_NUMBER=4242 assert_noop "a same-day (#N) is not filled once the rows left the prose's pin" \
-    sameday_placeholder_then_hand_repin
 
 # Rows joining a pin the table already uses write no new pin, so this is not
 # a re-pin: the rows are fixed, the prose is left alone, and the run warns.

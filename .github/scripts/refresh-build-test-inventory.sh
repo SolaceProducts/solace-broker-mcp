@@ -44,12 +44,13 @@
 # The "Solace-internal composite actions" table is followed by prose that names
 # the shared pin, the date and Dependabot PR of the last re-pin, and the prior
 # pin. On a re-pin, a fix that moves every SolaceDev/solace-public-workflows
-# row to one new commit, this script rewrites that prose too: every backticked
-# old pin becomes the new one, and the "Re-pinned <date> ... (#<PR>); the prior
-# pin was `<old>`" sentence gets today's date, the PR number and the old pin,
-# which is the pin the prose named. The PR number comes from
-# REFRESH_PR_NUMBER; without it the sentence carries a literal "(#N)", and a
-# same-day run with the number set fills it in.
+# row to one new commit, this script rewrites that paragraph too: every
+# backticked old pin in it becomes the new one, and the "Re-pinned <date> ...
+# (#<PR>); the prior pin was `<old>`" sentence gets today's date, the PR
+# number and the old pin, which is the pin the prose named. Later paragraphs
+# in the section are left alone. The PR number comes from REFRESH_PR_NUMBER
+# and is used only by a re-pin run, so a caller may pass it on every PR;
+# without it the sentence carries a literal "(#N)" for a person to replace.
 #
 # The check never reads this prose, so it is checked here, before anything is
 # written. A Solace-internal ref that is not a full commit SHA is refused. A
@@ -58,6 +59,11 @@
 # prose: a run that only drops or fixes rows, or finds rows re-pinned by hand,
 # leaves it alone and prints a warning when the rows no longer share the pin it
 # names. Dropping every row leaves the prose with a warning too.
+#
+# Every ::warning:: this script prints about the prose means a person must
+# edit it before the change is committed; the check never reads the prose, so
+# a run can exit 0 with it wrong. An unattended caller (SOL-153374) must treat
+# any ::warning:: line from this script as a failure.
 #
 # Usage: [REFRESH_PR_NUMBER=<n>] .github/scripts/refresh-build-test-inventory.sh
 #   REFRESH_PR_NUMBER  number of the Dependabot PR that re-pinned
@@ -126,13 +132,13 @@ run_check() {
 #   next heading. Modes:
 #     pin      print the pin the prose names ("`<sha>` is a branch commit",
 #              exactly 7 hex characters)
-#     check    exit 0 if the Re-pinned sentence occurs exactly once
-#     ref      print that sentence's PR reference ("#540", or "#N")
-#     date     print that sentence's date
-#     setref   print <doc> with only that reference set to (<pr-ref>)
-#     rewrite  print <doc> with every backticked <old-pin> in that prose set to
-#              <new-pin>, then the Re-pinned sentence's date, (#...) and prior
-#              pin set to <date>, (<pr-ref>) and <old-pin>
+#     ref      print the Re-pinned sentence's PR reference ("#540", or "#N")
+#     check    exit 0 if the Re-pinned sentence occurs exactly once, after the
+#              branch-commit sentence
+#     rewrite  print <doc> with, in the Re-pinned paragraph only (branch-commit
+#              sentence to the end of the Re-pinned sentence), every
+#              backticked <old-pin> set to <new-pin>, then the date, (#...)
+#              and prior pin set to <date>, (<pr-ref>) and <old-pin>
 #   Exits 3 when the section, its table or the expected text is missing.
 #   The sentence may wrap anywhere, so it is matched across the joined lines
 #   with [[:space:]]+, and only the three values are spliced in: the
@@ -160,10 +166,13 @@ repin_prose() {
 
             sentence = "Re-pinned[[:space:]]+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][[:space:]]+by[[:space:]]+the[[:space:]]+Dependabot[[:space:]]+`internal-reusable-workflows`[[:space:]]+group[[:space:]]+update[[:space:]]+\\(#([0-9]+|N)\\);[[:space:]]+the[[:space:]]+prior[[:space:]]+pin[[:space:]]+was[[:space:]]+`[0-9a-f]+`"
 
+            # Exactly 7 characters, as in the table rows: the same commit
+            # written longer must not read as a different pin.
+            h = "[0123456789abcdef]"
+            branch = "`" h h h h h h h "`[[:space:]]+is[[:space:]]+a[[:space:]]+branch[[:space:]]+commit"
+
             if (mode == "pin") {
-                # Exactly 7 characters, as in the table rows: the same commit
-                # written longer must not read as a different pin.
-                if (!match(text, /`[0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef][0123456789abcdef]`[[:space:]]+is[[:space:]]+a[[:space:]]+branch[[:space:]]+commit/)) exit 3
+                if (!match(text, branch)) exit 3
                 s = substr(text, RSTART + 1)
                 print substr(s, 1, index(s, "`") - 1)
                 exit 0
@@ -172,41 +181,40 @@ repin_prose() {
             n = 0; rest = text
             while (match(rest, sentence)) { n++; rest = substr(rest, RSTART + RLENGTH) }
             if (n != 1) exit 3
-            if (mode == "check") exit 0
-
-            if (mode == "rewrite") {
-                # Old pin to new first, so the prior pin written next survives.
-                out = ""; rest = text; o = "`" old "`"
-                while ((k = index(rest, o)) > 0) {
-                    out = out substr(rest, 1, k - 1) "`" new "`"
-                    rest = substr(rest, k + length(o))
-                }
-                text = out rest
-            }
-
             match(text, sentence)
-            pre = substr(text, 1, RSTART - 1); m = substr(text, RSTART, RLENGTH); post = substr(text, RSTART + RLENGTH)
-            if (mode == "date") {
-                match(m, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)
-                print substr(m, RSTART, RLENGTH)
-                exit 0
-            }
+            ss = RSTART; se = RSTART + RLENGTH
+
             if (mode == "ref") {
+                m = substr(text, ss, se - ss)
                 match(m, /\(#([0-9]+|N)\)/)
                 print substr(m, RSTART + 1, RLENGTH - 2)
                 exit 0
             }
-            if (mode == "rewrite") {
-                match(m, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)
-                m = substr(m, 1, RSTART - 1) day substr(m, RSTART + RLENGTH)
+
+            # The Re-pinned paragraph runs from the branch-commit sentence to
+            # the end of the Re-pinned sentence; it is all a re-pin rewrites.
+            # Later paragraphs that name a pin record other events.
+            if (!match(text, branch) || RSTART > ss) exit 3
+            bs = RSTART
+            if (mode == "check") exit 0
+
+            pre = substr(text, 1, bs - 1); mid = substr(text, bs, se - bs); post = substr(text, se)
+            # Old pin to new first, so the prior pin written next survives.
+            out = ""; rest = mid; o = "`" old "`"
+            while ((k = index(rest, o)) > 0) {
+                out = out substr(rest, 1, k - 1) "`" new "`"
+                rest = substr(rest, k + length(o))
             }
+            mid = out rest
+            match(mid, sentence)
+            mpre = substr(mid, 1, RSTART - 1); m = substr(mid, RSTART, RLENGTH)
+            match(m, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)
+            m = substr(m, 1, RSTART - 1) day substr(m, RSTART + RLENGTH)
             match(m, /\(#([0-9]+|N)\)/)
             m = substr(m, 1, RSTART - 1) "(" ref ")" substr(m, RSTART + RLENGTH)
-            if (mode == "rewrite") {
-                match(m, /`[0-9a-f]+`$/)
-                m = substr(m, 1, RSTART - 1) "`" old "`"
-            }
-            text = pre m post
+            match(m, /`[0-9a-f]+`$/)
+            m = substr(m, 1, RSTART - 1) "`" old "`"
+            text = pre mpre m post
 
             for (i = 1; i < from; i++) print line[i]
             print text
@@ -239,7 +247,7 @@ prose_old=""
 prose_new=""
 prose_rows_gone=0
 plan_prose() {
-    local repins="$1" pins prose_pin prose_rc=0
+    local repins="$1" pins prose_pin prose_rc=0 named
     pins=$(awk -F'\t' 'NF == 2 && $2 != "" { print $2 }' <<<"$2" | sort -u)
     [ -n "$pins" ] || return 0
     prose_pin=$(repin_prose pin "$DOC") || prose_rc=$?
@@ -251,9 +259,14 @@ plan_prose() {
                 "($(sed 's/.*/`&`/' <<<"$pins" | paste -sd ' ' -)), but the prose below their table says" \
                 "they share one. The prose is rewritten only on a re-pin to a new commit; update it by hand."
         elif [ "$pins" != "$prose_pin" ]; then
+            if [ -n "$prose_pin" ]; then
+                named="\`$prose_pin\`"
+            else
+                named="no pin this script can read"
+            fi
             echo "::warning::The ${SOLACE_INTERNAL_OWNER_REPO} rows are pinned to \`$pins\`, but the prose" \
-                "below their table names ${prose_pin:+\`$prose_pin\`}${prose_pin:-no pin this script can read}." \
-                "The prose is rewritten only on a re-pin to a new commit; update it by hand."
+                "below their table names ${named}. The prose is rewritten only on a re-pin to a new" \
+                "commit; update it by hand."
         fi
         return 0
     fi
@@ -292,16 +305,13 @@ plan_prose() {
 }
 
 # apply_prose <date>
-#   Writes what plan_prose decided. Also fills a "(#N)" an earlier run left
-#   in the Re-pinned sentence when REFRESH_PR_NUMBER is now given, so the
-#   re-run the warning below asks for does what it says — but only when that
-#   sentence carries <date>, i.e. the re-pin is this same day's, and the rows
-#   still share the pin the prose names: an older "(#N)", or one whose re-pin
-#   the rows have since moved away from, belongs to some other change, and a
-#   later PR's number must not be written into it. Sets prose_changed.
+#   Writes what plan_prose decided, citing REFRESH_PR_NUMBER. The number is
+#   used only here, by the run that re-pins; any other run ignores it, so a
+#   caller can pass it on every PR. A "(#N)" that stays in the Re-pinned
+#   sentence is reported on every run until a person replaces it.
 prose_changed=0
 apply_prose() {
-    local day="$1" pr_ref="#N" cur_ref rows_pin
+    local day="$1" pr_ref="#N"
     [ -z "$pr_number" ] || pr_ref="#${pr_number}"
     if [ -n "$prose_new" ]; then
         echo "  prose: ${SOLACE_INTERNAL_OWNER_REPO} re-pinned \`$prose_old\` -> \`$prose_new\` on $day ($pr_ref)"
@@ -309,21 +319,9 @@ apply_prose() {
         mv "$DOC.tmp" "$DOC"
         prose_changed=1
     fi
-    cur_ref=$(repin_prose ref "$DOC" 2>/dev/null || true)
-    rows_pin=$(solace_rows | awk -F'\t' 'NF == 2 && $2 != "" { print $2 }' | sort -u)
-    if [ "$cur_ref" = "#N" ] && [ -n "$pr_number" ] &&
-        [ "$(repin_prose date "$DOC" 2>/dev/null || true)" = "$day" ] &&
-        [ "$(grep -c . <<<"$rows_pin" || true)" -eq 1 ] &&
-        [ "$rows_pin" = "$(repin_prose pin "$DOC" 2>/dev/null || true)" ]; then
-        echo "  prose: (#N) -> ($pr_ref) in the Re-pinned sentence"
-        repin_prose setref "$DOC" "" "" "" "$pr_ref" >"$DOC.tmp"
-        mv "$DOC.tmp" "$DOC"
-        prose_changed=1
-        cur_ref="$pr_ref"
-    fi
-    if [ "$cur_ref" = "#N" ]; then
+    if [ "$(repin_prose ref "$DOC" 2>/dev/null || true)" = "#N" ]; then
         echo "::warning::$DOC says \"(#N)\" where the Dependabot PR number belongs. Replace it by" \
-            "hand, or re-run with REFRESH_PR_NUMBER=<n> on the day of the re-pin (UTC), which fills it in."
+            "hand, or restore the file and re-run the refresh with REFRESH_PR_NUMBER=<n> on the re-pin PR."
     fi
     if [ "$prose_rows_gone" -eq 1 ]; then
         echo "::warning::Every ${SOLACE_INTERNAL_OWNER_REPO} row was dropped. The prose below their" \
