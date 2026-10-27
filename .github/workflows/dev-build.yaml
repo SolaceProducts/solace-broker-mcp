@@ -162,8 +162,8 @@ jobs:
           build-args: |
             GO_VERSION=${{ steps.go.outputs.version }}
             VERSION=${{ steps.ver.outputs.version }}
-          # Read the shared cache, never write it. release.yml:428 and
-          # build-image.yaml:71 already export mode=max into one ~10GB LRU
+          # Read the shared cache, never write it. release.yml:538 and
+          # build-image.yaml:79 already export mode=max into one ~10GB LRU
           # budget; a third writer would evict entries the release build and every
           # PR scan hit. That is the one way this could slow the release path
           # without touching release.yml. The compile layer never cache-hits

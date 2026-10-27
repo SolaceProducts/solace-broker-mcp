@@ -137,12 +137,18 @@ updates:
   # proposes each new digest of its tag. The builder stage is not covered:
   # `golang:${GO_VERSION}-alpine` takes its version from go.mod, which moves
   # only when the `go` directive is raised.
+  #
+  # 3 days, not the 14 above: before the pin every build pulled the newest
+  # digest, so a distroless rebuild carrying a security fix shipped at the next
+  # build. A 14-day hold would leave releases on the known-vulnerable base for
+  # two weeks; 3 days still keeps a just-published digest from being proposed
+  # the moment it lands.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "daily"
     cooldown:
-      default-days: 14
+      default-days: 3
     groups:
       docker-base-images:
         patterns:

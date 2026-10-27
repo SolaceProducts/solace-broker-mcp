@@ -21,8 +21,8 @@ RUN CGO_ENABLED=0 go build \
     ./cmd/server
 
 # Stage 2: Runtime
-# Pinned by digest so a rebuild reproduces the published image; Dependabot's
-# docker entry proposes each new digest of the tag.
+# Pinned by digest so a rebuild of a tag ships the same runtime base;
+# Dependabot's docker entry proposes each new digest of the tag.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 LABEL org.opencontainers.image.source=https://github.com/SolaceProducts/solace-broker-mcp
