@@ -231,10 +231,10 @@ solace_rows() {
 #   the rows carried before the run, in pins_before) and its Re-pinned
 #   sentence must be found, or the run is refused (exit 1)
 #   before any row is written; when they are, prose_old/prose_new are set.
-#   Any other run never touches the prose. When it leaves the rows on one
-#   pin the prose does not name (rows re-pinned by hand, rows joining a pin
-#   the table already used, prose this script cannot read), it says so in a
-#   warning and carries on.
+#   Any other run never touches the prose. When it leaves the rows on more
+#   than one pin, or on one pin the prose does not name (rows re-pinned by
+#   hand, rows joining a pin the table already used, prose this script
+#   cannot read), it says so in a warning and carries on.
 prose_old=""
 prose_new=""
 prose_rows_gone=0
@@ -246,7 +246,11 @@ plan_prose() {
     [ "$prose_rc" -eq 0 ] || prose_pin=""
 
     if [ "$repins" -ne 1 ]; then
-        if [ "$(grep -c . <<<"$pins")" -eq 1 ] && [ "$pins" != "$prose_pin" ]; then
+        if [ "$(grep -c . <<<"$pins")" -ne 1 ]; then
+            echo "::warning::The ${SOLACE_INTERNAL_OWNER_REPO} rows are on more than one pin" \
+                "($(sed 's/.*/`&`/' <<<"$pins" | paste -sd ' ' -)), but the prose below their table says" \
+                "they share one. The prose is rewritten only on a re-pin to a new commit; update it by hand."
+        elif [ "$pins" != "$prose_pin" ]; then
             echo "::warning::The ${SOLACE_INTERNAL_OWNER_REPO} rows are pinned to \`$pins\`, but the prose" \
                 "below their table names ${prose_pin:+\`$prose_pin\`}${prose_pin:-no pin this script can read}." \
                 "The prose is rewritten only on a re-pin to a new commit; update it by hand."
@@ -291,12 +295,13 @@ plan_prose() {
 #   Writes what plan_prose decided. Also fills a "(#N)" an earlier run left
 #   in the Re-pinned sentence when REFRESH_PR_NUMBER is now given, so the
 #   re-run the warning below asks for does what it says — but only when that
-#   sentence carries <date>, i.e. the re-pin is this same day's: an older
-#   "(#N)" belongs to some other PR, and a later, unrelated PR's number must
-#   not be written into it. Sets prose_changed.
+#   sentence carries <date>, i.e. the re-pin is this same day's, and the rows
+#   still share the pin the prose names: an older "(#N)", or one whose re-pin
+#   the rows have since moved away from, belongs to some other change, and a
+#   later PR's number must not be written into it. Sets prose_changed.
 prose_changed=0
 apply_prose() {
-    local day="$1" pr_ref="#N" cur_ref
+    local day="$1" pr_ref="#N" cur_ref rows_pin
     [ -z "$pr_number" ] || pr_ref="#${pr_number}"
     if [ -n "$prose_new" ]; then
         echo "  prose: ${SOLACE_INTERNAL_OWNER_REPO} re-pinned \`$prose_old\` -> \`$prose_new\` on $day ($pr_ref)"
@@ -305,8 +310,11 @@ apply_prose() {
         prose_changed=1
     fi
     cur_ref=$(repin_prose ref "$DOC" 2>/dev/null || true)
+    rows_pin=$(solace_rows | awk -F'\t' 'NF == 2 && $2 != "" { print $2 }' | sort -u)
     if [ "$cur_ref" = "#N" ] && [ -n "$pr_number" ] &&
-        [ "$(repin_prose date "$DOC" 2>/dev/null || true)" = "$day" ]; then
+        [ "$(repin_prose date "$DOC" 2>/dev/null || true)" = "$day" ] &&
+        [ "$(grep -c . <<<"$rows_pin" || true)" -eq 1 ] &&
+        [ "$rows_pin" = "$(repin_prose pin "$DOC" 2>/dev/null || true)" ]; then
         echo "  prose: (#N) -> ($pr_ref) in the Re-pinned sentence"
         repin_prose setref "$DOC" "" "" "" "$pr_ref" >"$DOC.tmp"
         mv "$DOC.tmp" "$DOC"

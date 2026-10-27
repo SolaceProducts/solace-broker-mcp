@@ -738,6 +738,26 @@ test_unreconciled_prose_warns "a hand re-pin whose branch-commit sentence cannot
 test_unreconciled_prose_warns "a drop over prose that already lagged is not refused, and warns" \
     hand_repin_reworded_then_drop changed
 
+# Rows on two pins contradict prose that says they share one, so that state
+# warns too, with every pin on the one line, and the prose is left alone.
+test_unreconciled_prose_warns "rows already on two pins warn that the prose names one pin" \
+    split_pins_by_hand same
+
+# A same-day "(#N)" is filled only when the rows still share the pin the
+# prose names: here they were re-pinned by hand since, so a PR number passed
+# now would be attributed to a re-pin it did not make. The accept side is
+# "a re-run with the PR number fills the (#N) an earlier run left".
+sameday_placeholder_then_hand_repin() { # <tmp>
+    local today
+    today=$(date -u +%Y-%m-%d)
+    sed -E "s/(Re-pinned )[0-9]{4}-[0-9]{2}-[0-9]{2}/\\1${today}/; s/group update \\(#(N|[0-9]+)\\)/group update (#N)/" \
+        "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC" &&
+        grep -qF "Re-pinned ${today}" "$1/$DOC" && grep -qF 'group update (#N)' "$1/$DOC" &&
+        hand_repin "$1"
+}
+REFRESH_PR_NUMBER=4242 assert_noop "a same-day (#N) is not filled once the rows left the prose's pin" \
+    sameday_placeholder_then_hand_repin
+
 # Rows joining a pin the table already uses write no new pin, so this is not
 # a re-pin: the rows are fixed, the prose is left alone, and the run warns.
 split_then_join() { # <tmp>
@@ -890,8 +910,41 @@ test_drop_all_solace_rows "dropping every row from rows already on two pins stil
     split_then_remove_all
 
 # Accept side of REFRESH_PR_NUMBER: a valid number with nothing re-pinned
-# changes nothing — the prose is rewritten only when the pin moves.
-REFRESH_PR_NUMBER=4242 assert_refresh "a PR number with no re-pin is a clean no-op" 0 -
+# changes nothing. Starts from the converged rows with a concrete PR
+# reference: on an unrefreshed re-pin PR the converged document itself says
+# "(#N)" dated today, which a run with a number would rightly fill.
+concrete_ref() { # <tmp>
+    sed -E 's/group update \(#(N|[0-9]+)\)/group update (#540)/' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    grep -qF 'group update (#540)' "$1/$DOC"
+}
+REFRESH_PR_NUMBER=4242 assert_noop "a PR number with no re-pin is a clean no-op" concrete_ref
+
+# A consistent table and prose produce no warning at all: the warnings below
+# are worth reading only if they never fire on a clean run.
+test_clean_run_is_quiet() {
+    local desc="a run over consistent rows and prose prints no warning" tmp got=0 n
+    tmp=$(mktemp -d)
+    INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$tmp"
+    if ! concrete_ref "$tmp"; then
+        echo "  ERROR    $desc (the test's own mutation failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    (cd "$tmp" && REFRESH_PR_NUMBER=4242 "$REFRESH" >"$tmp/out" 2>&1) || got=$?
+    n=$(grep -c '^::warning::' "$tmp/out" || true)
+    if [ "$got" -ne 0 ] || [ "$n" -ne 0 ]; then
+        echo "  NOT OK   $desc (exit $got, $n warning(s))"
+        sed 's/^/           /' "$tmp/out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+    echo "  ok       $desc (exit $got)"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_clean_run_is_quiet
 
 # Refusals: each leaves the file exactly as the mutation left it (asserted by
 # assert_refresh's want=1 branch), so no half-rewritten table is left behind.

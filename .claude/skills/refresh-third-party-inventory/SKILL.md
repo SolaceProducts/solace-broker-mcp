@@ -101,8 +101,10 @@ PR: the number is recorded as the one that re-pinned those actions.
 - **If `make` itself fails because the target doesn't exist** ("No rule to make target..."): this
   means SOL-152956 (which ships the target) hasn't reached this branch — say so plainly and stop.
   This is not the same thing as the refusal case below; don't describe it as "the script refused."
-- **If it exits 0 with no file changes:** the inventory already matches. Report that, restore the
-  original branch (Step 8), and stop — the check is failing for a reason this skill doesn't cover
+- **If it exits 0 with no file changes:** the table already matches. First quote every
+  `::warning::` line from the run verbatim: a matching table can still sit beside prose that needs a
+  human edit (rows re-pinned by hand, or a `(#N)` the script would not fill), and that repair is the
+  person's to make. Then report it, restore the original branch (Step 8), and stop — the check is failing for a reason this skill doesn't cover
   (back to Step 2's judgment call).
 - **If it exits 0 with changes:** proceed to Step 5.
 - **If it exits nonzero for any other reason:** the underlying scripts refused to guess at
