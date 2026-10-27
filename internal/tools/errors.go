@@ -840,7 +840,7 @@ func connectFailureCause(err error) string {
 	case errors.As(err, &dnsErr):
 		return "host name could not be resolved"
 	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaECONNREFUSED):
-		return "connection refused"
+		return proxyPrefix(err) + "connection refused"
 	case errors.Is(err, http.ErrSchemeMismatch):
 		return "the port serves plain HTTP, not HTTPS: use http://"
 	case isTLSHandshakeTimeout(err):
@@ -849,7 +849,19 @@ func connectFailureCause(err error) string {
 		errors.As(err, &authorityErr), errors.As(err, &hostnameErr), errors.As(err, &invalidErr):
 		return "TLS handshake failed"
 	case errors.As(err, &opErr) && (opErr.Op == "dial" || opErr.Op == "proxyconnect") && opErr.Timeout():
-		return "connection timed out"
+		return proxyPrefix(err) + "connection timed out"
+	}
+	return ""
+}
+
+// proxyPrefix returns "proxy " when the failed dial was to the configured
+// proxy rather than the broker, so the reader checks the proxy and not the
+// broker.
+func proxyPrefix(err error) string {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "proxyconnect" {
+			return "proxy "
+		}
 	}
 	return ""
 }

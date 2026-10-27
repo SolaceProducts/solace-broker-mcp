@@ -260,7 +260,7 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 				}
 				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
 			},
-			want: `Could not connect to broker "dev" (connection timed out) after 3 attempts.` + tail,
+			want: `Could not connect to broker "dev" (proxy connection timed out) after 3 attempts.` + tail,
 		},
 		{
 			name: "proxy refused the connection",
@@ -272,7 +272,7 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 				tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
 				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
 			},
-			want: `Could not connect to broker "dev" (connection refused) after 3 attempts.` + tail,
+			want: `Could not connect to broker "dev" (proxy connection refused) after 3 attempts.` + tail,
 		},
 		{
 			// The production transport sets ResponseHeaderTimeout below the
