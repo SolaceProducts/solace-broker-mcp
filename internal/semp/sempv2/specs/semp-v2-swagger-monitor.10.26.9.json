@@ -33340,7 +33340,7 @@
     "MsgVpnCollectionsDmrExportFilters": {
       "properties": {
         "count": {
-          "description": "The total number of objects in the dmrExportFilters collection. (private API only)",
+          "description": "The total number of objects in the dmrExportFilters collection.",
           "format": "int64",
           "type": "integer"
         }
@@ -38039,7 +38039,7 @@
     "MsgVpnDmrExportFilter": {
       "properties": {
         "msgVpnName": {
-          "description": "The name of the Message VPN.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". (private API only)",
+          "description": "The name of the Message VPN.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\".",
           "maxLength": 32,
           "minLength": 1,
           "type": "string",
@@ -38061,7 +38061,7 @@
           "x-writeOnly": false
         },
         "subscriptionFilter": {
-          "description": "The topic of the Export Filter.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". (private API only)",
+          "description": "The topic of the Export Filter.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\".",
           "maxLength": 250,
           "minLength": 1,
           "type": "string",
@@ -45421,7 +45421,7 @@
           "type": "string"
         },
         "dmrExportFiltersUri": {
-          "description": "The URI of this Message VPN's collection of Export Filter objects. (private API only)",
+          "description": "The URI of this Message VPN's collection of Export Filter objects.",
           "type": "string"
         },
         "jndiConnectionFactoriesUri": {
@@ -71818,7 +71818,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.8.13158"
+    "version": "10.26.9.13589"
   },
   "parameters": {
     "countQuery": {
@@ -79788,7 +79788,7 @@
     },
     "/msgVpns/{msgVpnName}/dmrExportFilters": {
       "get": {
-        "description": "Get a list of Export Filter objects.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".\n\nThe maximum number of objects that can be returned in a single page is 100.\n\n(private API only)",
+        "description": "Get a list of Export Filter objects.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".\n\nThe maximum number of objects that can be returned in a single page is 100.",
         "operationId": "getMsgVpnDmrExportFilters",
         "parameters": [
           {
@@ -79850,7 +79850,7 @@
     },
     "/msgVpns/{msgVpnName}/dmrExportFilters/{subscriptionFilter}": {
       "get": {
-        "description": "Get an Export Filter object.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".\n\n(private API only)",
+        "description": "Get an Export Filter object.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".",
         "operationId": "getMsgVpnDmrExportFilter",
         "parameters": [
           {
