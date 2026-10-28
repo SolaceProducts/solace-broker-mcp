@@ -42,23 +42,31 @@ func TestClassifyCallOutcome(t *testing.T) {
 
 	semErr := &sempv2.SEMPError{StatusCode: 400, SEMPCode: 6, Operation: "deleteMsgVpnQueue"}
 
+	canceledErr := fmt.Errorf("step: %w", context.Canceled)
+	deadlineErr := fmt.Errorf("step: %w", context.DeadlineExceeded)
+
 	for _, tt := range []struct {
-		name string
-		ctx  context.Context
-		err  error
-		want metrics.Outcome
+		name          string
+		ctx           context.Context
+		err           error
+		budgetExpired bool
+		want          metrics.Outcome
 	}{
-		{"success", live, nil, metrics.OutcomeSuccess},
-		{"broker success that a cancel followed", cancelled, nil, metrics.OutcomeSuccess},
-		{"failure, caller still there", live, errors.New("connection refused"), metrics.OutcomeError},
-		{"caller cancelled", cancelled, fmt.Errorf("step: %w", context.Canceled), metrics.OutcomeCancelled},
-		{"caller's own deadline", expired, fmt.Errorf("step: %w", context.DeadlineExceeded), metrics.OutcomeCancelled},
-		{"our retry budget timed out", live, fmt.Errorf("step: %w", context.DeadlineExceeded), metrics.OutcomeError},
-		{"broker error that raced a cancel", cancelled, semErr, metrics.OutcomeError},
-		{"panic while cancelled", cancelled, panicError{}, metrics.OutcomeError},
+		{"success", live, nil, false, metrics.OutcomeSuccess},
+		{"broker success that a cancel followed", cancelled, nil, false, metrics.OutcomeSuccess},
+		{"failure, caller still there", live, errors.New("connection refused"), false, metrics.OutcomeError},
+		{"caller cancelled", cancelled, canceledErr, false, metrics.OutcomeCancelled},
+		{"caller's own deadline", expired, deadlineErr, false, metrics.OutcomeCancelled},
+		{"our retry budget timed out", live, deadlineErr, true, metrics.OutcomeError},
+		// Both deadlines have passed by the time CallTool classifies; the
+		// error is the budget's, so it is our timeout, not the caller's.
+		{"our retry budget timed out, then the caller's deadline passed", expired, deadlineErr, true, metrics.OutcomeError},
+		{"caller cancelled after a retry budget timed out", cancelled, canceledErr, true, metrics.OutcomeCancelled},
+		{"broker error that raced a cancel", cancelled, semErr, false, metrics.OutcomeError},
+		{"panic while cancelled", cancelled, panicError{}, false, metrics.OutcomeError},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := classifyCallOutcome(tt.ctx, tt.err); got != tt.want {
+			if got := classifyCallOutcome(tt.ctx, tt.err, tt.budgetExpired); got != tt.want {
 				t.Errorf("classifyCallOutcome = %q, want %q", got, tt.want)
 			}
 		})

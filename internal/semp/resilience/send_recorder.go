@@ -16,7 +16,9 @@ package resilience
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 )
 
@@ -33,9 +35,22 @@ import (
 // A write is any method other than GET/HEAD that the caller did not mark
 // WithRetrySafe (SEMPv1 <show> reads travel over POST). Safe for concurrent
 // use: net/http calls the hook on its connection write goroutine.
+//
+// It also keeps each request's retry-budget context, so the caller can tell
+// our own budget's timeout from its own deadline: both surface as
+// context.DeadlineExceeded, and by the time the caller classifies, both may
+// have passed.
 type SendRecorder struct {
 	sent atomic.Bool
+
+	mu      sync.Mutex
+	budgets []context.Context
 }
+
+// errRetryBudgetExpired is the cause Sender.Do sets on its retry-budget
+// context. context.Cause reports it only when the budget's own timer fired,
+// not when a parent context ended first.
+var errRetryBudgetExpired = errors.New("SEMP retry budget expired")
 
 type sendRecorderKey struct{}
 
@@ -50,6 +65,33 @@ func WithSendRecorder(ctx context.Context) (context.Context, *SendRecorder) {
 // reports false.
 func (r *SendRecorder) WriteSent() bool {
 	return r != nil && r.sent.Load()
+}
+
+// RetryBudgetExpired reports whether the retry budget of any request issued
+// under the recorder's context ran out, as opposed to the caller's own context
+// ending it. A nil recorder reports false.
+func (r *SendRecorder) RetryBudgetExpired() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, b := range r.budgets {
+		if errors.Is(context.Cause(b), errRetryBudgetExpired) {
+			return true
+		}
+	}
+	return false
+}
+
+// addBudget records one request's retry-budget context. Nil-safe.
+func (r *SendRecorder) addBudget(budget context.Context) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.budgets = append(r.budgets, budget)
+	r.mu.Unlock()
 }
 
 // sendRecorderFrom returns the recorder on ctx, or nil.

@@ -17,6 +17,7 @@ package resilience
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -154,5 +155,85 @@ func TestSendRecorder_NilIsSafe(t *testing.T) {
 	var rec *SendRecorder
 	if rec.WriteSent() {
 		t.Error("nil recorder reports a sent write")
+	}
+}
+
+// SOL-156509 (PR #560 review): the retry budget and the caller's own deadline
+// both end in context.DeadlineExceeded. CallTool classifies after the fact, so
+// if the budget fires first and the caller's deadline passes before then, the
+// error alone cannot say whose deadline it was. The recorder can.
+
+// hangUntilCancelled holds every request until the client gives up on it. It
+// reads the body first: net/http only notices a client hanging up once the
+// body is consumed, and httptest.Server.Close waits for the handler.
+func hangUntilCancelled(_ http.ResponseWriter, r *http.Request) {
+	_, _ = io.Copy(io.Discard, r.Body)
+	<-r.Context().Done()
+}
+
+func newBudgetSender(t *testing.T, url string, client *http.Client, budget time.Duration) *Sender {
+	t.Helper()
+	retries := 0
+	minInterval := time.Duration(0)
+	return New(client, &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: budget, // retries=0, so the budget is exactly this
+		RetryMinInterval:       time.Millisecond,
+		RetryMaxInterval:       time.Millisecond,
+	}, bearerAuth(t), url, NewSemaphore(10), NewRateLimiter(0))
+}
+
+func TestSendRecorder_RetryBudgetExpired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(hangUntilCancelled))
+	defer server.Close()
+	sender := newBudgetSender(t, server.URL, server.Client(), 50*time.Millisecond)
+
+	ctx, rec := WithSendRecorder(context.Background())
+	resp, err := sender.Do(ctx, newBodyRequest(t, http.MethodDelete, server.URL))
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want context.DeadlineExceeded, got %v", err)
+	}
+	if !rec.RetryBudgetExpired() {
+		t.Error("RetryBudgetExpired() = false after the retry budget ended the request")
+	}
+}
+
+func TestSendRecorder_CallerDeadlineIsNotTheRetryBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(hangUntilCancelled))
+	defer server.Close()
+	sender := newBudgetSender(t, server.URL, server.Client(), 30*time.Second)
+
+	ctx, rec := WithSendRecorder(context.Background())
+	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	resp, err := sender.Do(ctx, newBodyRequest(t, http.MethodDelete, server.URL))
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want context.DeadlineExceeded, got %v", err)
+	}
+	if rec.RetryBudgetExpired() {
+		t.Error("RetryBudgetExpired() = true, but the caller's own deadline ended the request")
+	}
+}
+
+func TestSendRecorder_SuccessIsNotRetryBudgetExpired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(okHandler))
+	defer server.Close()
+	sender := newBudgetSender(t, server.URL, server.Client(), 30*time.Second)
+
+	ctx, rec := WithSendRecorder(context.Background())
+	resp, err := sender.Do(ctx, newBodyRequest(t, http.MethodDelete, server.URL))
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if rec.RetryBudgetExpired() {
+		t.Error("RetryBudgetExpired() = true for a request that succeeded")
 	}
 }

@@ -322,7 +322,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			errorType = metrics.ErrorTypePanic
 			toolErr = panicError{}
 		}
-		callOutcome = classifyCallOutcome(ctx, toolErr)
+		callOutcome = classifyCallOutcome(ctx, toolErr, sendRec.RetryBudgetExpired())
 
 		// The log line uses the raw alias for diagnostics; the metric label is
 		// canonicalized to a bounded set.

@@ -32,15 +32,20 @@ import (
 // (SOL-153333):
 //
 //   - Our own SEMP retry budget is a child context inside Sender.Do, so its
-//     timeout leaves ctx live and stays an error.
+//     timeout usually leaves ctx live and stays an error. When ctx carries a
+//     deadline too, it may have passed by the time CallTool classifies, and
+//     both end in context.DeadlineExceeded; budgetExpired (from the call's
+//     resilience.SendRecorder) says the budget fired, so that stays an error.
 //   - A real failure that a cancel raced (a broker error reply, a panic) is
 //     not that ending, so the failure is what gets reported.
 //
 // A nil toolErr is a success even if a cancel followed: the broker answered.
-func classifyCallOutcome(ctx context.Context, toolErr error) metrics.Outcome {
+func classifyCallOutcome(ctx context.Context, toolErr error, budgetExpired bool) metrics.Outcome {
 	switch {
 	case toolErr == nil:
 		return metrics.OutcomeSuccess
+	case budgetExpired && errors.Is(toolErr, context.DeadlineExceeded):
+		return metrics.OutcomeError
 	case ctx.Err() != nil && errors.Is(toolErr, ctx.Err()):
 		return metrics.OutcomeCancelled
 	default:
