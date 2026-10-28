@@ -486,6 +486,72 @@ tools:
       strategy: postProcess
       postProcess: listQueues
 
+  - name: list-topic-endpoints
+    description: >
+      List topic endpoints in a VPN with destinationTopic, spooledMsgCount,
+      unacked count (txUnackedMsgCount), bindCount, congestion state, spool
+      usage, and rates. Returns up to 100 by default (max 500 via maxResults).
+      When more topic endpoints exist, the result includes nextCursor: pass it
+      back as cursor to get the next page. Summary counts cover only the topic
+      endpoints on this page. IMPORTANT: spooledMsgCount is the cumulative
+      lifetime count of messages ever spooled to each topic endpoint — it is
+      NOT the current number of messages on it and does NOT decrease as
+      messages are consumed; do not report it as the current backlog. Current
+      fill is msgSpoolUsage (bytes) against maxSpoolUsage (MB). The response
+      summary counts topic endpoints with no consumers, congestion, and
+      near-full spool (>=80% of quota). For one topic endpoint's full
+      attributes, use get-topic-endpoint. Verifies the VPN exists before
+      listing, so a nonexistent VPN is reported as an error rather than an
+      empty list.
+    annotations:
+      readOnly: true
+    strictParameters: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list topic endpoints for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of topic endpoints to return (default 100, max 500)"
+      - name: cursor
+        type: string
+        required: false
+        description: "nextCursor from a previous list-topic-endpoints call on the same VPN, to get the next page"
+    steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
+      - id: topicEndpoints
+        operation: monitor/getMsgVpnTopicEndpoints
+        followPages: true
+        resumable: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - accessType
+          - bindCount
+          - destinationTopic
+          - egressEnabled
+          - ingressEnabled
+          - lowPriorityMsgCongestionState
+          - maxSpoolUsage
+          - msgSpoolUsage
+          - msgVpnName
+          - rxMsgRate
+          - spooledMsgCount
+          - topicEndpointName
+          - txMsgRate
+          - txUnackedMsgCount
+    result:
+      strategy: postProcess
+      postProcess: listTopicEndpoints
+
   - name: list-clients
     description: >
       List active clients in a VPN with rates, uptime, and the slowSubscriber
@@ -1936,6 +2002,44 @@ tools:
     steps:
       - id: deleteTopicEndpoint
         operation: config/deleteMsgVpnTopicEndpoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          topicEndpointName: "{{.Params.topicEndpointName}}"
+    result:
+      strategy: collect
+
+  - name: get-topic-endpoint
+    description: >
+      Get every monitor attribute of one topic endpoint: configuration
+      (destinationTopic, accessType, maxSpoolUsage, owner, permission,
+      ingress/egress enabled) and current state (bindCount, msgSpoolUsage,
+      txUnackedMsgCount, rates, congestion). Use it to confirm a create or
+      update took effect, or to check a topic endpoint before deleting it.
+      msgSpoolUsage is in bytes and maxSpoolUsage is in MB. spooledMsgCount is
+      the cumulative lifetime count of messages ever spooled, not the current
+      number of messages on the topic endpoint. Verifies the VPN exists first,
+      so a nonexistent VPN and a nonexistent topic endpoint are reported as
+      different errors.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the topic endpoint"
+      - name: topicEndpointName
+        type: string
+        required: true
+        description: "The name of the topic endpoint"
+    steps:
+      - id: vpn
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+        select:
+          - msgVpnName
+      - id: topicEndpoint
+        operation: monitor/getMsgVpnTopicEndpoint
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           topicEndpointName: "{{.Params.topicEndpointName}}"

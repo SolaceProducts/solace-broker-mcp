@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **30 read-only tools** plus **28 write tools** — four action
+The server exposes **32 read-only tools** plus **28 write tools** — four action
 tools and 24 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -49,18 +49,18 @@ List tools accept an optional `maxResults` integer: **default 100, maximum 500**
 (`defaultMax`/`capMax` in the composite executor). The server pages through the
 event broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items.
 
-`list-queues` and `list-clients` also accept an optional `cursor` string, so
-they can page past 500 objects:
+`list-queues`, `list-topic-endpoints` and `list-clients` also accept an
+optional `cursor` string, so they can page past 500 objects:
 
-1. Call the tool. If more objects exist, the `queues` or `clients` step carries
-   `nextCursor`.
+1. Call the tool. If more objects exist, the `queues`, `topicEndpoints` or
+   `clients` step carries `nextCursor`.
 2. Call it again on the same Message VPN with `cursor` set to that value.
 3. Repeat until the step's `truncated` is `false`.
 
 A truncated step leaves out `nextCursor` when following it could skip objects,
 for example when the [response size cap](#response-size-cap) trimmed the page;
-its `truncatedMessage` says what to do instead. The `list-queues` `summary`
-counts cover only the queues that call fetched. A call made with `cursor`
+its `truncatedMessage` says what to do instead. The `list-queues` and
+`list-topic-endpoints` `summary` counts cover only the objects that call fetched. A call made with `cursor`
 carries `resumed: true` on its step. When the step is truncated or resumed, the
 summary adds a `scopeNote` saying so.
 
@@ -96,10 +96,10 @@ The rows kept are the first ones the event broker returned. A `postProcess`
 tool's `summary` is computed from every row fetched before any are removed, so
 its counts stay complete. To reach the removed rows:
 
-- **`list-queues` and `list-clients`:** repeat the call with the same `cursor`
-  (none for the first page) and `maxResults` at most the number of rows kept,
-  as `truncatedMessage` says. That call's `nextCursor` starts right after the
-  rows it returns.
+- **`list-queues`, `list-topic-endpoints` and `list-clients`:** repeat the call
+  with the same `cursor` (none for the first page) and `maxResults` at most the
+  number of rows kept, as `truncatedMessage` says. That call's `nextCursor`
+  starts right after the rows it returns.
 - **Other tools:** removed rows are not available through the tool; narrow the
   query (a single queue, client or Message VPN) to see them.
 
@@ -172,6 +172,7 @@ and sender queue bindings) are gated behind the same flag and documented under
 | Replication | [`get-replication-status`](#get-replication-status) | — |
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics), [`list-queue-subscriptions`](#list-queue-subscriptions), [`list-queue-consumers`](#list-queue-consumers) | — |
+| Topic Endpoints | [`list-topic-endpoints`](#list-topic-endpoints), [`get-topic-endpoint`](#get-topic-endpoint) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | Client Access | [`list-client-usernames`](#list-client-usernames), [`get-client-username`](#get-client-username), [`list-client-profiles`](#list-client-profiles), [`get-client-profile`](#get-client-profile) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
@@ -553,6 +554,70 @@ bound to it.
 ```
 
 **Example request:** "orders.q is backing up on prod-broker. Which consumer is slow?"
+
+---
+
+## Topic Endpoints
+
+### list-topic-endpoints
+
+List topic endpoints in a Message VPN with destination topic, cumulative
+spooled count (`spooledMsgCount` — lifetime, not live depth), unacked count,
+bind count, congestion state, spool usage, and rates. Current fill is
+`msgSpoolUsage` (bytes) against `maxSpoolUsage` (MB). Verifies the VPN exists
+before listing, so a nonexistent VPN is reported as an error rather than an
+empty list.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max topic endpoints to return (default 100, max 500). |
+| `cursor` | string | no | `nextCursor` from a previous `list-topic-endpoints` call on the same VPN, to get the next page. See [Pagination](#pagination). |
+
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`topicEndpoints` (array), plus a `summary` with `noConsumerCount`
+(`bindCount` 0), `congestedCount`, `nearFullCount` (spool usage at or above 80%
+of `maxSpoolUsage`; a quota of 0 is not counted) and `scanned`. Selected fields
+per topic endpoint: `topicEndpointName`, `destinationTopic`, `accessType`,
+`spooledMsgCount`, `txUnackedMsgCount`, `bindCount`, `rxMsgRate`, `txMsgRate`,
+`msgSpoolUsage`, `maxSpoolUsage`, `lowPriorityMsgCongestionState`,
+`ingressEnabled`, `egressEnabled`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "maxResults": 100 }
+```
+
+**Example request:** "Which topic endpoints on `<your-vpn-name>` have no consumers?"
+
+### get-topic-endpoint
+
+Every monitor attribute of one topic endpoint: configuration
+(`destinationTopic`, `accessType`, `maxSpoolUsage`, `owner`, `permission`,
+ingress and egress state) and current state (`bindCount`, `msgSpoolUsage`,
+`txUnackedMsgCount`, rates, congestion). Use it to confirm that
+`create-topic-endpoint` or `update-topic-endpoint` took effect, or to check a
+topic endpoint before `delete-topic-endpoint`. Verifies the VPN exists first,
+so a nonexistent VPN and a nonexistent topic endpoint return different errors.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `topicEndpointName` | string | yes | The topic endpoint name. |
+
+**Returns:** step-keyed envelope, steps `vpn` (existence check) and
+`topicEndpoint` (object with every attribute the event broker returns).
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "<your-vpn-name>", "topicEndpointName": "orders.te" }
+```
+
+**Example request:** "Show me the settings of topic endpoint orders.te on `<your-vpn-name>`."
 
 ---
 
