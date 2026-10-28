@@ -838,24 +838,25 @@ func connectFailureCause(err error) string {
 	var invalidErr x509.CertificateInvalidError
 	switch {
 	case errors.As(err, &dnsErr):
-		return "host name could not be resolved"
+		return proxyPrefix(err) + "host name could not be resolved"
 	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaECONNREFUSED):
 		return proxyPrefix(err) + "connection refused"
 	case errors.Is(err, http.ErrSchemeMismatch):
-		return "the port serves plain HTTP, not HTTPS: use http://"
+		return "the port serves plain HTTP, not HTTPS: check the broker URL's port"
 	case isTLSHandshakeTimeout(err):
-		return "TLS handshake timed out"
+		return proxyPrefix(err) + "TLS handshake timed out"
 	case errors.As(err, &certErr), errors.As(err, &recordErr), isRemoteTLSAlert(err),
 		errors.As(err, &authorityErr), errors.As(err, &hostnameErr), errors.As(err, &invalidErr):
-		return "TLS handshake failed"
+		return proxyPrefix(err) + "TLS handshake failed"
 	case errors.As(err, &opErr) && (opErr.Op == "dial" || opErr.Op == "proxyconnect") && opErr.Timeout():
 		return proxyPrefix(err) + "connection timed out"
 	}
 	return ""
 }
 
-// proxyPrefix returns "proxy " when the failed dial was to the configured
-// proxy rather than the broker, so the reader checks the proxy and not the
+// proxyPrefix returns "proxy " when the failure was in reaching the configured
+// proxy rather than the broker (net/http wraps the proxy's dial, DNS lookup and
+// TLS handshake as proxyconnect), so the reader checks the proxy and not the
 // broker.
 func proxyPrefix(err error) string {
 	for ; err != nil; err = errors.Unwrap(err) {

@@ -232,7 +232,7 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 			err: func(t *testing.T) error {
 				return realDoErr(t, &http.Client{}, "https://"+liveAddr+"/")
 			},
-			want: `Could not connect to broker "dev" (the port serves plain HTTP, not HTTPS: use http://) after 3 attempts.` + tail,
+			want: `Could not connect to broker "dev" (the port serves plain HTTP, not HTTPS: check the broker URL's port) after 3 attempts.` + tail,
 		},
 		{
 			// Bytes that do not start with "HTTP/" stay a tls.RecordHeaderError.
@@ -273,6 +273,36 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
 			},
 			want: `Could not connect to broker "dev" (proxy connection refused) after 3 attempts.` + tail,
+		},
+		{
+			// With a proxy, the proxy resolves the broker's name, so a DNS error
+			// under proxyconnect can only be the proxy's own host.
+			name: "proxy host name not resolvable",
+			err: func(t *testing.T) error {
+				tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "solace-broker-mcp-proxy.invalid:3128"})}
+				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
+			},
+			want: `Could not connect to broker "dev" (proxy host name could not be resolved) after 3 attempts.` + tail,
+		},
+		{
+			// An https:// proxy gets its own TLS handshake, also under proxyconnect.
+			name: "untrusted TLS certificate on the proxy",
+			err: func(t *testing.T) error {
+				tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "https", Host: tlsSrv.Listener.Addr().String()})}
+				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
+			},
+			want: `Could not connect to broker "dev" (proxy TLS handshake failed) after 3 attempts.` + tail,
+		},
+		{
+			name: "TLS handshake to the proxy timed out",
+			err: func(t *testing.T) error {
+				tr := &http.Transport{
+					Proxy:               http.ProxyURL(&url.URL{Scheme: "https", Host: stallingListener(t)}),
+					TLSHandshakeTimeout: 50 * time.Millisecond,
+				}
+				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
+			},
+			want: `Could not connect to broker "dev" (proxy TLS handshake timed out) after 3 attempts.` + tail,
 		},
 		{
 			// The production transport sets ResponseHeaderTimeout below the
