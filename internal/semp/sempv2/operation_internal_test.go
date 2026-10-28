@@ -87,15 +87,13 @@ func msgVpnQueueResponseFixture() (*openapi2.SchemaRef, map[string]*openapi2.Sch
 }
 
 func opWith200Schema(schema *openapi2.SchemaRef) *openapi2.Operation {
-	return &openapi2.Operation{
-		Responses: map[string]*openapi2.Response{
-			"200": {Schema: schema},
-		},
-	}
+	responses := openapi2.NewResponsesWithCapacity(1)
+	responses.Set("200", &openapi2.Response{Schema: schema})
+	return &openapi2.Operation{Responses: responses}
 }
 
 func TestExtractResponseFields_NoResponses(t *testing.T) {
-	op := &openapi2.Operation{Responses: map[string]*openapi2.Response{}}
+	op := &openapi2.Operation{Responses: &openapi2.Responses{}}
 	if got := extractResponseFields(op, nil); got != nil {
 		t.Errorf("extractResponseFields with no 200 response = %v, want nil", got)
 	}
