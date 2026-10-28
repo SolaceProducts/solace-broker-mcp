@@ -173,6 +173,15 @@ jobs:
       - name: E2E handshake helper self-test
         run: bash test/e2e-common/lib.test.sh
 
+      # go-version.sh refuses a go.mod that would build the image and the
+      # release binaries with different Go: a `toolchain` line, or a `go` line
+      # without a patch version. The image builds that also run it skip fork
+      # pull requests; this job does not, so the refusal happens before merge.
+      - name: go.mod pins one Go for the image and the release binaries
+        run: |
+          .github/scripts/go-version.test.sh
+          .github/scripts/go-version.sh
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30

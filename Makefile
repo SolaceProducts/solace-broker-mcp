@@ -9,6 +9,11 @@ PKG         := ./cmd/server
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null | grep -E '^[A-Za-z0-9._+-]+$$' || echo dev)
 # Deferred (=) so $(shell git describe) only runs for targets that actually use LDFLAGS.
 LDFLAGS      = -s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=$(VERSION)
+# The Dockerfile builder's Go version: go.mod's `go` directive, as CI passes it.
+# `=`, not `?=`: an exported GO_VERSION (toolchain managers and CI images set
+# one) must not override go.mod. `make docker GO_VERSION=...` still can.
+# Deferred, like LDFLAGS, so only targets that use it read go.mod.
+GO_VERSION   = $(shell .github/scripts/go-version.sh)
 IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
 E2E_DIR     := test/e2e-basic-mcp
@@ -350,4 +355,4 @@ e2e-helm-down: ## Remove the e2e-helm kind cluster and brokers left behind by an
 
 .PHONY: docker
 docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
-	docker build --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .
+	docker build --build-arg GO_VERSION="$(GO_VERSION)" --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .

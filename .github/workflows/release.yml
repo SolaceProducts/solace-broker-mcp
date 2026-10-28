@@ -508,6 +508,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The Dockerfile's builder runs go.mod's `go` directive, the same toolchain
+      # build-binaries gets from setup-go's go-version-file, so the image and the
+      # tarballs of one release ship one Go. It has no default, so this is required.
+      - name: Read Go version from go.mod
+        id: go
+        # Assigned first so a refused go.mod fails the step; inside the echo,
+        # the script's exit status would be lost.
+        run: |
+          version=$(.github/scripts/go-version.sh)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -529,6 +540,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

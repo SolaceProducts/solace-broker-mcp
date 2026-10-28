@@ -235,7 +235,7 @@ published artifact; see [Scope](#scope).
 
 | Image | Tag | Used for | Upstream license |
 |---|---|---|---|
-| `golang` | `1.26-alpine` | `Dockerfile` builder stage | BSD-3-Clause (Go) |
+| `golang` | `${GO_VERSION}-alpine` | `Dockerfile` builder stage, at `go.mod`'s `go` directive | BSD-3-Clause (Go) |
 | `gcr.io/distroless/static-debian12` | `nonroot` | `Dockerfile` runtime base | Apache-2.0 (distroless) |
 | `solace/solace-pubsub-standard` | `latest` | Broker fixture for e2e suites | Solace, proprietary |
 | `quay.io/keycloak/keycloak` | `26.2.5` | identity provider (IdP) fixture for the OAuth e2e suite | Apache-2.0 |

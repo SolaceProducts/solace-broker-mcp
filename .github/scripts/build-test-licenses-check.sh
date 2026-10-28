@@ -293,6 +293,16 @@ while read -r ref; do
     # first: its own colon would otherwise be taken as the tag separator. GitHub
     # `${{ }}` expressions do not match (`{` is not a name character).
     ref="$(sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^}]*)\}/\1/g' <<<"$ref")"
+    # A Dockerfile `${VAR:?message}` has no default to resolve to, so it keeps
+    # the bare `${VAR}`. Its message would otherwise end up in the tag, and its
+    # colon in the image name.
+    ref="$(sed -E 's/\$\{([A-Za-z_][A-Za-z0-9_]*):?[?][^}]*\}/${\1}/g' <<<"$ref")"
+    # `image:tag@sha256:...` is checked at its tag. The digest only fixes which
+    # build of that tag is pulled, and Dependabot moves it on every rebuild.
+    pinned="${ref%@*}"
+    if [[ "$ref" == *"@"* && "${pinned##*/}" == *":"* ]]; then
+        ref="$pinned"
+    fi
     # Split on the LAST path segment only. A colon before the final `/` is a
     # registry port (`localhost:5000/foo`), not a tag separator, and treating it
     # as one silently renames the component to `localhost` — a compliance gate

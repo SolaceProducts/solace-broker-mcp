@@ -241,6 +241,21 @@ add_defaulted_tag_image() { # <tmp> — a compose `${VAR:-default}` tag holds a
     printf '\n# fixture\n    image: testonly/thing:${TESTONLY_TAG:-v9}\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 
+add_tag_and_digest_image() { # <tmp> — the Dockerfile's runtime base form,
+    # `image:tag@sha256:...`. Splitting on the `@` alone names the component
+    # `testonly/thing:v9`, which no row can match.
+    unlink_workflows "$1"
+    printf '\n# fixture\n    image: testonly/thing:v9@sha256:%064d\n' 0 >>"$1/.github/workflows/ci-pr.yaml"
+}
+
+add_required_tag_image() { # <tmp> — the Dockerfile's builder form,
+    # `${VAR:?message}`, which has no default to resolve to. Splitting on its
+    # colon names the component `testonly/thing:${TESTONLY_TAG`.
+    unlink_workflows "$1"
+    # shellcheck disable=SC2016 # the fixture must carry the literal `${...}`
+    printf '\n# fixture\n    image: testonly/thing:${TESTONLY_TAG:?set-it}\n' >>"$1/.github/workflows/ci-pr.yaml"
+}
+
 shim_go_with_download_chatter() { # <tmp> — stand in for a cold module cache.
     # `go list` on a cold cache writes lines like "go: downloading
     # golang.org/x/oauth2 v0.35.0" to stderr while it still succeeds and prints
@@ -475,6 +490,18 @@ unset EXPECT_STDERR
 EXPECT_STDERR='`testonly/thing` (v9)' \
     assert_check "a \${VAR:-default} tag resolves to its default" 1 \
     add_defaulted_tag_image
+unset EXPECT_STDERR
+
+# shellcheck disable=SC2016 # literal backticks, as the gate prints them
+EXPECT_STDERR='`testonly/thing` (v9)' \
+    assert_check "a digest pinned to a tag is checked at its tag" 1 \
+    add_tag_and_digest_image
+unset EXPECT_STDERR
+
+# shellcheck disable=SC2016 # literal backticks and `${...}`, as the gate prints them
+EXPECT_STDERR='`testonly/thing` (${TESTONLY_TAG})' \
+    assert_check "a \${VAR:?message} tag keeps the variable, not the message" 1 \
+    add_required_tag_image
 unset EXPECT_STDERR
 
 # --- parser integrity --------------------------------------------------------

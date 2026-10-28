@@ -96,6 +96,16 @@ jobs:
           echo "short_sha=$(git rev-parse HEAD | cut -c1-7)" >> "$GITHUB_OUTPUT"
           echo "Building ${version} from $(git rev-parse HEAD)"
 
+      # The Dockerfile's builder runs go.mod's `go` directive, the toolchain
+      # setup-go gives the release tarballs. It has no default, so this is required.
+      - name: Read Go version from go.mod
+        id: go
+        # Assigned first so a refused go.mod fails the step; inside the echo,
+        # the script's exit status would be lost.
+        run: |
+          version=$(.github/scripts/go-version.sh)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
       - name: Skip if this commit is already built
         id: skip
         # Correctness, not optimisation: buildkit stamps a fresh `created`
@@ -154,13 +164,14 @@ jobs:
           # index. Nothing verifies this image, so keep it a plain manifest.
           provenance: false
           build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
             VERSION=${{ steps.ver.outputs.version }}
-          # Read the shared cache, never write it. release.yml:428 and
-          # build-image.yaml:71 already export mode=max into one ~10GB LRU
-          # budget; a third writer would evict entries the release build and every
-          # PR scan hit. That is the one way this could slow the release path
-          # without touching release.yml. The compile layer never cache-hits
-          # anyway — VERSION is in the `RUN go build` at Dockerfile:11-14.
+          # Read the shared cache, never write it. The `cache-to` of release.yml's
+          # build-docker job and of build-image.yaml already export mode=max into
+          # one ~10GB LRU budget; a third writer would evict entries the release
+          # build and every PR scan hit. That is the one way this could slow the
+          # release path without touching release.yml. The compile layer never
+          # cache-hits anyway — VERSION is in the Dockerfile's `RUN go build`.
           cache-from: type=gha
 
       - name: Summary
