@@ -25,7 +25,7 @@ If invoked without arguments, ask the user which file or function to target.
 
 ### Step 1: Read the rules
 
-Read the secure logging rules at `docs/secure-logging-rules.md` in the project root. These rules are non-negotiable — every log line you write must comply.
+Read the secure logging rules at `docs/_internal/secure-logging-rules.md` in the project root. These rules are non-negotiable — every log line you write must comply.
 
 ### Step 2: Read the target code
 
@@ -36,7 +36,7 @@ Read the file or function the user specified. Understand what it does, what even
 For each function, identify events that belong in the Always-Log list from the rules:
 
 - Server startup/shutdown
-- Tool invocations (tool name, broker alias, outcome, duration_ms)
+- Tool invocations (tool name, broker alias, outcome, duration)
 - Tool errors (tool name, broker alias, error_type, http_status)
 - Broker connections created (broker alias, URL)
 - Config loaded (broker_count, port)
@@ -111,7 +111,7 @@ slog.Error("failed", slog.String("error", err.Error()))
 
 ## Rules
 
-- Every log line must pass the Never-Log list check from `docs/secure-logging-rules.md`
+- Every log line must pass the Never-Log list check from `docs/_internal/secure-logging-rules.md`
 - Every significant event must include the fields from the Always-Log table
 - If unsure whether something is safe to log, don't log it — flag it for the user
 - When migrating from `log.Printf`, don't just swap the call — redesign it with structured fields
