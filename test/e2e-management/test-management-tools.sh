@@ -10,12 +10,12 @@
 # (pre-clean) and on exit (safety net) so a mid-run failure never leaks state.
 #
 # Verification mixes two layers, per the tool under test:
-#   - presence/absence → monitoring tools (list-vpns / list-queues); this is the
-#     read-after-write / cache-invalidation assertion (reads hit the broker live).
+#   - presence/absence → monitoring tools (list-vpns / list-queues /
+#     list-topic-endpoints); this is the read-after-write / cache-invalidation
+#     assertion (reads hit the broker live).
 #   - updated attribute → SEMP-direct monitor GET (the monitoring tools don't
-#     surface arbitrary config attributes).
-#   - topic-endpoints have no monitoring tool, so all of their verification is
-#     SEMP-direct.
+#     surface arbitrary config attributes), except topic-endpoints, whose
+#     get-topic-endpoint returns every attribute.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -63,7 +63,7 @@ call_tool_ok() {
 }
 
 # Assert an object name is (or is not) present in a list tool's output.
-#   $1 broker   $2 list_tool (list-vpns|list-queues|list-rdps)   $3 name   $4 present(true|false)
+#   $1 broker   $2 list_tool (list-vpns|list-queues|list-topic-endpoints|list-rdps)   $3 name   $4 present(true|false)
 assert_listed() {
     local broker="$1" list_tool="$2" name="$3" present="$4"
     local args resp content data_path key expr
@@ -74,6 +74,9 @@ assert_listed() {
         list-queues)
             args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
             data_path=".queues.data | map(select(.msgVpnName==\"default\"))"; key="queueName" ;;
+        list-topic-endpoints)
+            args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
+            data_path=".topicEndpoints.data"; key="topicEndpointName" ;;
         list-rdps)
             args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
             data_path=".rdps.data"; key="restDeliveryPointName" ;;
@@ -195,34 +198,42 @@ test_queue_owner_validation() {
     semp_delete "$(semp_config_for "$broker")" "msgVpns/$BROKER_VPN/clientUsernames/$owner"
 }
 
-# ── Topic-endpoint round-trip (SEMP-direct verify: no monitoring tool) ────────
+# ── Topic-endpoint round-trip (verified through list-/get-topic-endpoint) ─────
 
 test_te_roundtrip() {
     local broker="$1"
     local name="e2e-config-te-$broker"
-    local burl
-    burl=$(broker_url_for "$broker")
+    local get_args resp
+    get_args=$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n}')
 
     call_tool_ok "create-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{accessType:"non-exclusive"}}')" \
         "create-topic-endpoint [$broker]" || return 1
-    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/topicEndpoints/$name" \
-        || { log_fail "create-topic-endpoint [$broker]: $name not visible"; return 1; }
+    assert_listed "$broker" "list-topic-endpoints" "$name" "true" || return 1
+    resp=$(mcp_call_tool "get-topic-endpoint" "$get_args") \
+        || { log_fail "get-topic-endpoint [$broker]: MCP transport failure"; return 1; }
+    assert_json_field "$(extract_content "$resp")" ".topicEndpoint.data.topicEndpointName" "$name" \
+        "get-topic-endpoint [$broker]: returns $name after create" || return 1
 
     # Topic endpoints use maxSpoolUsage (queues use maxMsgSpoolUsage).
     call_tool_ok "update-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{maxSpoolUsage:10}}')" \
         "update-topic-endpoint [$broker]" || return 1
-    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/topicEndpoints/$name" 30 '.data.maxSpoolUsage == 10' \
-        || { log_fail "update-topic-endpoint [$broker]: maxSpoolUsage not reflected"; return 1; }
+    resp=$(mcp_call_tool "get-topic-endpoint" "$get_args") \
+        || { log_fail "get-topic-endpoint [$broker]: MCP transport failure"; return 1; }
+    assert_json_field "$(extract_content "$resp")" ".topicEndpoint.data.maxSpoolUsage" "10" \
+        "get-topic-endpoint [$broker]: maxSpoolUsage reflects update" || return 1
 
     call_tool_ok "delete-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n}')" \
         "delete-topic-endpoint [$broker]" || return 1
-    if semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name" >/dev/null 2>&1; then
-        log_fail "delete-topic-endpoint [$broker]: $name still visible after delete"
-        return 1
-    fi
+    assert_listed "$broker" "list-topic-endpoints" "$name" "false" || return 1
+    resp=$(mcp_call_tool "get-topic-endpoint" "$get_args") \
+        || { log_fail "get-topic-endpoint [$broker]: MCP transport failure"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "get-topic-endpoint [$broker]: errors for $name after delete" || return 1
+    assert_contains "$(extract_content "$resp")" "Could not find match for topicEndpoint" \
+        "get-topic-endpoint [$broker]: not-found error for $name after delete" || return 1
 }
 
 # ── Topic-endpoint owner validation (SOL-153080) ─────────────────────────────

@@ -247,7 +247,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
 | `test_initialize` | MCP handshake completes. A stateful server returns `Mcp-Session-Id`; a stateless one (`MCP_TRANSPORT_STATELESS=true`) returns none, and the helper fails if the response contradicts the mode in either direction |
-| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns all 58 tools: 30 read-only plus 28 write (4 action, 24 management). |
+| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns all 60 tools: 32 read-only plus 28 write (4 action, 24 management). |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
