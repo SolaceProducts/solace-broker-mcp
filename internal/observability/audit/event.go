@@ -96,9 +96,9 @@ const (
 	OutcomeSuccess Outcome = "success"
 	// OutcomeError: the operation failed. error_type carries the cause.
 	OutcomeError Outcome = "error"
-	// OutcomeCancelled: the caller went away before the operation finished.
-	// The enum surface ships here; SOL-152426 (Story 42) adds the branch that
-	// classifies a call as cancelled.
+	// OutcomeCancelled: the caller went away before the operation finished —
+	// the request was cancelled or its own deadline passed. Classified once
+	// per tool call in internal/tools (classifyCallOutcome, SOL-156509).
 	OutcomeCancelled Outcome = "cancelled"
 )
 
@@ -216,6 +216,9 @@ const (
 	fieldRequired
 	// fieldOnErrorOnly: required when outcome is "error", forbidden otherwise.
 	fieldOnErrorOnly
+	// fieldOnNonSuccessOnly: required when outcome is not "success" (error or
+	// cancelled), forbidden on success.
+	fieldOnNonSuccessOnly
 )
 
 // rules is one row of the field-applicability table.
@@ -231,6 +234,7 @@ type rules struct {
 	timing           applicability // started_at / duration_ms
 	identity         applicability // principal.sub / agent_client_id
 	droppedEventType applicability // audit_drop only; see EventAuditDrop's row
+	requestSent      applicability // operation only; see Fields.RequestSent
 }
 
 // allOutcomes is the unrestricted outcome set: success, error, cancelled.
@@ -272,6 +276,7 @@ var applicabilityByType = map[EventType]rules{
 		reason:    fieldForbidden,
 		tool:      fieldRequired, argumentsHash: fieldRequired,
 		broker: fieldRequired, timing: fieldRequired, identity: fieldOptional,
+		requestSent: fieldOnNonSuccessOnly,
 	},
 	EventAuthSuccess: {
 		outcome: fieldForbidden, errorType: fieldForbidden, reason: fieldForbidden,
@@ -358,6 +363,14 @@ type Fields struct {
 	// PanicRecovered marks a record whose error came from a recovered panic.
 	// Only meaningful with Outcome OutcomeError and ErrorType "panic".
 	PanicRecovered bool
+	// RequestSent says whether a write was sent to the broker (SOL-156509):
+	// false means nothing was applied; true means it went onto the wire, so
+	// the broker may have applied it — or rejected it, when error_type says
+	// the broker replied with an error. Conservative by construction: it is
+	// set from httptrace WroteHeaders, before the flush. Required on an operation record whose outcome is
+	// not success, forbidden otherwise; a pointer so false is a value, not an
+	// absence.
+	RequestSent *bool
 	// DroppedEventType names the audit_event_type of the record that could
 	// not be built or written. EventAuditDrop only.
 	DroppedEventType EventType
@@ -502,6 +515,9 @@ func NewEvent(ctx context.Context, f Fields) (Event, error) {
 	if f.PanicRecovered {
 		attrs = append(attrs, slog.Bool("panic_recovered", true))
 	}
+	if f.RequestSent != nil {
+		attrs = append(attrs, slog.Bool("request_sent", *f.RequestSent))
+	}
 	if f.Reason != "" {
 		attrs = append(attrs, slog.String("reason", f.Reason))
 	}
@@ -515,6 +531,25 @@ func NewEvent(ctx context.Context, f Fields) (Event, error) {
 	}
 
 	return Event{attrs: attrs, level: levelByType[f.Type], typ: f.Type}, nil
+}
+
+// resolveByOutcome turns an outcome-conditional applicability into
+// fieldRequired or fieldForbidden for this record's outcome; any other value
+// passes through unchanged.
+func resolveByOutcome(a applicability, outcome Outcome) applicability {
+	var required bool
+	switch a {
+	case fieldOnErrorOnly:
+		required = outcome == OutcomeError
+	case fieldOnNonSuccessOnly:
+		required = outcome != OutcomeSuccess
+	default:
+		return a
+	}
+	if required {
+		return fieldRequired
+	}
+	return fieldForbidden
 }
 
 // validate enforces one row of the field-applicability table. It checks every
@@ -541,15 +576,7 @@ func validate(f Fields, r rules) error {
 	// error_type: on an operation record it is required exactly when the
 	// outcome is an error and forbidden otherwise, so a success can never
 	// carry a cause and a failure can never omit one.
-	errorTypeRule := r.errorType
-	if errorTypeRule == fieldOnErrorOnly {
-		if f.Outcome == OutcomeError {
-			errorTypeRule = fieldRequired
-		} else {
-			errorTypeRule = fieldForbidden
-		}
-	}
-	if err := checkPresence("error_type", f.ErrorType != "", errorTypeRule, f.Type); err != nil {
+	if err := checkPresence("error_type", f.ErrorType != "", resolveByOutcome(r.errorType, f.Outcome), f.Type); err != nil {
 		return err
 	}
 	if f.ErrorType != "" {
@@ -562,6 +589,13 @@ func validate(f Fields, r rules) error {
 	if f.PanicRecovered && (f.Outcome != OutcomeError || f.ErrorType != "panic") {
 		return fmt.Errorf("audit: panic_recovered requires outcome=%q and error_type=\"panic\", got outcome=%q error_type=%q",
 			OutcomeError, f.Outcome, f.ErrorType)
+	}
+
+	// request_sent: on an operation record it answers "did the write reach the
+	// broker?" for every call that did not succeed, and is meaningless on one
+	// that did (the broker answered).
+	if err := checkPresence("request_sent", f.RequestSent != nil, resolveByOutcome(r.requestSent, f.Outcome), f.Type); err != nil {
+		return err
 	}
 
 	// reason: presence per the table, and membership in THIS record type's

@@ -182,11 +182,13 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 			want: `Could not connect to broker "dev" (connection refused) after 3 attempts.` + tail,
 		},
 		{
-			// .invalid is reserved by RFC 2606 and never resolves. The transport
-			// has no Proxy, so an HTTP_PROXY on the runner cannot answer for it.
+			// .invalid is reserved by RFC 2606 and never resolves. The trailing
+			// dot makes the name absolute, so a resolver search domain with a
+			// wildcard record cannot answer for it. The transport has no Proxy,
+			// so an HTTP_PROXY on the runner cannot answer for it either.
 			name: "host name not resolvable",
 			err: func(t *testing.T) error {
-				return realDoErr(t, &http.Client{Transport: &http.Transport{}}, "http://solace-broker-mcp-test.invalid/SEMP")
+				return realDoErr(t, &http.Client{Transport: &http.Transport{}}, "http://solace-broker-mcp-test.invalid./SEMP")
 			},
 			want: `Could not connect to broker "dev" (host name could not be resolved) after 3 attempts.` + tail,
 		},
@@ -276,10 +278,11 @@ func TestBuildErrorMessage_ConnectionFailureNamesCause(t *testing.T) {
 		},
 		{
 			// With a proxy, the proxy resolves the broker's name, so a DNS error
-			// under proxyconnect can only be the proxy's own host.
+			// under proxyconnect can only be the proxy's own host. Trailing dot:
+			// see "host name not resolvable" above.
 			name: "proxy host name not resolvable",
 			err: func(t *testing.T) error {
-				tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "solace-broker-mcp-proxy.invalid:3128"})}
+				tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "solace-broker-mcp-proxy.invalid.:3128"})}
 				return realDoErr(t, &http.Client{Transport: tr}, "http://broker.example/")
 			},
 			want: `Could not connect to broker "dev" (proxy host name could not be resolved) after 3 attempts.` + tail,

@@ -206,8 +206,8 @@ So a name you would change is worth flagging now. See
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
-- `metrics_schema` (current: **1.10**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.3**), surfaced as the `audit_schema_version` field on every audit
+- `metrics_schema` (current: **1.12**), surfaced by the `mcp_schema_version` metric.
+- `audit_schema` (current: **1.4**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
 
@@ -1191,11 +1191,12 @@ records means your log level, not your flag.
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
 | `error_type` | Why an operation failed; present on `outcome: error` only. Six of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
 | `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
+| `request_sent` | On `operation` only, present exactly when `outcome` is not `success` (SOL-156509): whether the write was sent to the broker. `false`: nothing was applied. `true`: it went onto the wire (httptrace `WroteHeaders`, deliberately conservative), so it may have been applied — or rejected, when the failure is the broker's error reply | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed, or why an owner was rejected; present on `auth_failure`, `authz_denied`, `broker_authz_denied`, and `owner_validation_rejected` | string (closed set, one per record type) |
 | `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
-| `audit_schema_version` | The schema version, for query pinning | string (`1.3`) |
+| `audit_schema_version` | The schema version, for query pinning | string (`1.4`) |
 
 **`audit_event_type`** is a closed set of eight: `operation` (a destructive tool call),
 `auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`,
@@ -1213,16 +1214,16 @@ not belong to a request.
 Reading the table: **yes** means always present, **opt** means present when there is a value
 (see the notes below each column's meaning of that), and **—** means never present.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` | `panic_recovered` |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — | opt |
-| `auth_success` | — | — | — | — | — | — | — | opt | — | — |
-| `auth_failure` | — | — | yes | — | — | — | — | opt | — | — |
-| `authz_denied` | — | — | yes | yes | — | — | — | opt | — | — |
-| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — | — |
-| `owner_validation_rejected` | — | — | yes | yes | — | — | yes | opt | — | — |
-| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — | — |
-| `audit_drop` | — | — | — | opt | — | — | opt | — | opt | — |
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` | `panic_recovered` | `request_sent` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — | opt | unless `success` |
+| `auth_success` | — | — | — | — | — | — | — | opt | — | — | — |
+| `auth_failure` | — | — | yes | — | — | — | — | opt | — | — | — |
+| `authz_denied` | — | — | yes | yes | — | — | — | opt | — | — | — |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — | — | — |
+| `owner_validation_rejected` | — | — | yes | yes | — | — | yes | opt | — | — | — |
+| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — | — | — |
+| `audit_drop` | — | — | — | opt | — | — | opt | — | opt | — | — |
 
 - **The identity columns are `opt`, not `yes`.** `principal.sub` and `agent_client_id` are
   present whenever a principal was authenticated, and absent when there is none to name —
@@ -1464,7 +1465,7 @@ contracts.
 **1. Destructive-operation review — who changed what.**
 
 ```
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="operation"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="operation"
   → group by principal.sub
   → report tool, broker, outcome, timestamp_utc, correlation_id
 ```
@@ -1472,7 +1473,7 @@ event="audit" AND audit_schema_version="1.3" AND audit_event_type="operation"
 In Splunk SPL:
 
 ```
-index=<your_audit_index> event="audit" audit_schema_version="1.3" audit_event_type="operation"
+index=<your_audit_index> event="audit" audit_schema_version="1.4" audit_event_type="operation"
 | stats count, values(tool) as tools, values(broker) as brokers, values(outcome) as outcomes,
     values(timestamp_utc) as timestamps, values(correlation_id) as correlation_ids
     by principal.sub
@@ -1492,7 +1493,7 @@ made it. Two limits to state before a reviewer treats this as a complete record 
 **2. Rejected credentials — who could not get in.**
 
 ```
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="auth_failure"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="auth_failure"
   → group by reason
 ```
 
@@ -1505,7 +1506,7 @@ Events](#authentication-events)).
 **3. Denied privileged attempts, hop 1 — this server refused the tool.**
 
 ```
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="authz_denied"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="authz_denied"
   → group by reason, tool
 ```
 
@@ -1515,7 +1516,7 @@ is no `operation` record and no tool-invocation metric sample for them.
 **4. Denied privileged attempts, hop 2 — the broker refused the operation.**
 
 ```
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="broker_authz_denied"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="broker_authz_denied"
   → group by reason, tool, broker
 ```
 
@@ -2273,10 +2274,10 @@ small enough to group by on a dashboard while still carrying the detail an inves
 | Value | Meaning |
 |---|---|
 | `success` | The call completed successfully. |
-| `error` | The call failed. The cause is in `error_type`, except on the `tokenexchange.Exchange` span, which never sets it — see [Span Attributes](#span-attributes). A `context.DeadlineExceeded` timeout is classified here. |
-| `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x) — already emitted today on the `tokenexchange.Exchange` span, see the exception below.** |
+| `error` | The call failed. The cause is in `error_type`, except on the `tokenexchange.Exchange` span, which never sets it — see [Span Attributes](#span-attributes). A `context.DeadlineExceeded` from the server's own timeout (the SEMP retry budget, or the token exchange's retry chain) is classified here; one from the caller's own context is `cancelled`. |
+| `cancelled` | The caller cancelled the request (`notifications/cancelled` in stateful mode, or a dropped `2026-07-28` request in stateless mode — go-sdk propagates the drop only on that protocol) or its own deadline passed. **Emitted at the tool-invocation level since SOL-156509**, by the same where-it-originated rule as the token-exchange span below: `CallTool` (`classifyCallOutcome`) classifies a call as `cancelled` only when its own context has ended *and* the handler's error is that ending, so the SEMP retry budget's timeout (a child context) and a real failure that raced a cancel both stay `error`. No `error_type`. |
 
-**Exception — the token-exchange span (SOL-153333, Story 50) already emits `cancelled`, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
+**The token-exchange span (SOL-153333, Story 50) emitted `cancelled` first, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
 
 ### `error_type`
 
@@ -3597,7 +3598,7 @@ will get their own review before they ship.
   but the metric form is still roadmap, tracked under SOL-150254.
 - Broker connection-pool gauges.
 - A SEMP retry-outcome counter.
-- Cancellation and progress signals (which populate the reserved `cancelled` outcome).
+- Progress signals. (Cancellation now populates `cancelled` at the tool-invocation level, SOL-156509.)
 
 ---
 

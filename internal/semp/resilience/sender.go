@@ -827,9 +827,19 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 	// for why WroteHeaders, not WroteRequest). A write that fails before this
 	// (connection refused, DNS, TLS handshake) cannot have reached the broker;
 	// one that fails after it (timeout, connection reset) may have been
-	// applied. WithClientTrace composes with any trace already on ctx.
+	// applied. WithClientTrace composes with any trace already on ctx. The
+	// same moment marks the caller's SendRecorder, if any, for a write.
+	var sendRec *SendRecorder
+	if isWriteRequest(state.method, state.retrySafe) {
+		sendRec = sendRecorderFrom(ctx)
+	}
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		WroteHeaders: func() { state.requestWritten.Store(true) },
+		WroteHeaders: func() {
+			state.requestWritten.Store(true)
+			if sendRec != nil {
+				sendRec.sent.Store(true)
+			}
+		},
 	})
 	req = req.WithContext(ctx)
 
