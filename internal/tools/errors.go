@@ -15,12 +15,17 @@
 package tools
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
@@ -665,6 +670,9 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			}
 			return msg, nil
 		}
+		if retriesErr.StatusCode == 0 {
+			return connectionFailureMessage(retriesErr, brokerAlias), nil
+		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",
 			retriesErr.Attempts, retriesErr.StatusCode), nil
@@ -774,6 +782,111 @@ func brokerAccessMessage(brokerAlias string, status int, permissionDenied bool, 
 			"change the configured broker URL to use https://.", brokerAlias), true
 	}
 	return "", false
+}
+
+// connectionFailureMessage describes a retry-exhausted request that never got
+// an HTTP response, so there is no status to report (SOL-155417: it used to
+// print "HTTP 0"). The raw cause is never shown — a *url.Error names the URL
+// and a dial error names the host and address — so it is mapped to a fixed
+// phrase instead. A timeout after the connection opened gets its own sentence:
+// it points at a slow broker, not at the network path.
+func connectionFailureMessage(e *resilience.RetriesExhaustedError, brokerAlias string) string {
+	const tail = " Internal retries exhausted; try again later."
+	broker, subject := "the broker", "The broker"
+	if brokerAlias != "" {
+		broker = fmt.Sprintf("broker %q", brokerAlias)
+		subject = fmt.Sprintf("Broker %q", brokerAlias)
+	}
+	attempts := fmt.Sprintf("%d attempts", e.Attempts)
+	if e.Attempts == 1 {
+		attempts = "1 attempt"
+	}
+	if cause := connectFailureCause(e.Err); cause != "" {
+		return fmt.Sprintf("Could not connect to %s (%s) after %s.", broker, cause, attempts) + tail
+	}
+	var netErr net.Error
+	if errors.Is(e.Err, context.DeadlineExceeded) || (errors.As(e.Err, &netErr) && netErr.Timeout()) {
+		return fmt.Sprintf("%s did not respond within the request timeout after %s.", subject, attempts) + tail
+	}
+	return fmt.Sprintf("The connection to %s failed after %s.", broker, attempts) + tail
+}
+
+// wsaECONNREFUSED is Windows' WSAECONNREFUSED. A refused dial on Windows
+// carries this code, which syscall.ECONNREFUSED does not match there. No Unix
+// errno has this value, so checking it everywhere is harmless.
+const wsaECONNREFUSED = syscall.Errno(10061)
+
+// tlsHandshakeTimeoutText is the text of net/http's unexported
+// tlsHandshakeTimeoutError. There is no exported type to match, so each error
+// in the chain is compared against this text.
+const tlsHandshakeTimeoutText = "net/http: TLS handshake timeout"
+
+// connectFailureCause names why the connection could not be set up, or returns
+// "" when the cause is not a recognized connect-phase failure.
+//
+// Over TCP, a fatal alert from the server arrives as
+// *net.OpError{Op: "remote error"} with an unexported alert type, not as
+// tls.AlertError (QUIC only). A failed dial through a proxy is wrapped as
+// *net.OpError{Op: "proxyconnect"}, which errors.As finds before the inner dial.
+func connectFailureCause(err error) string {
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	var certErr *tls.CertificateVerificationError
+	var recordErr tls.RecordHeaderError
+	var authorityErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+	switch {
+	case errors.As(err, &dnsErr):
+		return proxyPrefix(err) + "host name could not be resolved"
+	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, wsaECONNREFUSED):
+		return proxyPrefix(err) + "connection refused"
+	case errors.Is(err, http.ErrSchemeMismatch):
+		return "the port serves plain HTTP, not HTTPS: check the broker URL's port"
+	case isTLSHandshakeTimeout(err):
+		return proxyPrefix(err) + "TLS handshake timed out"
+	case errors.As(err, &certErr), errors.As(err, &recordErr), isRemoteTLSAlert(err),
+		errors.As(err, &authorityErr), errors.As(err, &hostnameErr), errors.As(err, &invalidErr):
+		return proxyPrefix(err) + "TLS handshake failed"
+	case errors.As(err, &opErr) && (opErr.Op == "dial" || opErr.Op == "proxyconnect") && opErr.Timeout():
+		return proxyPrefix(err) + "connection timed out"
+	}
+	return ""
+}
+
+// proxyPrefix returns "proxy " when the failure was in reaching the configured
+// proxy rather than the broker (net/http wraps the proxy's dial, DNS lookup and
+// TLS handshake as proxyconnect), so the reader checks the proxy and not the
+// broker.
+func proxyPrefix(err error) string {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "proxyconnect" {
+			return "proxy "
+		}
+	}
+	return ""
+}
+
+// isRemoteTLSAlert reports whether the server ended the TLS session with a
+// fatal alert. It walks the whole chain because a proxy wrapper can sit above it.
+func isRemoteTLSAlert(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "remote error" {
+			return true
+		}
+	}
+	return false
+}
+
+// isTLSHandshakeTimeout reports whether net/http gave up waiting for the TLS
+// handshake (Transport.TLSHandshakeTimeout).
+func isTLSHandshakeTimeout(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		if err.Error() == tlsHandshakeTimeoutText {
+			return true
+		}
+	}
+	return false
 }
 
 // buildSEMPv1Message builds the message the agent sees for a SEMPv1 error.
