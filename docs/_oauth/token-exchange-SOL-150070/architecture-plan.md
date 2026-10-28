@@ -300,7 +300,7 @@ This is not a "later" concern. Enterprise customers require per-component observ
 
 ### Convention
 
-Match the project's existing convention (slog structured logging — see `docs/internal/secure-logging-rules.md`). Verify whether the project emits Prometheus metrics today; if not, this becomes part of scope or a follow-up.
+Match the project's existing convention (slog structured logging — see `docs/_internal/secure-logging-rules.md`). Verify whether the project emits Prometheus metrics today; if not, this becomes part of scope or a follow-up.
 
 ---
 

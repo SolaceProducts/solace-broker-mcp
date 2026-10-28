@@ -217,7 +217,7 @@ This project follows standard Go coding principles. Key guidelines:
 
 ### Security — Credential Handling
 
-**CRITICAL:** Never log credentials. See `docs/secure-logging-rules.md` for full details.
+**CRITICAL:** Never log credentials. See `docs/_internal/secure-logging-rules.md` for full details.
 
 - Implement `slog.LogValuer` on types containing credentials (see `AuthConfig` example)
 - Never use `slog.Any()` with credential-carrying types
