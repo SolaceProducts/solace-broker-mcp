@@ -328,8 +328,8 @@ func schemaTypeName(s *openapi2.Schema) string {
 // operation across all three embedded specs uses 200 as its sole success
 // code, so this isn't a guess about a convention that might not hold.
 func extractResponseFields(opDef *openapi2.Operation, definitions map[string]*openapi2.SchemaRef) map[string]string {
-	resp, ok := opDef.Responses["200"]
-	if !ok || resp.Schema == nil {
+	resp := opDef.Responses.Value("200")
+	if resp == nil || resp.Schema == nil {
 		return nil
 	}
 
