@@ -125,6 +125,12 @@ func TestCallTool_CancelledCall_ToolInvokedLineSaysCancelled(t *testing.T) {
 	if line["level"] != "INFO" {
 		t.Errorf("level = %v, want INFO", line["level"])
 	}
+	// The line says whether a write reached the broker on its own: the audit
+	// record that also says so is off by default and covers destructive tools
+	// only. The stub never reached a SEMP sender.
+	if got, ok := line["request_sent"]; !ok || got != false {
+		t.Errorf("request_sent = %v (present=%v), want false", got, ok)
+	}
 }
 
 func TestCallTool_CancelledCall_OperationRecordSaysCancelled(t *testing.T) {

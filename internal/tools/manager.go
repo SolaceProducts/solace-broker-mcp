@@ -326,7 +326,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 		// The log line uses the raw alias for diagnostics; the metric label is
 		// canonicalized to a bounded set.
-		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id, callOutcome)
+		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id, callOutcome, sendRec.WriteSent())
 		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, callOutcome)
 
 		// One operation record per destructive call, emitted here so it
@@ -520,7 +520,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// blocked owner check — so each records its own counter. It sets no
 		// errorType and returns nothing: the invocation metric's classification
 		// is decided below, exactly as before.
-		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr)
+		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr, sendRec.RetryBudgetExpired())
 
 		// SOL-154703: a confirmed owner rejection gets its own audit record,
 		// emitted whether or not the tool is destructive, exactly as the hop-2
@@ -959,7 +959,7 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, outcome *desiredStateOutcome, id Identity, callOutcome metrics.Outcome) {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, outcome *desiredStateOutcome, id Identity, callOutcome metrics.Outcome, requestSent bool) {
 	dur := time.Since(start)
 
 	// Brokerless tools and pre-resolution failures carry no alias; the field
@@ -1020,13 +1020,16 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// SOL-156509: the caller went away before the call finished. Not a server
 	// failure, so INFO like a success (ERROR would page, WARN is noise for
 	// something clients do routinely), and no error_type — the shared
-	// vocabulary has none for cancelled. Whether a write still reached the
-	// broker is the operation audit record's request_sent, not this line's job.
+	// vocabulary has none for cancelled. request_sent says whether a write
+	// still reached the broker: the operation audit record says so too, but it
+	// is off by default and covers destructive tools only, and this line
+	// carries no detail for the agent-facing "may already have applied it".
 	if callOutcome == metrics.OutcomeCancelled {
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked",
 			slog.String("tool", tool),
 			slog.String("broker", brokerLabel),
 			slog.String("outcome", string(metrics.OutcomeCancelled)),
+			slog.Bool("request_sent", requestSent),
 			slog.Duration("duration", dur),
 			slog.Any("", id))
 		return

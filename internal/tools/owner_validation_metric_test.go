@@ -153,12 +153,14 @@ func TestOwnerValidationMetric_CheckFailedWrappingCode72_StillCounts(t *testing.
 }
 
 // TestOwnerValidationMetric_CallerCancelled pins what rejected_check_failed
-// does and does not mean. A caller that cancels mid-check (context.Canceled)
-// abandoned the call; the check did not block the write, so counting it would
-// make the counter move with how often clients hit stop. A timeout
-// (context.DeadlineExceeded) is a check that could not complete and still counts,
-// and a confirmed-absent owner counts however the context ends, since that check
-// did complete.
+// does and does not mean. A call the caller abandoned mid-check — it cancelled,
+// or its own deadline passed — did not have its write blocked by the check, so
+// counting it would make the counter move with how often clients hit stop. The
+// rule is classifyCallOutcome's, so this counter and the call's outcome agree
+// (SOL-156509). Our own timeout (context.DeadlineExceeded with the caller still
+// there) is a check that could not complete and still counts, and a
+// confirmed-absent owner counts however the context ends, since that check did
+// complete.
 func TestOwnerValidationMetric_CallerCancelled(t *testing.T) {
 	checkFailed := &ownerCheckFailedError{
 		cause: context.Canceled, objectKind: "queue", owner: "real-user", msgVpn: "default",
@@ -178,12 +180,18 @@ func TestOwnerValidationMetric_CallerCancelled(t *testing.T) {
 			},
 			want: "",
 		},
-		"deadline exceeded is a failed check": {
+		"caller's own deadline mid-check is not counted": {
 			err: &ownerCheckFailedError{cause: context.DeadlineExceeded, objectKind: "queue", owner: "real-user",
 				msgVpn: "default", stage: ownerCheckStageClientUsername},
 			ctx: func() (context.Context, context.CancelFunc) {
 				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 			},
+			want: "",
+		},
+		"our own timeout is a failed check": {
+			err: &ownerCheckFailedError{cause: context.DeadlineExceeded, objectKind: "queue", owner: "real-user",
+				msgVpn: "default", stage: ownerCheckStageClientUsername},
+			ctx:  func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
 			want: "rejected_check_failed",
 		},
 		"live context is a failed check": {

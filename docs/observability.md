@@ -148,7 +148,7 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 Two versions identify the published contract:
 
 - `metrics_schema` is **1.12**, exposed by `mcp_schema_version`.
-- `audit_schema` is **1.3**, exposed by `mcp_schema_version` and by
+- `audit_schema` is **1.4**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
 Within a major version, changes are additive. A new metric, field, or closed-set value bumps
@@ -347,8 +347,9 @@ runs. This counts the calls that check blocked. `outcome` is one of:
 
 `rejected_check_failed` moves with broker health, not only with the check. Any failure to
 complete the read counts: a timeout, a 5xx, a rate limit, the broker refusing the read, a request
-shed because the broker was too busy, or a failed token exchange. A call the caller cancelled
-while the check was running is not counted. Timeouts, 5xx, and rate limits also appear in
+shed because the broker was too busy, or a failed token exchange. A call the caller ended while
+the check was running (it cancelled, or its own deadline passed) is not counted; it is
+`outcome="cancelled"` on the tool metrics. Timeouts, 5xx, and rate limits also appear in
 `mcp_semp_request_total` with `operation` `getMsgVpnClientUsername` or `getMsgVpn` (an empty
 status when there was no response). A request shed before it was sent, or a failed token
 exchange, never reaches the transport and appears only here.
@@ -643,7 +644,8 @@ the only trace of what happened. `request_sent` says whether the write left the 
 - A call counts as `cancelled` only when the client ended it (or the client's own deadline
   passed). The server's own SEMP request timeout is `error`.
 - A cancelled record carries no `error_type`. The operational `tool invoked` line for it logs at
-  `INFO` with `outcome=cancelled`.
+  `INFO` with `outcome=cancelled` and the same `request_sent`, for every tool and with the audit
+  log off.
 - Through `audit_schema` 1.3 a cancelled call was recorded as `outcome=error` with
   `error_type=execution_error`. A SIEM rule that counts failures on `outcome="error"` no longer
   sees cancelled calls; add `outcome="cancelled"` to it if it should.

@@ -58,23 +58,35 @@ const cancelWait = 5 * time.Second
 
 // recordingBroker is a fake SEMP broker. Every request it receives is logged.
 // In hold mode it reads the request, reports it on received, and never
-// answers — a write the broker has but whose reply has not arrived.
+// answers — a write the broker has but whose reply has not arrived. With
+// bodyStatus set it answers with that status and the start of a body, then
+// holds the rest — a reply whose body is still being read.
 type recordingBroker struct {
 	*httptest.Server
-	hold     bool
-	received chan struct{}
+	hold       bool
+	bodyStatus int
+	received   chan struct{}
 
 	mu   sync.Mutex
 	seen []string
 }
 
-func newRecordingBroker(t *testing.T, hold bool) *recordingBroker {
+func newRecordingBroker(t *testing.T, hold bool, bodyStatus int) *recordingBroker {
 	t.Helper()
-	b := &recordingBroker{hold: hold, received: make(chan struct{}, 8)}
+	b := &recordingBroker{hold: hold, bodyStatus: bodyStatus, received: make(chan struct{}, 8)}
 	b.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.seen = append(b.seen, r.Method+" "+r.URL.Path)
 		b.mu.Unlock()
+		if b.bodyStatus != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(b.bodyStatus)
+			_, _ = w.Write([]byte(`{"meta":`))
+			w.(http.Flusher).Flush()
+			b.received <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
 		b.received <- struct{}{}
 		if b.hold {
 			<-r.Context().Done()
@@ -220,6 +232,7 @@ type writeCase struct {
 	name             string
 	method           string
 	hold             bool   // broker holds the reply
+	bodyStatus       int    // broker sends this status and part of a body, then holds the rest
 	brokerDown       bool   // nothing listens at the broker URL
 	sempYAML         string // top-level semp: block
 	waitForCancel    bool
@@ -255,6 +268,17 @@ func TestCancelledWrite_OutcomeAndRequestSent(t *testing.T) {
 			wantOutcome: "error", wantErrorType: "execution_error", wantSent: &no, wantRequests: 0},
 		{name: "broker success before the cancel", method: http.MethodDelete, holdAfterSuccess: true, cancelOn: "succeeded",
 			wantOutcome: "success", wantSent: nil, wantRequests: 1},
+		// The cancel lands in sempv2.Client's response-body read, not in
+		// Sender.Do. Still cancelled: the body-read error wraps the ctx error.
+		{name: "cancelled while reading the reply, POST", method: http.MethodPost, bodyStatus: http.StatusOK, cancelOn: "reading",
+			wantOutcome: "cancelled", wantSent: &yes, wantRequests: 1},
+		{name: "cancelled while reading the reply, DELETE", method: http.MethodDelete, bodyStatus: http.StatusOK, cancelOn: "reading",
+			wantOutcome: "cancelled", wantSent: &yes, wantRequests: 1},
+		// The broker's 403 status arrived but its reason had not: the call is
+		// cancelled with request_sent=true, the "check the broker" answer,
+		// rather than an error built from half a reply.
+		{name: "cancelled while reading an error reply", method: http.MethodPost, bodyStatus: http.StatusForbidden, cancelOn: "reading",
+			wantOutcome: "cancelled", wantSent: &yes, wantRequests: 1},
 	}
 	for _, path := range []struct {
 		name      string
@@ -284,7 +308,7 @@ func runWriteCase(t *testing.T, tc writeCase, stateless bool) {
 	}
 	logged := captureLogRecords(t)
 
-	broker := newRecordingBroker(t, tc.hold)
+	broker := newRecordingBroker(t, tc.hold, tc.bodyStatus)
 	brokerURL := broker.URL
 	if tc.brokerDown {
 		broker.Close()
@@ -313,6 +337,15 @@ func runWriteCase(t *testing.T, tc writeCase, stateless bool) {
 		cancel()
 	case "succeeded":
 		waitFor(t, h.succeeded, "the broker's success to reach the handler")
+		cancel()
+	case "reading":
+		// The broker has flushed the status line and part of the body. Give
+		// the client a moment to parse the headers and start the body read,
+		// so the cancel lands there. Either order ends cancelled with
+		// request_sent=true, so this delay cannot make the test flaky; it
+		// only decides which read the cancel interrupts.
+		waitFor(t, broker.received, "the broker to send its reply headers")
+		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}
 	dispatch := awaitDispatchSpan(t, sr)
@@ -345,6 +378,14 @@ func runWriteCase(t *testing.T, tc writeCase, stateless bool) {
 		t.Fatalf("mcp_tool_invocation_total series = %d, want 1: %v", len(series), series)
 	}
 	line := oneRecordWithMsg(t, logged, "tool invoked")
+	// The log line carries request_sent on a cancelled call too, so the answer
+	// survives with the audit log off (its default) and for tools the audit
+	// record does not cover.
+	if tc.wantOutcome == "cancelled" {
+		if got, ok := line["request_sent"]; !ok || got != *tc.wantSent {
+			t.Errorf("log line request_sent = %v (present=%v), want %v", got, ok, *tc.wantSent)
+		}
+	}
 	for _, key := range []string{"outcome", "error_type"} {
 		want := stringField(record, key)
 		spanValue, _ := spanAttr(dispatch, key)
