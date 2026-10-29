@@ -155,15 +155,11 @@ Stateless mode removes the need for affinity: with `MCP_TRANSPORT_STATELESS=true
 no session exists and any replica can serve any request. It is work in
 progress, so leave it off in production for now (see its row in
 [`docs/configuration.md`](../../docs/configuration.md#server-settings)). To try
-it, use an image that contains the variable and add it to the container's `env`
-in `deployment.yaml`. No release has it yet: the `:latest` image in
-`deployment.yaml` ignores it and stays stateful, so change `image:` to one that
-has it, such as the development image CI uses
-(`ghcr.io/solaceproducts/solace-broker-mcp-dev`), and confirm the startup
-`config loaded` line shows `transport_stateless` set to `true` before removing
-any session routing. Use an immutable `dev-<short sha>` tag, not the moving `dev`
-tag: `dev` is retagged nightly, and with the default `imagePullPolicy` a node can
-keep running an older cached build. Then add the variable:
+it, use an image that contains the variable (1.1.0 or later) and add it to the
+container's `env` in `deployment.yaml`. A 1.0.0 image ignores it and stays
+stateful, so confirm the startup `config loaded` line shows
+`transport_stateless` set to `true` before removing any session routing. Then
+add the variable:
 
 ```yaml
 - name: MCP_TRANSPORT_STATELESS

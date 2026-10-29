@@ -604,21 +604,12 @@ one pod, so the chart gives no spreading in stateless mode. Spreading needs
 affinity removed, as in [`deploy/kubernetes/`](../../kubernetes/README.md#stateless-mode-and-session-affinity),
 or a chart value, which waits for the default to change.
 
-**The image must contain the variable.** `MCP_TRANSPORT_STATELESS` is not in
-any release yet, and the chart defaults to the `appVersion` release image
-(`1.0.0`). That image ignores the variable and stays stateful, so an ingress
-without session routing would then return `404 session not found`. Select an
-image that has it, such as the development image CI uses, and confirm the
+**The image must contain the variable.** `MCP_TRANSPORT_STATELESS` is in
+1.1.0 and later, the chart's default `appVersion` image. A 1.0.0 image set
+through `image.tag` ignores the variable and stays stateful, so an ingress
+without session routing would then return `404 session not found`. Confirm the
 startup `config loaded` line shows `transport_stateless` set to `true` before
-relying on it. Use an immutable `dev-<short sha>` tag from that package, not the
-moving `dev` tag: `dev` is retagged nightly, and with the default
-`pullPolicy: IfNotPresent` a node can keep running an older cached build.
-
-```yaml
-image:
-  repository: ghcr.io/solaceproducts/solace-broker-mcp-dev
-  tag: dev-<short sha>      # a published dev-<short sha> tag
-```
+relying on it.
 
 To go back to stateful mode, first restore the Ingress `upstream-hash-by`
 annotation if you removed it, then remove the `extraEnv` entry. Removing the
