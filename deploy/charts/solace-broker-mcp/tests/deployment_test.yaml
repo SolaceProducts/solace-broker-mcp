@@ -102,7 +102,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/solaceproducts/solace-broker-mcp:1.0.0
+          value: ghcr.io/solaceproducts/solace-broker-mcp:1.1.0
 
   - it: derives GOMEMLIMIT 384MiB from 512Mi
     asserts:
