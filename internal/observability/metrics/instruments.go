@@ -33,8 +33,9 @@ type Outcome string
 const (
 	OutcomeSuccess Outcome = "success"
 	OutcomeError   Outcome = "error"
-	// OutcomeCancelled is reserved; the classification that produces it is wired
-	// by a later story.
+	// OutcomeCancelled: the caller cancelled the call or its own deadline
+	// passed. Classified once per tool call in internal/tools
+	// (classifyCallOutcome, SOL-156509).
 	OutcomeCancelled Outcome = "cancelled"
 )
 

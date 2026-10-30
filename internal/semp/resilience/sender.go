@@ -808,9 +808,14 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 	// response body, so on success it is transferred to Body.Close (below)
 	// rather than deferred here — a premature cancel would abort the connection
 	// instead of returning it to the idle pool and could truncate the body.
+	//
+	// The cause lets the caller's SendRecorder tell this budget's timeout from
+	// the caller's own deadline afterwards (SOL-156509); ctx.Err() is still
+	// context.DeadlineExceeded either way.
 	var cancel context.CancelFunc
 	if d.retryBudget > 0 {
-		ctx, cancel = context.WithTimeout(ctx, d.retryBudget)
+		ctx, cancel = context.WithTimeoutCause(ctx, d.retryBudget, errRetryBudgetExpired)
+		sendRecorderFrom(ctx).addBudget(ctx)
 	}
 
 	// Attach per-request retry state for checkRetry, including the HTTP method
@@ -827,9 +832,19 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (resp *http.Response
 	// for why WroteHeaders, not WroteRequest). A write that fails before this
 	// (connection refused, DNS, TLS handshake) cannot have reached the broker;
 	// one that fails after it (timeout, connection reset) may have been
-	// applied. WithClientTrace composes with any trace already on ctx.
+	// applied. WithClientTrace composes with any trace already on ctx. The
+	// same moment marks the caller's SendRecorder, if any, for a write.
+	var sendRec *SendRecorder
+	if isWriteRequest(state.method, state.retrySafe) {
+		sendRec = sendRecorderFrom(ctx)
+	}
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		WroteHeaders: func() { state.requestWritten.Store(true) },
+		WroteHeaders: func() {
+			state.requestWritten.Store(true)
+			if sendRec != nil {
+				sendRec.sent.Store(true)
+			}
+		},
 	})
 	req = req.WithContext(ctx)
 

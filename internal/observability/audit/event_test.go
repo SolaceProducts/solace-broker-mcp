@@ -73,6 +73,13 @@ func render(t *testing.T, e Event) map[string]any {
 	return out
 }
 
+// notSent is request_sent=false, which every valid non-success operation
+// record must carry (SOL-156509).
+func notSent() *bool {
+	b := false
+	return &b
+}
+
 // validOperation is the minimum valid operation record, the base every
 // applicability case below mutates one field of.
 func validOperation() Fields {
@@ -297,13 +304,19 @@ func TestNewEvent_fieldApplicability(t *testing.T) {
 				f := validOperation()
 				f.Outcome = OutcomeError
 				f.ErrorType = "execution_error"
+				f.RequestSent = notSent()
 				return f
 			}(),
 			"",
 		},
 		{
 			"operation accepts cancelled",
-			func() Fields { f := validOperation(); f.Outcome = OutcomeCancelled; return f }(),
+			func() Fields {
+				f := validOperation()
+				f.Outcome = OutcomeCancelled
+				f.RequestSent = notSent()
+				return f
+			}(),
 			"",
 		},
 
@@ -476,6 +489,9 @@ func TestNewEvent_outcomeVocabulary(t *testing.T) {
 			if tc.outcome == OutcomeError {
 				f.ErrorType = "execution_error"
 			}
+			if tc.outcome != OutcomeSuccess {
+				f.RequestSent = notSent()
+			}
 			_, err := NewEvent(context.Background(), f)
 			if tc.valid && err != nil {
 				t.Errorf("outcome %q rejected: %v", tc.outcome, err)
@@ -497,6 +513,7 @@ func TestNewEvent_errorTypeVocabularyIsClosed(t *testing.T) {
 		f := validOperation()
 		f.Outcome = OutcomeError
 		f.ErrorType = et
+		f.RequestSent = notSent()
 		if et == "panic" {
 			f.PanicRecovered = true
 		}
@@ -741,6 +758,7 @@ func TestNewEvent_operationAttributeOrder(t *testing.T) {
 	f.Outcome = OutcomeError
 	f.ErrorType = "panic"
 	f.PanicRecovered = true
+	f.RequestSent = notSent()
 
 	e, err := NewEvent(correlation.With(ctxWithPrincipal(t), "corr-123"), f)
 	if err != nil {
@@ -755,7 +773,7 @@ func TestNewEvent_operationAttributeOrder(t *testing.T) {
 		"event", "audit_event_type", "audit_schema_version", "timestamp_utc",
 		"correlation_id", "principal", "agent_client_id",
 		"tool", "broker", "arguments_hash",
-		"outcome", "error_type", "panic_recovered",
+		"outcome", "error_type", "panic_recovered", "request_sent",
 		"started_at_utc", "duration_ms",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -775,6 +793,7 @@ func TestNewEvent_panicRecoveredMustAgreeWithTheCause(t *testing.T) {
 	valid.Outcome = OutcomeError
 	valid.ErrorType = "panic"
 	valid.PanicRecovered = true
+	valid.RequestSent = notSent()
 	e, err := NewEvent(context.Background(), valid)
 	if err != nil {
 		t.Fatalf("NewEvent rejected a valid recovered-panic record: %v", err)
@@ -789,6 +808,7 @@ func TestNewEvent_panicRecoveredMustAgreeWithTheCause(t *testing.T) {
 		if name == "on a different error_type" {
 			f.Outcome = OutcomeError
 			f.ErrorType = "execution_error"
+			f.RequestSent = notSent()
 		}
 		if _, err := NewEvent(context.Background(), f); err == nil {
 			t.Errorf("panic_recovered accepted %s", name)
@@ -921,6 +941,8 @@ func applicabilityName(a applicability) string {
 		return "required"
 	case fieldOnErrorOnly:
 		return "on_error_only"
+	case fieldOnNonSuccessOnly:
+		return "on_non_success_only"
 	default:
 		return fmt.Sprintf("unknown(%d)", a)
 	}
@@ -943,7 +965,7 @@ func renderApplicabilityFingerprint() string {
 	fmt.Fprintf(&b, "schema_version=%s\n", schema.AuditSchemaVersion)
 	for _, t := range types {
 		r := applicabilityByType[EventType(t)]
-		fmt.Fprintf(&b, "%s: outcome=%s error_type=%s reason=%s tool=%s arguments_hash=%s broker=%s timing=%s identity=%s dropped_event_type=%s\n",
+		fmt.Fprintf(&b, "%s: outcome=%s error_type=%s reason=%s tool=%s arguments_hash=%s broker=%s timing=%s identity=%s dropped_event_type=%s request_sent=%s\n",
 			t,
 			applicabilityName(r.outcome),
 			applicabilityName(r.errorType),
@@ -954,6 +976,7 @@ func renderApplicabilityFingerprint() string {
 			applicabilityName(r.timing),
 			applicabilityName(r.identity),
 			applicabilityName(r.droppedEventType),
+			applicabilityName(r.requestSent),
 		)
 	}
 	return b.String()
@@ -973,15 +996,15 @@ func renderApplicabilityFingerprint() string {
 // TestApplicabilityByType_isVersioned, read the failure's "got" block, and
 // paste it in here. This test cannot make the additive-vs-breaking judgment
 // for you; it only proves a human made one, by pinning both together.
-const wantApplicabilityFingerprint = `schema_version=1.3
-audit_drop: outcome=forbidden error_type=forbidden reason=forbidden tool=optional arguments_hash=forbidden broker=optional timing=forbidden identity=forbidden dropped_event_type=optional
-auth_failure: outcome=forbidden error_type=forbidden reason=required tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
-auth_success: outcome=forbidden error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
-authz_denied: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden
-broker_auth_retry: outcome=required error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=required timing=optional identity=optional dropped_event_type=forbidden
-broker_authz_denied: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden
-operation: outcome=required error_type=on_error_only reason=forbidden tool=required arguments_hash=required broker=required timing=required identity=optional dropped_event_type=forbidden
-owner_validation_rejected: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden
+const wantApplicabilityFingerprint = `schema_version=1.4
+audit_drop: outcome=forbidden error_type=forbidden reason=forbidden tool=optional arguments_hash=forbidden broker=optional timing=forbidden identity=forbidden dropped_event_type=optional request_sent=forbidden
+auth_failure: outcome=forbidden error_type=forbidden reason=required tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden request_sent=forbidden
+auth_success: outcome=forbidden error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden request_sent=forbidden
+authz_denied: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=forbidden timing=forbidden identity=optional dropped_event_type=forbidden request_sent=forbidden
+broker_auth_retry: outcome=required error_type=forbidden reason=forbidden tool=forbidden arguments_hash=forbidden broker=required timing=optional identity=optional dropped_event_type=forbidden request_sent=forbidden
+broker_authz_denied: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden request_sent=forbidden
+operation: outcome=required error_type=on_error_only reason=forbidden tool=required arguments_hash=required broker=required timing=required identity=optional dropped_event_type=forbidden request_sent=on_non_success_only
+owner_validation_rejected: outcome=forbidden error_type=forbidden reason=required tool=required arguments_hash=forbidden broker=required timing=forbidden identity=optional dropped_event_type=forbidden request_sent=forbidden
 `
 
 // TestApplicabilityByType_isVersioned pins schema.AuditSchemaVersion against
@@ -1000,5 +1023,56 @@ func TestApplicabilityByType_isVersioned(t *testing.T) {
 			"If this is a deliberate change, bump schema.AuditSchemaVersion (if not already done) "+
 			"and update wantApplicabilityFingerprint to match — see its doc comment for additive "+
 			"vs breaking.", got, wantApplicabilityFingerprint)
+	}
+}
+
+// TestNewEvent_requestSentOnNonSuccessOperationOnly pins SOL-156509's rule:
+// request_sent is on every operation record whose outcome is not success, and
+// on no other record. false is a value, not an absence — "the write never
+// reached the broker" is the answer an operator needs most.
+func TestNewEvent_requestSentOnNonSuccessOperationOnly(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, tc := range []struct {
+		name    string
+		outcome Outcome
+		sent    *bool
+		valid   bool
+	}{
+		{"error, sent", OutcomeError, &yes, true},
+		{"error, not sent", OutcomeError, &no, true},
+		{"cancelled, sent", OutcomeCancelled, &yes, true},
+		{"cancelled, not sent", OutcomeCancelled, &no, true},
+		{"error, absent", OutcomeError, nil, false},
+		{"cancelled, absent", OutcomeCancelled, nil, false},
+		{"success, present", OutcomeSuccess, &yes, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := validOperation()
+			f.Outcome = tc.outcome
+			if tc.outcome == OutcomeError {
+				f.ErrorType = "execution_error"
+			}
+			f.RequestSent = tc.sent
+			e, err := NewEvent(context.Background(), f)
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("rejected: %v", err)
+			}
+			if got, ok := render(t, e)["request_sent"]; !ok || got != *tc.sent {
+				t.Errorf("request_sent = %v (present=%v), want %v", got, ok, *tc.sent)
+			}
+		})
+	}
+
+	f := Fields{Type: EventBrokerAuthRetry, Outcome: OutcomeError, Broker: "prod-1", RequestSent: &yes}
+	if _, err := NewEvent(context.Background(), f); err == nil {
+		t.Error("request_sent accepted on a broker_auth_retry record")
 	}
 }

@@ -1,12 +1,12 @@
 # Solace Broker MCP Server
 
 Go MCP server exposing Solace broker monitoring/management tools over SEMP.
-Architecture and diagrams: `docs/internal/architecture.md`.
+Architecture and diagrams: `docs/_internal/architecture.md`.
 
 ## Commands
 
 - `make check` — build, vet, lint, race-enabled tests with the 85% coverage gate
-  (`docs/internal/unit-test-coverage.md`). Matches CI's build/lint/test jobs (CI
+  (`docs/_internal/unit-test-coverage.md`). Matches CI's build/lint/test jobs (CI
   additionally runs the E2E jobs below); run before pushing.
 - `make test` — unit tests. Single test: `go test ./internal/<pkg>/ -run TestName -v`
 - `make test-cover` — unit tests + coverage gate only (no vet/lint)
@@ -16,7 +16,7 @@ Architecture and diagrams: `docs/internal/architecture.md`.
   changes. Tool prerequisites (incl. `yq`, `dyff`): `deploy/charts/solace-broker-mcp/README.md`.
 - `make e2e-all` — the `test/e2e-basic-mcp` suite against Dockerized brokers, full
   lifecycle (up, run, teardown). CI also runs the oauth and monitoring E2E suites
-  (`docs/internal/e2e-testing.md`).
+  (`docs/_internal/e2e-testing.md`).
 - CI (`.github/workflows/build-and-test.yml`) is the source of truth; if the Makefile drifts, CI wins.
 
 ## Adding a tool
@@ -54,7 +54,7 @@ tool name; LLMs see and pattern-match against this string.
 ## Before committing
 
 Run `/check-logs` to scan for logging security violations. Fix all CRITICAL
-and HIGH issues before committing. Rules: `docs/internal/secure-logging-rules.md`.
+and HIGH issues before committing. Rules: `docs/_internal/secure-logging-rules.md`.
 
 Every commit needs a DCO `Signed-off-by` trailer — the required `DCO` check
 blocks a PR without one. `make hooks` (once per clone) installs a

@@ -51,11 +51,9 @@ func canonicalBrokerLabel(pool *semp.BrokerPool, alias string) string {
 // recordToolInvocation records the RED metrics for one invocation on tm
 // (nil-safe). Kept separate from logToolResult so the metric broker label
 // (canonical) can differ from the logged one (raw).
-func recordToolInvocation(ctx context.Context, tm *metrics.ToolMetrics, tool, metricBroker string, start time.Time, errorType metrics.ErrorType, toolErr error) {
-	outcome := metrics.OutcomeSuccess
+func recordToolInvocation(ctx context.Context, tm *metrics.ToolMetrics, tool, metricBroker string, start time.Time, errorType metrics.ErrorType, outcome metrics.Outcome) {
 	et := metrics.ErrorType("")
-	if toolErr != nil {
-		outcome = metrics.OutcomeError
+	if outcome == metrics.OutcomeError {
 		et = errorType
 	}
 	tm.Record(ctx, tool, metricBroker, outcome, et, time.Since(start))

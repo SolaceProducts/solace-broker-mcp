@@ -284,6 +284,9 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// tells the defer to emit the operation record, so a call that never
 	// reached the destructive gate emits none.
 	var auditArgsHash string
+	// callOutcome is decided once, in the emission defer, and read by every
+	// signal that carries `outcome` — see classifyCallOutcome (SOL-156509).
+	var callOutcome metrics.Outcome
 
 	// The tool-dispatch span (SOL-152421). The reassigned ctx is what every
 	// layer below receives — threading context.Background() anywhere below
@@ -291,6 +294,9 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// TestCallTool_LatencyBucketCarriesTheDispatchSpansTraceID is what fails if
 	// the observation site below stops seeing this span.
 	ctx, span := tracer.Start(ctx, dispatchSpanName)
+	// Every SEMP write below reports here whether it reached the broker, for
+	// the operation record's request_sent (SOL-156509).
+	ctx, sendRec := resilience.WithSendRecorder(ctx)
 
 	// Registered BEFORE the emission defer below, so LIFO runs it AFTER that
 	// one. Load-bearing: that defer reclassifies a recovered panic, and the
@@ -302,7 +308,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// canonicalBrokerLabel, not the raw alias, for the same two reasons the
 	// metric uses it — see endDispatchSpan.
 	defer func() {
-		endDispatchSpan(ctx, span, name, canonicalBrokerLabel(m.pool, brokerAlias), errorType, toolErr)
+		endDispatchSpan(ctx, span, name, canonicalBrokerLabel(m.pool, brokerAlias), errorType, callOutcome)
 	}()
 
 	defer func() {
@@ -316,11 +322,12 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			errorType = metrics.ErrorTypePanic
 			toolErr = panicError{}
 		}
+		callOutcome = classifyCallOutcome(ctx, toolErr, sendRec.RetryBudgetExpired())
 
 		// The log line uses the raw alias for diagnostics; the metric label is
 		// canonicalized to a bounded set.
-		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id)
-		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, toolErr)
+		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id, callOutcome, sendRec.WriteSent())
+		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, callOutcome)
 
 		// One operation record per destructive call, emitted here so it
 		// carries the outcome — including a recovered panic, which reaches
@@ -336,7 +343,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			// they are two independent types, so the value crosses the
 			// package boundary as a string rather than assuming one
 			// vocabulary is a subtype of the other.
-			emitOperationAudit(ctx, name, brokerAlias, auditArgsHash, start, string(errorType), toolErr)
+			emitOperationAudit(ctx, name, brokerAlias, auditArgsHash, start, string(errorType), callOutcome, sendRec.WriteSent())
 		}
 	}()
 
@@ -513,7 +520,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// blocked owner check — so each records its own counter. It sets no
 		// errorType and returns nothing: the invocation metric's classification
 		// is decided below, exactly as before.
-		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr)
+		m.recordOwnerValidation(ctx, name, brokerAlias, handleErr, sendRec.RetryBudgetExpired())
 
 		// SOL-154703: a confirmed owner rejection gets its own audit record,
 		// emitted whether or not the tool is destructive, exactly as the hop-2
@@ -773,7 +780,7 @@ func hashArgsForAudit(ctx context.Context, tool, broker string, args map[string]
 // same canonical source logToolResult's Identity was projected from
 // (SOL-152087), so the two records name one caller by construction rather than
 // by two call sites agreeing.
-func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, start time.Time, errorType string, toolErr error) {
+func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, start time.Time, errorType string, outcome metrics.Outcome, requestSent bool) {
 	fields := audit.Fields{
 		Type:          audit.EventOperation,
 		Outcome:       audit.OutcomeSuccess,
@@ -783,7 +790,18 @@ func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, star
 		StartedAt:     start,
 		Duration:      time.Since(start),
 	}
-	if toolErr != nil {
+	// request_sent is on every record that did not succeed: it is what tells
+	// a reviewer whether a failed or cancelled write may still have been
+	// applied. On success the broker answered, so the field adds nothing.
+	if outcome != metrics.OutcomeSuccess {
+		fields.RequestSent = &requestSent
+	}
+	switch outcome {
+	case metrics.OutcomeCancelled:
+		// The caller went away; there is no error_type for that, and the
+		// schema forbids one on a cancelled record.
+		fields.Outcome = audit.OutcomeCancelled
+	case metrics.OutcomeError:
 		fields.Outcome = audit.OutcomeError
 		fields.ErrorType = errorType
 		// A recovered panic is outcome=error with error_type=panic; there is
@@ -915,14 +933,15 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // failure logs at ERROR with the error type and, for SEMP errors, the HTTP
 // status and operation.
 //
-// Dispatch is keyed on outcome and *toolErr's nilness, not on *errorType:
-// CallTool never sets errorType to a desired-state sentinel at all (staying
-// inside metrics.ErrorType's closed set, SOL-152086), and clears toolErr
-// back to nil for a desired-state noop — a non-nil toolErr means "the call
-// failed" everywhere else a consumer might infer from it, including
-// SOL-152086's per-tool metrics, which key outcome=error off exactly that
-// signal. The SEMP audit fields for the noop case travel via the outcome
-// parameter instead of toolErr.
+// Dispatch is keyed on callOutcome — the one value CallTool hands the metric,
+// the span and the audit record too (SOL-156509) — never on *toolErr or
+// *errorType, so the four signals cannot disagree. Within a success, outcome
+// (non-nil for a desired-state noop) picks the line shape. CallTool never sets
+// errorType to a desired-state sentinel at all (staying inside
+// metrics.ErrorType's closed set, SOL-152086); the SEMP audit fields for the
+// noop case travel via the outcome parameter instead of toolErr. A noop whose
+// result then fails output validation is an error, not a noop: callOutcome
+// says so, and so does this line.
 //
 // A free function rather than a ToolManager method so every tool emits the
 // same audit line, including the one dispatch site that still bypasses
@@ -940,7 +959,7 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, outcome *desiredStateOutcome, id Identity) {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, outcome *desiredStateOutcome, id Identity, callOutcome metrics.Outcome, requestSent bool) {
 	dur := time.Since(start)
 
 	// Brokerless tools and pre-resolution failures carry no alias; the field
@@ -963,8 +982,8 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// signal needed a name of its own) — so anyone reading the audit trail
 	// can still see that SEMP returned ALREADY_EXISTS/NOT_FOUND rather than a
 	// fresh create/delete. Checked before the plain-success branch below
-	// since toolErr is nil for this case too — outcome is the discriminator.
-	if outcome != nil {
+	// since that is a success too — outcome is the discriminator.
+	if callOutcome == metrics.OutcomeSuccess && outcome != nil {
 		attrs := make([]slog.Attr, 0, 9)
 		attrs = append(attrs, slog.String("tool", tool))
 		attrs = append(attrs, slog.String("broker", brokerLabel))
@@ -986,7 +1005,7 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 		return
 	}
 
-	if *toolErr == nil {
+	if callOutcome == metrics.OutcomeSuccess {
 		attrs := make([]slog.Attr, 0, 5)
 		attrs = append(attrs, slog.String("tool", tool))
 		attrs = append(attrs, slog.String("broker", brokerLabel))
@@ -995,6 +1014,24 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			slog.Duration("duration", dur),
 			slog.Any("", id))
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
+		return
+	}
+
+	// SOL-156509: the caller went away before the call finished. Not a server
+	// failure, so INFO like a success (ERROR would page, WARN is noise for
+	// something clients do routinely), and no error_type — the shared
+	// vocabulary has none for cancelled. request_sent says whether a write
+	// still reached the broker: the operation audit record says so too, but it
+	// is off by default and covers destructive tools only, and this line
+	// carries no detail for the agent-facing "may already have applied it".
+	if callOutcome == metrics.OutcomeCancelled {
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked",
+			slog.String("tool", tool),
+			slog.String("broker", brokerLabel),
+			slog.String("outcome", string(metrics.OutcomeCancelled)),
+			slog.Bool("request_sent", requestSent),
+			slog.Duration("duration", dur),
+			slog.Any("", id))
 		return
 	}
 

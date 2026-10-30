@@ -147,8 +147,8 @@ attributes you want to query. For Prometheus OTLP ingestion, include at least
 
 Two versions identify the published contract:
 
-- `metrics_schema` is **1.11**, exposed by `mcp_schema_version`.
-- `audit_schema` is **1.3**, exposed by `mcp_schema_version` and by
+- `metrics_schema` is **1.12**, exposed by `mcp_schema_version`.
+- `audit_schema` is **1.4**, exposed by `mcp_schema_version` and by
   `audit_schema_version` on every audit record.
 
 Within a major version, changes are additive. A new metric, field, or closed-set value bumps
@@ -224,7 +224,9 @@ recommended shape behind a Service/ingress.
 | `mcp_tool_invocation_duration_seconds` | Histogram | `tool`, `broker`, `outcome`, `error_type` | Solace |
 
 These cover calls that reach tool dispatch. A hop-1 authorization denial occurs before the
-handler and appears in `mcp_authz_denied_total`, not in these metrics.
+handler and appears in `mcp_authz_denied_total`, not in these metrics. A call the client
+cancelled is counted with `outcome="cancelled"` and an empty `error_type`, not as an error; see
+[The Outcome Vocabulary](#the-outcome-vocabulary).
 
 The `broker` label is the configured alias, or `none` / `unknown` before successful resolution. The
 histogram buckets in seconds are `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
@@ -345,8 +347,9 @@ runs. This counts the calls that check blocked. `outcome` is one of:
 
 `rejected_check_failed` moves with broker health, not only with the check. Any failure to
 complete the read counts: a timeout, a 5xx, a rate limit, the broker refusing the read, a request
-shed because the broker was too busy, or a failed token exchange. A call the caller cancelled
-while the check was running is not counted. Timeouts, 5xx, and rate limits also appear in
+shed because the broker was too busy, or a failed token exchange. A call the caller ended while
+the check was running (it cancelled, or its own deadline passed) is not counted; it is
+`outcome="cancelled"` on the tool metrics. Timeouts, 5xx, and rate limits also appear in
 `mcp_semp_request_total` with `operation` `getMsgVpnClientUsername` or `getMsgVpn` (an empty
 status when there was no response). A request shed before it was sent, or a failed token
 exchange, never reaches the transport and appears only here.
@@ -576,7 +579,7 @@ complete (a timeout, a 5xx) is not a rejection and emits no `owner_validation_re
 |---|---|---|
 | `event` | Routing tag, always `audit` | string |
 | `audit_event_type` | Record discriminator | closed-set string |
-| `audit_schema_version` | Audit contract version | string (`1.3`) |
+| `audit_schema_version` | Audit contract version | string (`1.4`) |
 | `timestamp_utc` | Record time | RFC 3339 UTC |
 | `correlation_id` | Join key; omitted when unavailable | string |
 | `started_at_utc` | Operation start | RFC 3339 UTC |
@@ -588,6 +591,7 @@ complete (a timeout, a 5xx) is not a rejection and emits no `owner_validation_re
 | `outcome` | Operation result | closed-set string |
 | `error_type` | Failure cause on an error operation | closed-set string |
 | `panic_recovered` | Recovered destructive-handler panic | boolean |
+| `request_sent` | Whether the write was sent to the broker; on every `operation` record that did not succeed | boolean |
 | `arguments_hash` | SHA-256 over redacted, canonicalized arguments | lowercase hex |
 | `reason` | Authentication, authorization, or owner-validation reason | closed-set string |
 | `dropped_audit_event_type` | Record type that could not be emitted | closed-set string |
@@ -595,16 +599,16 @@ complete (a timeout, a 5xx) is not a rejection and emits no `owner_validation_re
 The `audit_event_type` field is one of `operation`, `auth_success`, `auth_failure`, `authz_denied`,
 `broker_authz_denied`, `owner_validation_rejected`, `broker_auth_retry`, or `audit_drop`.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | timing | `broker` | identity | dropped type | panic |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `operation` | yes | on error | — | yes | yes | yes | yes | optional | — | optional |
-| `auth_success` | — | — | — | — | — | — | — | optional | — | — |
-| `auth_failure` | — | — | yes | — | — | — | — | optional | — | — |
-| `authz_denied` | — | — | yes | yes | — | — | — | optional | — | — |
-| `broker_authz_denied` | — | — | yes | yes | — | — | yes | optional | — | — |
-| `owner_validation_rejected` | — | — | yes | yes | — | — | yes | optional | — | — |
-| `broker_auth_retry` | yes | — | — | — | — | optional | yes | optional | — | — |
-| `audit_drop` | — | — | — | optional | — | — | optional | — | optional | — |
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | timing | `broker` | identity | dropped type | panic | `request_sent` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on error | — | yes | yes | yes | yes | optional | — | optional | unless success |
+| `auth_success` | — | — | — | — | — | — | — | optional | — | — | — |
+| `auth_failure` | — | — | yes | — | — | — | — | optional | — | — | — |
+| `authz_denied` | — | — | yes | yes | — | — | — | optional | — | — | — |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | optional | — | — | — |
+| `owner_validation_rejected` | — | — | yes | yes | — | — | yes | optional | — | — | — |
+| `broker_auth_retry` | yes | — | — | — | — | optional | yes | optional | — | — | — |
+| `audit_drop` | — | — | — | optional | — | — | optional | — | optional | — | — |
 
 The `principal` field is a nested object. Only the opaque OIDC `sub` is stored; a human-readable
 username is not written to the append-only stream. Identity is absent when authentication is
@@ -613,6 +617,41 @@ disabled or no verified principal exists.
 The `arguments_hash` field excludes `broker` and replaces sensitive values with `[REDACTED]` before
 RFC 8785 canonicalization and SHA-256 hashing. Raw arguments are never stored in an audit
 record.
+
+### Cancelled and Failed Writes
+
+A client can cancel a tool call while it runs. In the default stateful mode it sends
+`notifications/cancelled`. With `MCP_TRANSPORT_STATELESS=true`, a client on protocol
+`2026-07-28` cancels by dropping the HTTP request; a client on an earlier protocol cannot
+cancel a call in that mode, and its call runs to completion. A write may already have reached
+the broker when the call is cancelled, and the client is gone, so the `operation` record is
+the only trace of what happened. `request_sent` says whether the write left the server:
+
+| What happened | `outcome` | `request_sent` |
+|---|---|---|
+| Cancelled before the write was sent | `cancelled` | `false` |
+| Cancelled after the write was sent, before the broker's reply arrived | `cancelled` | `true` |
+| Failed before the write was sent (for example connection refused) | `error` | `false` |
+| Failed after the write was sent (for example a timeout) | `error` | `true` |
+| The broker replied with success, even if a cancel followed | `success` | absent |
+
+- `request_sent=false`: the broker never received the write; nothing was applied.
+- `request_sent=true`: the write was sent to the broker, so it may have been applied. Check
+  the broker's state before retrying. The flag is set as the request goes onto the wire, so in
+  rare cases (the connection dropped at that moment) the broker never got it. With
+  `outcome=error`, the failure may also be the broker's own error reply: it received the write
+  and rejected it.
+- A call counts as `cancelled` only when the client ended it (or the client's own deadline
+  passed). The server's own SEMP request timeout is `error`.
+- A cancelled record carries no `error_type`. The operational `tool invoked` line for it logs at
+  `INFO` with `outcome=cancelled` and the same `request_sent`, for every tool and with the audit
+  log off.
+- Through `audit_schema` 1.3 a cancelled call was recorded as `outcome=error` with
+  `error_type=execution_error`. A SIEM rule that counts failures on `outcome="error"` no longer
+  sees cancelled calls; add `outcome="cancelled"` to it if it should.
+- A call cut off by a forced shutdown may have no `operation` record; if it has one, it says
+  `cancelled`. The `shutdown timed out, forcing close` or `second signal received, forcing
+  immediate shutdown; in-flight connections dropped without draining` line marks the event.
 
 ### Authentication Events
 
@@ -640,12 +679,12 @@ Plan SIEM volume accordingly.
 Use the version emitted by your deployment:
 
 ```text
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="operation"
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="auth_failure"
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="authz_denied"
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="broker_authz_denied"
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="owner_validation_rejected"
-event="audit" AND audit_schema_version="1.3" AND audit_event_type="audit_drop"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="operation"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="auth_failure"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="authz_denied"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="broker_authz_denied"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="owner_validation_rejected"
+event="audit" AND audit_schema_version="1.4" AND audit_event_type="audit_drop"
 ```
 
 A complete authorization-refusal review requires both `authz_denied` and
@@ -707,6 +746,7 @@ request hierarchy.
 | `winner_trace_id`, `winner_span_id` | Pivot from a follower to the winner trace |
 
 Attempt spans have no `outcome`; an attempt can fail inside a successful retry chain.
+A `tools.CallTool` span with `outcome=cancelled` has no `error_type` and no error status.
 The `tokenexchange.Exchange` span has an outcome but no `error_type`.
 
 Entry spans include standard OTel HTTP attributes. `network.peer.address` is the transport
@@ -775,7 +815,7 @@ For tool-invocation metrics, logs, audit records, and spans:
 |---|---|
 | `success` | Tool call completed successfully |
 | `error` | Tool call failed; `error_type` explains why |
-| `cancelled` | Reserved for tool invocations in this release; emitted today only by `tokenexchange.Exchange` when its caller context ends |
+| `cancelled` | The client cancelled the call (`notifications/cancelled` in stateful mode, or a dropped `2026-07-28` request in stateless mode) before the server had a result. No `error_type`. The server's own SEMP request timeout is `error`. Also emitted by the `tokenexchange.Exchange` span when its caller context ends |
 
 ### `error_type`
 
@@ -1360,7 +1400,7 @@ The server does not emit the following:
 - saturation as metrics (saturation is logs only);
 - broker connection-pool gauges;
 - a dedicated SEMP retry-outcome counter;
-- tool-invocation cancellation or progress signals (the `cancelled` outcome on tool metrics is reserved and not produced).
+- tool-invocation progress signals.
 
 Do not build dashboards or alerts on metrics that do not exist. Such a panel stays empty
 and an alert on it never fires.

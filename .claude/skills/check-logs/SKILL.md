@@ -25,7 +25,7 @@ Scan Go code for logging security violations and compliance issues. Invoked with
 
 ### Step 1: Read the rules
 
-Read the secure logging rules at `docs/secure-logging-rules.md` in the project root. These are the rules you're checking against.
+Read the secure logging rules at `docs/_internal/secure-logging-rules.md` in the project root. These are the rules you're checking against.
 
 ### Step 2: Identify files to scan
 
@@ -61,7 +61,7 @@ For each file, check for the following violations in order of severity:
 
 #### LOW — Best practice
 
-- [ ] **L-01: Missing required fields** — Tool invocation logs without all required fields (tool, broker, outcome, duration_ms)
+- [ ] **L-01: Missing required fields** — Tool invocation logs without all required fields (tool, broker, outcome, duration)
 - [ ] **L-02: Unstructured fmt.Print** — Any `fmt.Printf`, `fmt.Println` used for logging purposes
 
 ### Step 4: Report findings

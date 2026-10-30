@@ -312,9 +312,9 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// nil: a parse failure never reaches classifyDesiredStateOutcome,
 					// so there is no desiredOutcome to report (SOL-153341) — same as
 					// the list-brokers dispatch site below.
-					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, nil, id)
-					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
-					endDispatchSpan(ctx, span, reg.name, brokerLabelNone, errorType, toolErr)
+					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, nil, id, metrics.OutcomeError, false)
+					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, metrics.OutcomeError)
+					endDispatchSpan(ctx, span, reg.name, brokerLabelNone, errorType, metrics.OutcomeError)
 
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
 				}

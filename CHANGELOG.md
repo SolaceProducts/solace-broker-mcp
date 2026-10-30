@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The `operation` audit record now carries `request_sent` on every call that did not succeed: `false` when the write never reached the broker, so nothing was applied, and `true` when it was sent and may have been applied. `audit_schema` is now **1.4**: update SIEM queries pinned to `audit_schema_version="1.3"`. Tracked under SOL-156509.
+
+### Changed
+
+- A tool call the client cancels (`notifications/cancelled`, or a dropped `2026-07-28` request with `MCP_TRANSPORT_STATELESS=true`) is now `outcome="cancelled"` with no `error_type`, not `error` / `execution_error`, in `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the `tools.CallTool` span, the `operation` audit record and the `tool invoked` line (now `INFO`, with `request_sent`). The server's own SEMP timeout stays `error`. `metrics_schema` is now 1.12. Rules, alerts and the error-rate panels in `deploy/grafana/solace-broker-mcp-overview.json` that count `outcome="error"` no longer see cancelled calls (the dashboard itself is unchanged); add `outcome="cancelled"` if they should. Tracked under SOL-156509.
+
 ## [1.1.0] - 2026-10-29
 
 ### Added

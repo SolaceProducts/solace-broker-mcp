@@ -40,6 +40,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -721,7 +722,7 @@ func TestAuditRecord_constructorRejectionEmitsADrop(t *testing.T) {
 		// makes NewEvent reject the operation record. Driving the helper
 		// directly is deliberate: CallTool cannot reach the destructive gate
 		// without a resolved broker, so this branch has no route through it.
-		emitOperationAudit(auditCtx(t), "delete-queue", "", "hash", time.Now(), "", nil)
+		emitOperationAudit(auditCtx(t), "delete-queue", "", "hash", time.Now(), "", metrics.OutcomeSuccess, false)
 	})
 
 	if got := len(ofType(records, audit.EventOperation)); got != 0 {
@@ -744,7 +745,7 @@ func TestAuditRecord_constructorRejectionEmitsADrop(t *testing.T) {
 func TestAuditRecord_rejectionDetailNamesNoArguments(t *testing.T) {
 	const secretTool = "delete-queue-SENSITIVE"
 	records := captureAudit(t, slog.LevelDebug, func() {
-		emitOperationAudit(auditCtx(t), secretTool, "", "SECRET-HASH-VALUE", time.Now(), "", nil)
+		emitOperationAudit(auditCtx(t), secretTool, "", "SECRET-HASH-VALUE", time.Now(), "", metrics.OutcomeSuccess, false)
 	})
 
 	for _, rec := range records {

@@ -70,23 +70,19 @@ const dispatchSpanName = "tools.CallTool"
 // alias: for an unresolved broker the raw value is whatever string the caller
 // typed, so it is unbounded, untrusted input that would egress to the
 // collector, and it breaks the span-to-metric join on caller casing alone.
-func endDispatchSpan(ctx context.Context, span trace.Span, tool, brokerLabel string, errorType metrics.ErrorType, toolErr error) {
+func endDispatchSpan(ctx context.Context, span trace.Span, tool, brokerLabel string, errorType metrics.ErrorType, outcome metrics.Outcome) {
 	// IsRecording guard: a non-recording span still needs End(), but building
 	// attributes nothing reads is waste on every tool call.
 	if span.IsRecording() {
-		outcome := "success"
-		if toolErr != nil {
-			outcome = "error"
-		}
 		attrs := []attribute.KeyValue{
 			attribute.String("tool", tool),
-			attribute.String("outcome", outcome),
+			attribute.String("outcome", string(outcome)),
 			attribute.String("broker", brokerLabel),
 		}
 		if id := correlation.From(ctx); id != "" {
 			attrs = append(attrs, attribute.String("correlation_id", id))
 		}
-		if toolErr != nil {
+		if outcome == metrics.OutcomeError {
 			// The same closed set as the audit record's error_type and the
 			// metric label — one predicate across all three surfaces. See
 			// docs/observability.md.
@@ -94,7 +90,8 @@ func endDispatchSpan(ctx context.Context, span trace.Span, tool, brokerLabel str
 		}
 		span.SetAttributes(attrs...)
 	}
-	if toolErr != nil {
+	// A cancelled call is not a span error: the caller left, nothing failed.
+	if outcome == metrics.OutcomeError {
 		// No description, no RecordError: that is unvouched text (the same
 		// text logToolResult gates behind a type check), and a span exports
 		// offsite. error_type carries the classification.

@@ -46,11 +46,14 @@ package schema
 // 1.9 (SOL-155414): added mcp_metrics_listener_exposed_beyond_mcp.
 // 1.10 (SOL-154679): added the mcp_owner_validation_total family.
 // 1.11 (SOL-155577): added the mcp_response_bounded_total family.
+// 1.12 (SOL-156509): mcp_tool_invocation_total and
+// mcp_tool_invocation_duration_seconds emit outcome="cancelled" for a call the
+// client cancelled; through 1.11 such a call was outcome="error".
 // The minor is an integer, not a decimal: 1.10 is later than 1.9. A consumer
 // that pins or compares this version must compare the components numerically,
 // not as a string and not with a pattern like 1\.[0-9], or it stops matching
 // at 1.10.
-const MetricsSchemaVersion = "1.11"
+const MetricsSchemaVersion = "1.12"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major
@@ -69,4 +72,10 @@ const MetricsSchemaVersion = "1.11"
 // (owner_not_found) for it. Additive: no existing field, event type or reason
 // changes. A query pinned to audit_schema_version="1.2" must move to 1.3 to keep
 // matching, and a closed-set validator must accept owner_validation_rejected.
-const AuditSchemaVersion = "1.3"
+// 1.4 (SOL-156509): the operation record gained request_sent (boolean),
+// present exactly when outcome is not success, and tool calls now emit
+// outcome="cancelled". The field is additive, but a call the client
+// cancelled, outcome="error" with error_type="execution_error" through 1.3, is
+// now outcome="cancelled" with no error_type: a rule that counts failures on
+// outcome="error" stops seeing it.
+const AuditSchemaVersion = "1.4"

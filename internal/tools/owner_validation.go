@@ -447,14 +447,19 @@ func extractOwner(params map[string]any, configParam string) (owner, msgVpn stri
 // what a confirmed rejection is. errors.As for the inconclusive case, because
 // ownerCheckFailedError wraps its cause. Metrics disabled needs no guard here: RecordOwnerValidation is nil-safe on its
 // receiver, the same single guard RecordBrokerAuthzDenied relies on.
-func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAlias string, err error) {
+//
+// A check the caller abandoned (it cancelled, or its own deadline passed) did
+// not block the write and is not counted. That is classifyCallOutcome's rule,
+// fed the same budgetExpired, so this counter and the call's outcome agree on
+// it (SOL-156509).
+func (m *ToolManager) recordOwnerValidation(ctx context.Context, tool, brokerAlias string, err error, budgetExpired bool) {
 	var checkFailed *ownerCheckFailedError
 	var outcome metrics.OwnerValidationOutcome
 	switch {
 	case isOwnerValidationRejection(err):
 		outcome = metrics.OwnerValidationRejectedNotFound
 	case errors.As(err, &checkFailed):
-		if errors.Is(ctx.Err(), context.Canceled) {
+		if classifyCallOutcome(ctx, err, budgetExpired) == metrics.OutcomeCancelled {
 			return
 		}
 		outcome = metrics.OwnerValidationRejectedCheckFailed
