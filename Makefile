@@ -223,13 +223,10 @@ helm-check: ## Helm chart lint, kubeconform, helm-unittest and drift check vs de
 # or anything else outside what it recognizes, still stops and asks for a
 # manual edit, same as before this target existed.
 #
-# This is a manual step run by whoever's PR needs it, not an automated one:
-# Dependabot cannot be configured to run arbitrary post-update scripts, so its
-# own PRs still need a human to run this target, review the diff, and push —
-# one command and a commit, rather than re-deriving the dependency closure and
-# hand-editing table rows. Fully automatic refresh on a Dependabot PR itself is
-# tracked separately (the target's script logic is what such automation would
-# call; only the trigger and a bot credential are missing).
+# On a Dependabot PR a scheduled workflow in SolaceDev/dax (SOL-153374) runs
+# this target and pushes the result. On any other PR it is a manual step run by
+# whoever's PR needs it: one command and a commit, rather than re-deriving the
+# dependency closure and hand-editing table rows.
 .PHONY: refresh-third-party-inventory
 refresh-third-party-inventory: ## Regenerate THIRD_PARTY_LICENSES.md and THIRD_PARTY_BUILD_TEST.md from what the repo actually uses; review the diff, then commit. REFRESH_PR_NUMBER=<n> cites the PR in the re-pin prose
 	@rc=0; \

@@ -12,9 +12,11 @@ result, with a human checkpoint before anything gets pushed. Invoked with
 
 Dependabot bumps Go modules and re-pins GitHub Action SHAs but cannot run post-update scripts, so
 its own PRs land with `THIRD_PARTY_LICENSES.md` / `THIRD_PARTY_BUILD_TEST.md` unmodified and
-`Third-party licenses current` red. `make refresh-third-party-inventory` already turns fixing that
-into one command; this skill is that command asked for in plain language instead of remembered and
-typed by hand.
+`Third-party licenses current` red. A scheduled workflow in `SolaceDev/dax` (SOL-153374) fixes that
+once a day: at 11:30 UTC it runs `make refresh-third-party-inventory` on each red Dependabot PR and
+pushes the result, and it reports a PR it cannot fix in #dax on Slack. This skill is for the cases
+that can't wait for that run, or that the run could not fix: the same command, asked for in plain
+language instead of remembered and typed by hand.
 
 **The one checkpoint is the diff, before anything is written.** This skill checks out a real PR
 branch and pushes a real commit to it — Step 5 always stops and shows the diff, and committing and
@@ -138,8 +140,8 @@ who asked for this is the checkpoint; do not infer consent from silence or move 
   ```
   `-s` for the DCO trailer every commit on this repo needs — this runs under the invoking person's
   own git identity; no bot identity or separate credential is needed, because a person is the one
-  asking for and reviewing this, unlike the fully-automated path (a separate, not-yet-built
-  mechanism) that would need one. `Generated-by:` records that an agent produced the diff, which
+  asking for and reviewing this, unlike the scheduled dax workflow, which commits as
+  `github-actions[bot]` with its own deploy key. `Generated-by:` records that an agent produced the diff, which
   matters here specifically because this is a license-compliance artifact — provenance of an edit
   to it is itself worth keeping.
 - `git push`. **Never force-push.** If the push is rejected as non-fast-forward — Dependabot can

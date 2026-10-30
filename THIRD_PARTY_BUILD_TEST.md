@@ -323,8 +323,8 @@ tests, are never linked, and are never redistributed by us.
 `build-test-licenses-check.sh`'s own verdict, rewrites only the row(s) that
 actually drifted (reading each new license fresh, never inferring one), and
 refuses outright rather than guess at anything it doesn't recognize —
-review its diff and commit as usual. A Dependabot PR still needs a human to
-run it; Dependabot itself cannot execute post-update scripts (SOL-152956).
+review its diff and commit as usual. On a Dependabot PR a scheduled workflow
+runs it and pushes the result (SOL-153374).
 
 When the `SolaceDev/solace-public-workflows` pin moves, the same run rewrites
 the prose below the [Solace-internal table](#solace-internal-composite-actions):
