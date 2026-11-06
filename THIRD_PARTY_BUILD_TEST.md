@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-11-05; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-11-06; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -177,7 +177,7 @@ note spells out.
 | `actions/setup-node` | `949feb2` | v7.1.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.1.0/LICENSE) |
 | `actions/upload-artifact` | `cf430e0` | v7.0.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.2/LICENSE) |
 | `docker/build-push-action` | `c3c9e26` | v7.4.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.4.0/LICENSE) |
-| `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
+| `docker/login-action` | `81c6f93` | v4.7.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.7.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `f87e599` | v4.4.1 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.4.1/LICENSE) |
 | `docker/setup-qemu-action` | `9901266` | v4.4.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.4.0/LICENSE) |
