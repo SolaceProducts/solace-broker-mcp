@@ -200,16 +200,16 @@ All six come from one repository and now share a single pin.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `842e0b8` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `842e0b8` | Solace |
-| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `842e0b8` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `842e0b8` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `842e0b8` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `842e0b8` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `d047a57` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `d047a57` | Solace |
+| `SolaceDev/solace-public-workflows/.github/workflows/update-manifest.yaml` | `d047a57` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `d047a57` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `d047a57` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `d047a57` | Solace |
 
-`842e0b8` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-11-05 by the Dependabot
-`internal-reusable-workflows` group update (#569); the prior pin was `fa3e128`.
+`d047a57` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-11-06 by the Dependabot
+`internal-reusable-workflows` group update (#571); the prior pin was `842e0b8`.
 
 The 2026-10-23 update (#540) collapsed `update-manifest.yaml` into the shared
 pin, so the separate-pin note that once stood here no longer applies.
