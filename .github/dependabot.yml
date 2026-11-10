@@ -1,13 +1,13 @@
 version: 2
 
-# Scheduled version-drift updates for Go modules and GitHub Actions, separate
-# from the Dependabot security alerts/updates already active on this repo
-# (those fire on a published CVE regardless of this file).
+# Scheduled version-drift updates for Go modules, GitHub Actions, the Docker
+# base image and the LLM e2e suite's pinned Claude Code CLI, separate from the
+# Dependabot security alerts/updates already active on this repo (those fire
+# on a published CVE regardless of this file).
 #
 # Not Renovate: Renovate cannot be enrolled for a public repository under the
-# org's current system, so it stays scoped to the one thing it already covers,
-# the pinned Claude Code CLI version (.github/renovate.json). Tracked under
-# SOL-152808.
+# org's current system (SOL-152808). It was configured for the Claude Code pin
+# alone, never opened a PR, and was removed under SOL-158007.
 #
 # Why Dependabot's pull requests satisfy the required `DCO` check, stated
 # precisely because the obvious explanation is wrong: its commits DO carry a
@@ -31,8 +31,8 @@ version: 2
 #
 # `cooldown` holds every update back until the release is at least 14 days old,
 # so a freshly-published (and possibly yanked or compromised) version is not
-# proposed the moment it lands. Renovate applies the same 14-day window via
-# `minimumReleaseAge` in .github/renovate.json.
+# proposed the moment it lands. Cooldown applies to version updates only;
+# security updates are proposed as soon as a fix exists.
 updates:
   # Four go.mod files exist in this repo; each needs its own entry because
   # Dependabot's `directory` matches exactly one path per ecosystem entry.
@@ -132,6 +132,23 @@ updates:
         exclude-patterns:
           - "Solace*"
     open-pull-requests-limit: 10
+
+  # The LLM e2e suite's Claude Code CLI pin, the only npm manifest in the repo.
+  # Dependabot can't follow npm's `stable` dist-tag the way the removed
+  # Renovate config did (SOL-158007), so the 14-day cooldown is the only lag
+  # behind `latest`. Every bump PR still needs the test/e2e-llm/README.md bump
+  # procedure (two clean runs) before merging, and a
+  # `make refresh-third-party-inventory` commit for the licenses check.
+  # `allow` keeps the entry to this one package if the manifest ever grows.
+  - package-ecosystem: "npm"
+    directory: "/test/e2e-llm"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 14
+    allow:
+      - dependency-name: "@anthropic-ai/claude-code"
+    open-pull-requests-limit: 1
 
   # The Dockerfile's runtime base is pinned by digest (SOL-156816); this entry
   # proposes each new digest of its tag. The builder stage is not covered:

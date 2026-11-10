@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-11-09; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-11-10; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the
 `solace-public-workflows` actions to a newer commit on the same branch, again
@@ -139,15 +139,15 @@ tidier.
 
 | Component | Version | License | License text |
 |---|---|---|---|
-| `@anthropic-ai/claude-code` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-darwin-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-darwin-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-arm64-musl` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-x64-musl` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-win32-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-win32-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-darwin-arm64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-darwin-x64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-arm64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-arm64-musl` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-x64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-x64-musl` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-win32-arm64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-win32-x64` | 2.1.311 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
 
 Eight of the nine are per-platform binary packages that npm resolves as optional
 dependencies of the first. Only one platform is ever installed on a given runner,
