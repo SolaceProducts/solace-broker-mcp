@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A tool call the client cancels (`notifications/cancelled`, or a dropped `2026-07-28` request with `MCP_TRANSPORT_STATELESS=true`) is now `outcome="cancelled"` with no `error_type`, not `error` / `execution_error`, in `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the `tools.CallTool` span, the `operation` audit record and the `tool invoked` line (now `INFO`, with `request_sent`). The server's own SEMP timeout stays `error`. `metrics_schema` is now 1.12. Rules, alerts and the error-rate panels in `deploy/grafana/solace-broker-mcp-overview.json` that count `outcome="error"` no longer see cancelled calls (the dashboard itself is unchanged); add `outcome="cancelled"` if they should. Tracked under SOL-156509.
+- Every tool that requires `msgVpnName` now names `list-vpns` in that parameter's description in `tools/list`, so an agent that loads one tool on its own looks the VPN up instead of asking the user. Read-only tools scoped by VPN alone also say to check each VPN when the question covers the whole broker; tools that change state say to confirm the target VPN with the user instead. Tracked under SOL-158044.
 
 ## [1.1.0] - 2026-10-29
 
