@@ -104,7 +104,7 @@ background updater can't drift the version mid-suite. Set
 
 1. Bump the version in `package.json` and regenerate the lockfile
    (`npm install --package-lock-only`), then run
-   `make refresh-third-party-inventory` so `THIRD_PARTY_BUILD_TEST.md`
+   `make -C ../.. refresh-third-party-inventory` so `THIRD_PARTY_BUILD_TEST.md`
    matches. Dependabot's PR does the first two but not the inventory; the
    `Third-party licenses current` check fails until it's refreshed on the
    PR branch.
