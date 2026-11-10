@@ -597,6 +597,14 @@ no persistent transcripts. No retries: re-run the suite if a scenario flakes.
   which was never enrolled; it now follows `latest` behind a 14-day
   Dependabot cooldown (SOL-158007), so the two-clean-runs gate carries the
   weight `stable` used to.
+- **Tool-schema deferral stays on.** From 2.1.311 the CLI defers this
+  server's tool schemas by default, so the agent spends a `ToolSearch` turn
+  before it can call a tool it hasn't loaded; 2.1.231 loaded them up front.
+  `--max-turns` went from 5 to 8 to cover those lookups (SOL-158007). The
+  suite deliberately does not set `ENABLE_TOOL_SEARCH=false`: that would
+  pass by testing a configuration users on the default don't run, and hide
+  failures like an agent that loads one tool in isolation and asks the user
+  for a VPN name instead of calling `list-vpns`.
 - **Followup turns use `--session-id`/`--resume`, not `--continue`.** Turn 1
   generates a UUID and passes it via `--session-id`; turn 2 passes the same
   UUID via `--resume`. `--continue` picks "the most recent session" — which

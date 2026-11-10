@@ -369,7 +369,13 @@ invoke_claude() {
         --tools "ToolSearch"
         --output-format stream-json
         --verbose
-        --max-turns 5
+        # 8, not 5: from 2.1.311 the CLI defers this server's tool schemas
+        # by default (2.1.231 loaded them up front, zero ToolSearch calls a
+        # night), and each lookup costs a turn. On 5, three scenarios spent
+        # 2-3 turns on ToolSearch and ran out before answering (SOL-158007).
+        # Deferral stays on — ENABLE_TOOL_SEARCH=false would pass the suite
+        # by testing a setup users on the default don't have.
+        --max-turns 8
         "${CLAUDE_MODEL_ARGS[@]}"
         "$@"
         -p "$prompt"
