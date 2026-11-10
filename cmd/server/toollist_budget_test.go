@@ -146,6 +146,11 @@ func listAllTools(t *testing.T, server *mcp.Server) []*mcp.Tool {
 // measurement, not at the size of tools that did not exist yet, so it still catches
 // a runaway schema. The read-only ceiling is unchanged (~10.0k measured). Write
 // tools are off by default, so only deployments that enable them pay this.
+//
+// SOL-158044: the with-write-tools ceiling was raised 35,000 -> 38,000 for the
+// list-vpns hint added to every required msgVpnName description (~15-35 tokens
+// on each of 54 tools): 60 tools went from ~34.5k to ~36.1k measured. The
+// read-only case went from ~11.8k to ~12.5k, still under its unchanged 15,000.
 func TestToolListBudget(t *testing.T) {
 	const bytesPerToken = 4 // same rough estimate used throughout this investigation
 
@@ -155,7 +160,7 @@ func TestToolListBudget(t *testing.T) {
 		maxTokens        int
 	}{
 		{"read-only", false, 15_000},
-		{"with-write-tools", true, 35_000},
+		{"with-write-tools", true, 38_000},
 	}
 
 	for _, tc := range cases {

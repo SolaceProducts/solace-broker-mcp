@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -353,14 +355,14 @@ func isWriteTool(a Annotations) bool {
 }
 
 // toMCPTool converts our Metadata to the SDK's mcp.Tool, injecting the broker
-// parameter into the input schema. This is the only place in the codebase
-// where our types and SDK types meet.
+// parameter and the list-vpns hint into the input schema. This is the only
+// place in the codebase where our types and SDK types meet.
 func toMCPTool(m Metadata, pool *semp.BrokerPool) *mcp.Tool {
-	inputSchema := m.InputSchema
+	inputSchema := injectVPNLookupHint(m.Name, m.InputSchema, m.Annotations.ReadOnly)
 	// A no-broker tool declares its complete input schema itself — there is
 	// no broker parameter to inject (SOL-153693).
 	if !m.NoBroker {
-		inputSchema = injectBrokerParam(m.InputSchema, pool)
+		inputSchema = injectBrokerParam(inputSchema, pool)
 	}
 	return &mcp.Tool{
 		Name:         m.Name,
@@ -434,6 +436,69 @@ func (h *listBrokersHandler) Handle(_ context.Context, _ *ToolContext, _ map[str
 // bypass it.
 func RegisterListBrokers(mgr *ToolManager, pool *semp.BrokerPool) {
 	mgr.Register(newListBrokersHandler(pool))
+}
+
+// The sentence appended to a required msgVpnName's description (SOL-158044).
+// Claude Code defers MCP tool schemas behind ToolSearch, so an agent often
+// loads one VPN-scoped tool on its own, sees msgVpnName is required, and asks
+// the user for it instead of looking it up. Every such tool therefore names
+// list-vpns itself. A tool that changes state is told to confirm the target
+// with the user, so the hint never invites, say, deleting a queue in every VPN
+// at once. Only a read-only tool scoped by VPN alone (a list or VPN-summary
+// tool) is also told to fan out across VPNs: a read-only tool that needs an
+// object identifier too (a queue, a client) addresses one object in one VPN,
+// so calling it once per VPN would only produce not-found errors.
+const (
+	vpnHintLookup    = "If you don't know the VPN name, call list-vpns first."
+	vpnHintFanOut    = "If the question covers the whole broker, call this tool once for each VPN it returns."
+	vpnHintWrite     = "If you don't know the VPN name, call list-vpns to find it, then confirm the target VPN with the user. Never run this tool across every VPN."
+	vpnHintCreateVPN = "Call list-vpns to see which names are already taken."
+)
+
+// injectVPNLookupHint returns schema with the list-vpns hint appended to its
+// msgVpnName description, when msgVpnName is a required parameter; otherwise
+// it returns schema unchanged. Applied in toMCPTool, so composite and native
+// tools alike get it and a new tool cannot forget it. The handler's schema is
+// never modified: properties and the msgVpnName entry are copied before the
+// write, the same shallow-clone discipline as injectBrokerParam.
+func injectVPNLookupHint(toolName string, schema map[string]any, readOnly bool) map[string]any {
+	required, _ := schema["required"].([]string)
+	if !slices.Contains(required, "msgVpnName") {
+		return schema
+	}
+	origProps, _ := schema["properties"].(map[string]any)
+	origVPN, ok := origProps["msgVpnName"].(map[string]any)
+	if !ok {
+		return schema
+	}
+
+	var hint string
+	switch {
+	case toolName == "create-message-vpn":
+		hint = vpnHintCreateVPN
+	case !readOnly:
+		hint = vpnHintWrite
+	case len(required) == 1: // msgVpnName is the tool's only required input
+		hint = vpnHintLookup + " " + vpnHintFanOut
+	default:
+		hint = vpnHintLookup
+	}
+
+	desc, _ := origVPN["description"].(string)
+	if desc = strings.TrimSpace(desc); desc != "" {
+		if !strings.HasSuffix(desc, ".") {
+			desc += "."
+		}
+		desc += " "
+	}
+
+	vpn := maps.Clone(origVPN)
+	vpn["description"] = desc + hint
+	props := maps.Clone(origProps)
+	props["msgVpnName"] = vpn
+	cloned := maps.Clone(schema)
+	cloned["properties"] = props
+	return cloned
 }
 
 // injectBrokerParam clones the given input schema and adds the required broker
