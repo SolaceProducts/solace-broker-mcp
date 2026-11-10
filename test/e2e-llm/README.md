@@ -604,7 +604,9 @@ no persistent transcripts. No retries: re-run the suite if a scenario flakes.
   suite deliberately does not set `ENABLE_TOOL_SEARCH=false`: that would
   pass by testing a configuration users on the default don't run, and hide
   failures like an agent that loads one tool in isolation and asks the user
-  for a VPN name instead of calling `list-vpns`.
+  for a VPN name instead of calling `list-vpns`. That one is a real gap in
+  the tool descriptions, not in the harness: `f6-slow-subscriber` fails on
+  2.1.311 until SOL-158044 points VPN-scoped tools at `list-vpns`.
 - **Followup turns use `--session-id`/`--resume`, not `--continue`.** Turn 1
   generates a UUID and passes it via `--session-id`; turn 2 passes the same
   UUID via `--resume`. `--continue` picks "the most recent session" — which

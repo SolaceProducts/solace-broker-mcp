@@ -349,7 +349,10 @@ invoke_claude() {
         # built-in. ToolSearch stays because the CLI defers tool schemas once
         # enough tools are registered, and the agent cannot name an MCP tool
         # without looking it up first; it only loads schemas, so it reaches
-        # neither the broker nor the filesystem.
+        # neither the broker nor the filesystem. 2.1.231 never deferred this
+        # server's tools; 2.1.311 does, with no setting, on every scenario
+        # (SOL-158007). That is the configuration the suite is meant to test,
+        # so ENABLE_TOOL_SEARCH is left unset — see --max-turns below.
         #
         # Do NOT rely on --allowed-tools for this. It is the auto-approve list,
         # not a registry filter: built-ins absent from it were still handed to
