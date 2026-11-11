@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
 ### Added
 
 - The `operation` audit record now carries `request_sent` on every call that did not succeed: `false` when the write never reached the broker, so nothing was applied, and `true` when it was sent and may have been applied. `audit_schema` is now **1.4**: update SIEM queries pinned to `audit_schema_version="1.3"`. Tracked under SOL-156509.
@@ -788,7 +790,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.1.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.2.0...HEAD
+- [1.2.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.1.0...v1.2.0
 - [1.1.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.0.0...v1.1.0
 - [1.0.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.11.0...v1.0.0
 - [0.11.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.10.0...v0.11.0
