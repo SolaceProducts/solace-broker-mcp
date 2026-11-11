@@ -43,6 +43,17 @@ natural-language **Example request** quotes below write `<your-vpn-name>`
 where a real VPN name is needed — replace it with one from your own event
 broker before trying the call.
 
+The server appends one sentence to every required `msgVpnName` description at
+registration, so an agent that loads a single tool still knows how to find a
+VPN name. Which sentence depends on the tool:
+
+| Tool | Appended to the `msgVpnName` description |
+|---|---|
+| Read-only, scoped by VPN alone (for example `list-queues`) | If you don't know the VPN name, call list-vpns first. If the question covers the whole broker, call this tool once for each VPN it returns. |
+| Read-only, also needs an object name (for example `get-queue-metrics`) | If you don't know the VPN name, call list-vpns first. |
+| Changes state (write tools) | If you don't know the VPN name, call list-vpns to find it, then confirm the target VPN with the user. Never run this tool across every VPN. |
+| `create-message-vpn` | Call list-vpns to see which names are already taken. |
+
 ### Pagination
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
