@@ -72,10 +72,14 @@ The pin lives in [`package.json`](package.json) (single source of truth);
 `config.env` reads it via `jq`. The runner refuses to start on a
 `claude --version` mismatch.
 
-The pin tracks npm's `stable` dist-tag — deliberately lagged from
-`latest` so a fresh release can't silently flip scenarios. Renovate
-([`.github/renovate.json`](../../.github/renovate.json)) watches this
-package only and opens a weekly PR when `stable` moves; never auto-merges.
+Dependabot ([`.github/dependabot.yml`](../../.github/dependabot.yml), the
+`npm` entry for `/test/e2e-llm`) watches this package only and opens a
+weekly PR, never auto-merged. Dependabot can't follow an npm dist-tag, so
+it proposes `latest` held back by a 14-day `cooldown`, not npm's `stable`
+dist-tag that this pin used to track. The cooldown doesn't apply to
+security updates: a CVE fix is proposed straight away. A proposed version
+may be ahead of `stable`, which makes the two-clean-runs gate in the bump procedure
+below the real check.
 
 Check what `stable` currently points to (and compare against `latest`):
 
@@ -96,10 +100,14 @@ lockfile exactly. The runner also exports `DISABLE_AUTOUPDATER=1` so the
 background updater can't drift the version mid-suite. Set
 `CLAUDE_VERSION_PIN_OVERRIDE=1` to skip the check locally.
 
-**Bump procedure** (manual or reviewing a Renovate PR):
+**Bump procedure** (manual or reviewing a Dependabot PR):
 
 1. Bump the version in `package.json` and regenerate the lockfile
-   (`npm install --package-lock-only`). Renovate's PR does both.
+   (`npm install --package-lock-only`), then run
+   `make -C ../.. refresh-third-party-inventory` so `THIRD_PARTY_BUILD_TEST.md`
+   matches. Dependabot's PR does the first two but not the inventory; the
+   `Third-party licenses current` check fails until it's refreshed on the
+   PR branch.
 2. Check the engine floor: `npm view @anthropic-ai/claude-code engines`. If the
    Node floor moved, update `node-version` in
    [`llm-eval.yml`](../../.github/workflows/llm-eval.yml) and the prereq above.
@@ -108,7 +116,9 @@ background updater can't drift the version mid-suite. Set
 3. Run `./test-assertions.sh` — cheap, offline, and catches an assertion the new
    CLI's output shape has silently invalidated before a full run spends credits.
 4. Run `./run-all.sh` twice against the candidate — confirm every
-   scenario passes both times.
+   scenario passes both times. `llm-eval.yml` has no per-PR trigger; to run
+   it in CI instead, dispatch it against the PR branch:
+   `gh workflow run llm-eval.yml -f target_branch=<branch>`.
 5. Merge.
 
 ## Configuration
@@ -180,7 +190,7 @@ docker-compose.yml         this suite's brokers (solace-e2e-llm-a/b) —
                            SEMP :8102/:8104, SMF :55661/:55662, MCP :9094
 mcp-config.json.tmpl       MCP server pointer (envsubst-rendered to MCP_URL)
 mcp-config-down.json.tmpl  deliberately broken (MCP_URL_DOWN) for the down test
-package.json + .lock       pinned Claude Code CLI (FOSSA-scannable, Renovate-tracked)
+package.json + .lock       pinned Claude Code CLI (FOSSA-scannable, Dependabot-tracked)
 bin/                       compiled broker-driver + MCP server binaries and
                            the log/PID files written by setup-fixtures.sh
 ```
@@ -581,9 +591,22 @@ no persistent transcripts. No retries: re-run the suite if a scenario flakes.
   The `Bash`/`Read` fallback observed on 2.1.181 is what `--tools ""` blocks.
 - **`--mcp-config` is additive** — always pair with `--strict-mcp-config` in
   tests.
-- **Pin the CLI to npm's `stable` dist-tag**, not `latest`. `latest` is
-  unvetted by Anthropic; a fresh release can change tool-call wrapping or
-  refusal phrasing in ways that silently flip scenarios.
+- **Never let the CLI float.** A fresh release can change tool-call
+  wrapping or refusal phrasing in ways that silently flip scenarios. The pin
+  used to follow npm's `stable` dist-tag (vetted by Anthropic) via Renovate,
+  which was never enrolled; it now follows `latest` behind a 14-day
+  Dependabot cooldown (SOL-158007), so the two-clean-runs gate carries the
+  weight `stable` used to.
+- **Tool-schema deferral stays on.** From 2.1.311 the CLI defers this
+  server's tool schemas by default, so the agent spends a `ToolSearch` turn
+  before it can call a tool it hasn't loaded; 2.1.231 loaded them up front.
+  `--max-turns` went from 5 to 8 to cover those lookups (SOL-158007). The
+  suite deliberately does not set `ENABLE_TOOL_SEARCH=false`: that would
+  pass by testing a configuration users on the default don't run, and hide
+  failures like an agent that loads one tool in isolation and asks the user
+  for a VPN name instead of calling `list-vpns`. That one is a real gap in
+  the tool descriptions, not in the harness: `f6-slow-subscriber` fails on
+  2.1.311 until SOL-158044 points VPN-scoped tools at `list-vpns`.
 - **Followup turns use `--session-id`/`--resume`, not `--continue`.** Turn 1
   generates a UUID and passes it via `--session-id`; turn 2 passes the same
   UUID via `--resume`. `--continue` picks "the most recent session" — which

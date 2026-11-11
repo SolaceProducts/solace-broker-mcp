@@ -30,11 +30,14 @@
 # no equally reliable, automatable source for either (a registry tag bump
 # doesn't change who publishes the image, so that case IS handled; a novel
 # image reference has no LICENSE-file or GitHub-API equivalent this script can
-# check). In practice this refusal is close to theoretical for images and npm:
-# .github/dependabot.yml has no `npm` ecosystem entry, and its `docker` entry
-# only moves the Dockerfile runtime base's digest, which the inventory does not
-# record (a digest pinned to a tag is checked at its tag). So a Dependabot PR
-# cannot structurally add or remove either kind today.
+# check). In practice this refusal is close to theoretical for images: the
+# `docker` entry in .github/dependabot.yml only moves the Dockerfile runtime
+# base's digest, which the inventory does not record (a digest pinned to a tag
+# is checked at its tag). For npm it is rarer but real: the `npm` entry bumps
+# only the Claude Code CLI pin, whose existing rows this script re-versions,
+# but a release that adds a platform package (a new
+# @anthropic-ai/claude-code-<os>-<arch> optional dependency) would bring a
+# row this script refuses, so that PR needs the row added by hand.
 #
 # If build-test-licenses-check.sh reports anything else this script does not
 # recognise (a duplicate row, an unparseable row, `go list` failing, a missing
