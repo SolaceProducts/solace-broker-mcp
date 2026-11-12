@@ -140,10 +140,13 @@ updates:
   # procedure (two clean runs) before merging, and a
   # `make refresh-third-party-inventory` commit for the licenses check.
   # `allow` keeps the entry to this one package if the manifest ever grows.
+  # Monthly, not weekly (SOL-158209): upstream ships close to a release a day,
+  # and each bump costs two paid eval runs, so a monthly PR that skips the
+  # intermediate releases is the cheapest cadence that still keeps up.
   - package-ecosystem: "npm"
     directory: "/test/e2e-llm"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     cooldown:
       default-days: 14
     allow:

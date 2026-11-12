@@ -74,7 +74,7 @@ The pin lives in [`package.json`](package.json) (single source of truth);
 
 Dependabot ([`.github/dependabot.yml`](../../.github/dependabot.yml), the
 `npm` entry for `/test/e2e-llm`) watches this package only and opens a
-weekly PR, never auto-merged. Dependabot can't follow an npm dist-tag, so
+monthly PR, never auto-merged. Dependabot can't follow an npm dist-tag, so
 it proposes `latest` held back by a 14-day `cooldown`, not npm's `stable`
 dist-tag that this pin used to track. The cooldown doesn't apply to
 security updates: a CVE fix is proposed straight away. A proposed version
