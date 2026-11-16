@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-11-10 with
+**Generated** 2026-11-16 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -42,7 +42,6 @@ under MPL-2.0.
 |---|---|---|---|
 | `github.com/hashicorp/go-cleanhttp` | v0.5.2 | MPL-2.0 | [license](https://github.com/hashicorp/go-cleanhttp/blob/v0.5.2/LICENSE) |
 | `github.com/hashicorp/go-retryablehttp` | v0.7.8 | MPL-2.0 | [license](https://github.com/hashicorp/go-retryablehttp/blob/v0.7.8/LICENSE) |
-| `github.com/hashicorp/go-uuid` | v1.0.3 | MPL-2.0 | [license](https://github.com/hashicorp/go-uuid/blob/v1.0.3/LICENSE) |
 
 ## Permissive components
 
@@ -54,8 +53,8 @@ under MPL-2.0.
 | `github.com/coreos/go-oidc/v3/oidc` | v3.21.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE) |
 | `github.com/felixge/httpsnoop` | v1.1.0 | MIT | [license](https://github.com/felixge/httpsnoop/blob/v1.1.0/LICENSE.txt) |
 | `github.com/getkin/kin-openapi` | v0.152.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.152.0/LICENSE) |
-| `github.com/go-jose/go-jose/v4` | v4.1.6 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.6/LICENSE) |
-| `github.com/go-jose/go-jose/v4/json` | v4.1.6 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.6/json/LICENSE) |
+| `github.com/go-jose/go-jose/v4` | v4.1.7 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.7/LICENSE) |
+| `github.com/go-jose/go-jose/v4/json` | v4.1.7 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.7/json/LICENSE) |
 | `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 | [license](https://github.com/go-logr/logr/blob/v1.4.4/LICENSE) |
 | `github.com/go-logr/stdr` | v1.2.2 | Apache-2.0 | [license](https://github.com/go-logr/stdr/blob/v1.2.2/LICENSE) |
 | `github.com/go-openapi/jsonpointer` | v1.0.1 | Apache-2.0 | [license](https://github.com/go-openapi/jsonpointer/blob/v1.0.1/LICENSE) |
@@ -68,11 +67,11 @@ under MPL-2.0.
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
 | `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
 | `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
-| `github.com/pandatix/go-abnf` | v0.5.1 | MIT | [license](https://github.com/pandatix/go-abnf/blob/v0.5.1/LICENSE) |
+| `github.com/pandatix/go-abnf` | v0.5.3 | MIT | [license](https://github.com/pandatix/go-abnf/blob/v0.5.3/LICENSE) |
 | `github.com/prometheus/client_golang` | v1.25.0 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/LICENSE) |
 | `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.25.0 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/internal/github.com/golang/gddo/LICENSE) |
 | `github.com/prometheus/client_model` | v0.6.3 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.3/LICENSE) |
-| `github.com/prometheus/common` | v0.73.0 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.73.0/LICENSE) |
+| `github.com/prometheus/common` | v0.73.1 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.73.1/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |
 | `github.com/prometheus/procfs` | v0.22.0 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.22.0/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.3 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/LICENSE) |
