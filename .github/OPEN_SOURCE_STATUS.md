@@ -176,10 +176,9 @@ These settings must be configured by repository admin:
 - Secret scanning and secret-scanning push protection are already on, as are
   validity checks and non-provider patterns. Confirm, do not re-enable
 - Dependabot alerts and Dependabot security updates are already on. Scheduled
-  Go module and GitHub Actions updates run on Dependabot too
-  (`.github/dependabot.yml`). Renovate can't be enrolled for a public repo
-  under the org's current system, so it stays scoped to just the pinned Claude
-  Code CLI version (`.github/renovate.json`). Dependabot pull requests pass the required
+  Go module, GitHub Actions, Docker base image and Claude Code CLI pin updates
+  run on Dependabot too (`.github/dependabot.yml`). Renovate can't be enrolled
+  for a public repo under the org's current system and is not used. Dependabot pull requests pass the required
   `DCO` check by bot exemption rather than by sign-off — `dco2` skips every
   bot-authored commit, a wider exemption than the retired workflow's single
   login-matched one, with no configuration key to narrow it. See ADMIN_SETUP.md →

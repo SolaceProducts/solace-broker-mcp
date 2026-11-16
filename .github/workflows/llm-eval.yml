@@ -183,7 +183,7 @@ jobs:
         id: suite
         # Below the job's 30, deliberately. A stalled request is the only
         # realistic route to a wall-clock cap here — nothing bounds a scenario
-        # in time (`--max-turns 5` bounds turns, and the claude invocation has
+        # in time (`--max-turns 8` bounds turns, and the claude invocation has
         # no timeout(1) wrapper). Capping the step instead of the job means a
         # stall surfaces as a step `failure`, which the classifier below reads
         # as an ordinary infrastructure failure, and Collect / Upload / Teardown

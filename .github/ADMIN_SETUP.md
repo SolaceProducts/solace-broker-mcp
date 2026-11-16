@@ -262,21 +262,21 @@ not affect it. Confirmed live: `dependency-graph/compare/v0.6.0...v0.7.1` return
 33 dependency changes. The cost question that parked this control was about an
 internal repository and no longer applies.
 
-**Dependency updates split between Renovate and Dependabot.**
+**Dependency updates run on Dependabot.**
 
-`.github/renovate.json` covers exactly one job: the pinned Claude Code CLI
-version in the LLM e2e harness. `.github/dependabot.yml` covers scheduled
-version updates for Go modules across all three `go.mod` files (root,
-`test/e2e-common/broker-driver`, `test/e2e-basic-mcp/agent`) and GitHub
-Actions — grouped to keep volume down: one PR per Go module for minor/patch,
-one per module for major, one for GitHub Actions. Dependabot also still
-handles alerts and security-only updates, as before; those run independently
-of `dependabot.yml` and are already on.
+`.github/dependabot.yml` covers scheduled version updates for Go modules across
+all three `go.mod` files (root, `test/e2e-common/broker-driver`,
+`test/e2e-basic-mcp/agent`), GitHub Actions, the Docker base image, and the
+pinned Claude Code CLI version in the LLM e2e harness. Go and Actions updates
+are grouped to keep volume down: one PR per Go module for minor/patch, one per
+module for major, one for GitHub Actions. Dependabot also still handles alerts
+and security-only updates, as before; those run independently of
+`dependabot.yml` and are already on.
 
-- Renovate does not cover Go modules or GitHub Actions here. SOL-152586
-  briefly extended it to do so instead of adding a Dependabot configuration, but
-  Renovate cannot be enrolled for a public repository under the org's current
-  system — reverted under SOL-152808 ahead of this repo going public.
+- Renovate is not used. Renovate cannot be enrolled for a public repository
+  under the org's current system. SOL-152586 briefly extended it to Go modules
+  and GitHub Actions, reverted under SOL-152808; its remaining job, the Claude
+  Code CLI pin, never opened a PR and moved to Dependabot under SOL-158007.
 - Dependabot pull requests pass the required `DCO` check by bot exemption, not
   by sign-off. Its commits do carry a trailer, but one whose address matches
   neither author nor committer; `dco2` never reads it, skipping bot-authored
@@ -1012,8 +1012,8 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
   `GITHUB_TOKEN` is read-only. It was a workflow running on a branch *inside* this
   repository, and this repository allows all actions with no SHA pinning required
   (see the following "Fork pull request workflows"), so a compromised third-party action
-  would have inherited that ability. Nothing here needed the setting: Renovate opens
-  PRs with its own GitHub App installation token, and no workflow in this
+  would have inherited that ability. Nothing here needed the setting: Dependabot opens
+  PRs under its own bot identity, and no workflow in this
   repository opens or approves PRs.
 
 **Alternative (more restrictive):**
