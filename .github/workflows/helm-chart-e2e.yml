@@ -87,7 +87,7 @@ jobs:
       # published next to its download. run-all.sh creates the cluster with
       # the node image from .env, the same code path as a local run.
       - name: Install kind
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           version: ${{ steps.pins.outputs.kind-version }}
           kubectl_version: v1.37.1
