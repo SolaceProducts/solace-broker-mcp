@@ -417,3 +417,152 @@ fetch_go_module_license() {
     [ "$(wc -l <<<"$distinct_licenses")" -eq 1 ] || return 0
     awk -F',' -v OFS='\t' '{print $3, $2; exit}' <<<"$matches"
 }
+
+# --- NOTICE propagation (SOL-159006) -----------------------------------------
+#
+# Used only by refresh-licenses-inventory.sh's opt-in REFRESH_NOTICE=1 mode.
+# licenses-check.sh's NOTICE check finds a module's NOTICE with
+# `find <dir> -maxdepth 1 -iname 'NOTICE*'` and then only checks that NOTICE
+# names the module path; it never reads the attribution text. So the copy
+# below is the only thing standing between "the gate is green" and "the
+# attribution is right", and it refuses every shape it cannot copy verbatim
+# with confidence rather than guessing.
+
+# notice_source_file <module-dir>
+#   Prints the path of the module's single root NOTICE file. Returns 1, with
+#   the reason on stderr, if there is not exactly one NOTICE* file at the
+#   root, if its name is not NOTICE or NOTICE.txt (any case), if it is empty
+#   or whitespace-only, or if it is not plain text this repo's NOTICE can take
+#   verbatim (a NUL byte, not valid UTF-8, CRLF line endings, or a byte-order
+#   mark, which would land mid-file). The same find expression licenses-check.sh uses, so the two can
+#   never disagree about which files are candidates.
+notice_source_file() {
+    local dir="$1" files count f upper
+    files=$(find "$dir" -maxdepth 1 -iname 'NOTICE*')
+    count=$(grep -c . <<<"$files" || true)
+    if [ "$count" -ne 1 ]; then
+        echo "notice_source_file: expected exactly one NOTICE file at the root of $dir, found $count" >&2
+        return 1
+    fi
+    f="$files"
+    upper=$(basename "$f" | tr '[:lower:]' '[:upper:]')
+    if [ ! -f "$f" ] || { [ "$upper" != NOTICE ] && [ "$upper" != NOTICE.TXT ]; }; then
+        echo "notice_source_file: $f is not a plain NOTICE or NOTICE.txt file" >&2
+        return 1
+    fi
+    if ! LC_ALL=C grep -q '[^[:space:]]' "$f"; then
+        echo "notice_source_file: $f is empty" >&2
+        return 1
+    fi
+    if [ "$(tr -d '\000' <"$f" | wc -c)" -ne "$(wc -c <"$f")" ]; then
+        echo "notice_source_file: $f contains NUL bytes, so it is not plain text" >&2
+        return 1
+    fi
+    if ! iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1; then
+        echo "notice_source_file: $f is not valid UTF-8 text" >&2
+        return 1
+    fi
+    if LC_ALL=C grep -q $'\r' "$f"; then
+        echo "notice_source_file: $f has CRLF line endings" >&2
+        return 1
+    fi
+    if [ "$(head -c 3 "$f" | od -An -tx1 | tr -d ' \n')" = efbbbf ]; then
+        echo "notice_source_file: $f starts with a byte-order mark" >&2
+        return 1
+    fi
+    printf '%s\n' "$f"
+}
+
+# insert_notice_block <notice> <module-path> <source-notice>
+#   Adds <source-notice> to the "Required attributions propagated from bundled
+#   dependencies" section of <notice> as a block: a header line naming the
+#   module path, then the source text with every non-blank line indented two
+#   spaces (the rest of each line byte-for-byte as upstream has it), blank and
+#   whitespace-only lines left empty, and trailing blank lines dropped. That
+#   is the shape of every block already in the file.
+#
+#   Placement: a block's sort key is its smallest header line (a hand-merged
+#   block can carry several headers, e.g. the yaml group), compared in byte
+#   order. The new block goes before the first block whose key sorts after
+#   <module-path>, or at the end of the section. A header line is a
+#   non-indented line with no spaces that follows a blank line (or another
+#   header line); the section's intro paragraph never matches that.
+#
+#   Returns 1 and leaves <notice> untouched if the section is missing or a
+#   block for <module-path> already exists.
+insert_notice_block() {
+    local notice="$1" mod="$2" src="$3" block
+    block=$(mktemp)
+    LC_ALL=C awk -v mod="$mod" '
+        { lines[NR] = $0 }
+        END {
+            n = NR
+            while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+            print mod
+            for (i = 1; i <= n; i++) {
+                if (lines[i] ~ /^[[:space:]]*$/) print ""
+                else print "  " lines[i]
+            }
+        }
+    ' "$src" >"$block" || { rm -f "$block"; return 1; }
+    # LC_ALL=C for the same reason as insert_row_in_table: awk string
+    # comparison collates by locale otherwise.
+    if ! LC_ALL=C awk -v mod="$mod" -v blockfile="$block" '
+        function is_header(s) {
+            return s != "" && s !~ /[[:space:]]/ && s !~ /^-+$/
+        }
+        { lines[NR] = $0 }
+        END {
+            n = NR
+            sec = 0
+            for (i = 1; i <= n; i++) {
+                if (lines[i] == "Required attributions propagated from bundled dependencies") { sec = i; break }
+            }
+            if (!sec) {
+                print "insert_notice_block: no \"Required attributions\" section in NOTICE" > "/dev/stderr"
+                exit 1
+            }
+            sec_end = n + 1
+            for (i = sec + 1; i <= n; i++) {
+                if (lines[i] ~ /^---+$/) { sec_end = i; break }
+            }
+            at = 0
+            for (i = sec + 1; i < sec_end; i++) {
+                if (!is_header(lines[i]) || lines[i - 1] != "") continue
+                key = lines[i]
+                j = i
+                while (j + 1 < sec_end && is_header(lines[j + 1])) {
+                    j++
+                    if (lines[j] < key) key = lines[j]
+                }
+                for (k = i; k <= j; k++) {
+                    if (lines[k] == mod) {
+                        print "insert_notice_block: NOTICE already has a block for " mod > "/dev/stderr"
+                        exit 1
+                    }
+                }
+                if (!at && key > mod) at = i
+                i = j
+            }
+            if (!at) at = sec_end
+            nb = 0
+            while ((getline line < blockfile) > 0) blk[++nb] = line
+            for (i = 1; i <= n; i++) {
+                if (i == at) {
+                    for (k = 1; k <= nb; k++) print blk[k]
+                    print ""
+                }
+                print lines[i]
+            }
+            if (at == n + 1) {
+                print ""
+                for (k = 1; k <= nb; k++) print blk[k]
+            }
+        }
+    ' "$notice" >"$notice.tmp"; then
+        rm -f "$notice.tmp" "$block"
+        return 1
+    fi
+    rm -f "$block"
+    mv "$notice.tmp" "$notice"
+}

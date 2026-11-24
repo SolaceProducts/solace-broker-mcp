@@ -511,9 +511,10 @@ remaining fix needs a human decision. Run the underlying check
 (`.github/scripts/licenses-check.sh` or `.github/scripts/build-test-licenses-check.sh`)
 directly to see exactly what's outstanding, and follow its own remediation
 text: most often either a new dependency shipping its own `NOTICE` file
-(needs a human-written Apache-2.0 §4(d) attribution block, which no tool
-should auto-author) or a component whose licence genuinely differs from its
-parent module's and needs its own verified row.
+(needs an Apache-2.0 §4(d) attribution block in `NOTICE`; `REFRESH_NOTICE=1
+make refresh-third-party-inventory` copies upstream's NOTICE verbatim, and a
+person still reviews the result) or a component whose licence genuinely
+differs from its parent module's and needs its own verified row.
 
 On a Dependabot PR you don't need to run it: a scheduled workflow
 (SOL-153374) runs this target daily at 11:30 UTC on each Dependabot PR whose

@@ -107,6 +107,19 @@ ignores it.
   person's to make. Then report it, restore the original branch (Step 8), and stop — the check is failing for a reason this skill doesn't cover
   (back to Step 2's judgment call).
 - **If it exits 0 with changes:** proceed to Step 5.
+- **If what is left is a NOTICE gap** (one or more `::error file=NOTICE::<mod>@<ver> ships a NOTICE
+  file, but NOTICE does not name it` lines and no other `file=` error in the re-verify output, typically
+  a bump that brings in a new Apache-2.0 module): this counts even when the run already rewrote
+  `THIRD_PARTY_LICENSES.md` and its closing error says that file "still does not match", because the
+  re-verify fails on the NOTICE gap alone. Say so, and offer to re-run as `REFRESH_NOTICE=1 REFRESH_PR_NUMBER=<PR> make
+  refresh-third-party-inventory`. Run it only if the person agrees. That mode copies the module's
+  root NOTICE file verbatim into `NOTICE`'s "Required attributions propagated from bundled
+  dependencies" section, under a line naming the module path, in sort order. It only adds blocks,
+  and it refuses whatever it cannot copy verbatim with confidence; the script's header comment and
+  `notice_source_file` in `.github/scripts/lib/inventory-refresh-common.sh` list exactly what.
+  Its own refusals follow the next bullet. If the person declines, treat it as a refusal and follow
+  the next bullet. If their review of an added block finds it wrong (for example, it belongs in an
+  existing hand-merged group), stop and leave that edit to them; do not commit it.
 - **If it exits nonzero for any other reason:** the underlying scripts refused to guess at
   something rather than write a fix they couldn't verify — see
   `.github/scripts/refresh-licenses-inventory.sh` and `refresh-build-test-inventory.sh`'s own
@@ -122,7 +135,10 @@ ignores it.
 ### Step 5: Show the diff and stop
 
 `git diff`. Present it clearly — which file(s) changed, which rows, old value → new value, and on a
-`SolaceDev/solace-public-workflows` re-pin the "Re-pinned …" prose below that table. Then quote every
+`SolaceDev/solace-public-workflows` re-pin the "Re-pinned …" prose below that table. If `NOTICE`
+changed (`REFRESH_NOTICE=1` only), show each added block in full and say plainly that it needs a
+person to review the attribution: `licenses-check.sh` only checks that `NOTICE` names the module, so a
+green check does not show the copied text is the right attribution. Then quote every
 `::warning::` line from Step 4's output verbatim. A warning there means a human edit is still needed
 before this can be committed (a `(#N)` still in the prose, or prose that no longer names the rows'
 pin): say so, and do not treat the diff as ready until the person has dealt with it.
@@ -131,9 +147,10 @@ who asked for this is the checkpoint; do not infer consent from silence or move 
 
 ### Step 6: Commit and push, only after confirmation
 
-- `git add THIRD_PARTY_LICENSES.md THIRD_PARTY_BUILD_TEST.md` (only these two — never `git add -A`;
-  the refresh touches nothing else, and blindly staging everything could pick up unrelated local
-  changes the person running this doesn't intend to commit).
+- `git add THIRD_PARTY_LICENSES.md THIRD_PARTY_BUILD_TEST.md`, plus `NOTICE` if a
+  `REFRESH_NOTICE=1` run changed it (only these — never `git add -A`; the refresh touches nothing
+  else, and blindly staging everything could pick up unrelated local changes the person running this
+  doesn't intend to commit).
 - Commit with a fixed, predictable message and both trailers:
   ```
   git commit -s -m "Refresh third-party inventory" -m "Generated-by: Claude Code (/refresh-third-party-inventory)"
@@ -177,7 +194,10 @@ stray local branch for it, once the task is done.
 - Never push, or commit, without the human first seeing and confirming the diff in Step 5.
 - Never hand-author a fix for anything the refresh scripts themselves refused (Step 4) — surface
   their error and stop.
-- Never `git add -A` or otherwise stage more than the two inventory files.
+- Never `git add -A` or otherwise stage more than the two inventory files and, after a
+  `REFRESH_NOTICE=1` run, `NOTICE`.
+- Never run `REFRESH_NOTICE=1` without the person agreeing to it first (Step 4), and never hand-edit
+  the block it adds.
 - Never force-push. A rejected push is a stop-and-report condition, not a retry-with-force one.
 - Never run this against a fork pull request (Step 3) or a PR whose failure isn't
   `Third-party licenses current` (Step 2).
