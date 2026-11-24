@@ -3,7 +3,7 @@ module github.com/SolaceProducts/solace-broker-mcp
 go 1.26.10
 
 require (
-	github.com/getkin/kin-openapi v0.152.0
+	github.com/getkin/kin-openapi v0.153.0
 	github.com/go-logr/logr v1.4.4
 	github.com/gowebpki/jcs v1.0.2
 	github.com/hashicorp/go-retryablehttp v0.7.8
@@ -46,6 +46,7 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
@@ -59,8 +60,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-openapi/jsonpointer v1.0.1 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/oasdiff/yaml v0.1.1 // indirect
-	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
