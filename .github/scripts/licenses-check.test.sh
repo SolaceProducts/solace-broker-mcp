@@ -155,9 +155,11 @@ assert_check "dropping a distinct-licence sub-package row fails" 1 \
     drop_row github.com/go-jose/go-jose/v4/json
 
 # NOTICE propagation: a dependency that ships a NOTICE must stay named in ours.
-# This is the oasdiff/yaml3 omission the ticket asked about, now automated.
+# procfs is the example because it is a long-lived dependency; the original
+# example, oasdiff/yaml3, left the closure with kin-openapi v0.153.0 and this
+# case then passed for the wrong reason.
 assert_check "a dependency's un-propagated NOTICE fails" 1 \
-    unname_in_notice github.com/oasdiff/yaml3
+    unname_in_notice github.com/prometheus/procfs
 
 # The '/' boundary in module resolution. This case is built so that a
 # boundary-less prefix match would PASS: `golang.org/x/sync-extra` is not in the
