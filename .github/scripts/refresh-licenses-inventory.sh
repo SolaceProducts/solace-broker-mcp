@@ -25,12 +25,26 @@
 # the same generator this file's own regenerate instructions name — never
 # inferred from a package name, never copied from a neighbouring row. If
 # licenses-check.sh reports anything this script does not recognise (a
-# duplicate row, an unparseable row, a NOTICE-propagation gap, `go list`
-# failing outright), it stops and asks for a human rather than guessing. A
+# duplicate row, an unparseable row, a NOTICE-propagation gap unless
+# REFRESH_NOTICE=1 below, `go list` failing outright), it stops and asks for a human rather than guessing. A
 # partially-applied fix is worse than no fix, so this refuses to write
 # anything unless it can make the *entire* diagnosed set of problems go away.
 #
-# Usage: .github/scripts/refresh-licenses-inventory.sh
+# REFRESH_NOTICE=1 (SOL-159006, off by default)
+#
+# Also fixes licenses-check.sh's "<mod>@<ver> ships a NOTICE file, but NOTICE
+# does not name it" diagnostic: it copies the module's root NOTICE file
+# verbatim into NOTICE's "Required attributions propagated from bundled
+# dependencies" section, indented under a line naming the module path, in
+# sort order (see lib/inventory-refresh-common.sh's insert_notice_block). It
+# only ever adds blocks; stale blocks and hand-merged groups stay manual. It
+# refuses when the module root has more than one NOTICE file, or one that is
+# empty or not plain text, and on any other NOTICE diagnostic. A green check
+# afterwards proves only that NOTICE names the module, not that the
+# attribution is right, so a bot-added block still needs a human to review it.
+# With the mode off, a NOTICE gap is handed to a person exactly as before.
+#
+# Usage: [REFRESH_NOTICE=1] .github/scripts/refresh-licenses-inventory.sh
 # Exits 0 if the file already matched, or now matches after a rewrite.
 # Exits 1 if any diagnostic could not be safely automated, or the rewrite did
 # not converge — in both cases, the file is left exactly as the failed
@@ -44,6 +58,8 @@ set -euo pipefail
 # script's own self-test symlinks individual paths into a plain tmpdir with no
 # `.git` at all, the same fixture shape licenses-check.test.sh already uses).
 DOC="THIRD_PARTY_LICENSES.md"
+NOTICE="NOTICE"
+REFRESH_NOTICE="${REFRESH_NOTICE:-0}"
 CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/licenses-check.sh"
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 
@@ -58,7 +74,9 @@ fi
 # exception: the stray .tmp survives in the repo root, where a later
 # `git add -A` could commit a half-written copy of a Legal document sitting
 # right next to the real one. Removed on every exit, success or failure.
-trap 'rm -f "$DOC.tmp"' EXIT
+# notice_staged (REFRESH_NOTICE=1 only) is a scratch copy of NOTICE; see below.
+notice_staged=""
+trap 'rm -f "$DOC.tmp" "$NOTICE.tmp" ${notice_staged:+"$notice_staged" "$notice_staged.tmp"}' EXIT
 
 # shellcheck source=lib/inventory-refresh-common.sh
 source "$LIB_DIR/inventory-refresh-common.sh"
@@ -92,7 +110,11 @@ fi
 # different diagnostics differ in text and are never merged) and costs
 # nothing, so it applies here too rather than relying on that distinction.
 doc_errors=$(grep -E "^::error file=${DOC}::" <<<"$output" | sort -u || true)
-if [ -z "$doc_errors" ]; then
+notice_errors=""
+if [ "$REFRESH_NOTICE" = "1" ]; then
+    notice_errors=$(grep -E "^::error file=${NOTICE}::" <<<"$output" | sort -u || true)
+fi
+if [ -z "$doc_errors" ] && [ -z "$notice_errors" ]; then
     echo "::error::licenses-check.sh failed, but reported no ::error file=${DOC}:: line." \
         "The failure is in something this script does not touch (see the full output above" \
         "— NOTICE propagation is the most likely case) and needs a human." >&2
@@ -126,12 +148,58 @@ while IFS= read -r line; do
     unhandled+=("$line")
 done <<<"$doc_errors"
 
+to_notice=() # "mod_path\tmod_version"; only ever filled with REFRESH_NOTICE=1
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    msg="${line#::error file="${NOTICE}"::}"
+    if [[ "$msg" =~ ^([^\ ]+)@([^\ ]+)\ ships\ a\ NOTICE\ file,\ but\ NOTICE\ does\ not\ name\ it\. ]]; then
+        to_notice+=("${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}")
+        continue
+    fi
+    unhandled+=("$line")
+done <<<"$notice_errors"
+
 if [ "${#unhandled[@]}" -gt 0 ]; then
     echo "::error::licenses-check.sh reported ${#unhandled[@]} problem(s) this script does not know" \
         "how to fix automatically. Refusing to write a partial fix. A human needs to look at:" >&2
     printf '%s\n' "${unhandled[@]}" >&2
     exit 1
 fi
+
+# Resolve, validate and insert every NOTICE block into a scratch copy of
+# NOTICE before writing anything, so any refusal here (a source file, or
+# insert_notice_block itself: a missing section, an existing block) leaves
+# both files untouched. The copy replaces NOTICE only after the inventory
+# edits below succeed. `go list -m` resolves the same module version
+# licenses-check.sh reported (from go.mod), and the version check makes sure
+# the text copied is that version's, not some other one in the module cache.
+notice_plan=() # "mod_path\tsource_file"
+if [ "${#to_notice[@]}" -gt 0 ]; then
+    notice_staged=$(mktemp)
+    cp "$NOTICE" "$notice_staged"
+fi
+for entry in ${to_notice[@]+"${to_notice[@]}"}; do
+    IFS=$'\t' read -r mod_path mod_version <<<"$entry"
+    listed_version="" mod_dir=""
+    # `|| true` on the read too: it returns 1 on empty input, and set -e would
+    # then exit before the error below names the cause.
+    read -r listed_version mod_dir < <(go list -m -f '{{.Version}} {{.Dir}}' "$mod_path" 2>/dev/null || true) || true
+    if [ -z "$mod_dir" ] || [ "$listed_version" != "$mod_version" ]; then
+        echo "::error::Could not find the module directory of \`$mod_path\`@$mod_version to copy its" \
+            "NOTICE from (\`go list -m\` gave '${listed_version:-nothing}'). Add its block to $NOTICE by hand." >&2
+        exit 1
+    fi
+    if ! src=$(notice_source_file "$mod_dir"); then
+        echo "::error::\`$mod_path\`@$mod_version ships a NOTICE this script will not copy automatically" \
+            "(reason above). Add its block to $NOTICE by hand, reproducing upstream's attribution." >&2
+        exit 1
+    fi
+    if ! insert_notice_block "$notice_staged" "$mod_path" "$src"; then
+        echo "::error::Could not add \`$mod_path\`'s block to $NOTICE (reason above). Add it by hand." >&2
+        exit 1
+    fi
+    notice_plan+=("$mod_path"$'\t'"$src")
+done
 
 echo "--- Applying ${#to_fix[@]} version fix(es), ${#to_add[@]} new row(s), ${#to_drop[@]} removal(s) ---"
 
@@ -192,10 +260,23 @@ for name in ${to_drop[@]+"${to_drop[@]}"}; do
     delete_row "$DOC" "$name"
 done
 
+if [ "${#notice_plan[@]}" -gt 0 ]; then
+    echo "--- Adding ${#notice_plan[@]} NOTICE block(s) ---"
+fi
+for entry in ${notice_plan[@]+"${notice_plan[@]}"}; do
+    IFS=$'\t' read -r mod_path src <<<"$entry"
+    echo "  notice: \`$mod_path\` from $(basename "$src")"
+done
+if [ "${#notice_plan[@]}" -gt 0 ]; then
+    cat "$notice_staged" >"$NOTICE"
+fi
+
 # Housekeeping only — never load-bearing for the gate, but a rewritten file
-# with a stale "Generated" date reads as though nobody looked at it.
+# with a stale "Generated" date reads as though nobody looked at it. Only
+# when an inventory row was diagnosed: a REFRESH_NOTICE=1 run that only adds
+# NOTICE blocks did not regenerate the inventory, so its date stays.
 today=$(date -u +%Y-%m-%d 2>/dev/null || true)
-if [ -n "$today" ]; then
+if [ -n "$today" ] && [ -n "$doc_errors" ]; then
     sed -i.bak -E "s/^\*\*Generated\*\* [0-9]{4}-[0-9]{2}-[0-9]{2}/\*\*Generated\*\* ${today}/" "$DOC" 2>/dev/null || true
     rm -f "$DOC.bak"
 fi
@@ -212,3 +293,7 @@ if [ "$verify_rc" -ne 0 ]; then
 fi
 
 echo "✅ $DOC refreshed and verified."
+if [ "${#notice_plan[@]}" -gt 0 ]; then
+    echo "⚠️  $NOTICE: added ${#notice_plan[@]} block(s) copied from upstream. licenses-check.sh only" \
+        "checks that NOTICE names each module, so a person must still review the attribution."
+fi

@@ -44,6 +44,12 @@ REFRESH="$REPO_ROOT/.github/scripts/refresh-licenses-inventory.sh"
 DOC="THIRD_PARTY_LICENSES.md"
 NOTICE_FILE="NOTICE"
 
+# REFRESH_NOTICE=1 (SOL-159006) changes what the refresh script may write.
+# Every case runs with it off unless the case itself turns it on
+# (`REFRESH_NOTICE=1 assert_refresh ...`), so an ambient value in the caller's
+# shell cannot silently turn the mode-off cases into mode-on ones.
+unset REFRESH_NOTICE
+
 pass=0
 fail=0
 skip=0
@@ -94,6 +100,44 @@ drop_required_component_row() { # <tmp> <component>
     # licence differs from its parent's, and only a human re-adding it can
     # attest that again.
     grep -vF "\`$2\`" "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+}
+
+drop_notice_block() { # <tmp> <module-path> — delete that block from NOTICE
+    # The block runs from its header line to the line before the next
+    # header (a non-indented line after a blank one); its trailing blank line
+    # goes with it. The last block has no trailing blank line, so the blank
+    # line before it goes instead. Fails if no such block exists.
+    awk -v hdr="$2" '
+        { lines[NR] = $0 }
+        END {
+            s = 0
+            for (i = 2; i <= NR; i++) if (lines[i] == hdr && lines[i - 1] == "") { s = i; break }
+            if (!s) exit 1
+            e = NR
+            for (i = s + 1; i <= NR; i++) {
+                if (lines[i] != "" && lines[i] !~ /^ / && lines[i - 1] == "") { e = i - 1; break }
+            }
+            if (e == NR) s--
+            for (i = 1; i <= NR; i++) if (i < s || i > e) print lines[i]
+        }
+    ' "$1/$NOTICE_FILE" >"$1/t" && mv "$1/t" "$1/$NOTICE_FILE"
+}
+
+drop_notice_block_and_change_version() { # <tmp> <module-path> <component> <wrong-version>
+    drop_notice_block "$1" "$2" && change_version "$1" "$3" "$4"
+}
+
+drop_notice_block_change_version_and_drop_section() { # <tmp> <module-path> <component> <wrong-version>
+    # A NOTICE gap the script can resolve, plus an inventory fix, in a NOTICE
+    # whose "Required attributions" heading is gone, so insert_notice_block
+    # must refuse. That refusal has to come before the inventory is written.
+    drop_notice_block_and_change_version "$@" &&
+        grep -vx 'Required attributions propagated from bundled dependencies' "$1/$NOTICE_FILE" >"$1/t" &&
+        mv "$1/t" "$1/$NOTICE_FILE"
+}
+
+drop_notice_block_and_add_unparseable_row() { # <tmp> <module-path>
+    drop_notice_block "$1" "$2" && add_unparseable_row "$1"
 }
 
 # --- harness -------------------------------------------------------------
@@ -175,9 +219,11 @@ assert_refresh() {
     # (refusal) branch below: a refusal case has no computed baseline
     # to converge to (it's supposed to change nothing), so "left alone" can
     # only be checked against what the mutation itself produced.
-    local pre_refresh_snapshot
+    local pre_refresh_snapshot pre_refresh_notice
     pre_refresh_snapshot=$(mktemp "$tmp/refresh-pre.XXXXXX")
     cp "$tmp/$DOC" "$pre_refresh_snapshot"
+    pre_refresh_notice=$(mktemp "$tmp/refresh-pre-notice.XXXXXX")
+    cp "$tmp/$NOTICE_FILE" "$pre_refresh_notice"
 
     # Scratch files live under $tmp, not a fixed /tmp/...$$ path: colocating
     # with the rest of this case's fixture means the single `rm -rf "$tmp"` at
@@ -240,7 +286,29 @@ assert_refresh() {
             rm -rf "$tmp"
             return
         fi
+        # NOTICE (SOL-159006): every exit-0 case must end with exactly the
+        # committed NOTICE. The mode-off cases never touch it; the
+        # REFRESH_NOTICE=1 cases delete a committed block and must put it
+        # back byte-identical. The blocks they use (coreos/go-oidc/v3, grpc)
+        # are upstream's NOTICE files verbatim, so this is the "copied
+        # verbatim" check. Not every committed block is: the jsonpointer one
+        # and the yaml group are hand-written, so no case drops those.
+        if ! diff -u "$REPO_ROOT/$NOTICE_FILE" "$tmp/$NOTICE_FILE" >"$diff_file" 2>&1; then
+            echo "  NOT OK   $desc (exit 0, but $NOTICE_FILE differs from the committed one)"
+            sed 's/^/           /' "$diff_file"
+            fail=$((fail + 1))
+            rm -rf "$tmp"
+            return
+        fi
     else
+        # Same contract for NOTICE: a refusal writes nothing to it either.
+        if ! cmp -s "$pre_refresh_notice" "$tmp/$NOTICE_FILE"; then
+            echo "  NOT OK   $desc (exit $got matched, but $NOTICE_FILE was touched despite the refusal)"
+            diff -u "$pre_refresh_notice" "$tmp/$NOTICE_FILE" | sed 's/^/           /'
+            fail=$((fail + 1))
+            rm -rf "$tmp"
+            return
+        fi
         # A refusal must leave the file exactly as the mutation left it — not
         # merely "exit nonzero". This is the check that would catch a
         # regression where the script fails loudly but still writes a partial
@@ -296,6 +364,182 @@ assert_normalize "a prerelease tag passes through unchanged" \
     "v2.0.0-beta.1" "v2.0.0-beta.1"
 assert_normalize "a non-v0 pseudo-version-shaped tag passes through unchanged" \
     "v1.2.3-0.20240101000000-abcdef123456" "v1.2.3-0.20240101000000-abcdef123456"
+
+# --- notice_source_file, in isolation (SOL-159006) ---------------------------
+# Picks the one root NOTICE file of a module directory that REFRESH_NOTICE=1
+# may copy, and refuses every shape the ticket says must go to a person.
+# Direct unit tests: a real module carrying two NOTICE files or a binary one
+# is not something the dependency closure can be made to produce on demand.
+
+# assert_notice_source <description> <want: ok|refuse> <setup fn>
+#   <setup fn> populates a fresh module dir passed as $1. On "ok" the helper
+#   must print the path of the single file the setup created whose name
+#   starts with NOTICE (any case).
+assert_notice_source() {
+    local desc="$1" want="$2" setup="$3" dir got rc=0
+    dir=$(mktemp -d "$SUITE_TMP/mod.XXXXXX")
+    "$setup" "$dir"
+    got=$(notice_source_file "$dir" 2>/dev/null) || rc=$?
+    if [ "$want" = ok ]; then
+        local expected
+        expected=$(find "$dir" -maxdepth 1 -iname 'NOTICE*')
+        if [ "$rc" -eq 0 ] && [ "$got" = "$expected" ]; then
+            echo "  ok       $desc"
+            pass=$((pass + 1))
+        else
+            echo "  NOT OK   $desc (rc=$rc, got \"$got\", want \"$expected\")"
+            fail=$((fail + 1))
+        fi
+    elif [ "$rc" -eq 1 ] && [ -z "$got" ]; then
+        echo "  ok       $desc (refused)"
+        pass=$((pass + 1))
+    else
+        echo "  NOT OK   $desc (expected a refusal, got rc=$rc, \"$got\")"
+        fail=$((fail + 1))
+    fi
+}
+
+mk_notice_plain() { printf 'Example Project\nCopyright 2020 Example\n' >"$1/NOTICE"; }
+mk_notice_txt_lower() { printf 'Example Project\n' >"$1/notice.txt"; }
+mk_notice_two() { printf 'a\n' >"$1/NOTICE"; printf 'b\n' >"$1/NOTICE.txt"; }
+mk_notice_none() { printf 'x\n' >"$1/LICENSE"; }
+mk_notice_md() { printf '# Notice\n' >"$1/NOTICE.md"; }
+mk_notice_empty() { : >"$1/NOTICE"; }
+mk_notice_blank() { printf '  \n\t\n\n' >"$1/NOTICE"; }
+mk_notice_nul() { printf 'Example\000Project\n' >"$1/NOTICE"; }
+mk_notice_latin1() { printf 'Copyright 2020 Fran\347ois\n' >"$1/NOTICE"; }
+mk_notice_utf8() { printf 'Copyright 2020 Fran\303\247ois\n' >"$1/NOTICE"; }
+mk_notice_crlf() { printf 'Example Project\r\nCopyright 2020 Example\r\n' >"$1/NOTICE"; }
+mk_notice_bom() { printf '\357\273\277Example Project\n' >"$1/NOTICE"; }
+
+assert_notice_source "a single NOTICE file is accepted" ok mk_notice_plain
+assert_notice_source "a single lower-case notice.txt is accepted" ok mk_notice_txt_lower
+assert_notice_source "non-ASCII UTF-8 text is accepted" ok mk_notice_utf8
+assert_notice_source "two NOTICE files refuse" refuse mk_notice_two
+assert_notice_source "no NOTICE file refuses" refuse mk_notice_none
+assert_notice_source "a NOTICE.md (not plain text by name) refuses" refuse mk_notice_md
+assert_notice_source "an empty NOTICE refuses" refuse mk_notice_empty
+assert_notice_source "a whitespace-only NOTICE refuses" refuse mk_notice_blank
+assert_notice_source "a NOTICE with a NUL byte refuses" refuse mk_notice_nul
+assert_notice_source "a NOTICE that is not valid UTF-8 refuses" refuse mk_notice_latin1
+# Copying either verbatim would put stray \r or a mid-file BOM into NOTICE.
+assert_notice_source "a NOTICE with CRLF line endings refuses" refuse mk_notice_crlf
+assert_notice_source "a NOTICE with a UTF-8 byte-order mark refuses" refuse mk_notice_bom
+
+# --- insert_notice_block, in isolation (SOL-159006) --------------------------
+# Synthetic NOTICE shaped like the real one: a preamble, a separator, the
+# "Required attributions" section with an intro paragraph, then blocks. The
+# second block is a hand-merged group whose sort key is its smallest header
+# (c.example/y), the same rule that places the real yaml group.
+
+NOTICE_SYNTH_HEAD='Example Product
+
+--------------------------------------------------------------------------------
+Required attributions propagated from bundled dependencies
+
+Intro paragraph that names no module
+and spans two lines.
+'
+NOTICE_SYNTH_B='b.example/one
+  B notice'
+NOTICE_SYNTH_GROUP='d.example/x
+c.example/y
+  Group notice
+
+  second paragraph'
+NOTICE_SYNTH_E='e.example/five
+  E notice'
+# What the fixed upstream NOTICE below must become: 2-space indent on
+# non-blank lines (tabs inside kept), blank lines empty, trailing blank and
+# whitespace-only lines dropped.
+NOTICE_SYNTH_NEW='new.example/mod
+  Line one
+  	tab-indented line kept as is
+
+  Line after blank'
+
+# write_synth_notice <path> <block>... — head, then blocks separated by one
+# blank line, ending with a single newline, exactly like the committed file.
+write_synth_notice() {
+    local path="$1" first=1 b
+    shift
+    { printf '%s\n' "$NOTICE_SYNTH_HEAD"
+      for b in "$@"; do
+          [ "$first" -eq 1 ] || printf '\n'
+          first=0
+          printf '%s\n' "$b"
+      done; } >"$path"
+}
+
+# assert_insert_notice <description> <mod_path> <expected block order...>
+#   Inserts a fixed upstream NOTICE for <mod_path> into the synthetic NOTICE
+#   and compares the whole result with the synthetic NOTICE rebuilt in the
+#   expected order. "NEW" in the order list stands for the inserted block.
+assert_insert_notice() {
+    local desc="$1" mod="$2" dir src notice want_file b
+    shift 2
+    dir=$(mktemp -d "$SUITE_TMP/ins.XXXXXX")
+    src="$dir/upstream-NOTICE"
+    notice="$dir/NOTICE"
+    printf 'Line one\n\ttab-indented line kept as is\n\nLine after blank\n\n \n' >"$src"
+    write_synth_notice "$notice" "$NOTICE_SYNTH_B" "$NOTICE_SYNTH_GROUP" "$NOTICE_SYNTH_E"
+    local new_block="${NOTICE_SYNTH_NEW/new.example\/mod/$mod}" ordered=()
+    for b in "$@"; do
+        case "$b" in
+            B) ordered+=("$NOTICE_SYNTH_B") ;;
+            GROUP) ordered+=("$NOTICE_SYNTH_GROUP") ;;
+            E) ordered+=("$NOTICE_SYNTH_E") ;;
+            NEW) ordered+=("$new_block") ;;
+        esac
+    done
+    want_file="$dir/want"
+    write_synth_notice "$want_file" "${ordered[@]}"
+    local rc=0
+    insert_notice_block "$notice" "$mod" "$src" 2>"$dir/err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "  NOT OK   $desc (insert_notice_block exited $rc: $(cat "$dir/err"))"
+        fail=$((fail + 1))
+    elif ! diff -u "$want_file" "$notice" >"$dir/diff"; then
+        echo "  NOT OK   $desc (NOTICE differs from expected)"
+        sed 's/^/           /' "$dir/diff"
+        fail=$((fail + 1))
+    else
+        echo "  ok       $desc"
+        pass=$((pass + 1))
+    fi
+}
+
+assert_insert_notice "a block sorting first goes before every existing block" \
+    "a.example/first" NEW B GROUP E
+assert_insert_notice "a group sorts by its smallest header, so c.example/a lands before it" \
+    "c.example/a" B NEW GROUP E
+assert_insert_notice "a path after the group's smallest header lands after the group" \
+    "c.example/z" B GROUP NEW E
+assert_insert_notice "a block sorting last is appended at the end of the file" \
+    "f.example/last" B GROUP E NEW
+
+# assert_insert_notice_refuses <description> <notice content> <mod_path>
+assert_insert_notice_refuses() {
+    local desc="$1" content="$2" mod="$3" dir rc=0
+    dir=$(mktemp -d "$SUITE_TMP/insr.XXXXXX")
+    printf 'Notice text\n' >"$dir/src"
+    printf '%s\n' "$content" >"$dir/NOTICE"
+    cp "$dir/NOTICE" "$dir/before"
+    insert_notice_block "$dir/NOTICE" "$mod" "$dir/src" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 1 ] && cmp -s "$dir/before" "$dir/NOTICE"; then
+        echo "  ok       $desc (refused, NOTICE untouched)"
+        pass=$((pass + 1))
+    else
+        echo "  NOT OK   $desc (rc=$rc; NOTICE must be refused and left untouched)"
+        fail=$((fail + 1))
+    fi
+}
+
+assert_insert_notice_refuses "a NOTICE without the attributions section refuses" \
+    "Example Product" "x.example/mod"
+assert_insert_notice_refuses "a module that already has a block refuses rather than duplicating" \
+    "$NOTICE_SYNTH_HEAD
+$NOTICE_SYNTH_B" "b.example/one"
 
 compute_converged_baseline
 
@@ -368,6 +612,115 @@ assert_refresh "an unparseable row refuses the whole batch rather than guessing"
 # is exercising is that no automation gets to make that call.
 assert_refresh "dropping a required differing-licence row refuses rather than reinstating it under a guess" 1 - \
     drop_required_component_row "github.com/go-jose/go-jose/v4/json"
+
+# --- REFRESH_NOTICE=1 (SOL-159006) ------------------------------------------
+# A missing NOTICE block is manufactured by deleting a committed one; the
+# harness then requires the refreshed NOTICE to equal the committed file
+# byte for byte. Offline: the module cache already holds each module's
+# upstream NOTICE once `go mod download` has run.
+
+# coreos/go-oidc/v3 ships a plain NOTICE and its block is early in the file.
+REFRESH_NOTICE=1 assert_refresh "REFRESH_NOTICE=1 restores a missing NOTICE block verbatim" 0 - \
+    drop_notice_block "github.com/coreos/go-oidc/v3"
+
+# grpc ships NOTICE.txt and its block is the last one in the file, so this
+# also covers appending at the end of the section.
+REFRESH_NOTICE=1 assert_refresh "REFRESH_NOTICE=1 restores a NOTICE.txt block at the end of the file" 0 - \
+    drop_notice_block "google.golang.org/grpc"
+
+REFRESH_NOTICE=1 assert_refresh "REFRESH_NOTICE=1 fixes the inventory and NOTICE in one run" 0 "golang.org/x/sync" \
+    drop_notice_block_and_change_version "github.com/coreos/go-oidc/v3" "golang.org/x/sync" "v0.0.1"
+
+# Validation happens before any write: an inventory problem the script
+# cannot fix must leave NOTICE untouched too, not half-applied.
+REFRESH_NOTICE=1 assert_refresh "REFRESH_NOTICE=1 writes nothing when another diagnostic refuses" 1 - \
+    drop_notice_block_and_add_unparseable_row "github.com/coreos/go-oidc/v3"
+
+REFRESH_NOTICE=1 assert_refresh "REFRESH_NOTICE=1 refuses before writing the inventory when NOTICE has no attributions section" 1 - \
+    drop_notice_block_change_version_and_drop_section "github.com/coreos/go-oidc/v3" "golang.org/x/sync" "v0.0.1"
+
+# A NOTICE-only fix must not touch THIRD_PARTY_LICENSES.md at all, not even
+# its "Generated" date: no row changed, so the inventory was not
+# regenerated. assert_refresh ignores that line, so this checks it directly.
+notice_only_desc="REFRESH_NOTICE=1 with only a NOTICE gap leaves $DOC byte-identical"
+notice_only_tmp=$(mktemp -d "$SUITE_TMP/notice-only.XXXXXX")
+INVENTORY_SOURCE="$CONVERGED_DOC" setup_refresh_fixture "$notice_only_tmp"
+sed -e 's/^\*\*Generated\*\* [0-9-]*/**Generated** 2000-01-01/' "$notice_only_tmp/$DOC" >"$notice_only_tmp/t" &&
+    mv "$notice_only_tmp/t" "$notice_only_tmp/$DOC"
+cp "$notice_only_tmp/$DOC" "$notice_only_tmp/doc-before"
+notice_only_rc=0
+if ! drop_notice_block "$notice_only_tmp" "github.com/coreos/go-oidc/v3"; then
+    echo "  ERROR    $notice_only_desc (could not drop the coreos block)"
+    fail=$((fail + 1))
+else
+    (cd "$notice_only_tmp" && REFRESH_NOTICE=1 "$REFRESH" >"$notice_only_tmp/out" 2>&1) || notice_only_rc=$?
+    if [ "$notice_only_rc" -ne 0 ]; then
+        echo "  NOT OK   $notice_only_desc (expected exit 0, got $notice_only_rc)"
+        sed 's/^/           /' "$notice_only_tmp/out"
+        fail=$((fail + 1))
+    elif ! diff -u "$notice_only_tmp/doc-before" "$notice_only_tmp/$DOC" >"$notice_only_tmp/d"; then
+        echo "  NOT OK   $notice_only_desc ($DOC changed)"
+        sed 's/^/           /' "$notice_only_tmp/d"
+        fail=$((fail + 1))
+    else
+        echo "  ok       $notice_only_desc"
+        pass=$((pass + 1))
+    fi
+fi
+
+# Mode off is today's behaviour: a NOTICE gap is handed to a person.
+assert_refresh "without REFRESH_NOTICE a NOTICE gap still refuses and leaves NOTICE alone" 1 - \
+    drop_notice_block "github.com/coreos/go-oidc/v3"
+
+# The #590 shape (go.yaml.in/yaml/v4@v4.0.0, brought in by kin-openapi
+# v0.153.0, not yet in this repo's closure): inserted into the committed
+# NOTICE, the block must be that version's upstream NOTICE verbatim, under
+# its own header between prometheus/procfs and grpc — not merged into the
+# yaml v3 group, whose text differs — and nothing else may change. Network:
+# the module is downloaded, since main's closure doesn't contain it.
+if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
+    skip_network "go.yaml.in/yaml/v4@v4.0.0's NOTICE lands verbatim between procfs and grpc"
+else
+    v4_desc="go.yaml.in/yaml/v4@v4.0.0's NOTICE lands verbatim between procfs and grpc"
+    v4_tmp=$(mktemp -d "$SUITE_TMP/yamlv4.XXXXXX")
+    v4_dir=$( (cd "$REPO_ROOT" && go mod download -json go.yaml.in/yaml/v4@v4.0.0) |
+        sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')
+    cp "$REPO_ROOT/$NOTICE_FILE" "$v4_tmp/$NOTICE_FILE"
+    v4_src=""
+    if [ -n "$v4_dir" ]; then v4_src=$(notice_source_file "$v4_dir" 2>/dev/null || true); fi
+    if [ -z "$v4_src" ] || ! insert_notice_block "$v4_tmp/$NOTICE_FILE" "go.yaml.in/yaml/v4" "$v4_src"; then
+        echo "  NOT OK   $v4_desc (could not download the module or insert its NOTICE)"
+        fail=$((fail + 1))
+    else
+        # Expected block built independently of insert_notice_block: header,
+        # then upstream with whitespace-only lines emptied, the rest indented,
+        # trailing blank lines dropped.
+        { echo "go.yaml.in/yaml/v4"
+          sed -e 's/^[[:space:]]*$//' -e 's/^./  &/' "$v4_src" |
+              awk '{ l[NR] = $0 } END { n = NR; while (n > 0 && l[n] == "") n--; for (i = 1; i <= n; i++) print l[i] }'
+        } >"$v4_tmp/want-block"
+        n_procfs=$(grep -nx 'github.com/prometheus/procfs' "$v4_tmp/$NOTICE_FILE" | cut -d: -f1)
+        n_v4=$(grep -nx 'go.yaml.in/yaml/v4' "$v4_tmp/$NOTICE_FILE" | cut -d: -f1)
+        n_grpc=$(grep -nx 'google.golang.org/grpc' "$v4_tmp/$NOTICE_FILE" | cut -d: -f1)
+        sed -n "${n_v4},$((n_grpc - 2))p" "$v4_tmp/$NOTICE_FILE" >"$v4_tmp/got-block"
+        cp "$v4_tmp/$NOTICE_FILE" "$v4_tmp/with-v4"
+        drop_notice_block "$v4_tmp" "go.yaml.in/yaml/v4"
+        if ! [ "$n_procfs" -lt "$n_v4" ] || ! [ "$n_v4" -lt "$n_grpc" ]; then
+            echo "  NOT OK   $v4_desc (placed at line $n_v4; procfs at $n_procfs, grpc at $n_grpc)"
+            fail=$((fail + 1))
+        elif ! diff -u "$v4_tmp/want-block" "$v4_tmp/got-block" >"$v4_tmp/d"; then
+            echo "  NOT OK   $v4_desc (block is not upstream's NOTICE verbatim)"
+            sed 's/^/           /' "$v4_tmp/d"
+            fail=$((fail + 1))
+        elif ! cmp -s "$REPO_ROOT/$NOTICE_FILE" "$v4_tmp/$NOTICE_FILE"; then
+            echo "  NOT OK   $v4_desc (inserting the block changed something else in NOTICE)"
+            fail=$((fail + 1))
+        else
+            echo "  ok       $v4_desc"
+            pass=$((pass + 1))
+        fi
+    fi
+fi
 
 echo
 echo "$pass passed, $fail failed, $skip skipped"
