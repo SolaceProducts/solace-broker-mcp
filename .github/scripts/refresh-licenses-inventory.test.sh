@@ -673,11 +673,13 @@ assert_refresh "without REFRESH_NOTICE a NOTICE gap still refuses and leaves NOT
     drop_notice_block "github.com/coreos/go-oidc/v3"
 
 # The #590 shape (go.yaml.in/yaml/v4@v4.0.0, brought in by kin-openapi
-# v0.153.0, not yet in this repo's closure): inserted into the committed
-# NOTICE, the block must be that version's upstream NOTICE verbatim, under
-# its own header between prometheus/procfs and grpc — not merged into the
-# yaml v3 group, whose text differs — and nothing else may change. Network:
-# the module is downloaded, since main's closure doesn't contain it.
+# v0.153.0): inserted into the committed NOTICE, the block must be that
+# version's upstream NOTICE verbatim, under its own header between
+# prometheus/procfs and grpc — not merged into the yaml v3 group, whose text
+# differs — and nothing else may change. Once #590 lands, the committed NOTICE
+# already has this block, so the fixture drops it first and that becomes the
+# baseline. Network: the module is downloaded, since it may not be in the
+# closure.
 if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
     skip_network "go.yaml.in/yaml/v4@v4.0.0's NOTICE lands verbatim between procfs and grpc"
 else
@@ -686,6 +688,10 @@ else
     v4_dir=$( (cd "$REPO_ROOT" && go mod download -json go.yaml.in/yaml/v4@v4.0.0) |
         sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')
     cp "$REPO_ROOT/$NOTICE_FILE" "$v4_tmp/$NOTICE_FILE"
+    if grep -qx 'go.yaml.in/yaml/v4' "$v4_tmp/$NOTICE_FILE"; then
+        drop_notice_block "$v4_tmp" "go.yaml.in/yaml/v4"
+    fi
+    cp "$v4_tmp/$NOTICE_FILE" "$v4_tmp/baseline"
     v4_src=""
     if [ -n "$v4_dir" ]; then v4_src=$(notice_source_file "$v4_dir" 2>/dev/null || true); fi
     if [ -z "$v4_src" ] || ! insert_notice_block "$v4_tmp/$NOTICE_FILE" "go.yaml.in/yaml/v4" "$v4_src"; then
@@ -712,7 +718,7 @@ else
             echo "  NOT OK   $v4_desc (block is not upstream's NOTICE verbatim)"
             sed 's/^/           /' "$v4_tmp/d"
             fail=$((fail + 1))
-        elif ! cmp -s "$REPO_ROOT/$NOTICE_FILE" "$v4_tmp/$NOTICE_FILE"; then
+        elif ! cmp -s "$v4_tmp/baseline" "$v4_tmp/$NOTICE_FILE"; then
             echo "  NOT OK   $v4_desc (inserting the block changed something else in NOTICE)"
             fail=$((fail + 1))
         else
