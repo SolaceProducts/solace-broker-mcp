@@ -3588,6 +3588,9 @@
         "domainCertAuthorities": {
           "$ref": "#/definitions/BrokerCollectionsDomainCertAuthorities"
         },
+        "featureFlags": {
+          "$ref": "#/definitions/BrokerCollectionsFeatureFlags"
+        },
         "msgVpns": {
           "$ref": "#/definitions/BrokerCollectionsMsgVpns"
         },
@@ -3656,6 +3659,16 @@
       "properties": {
         "count": {
           "description": "The total number of objects in the domainCertAuthorities collection.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "BrokerCollectionsFeatureFlags": {
+      "properties": {
+        "count": {
+          "description": "The total number of objects in the featureFlags collection. (private API only)",
           "format": "int64",
           "type": "integer"
         }
@@ -4702,6 +4715,10 @@
         },
         "domainCertAuthoritiesUri": {
           "description": "The URI of this Broker's collection of Domain Certificate Authority objects.",
+          "type": "string"
+        },
+        "featureFlagsUri": {
+          "description": "The URI of this Broker's collection of Feature Flag objects. (private API only)",
           "type": "string"
         },
         "mqttUri": {
@@ -9842,6 +9859,211 @@
         },
         "links": {
           "$ref": "#/definitions/DomainCertAuthorityLinks"
+        },
+        "meta": {
+          "$ref": "#/definitions/SempMeta"
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "type": "object"
+    },
+    "FeatureFlag": {
+      "properties": {
+        "key": {
+          "description": "The key of the feature flag or available feature.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". (private API only)",
+          "maxLength": 40,
+          "minLength": 1,
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": true,
+          "x-identifyingDirect": true,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": false,
+          "x-readOptional": false,
+          "x-requiredPost": true,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "FEATURE_FLAG_KEY_PARAM",
+          "x-writeOnly": false
+        },
+        "name": {
+          "description": "The name of the feature flag. The name is empty for an available feature.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". (private API only)",
+          "maxLength": 0,
+          "minLength": 0,
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": true,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "SempMonitorGenericString_param",
+          "x-writeOnly": false
+        },
+        "origin": {
+          "description": "The kind of input that provides the value of the feature flag.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The allowed values and their meaning are:\n\n<pre>\n\"default\" - Neither the flags file nor an environment variable provides a value for the feature flag, so the feature flag has its default value. An available feature also has this origin.\n\"environment\" - An environment variable provides the value of the feature flag.\n\"flags-file\" - The flags file provides the value of the feature flag.\n</pre>\n (private API only)",
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-monitoring-enum": [
+            "default",
+            "environment",
+            "flags-file"
+          ],
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": true,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "FEATURE_FLAG_ORIGIN_PARAM",
+          "x-writeOnly": false
+        },
+        "phase": {
+          "description": "The release phase of the feature flag. The phase is empty for an available feature.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". (private API only)",
+          "maxLength": 0,
+          "minLength": 0,
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": true,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "SempMonitorGenericString_param",
+          "x-writeOnly": false
+        },
+        "source": {
+          "description": "The path of the flags file and the line number, as \"&lt;path&gt;:&lt;line&gt;\", or \"environment\" if an environment variable provides the value of the feature flag. The source is empty if the origin is \"default\".\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". (private API only)",
+          "maxLength": 0,
+          "minLength": 0,
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": true,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "SempMonitorGenericString_param",
+          "x-writeOnly": false
+        },
+        "state": {
+          "description": "The state of the feature flag or available feature.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The allowed values and their meaning are:\n\n<pre>\n\"enabled\" - The feature flag is enabled.\n\"disabled\" - The feature flag is disabled.\n\"available\" - The feature is always on in this build, because the feature does not have a feature flag.\n</pre>\n (private API only)",
+          "type": "string",
+          "x-accessLevels": {
+            "get": "global/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-monitoring-enum": [
+            "enabled",
+            "disabled",
+            "available"
+          ],
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": true,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "FEATURE_FLAG_STATE_PARAM",
+          "x-writeOnly": false
+        }
+      },
+      "type": "object"
+    },
+    "FeatureFlagCollections": {
+      "properties": {},
+      "type": "object"
+    },
+    "FeatureFlagLinks": {
+      "properties": {
+        "uri": {
+          "description": "The URI of this Feature Flag object.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FeatureFlagResponse": {
+      "properties": {
+        "collections": {
+          "$ref": "#/definitions/FeatureFlagCollections"
+        },
+        "data": {
+          "$ref": "#/definitions/FeatureFlag"
+        },
+        "links": {
+          "$ref": "#/definitions/FeatureFlagLinks"
+        },
+        "meta": {
+          "$ref": "#/definitions/SempMeta"
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "type": "object"
+    },
+    "FeatureFlagsResponse": {
+      "properties": {
+        "collections": {
+          "items": {
+            "$ref": "#/definitions/FeatureFlagCollections"
+          },
+          "type": "array"
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/definitions/FeatureFlagLinks"
+          },
+          "type": "array"
         },
         "meta": {
           "$ref": "#/definitions/SempMeta"
@@ -71818,7 +72040,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.10.14510"
+    "version": "10.26.11.15216"
   },
   "parameters": {
     "countQuery": {
@@ -74131,6 +74353,109 @@
           "domainCertAuthority"
         ],
         "x-supportedInSempDirect": true
+      }
+    },
+    "/featureFlags": {
+      "get": {
+        "description": "Get a list of Feature Flag objects.\n\nThe feature flags and the available features of the broker.\n\n\nAttribute|Identifying\n:---|:---:\nkey|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"global/read-only\".\n\nThe maximum number of objects that can be returned in a single page is 100.\n\n(private API only)",
+        "operationId": "getFeatureFlags",
+        "parameters": [
+          {
+            "$ref": "#/parameters/countQuery"
+          },
+          {
+            "$ref": "#/parameters/cursorQuery"
+          },
+          {
+            "$ref": "#/parameters/forceFullPageQuery"
+          },
+          {
+            "$ref": "#/parameters/whereQuery"
+          },
+          {
+            "$ref": "#/parameters/selectQuery"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The list of Feature Flag objects' attributes, and the request metadata.",
+            "schema": {
+              "$ref": "#/definitions/FeatureFlagsResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Get a list of Feature Flag objects.",
+        "tags": [
+          "all",
+          "featureFlag"
+        ],
+        "x-supportedInSempDirect": false
+      }
+    },
+    "/featureFlags/{key}": {
+      "get": {
+        "description": "Get a Feature Flag object.\n\nThe feature flags and the available features of the broker.\n\n\nAttribute|Identifying\n:---|:---:\nkey|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"global/read-only\".\n\n(private API only)",
+        "operationId": "getFeatureFlag",
+        "parameters": [
+          {
+            "description": "The key of the feature flag or available feature.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "$ref": "#/parameters/selectQuery"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Feature Flag object's attributes, and the request metadata.",
+            "schema": {
+              "$ref": "#/definitions/FeatureFlagResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Get a Feature Flag object.",
+        "tags": [
+          "all",
+          "featureFlag"
+        ],
+        "x-supportedInSempDirect": false
       }
     },
     "/mqtt": {
