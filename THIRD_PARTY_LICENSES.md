@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-11-20 with
+**Generated** 2026-11-25 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -52,7 +52,7 @@ under MPL-2.0.
 | `github.com/cespare/xxhash/v2` | v2.3.0 | MIT | [license](https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt) |
 | `github.com/coreos/go-oidc/v3/oidc` | v3.21.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE) |
 | `github.com/felixge/httpsnoop` | v1.1.0 | MIT | [license](https://github.com/felixge/httpsnoop/blob/v1.1.0/LICENSE.txt) |
-| `github.com/getkin/kin-openapi` | v0.152.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.152.0/LICENSE) |
+| `github.com/getkin/kin-openapi` | v0.153.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.153.0/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | v4.1.9 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.9/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.9 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.9/json/LICENSE) |
 | `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 | [license](https://github.com/go-logr/logr/blob/v1.4.4/LICENSE) |
@@ -65,8 +65,6 @@ under MPL-2.0.
 | `github.com/maypok86/otter/v2` | v2.4.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.4.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/LICENSE) |
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
-| `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
-| `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
 | `github.com/pandatix/go-abnf` | v0.5.3 | MIT | [license](https://github.com/pandatix/go-abnf/blob/v0.5.3/LICENSE) |
 | `github.com/prometheus/client_golang` | v1.25.0 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/LICENSE) |
 | `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.25.0 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/internal/github.com/golang/gddo/LICENSE) |
@@ -95,6 +93,7 @@ under MPL-2.0.
 | `go.opentelemetry.io/otel/sdk/metric` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/sdk/metric/v1.47.0/LICENSE) |
 | `go.opentelemetry.io/otel/trace` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.47.0/LICENSE) |
 | `go.opentelemetry.io/proto/otlp` | v1.11.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.1/otlp/LICENSE) |
+| `go.yaml.in/yaml/v4` | v4.0.0 | Apache-2.0 | [license](https://github.com/yaml/go-yaml/blob/v4.0.0/LICENSE) |
 | `golang.org/x/net` | v0.61.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.61.0:LICENSE) |
 | `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
 | `golang.org/x/sync` | v0.25.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.25.0:LICENSE) |
