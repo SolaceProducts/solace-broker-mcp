@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.11 rolling release (`10.26.11.15216`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.11.json` and continue to be sourced from the private-extended variant.
+
 ## [1.2.0] - 2026-11-11
 
 ### Added
