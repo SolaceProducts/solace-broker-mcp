@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-26
+
 ### Changed
 
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.11 rolling release (`10.26.11.15216`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.11.json` and continue to be sourced from the private-extended variant.
@@ -794,7 +796,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.2.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.2.1...HEAD
+- [1.2.1]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.2.0...v1.2.1
 - [1.2.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.1.0...v1.2.0
 - [1.1.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v1.0.0...v1.1.0
 - [1.0.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.11.0...v1.0.0
