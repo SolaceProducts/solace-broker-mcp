@@ -74,7 +74,8 @@ Check, in order:
 **A1b. Main-health preflight (clean start only).** Post-merge runs on `main` are not required
 checks, so a red one blocks nothing and is easy to miss, yet the release re-runs the same gates at
 the tag. Before any branch or PR exists, take the latest *completed* run of **each active workflow**
-on `main`, `push` and `schedule` (nightly) events only. Query workflows one by one: a single
+on `main`, `push`, `schedule` (nightly) and `workflow_run` (chained after another workflow, such as
+the nightly Helm chart and Observability runs) events only. Query workflows one by one: a single
 `gh run list --branch main --limit 100` is capped before any filtering, so on a busy `main` it can
 hide a workflow's latest result (a red nightly followed by 100 newer runs) and report a false
 "nothing red". A workflow with no eligible run is reported as `NO-RESULT`, never treated as green:
@@ -85,8 +86,9 @@ while IFS=$'\t' read -r id name; do
   gh run list --workflow "$id" --branch main --limit 30 \
     --json workflowName,event,status,conclusion,createdAt,headSha,url,databaseId |
   jq -r --arg n "$name" '
-    [.[] | select((.event=="push" or .event=="schedule") and .status=="completed"
-                  and (.conclusion | IN("success","failure","timed_out")))]
+    [.[] | select((.event=="push" or .event=="schedule" or .event=="workflow_run")
+                  and .status=="completed"
+                  and (.conclusion | IN("success","failure","timed_out","startup_failure")))]
     | sort_by(.createdAt) | last
     | if . == null then "NO-RESULT\t\($n)"
       elif .conclusion != "success"
@@ -95,16 +97,19 @@ while IFS=$'\t' read -r id name; do
 done
 ```
 It makes one call per workflow (about 40 s for the ~17 active workflows here). Green workflows print
-nothing. Cancelled and skipped runs are ignored, as are `pull_request`, `merge_group`,
-`workflow_dispatch` and GitHub-managed `dynamic` runs: `workflow_dispatch` must not hide a red
-nightly, the others run on other refs or are not ours to fix.
+nothing. A `startup_failure` (a workflow broken by an invalid file fails every run this way) counts
+as red; without it the query would fall back to an older green run. Cancelled and skipped runs are
+ignored, as are `pull_request`, `merge_group`, `workflow_dispatch` and GitHub-managed `dynamic`
+runs: `workflow_dispatch` must not hide a red nightly, the others run on other refs or are not
+ours to fix.
 - **`NO-RESULT` lines are not a pass.** Most are workflows that never run on `main` (PR-only,
   release or tag workflows, GitHub-managed ones). Do not stop on them, but list their names in the
   report so a workflow that has not run on `main` within its last 30 runs is visible instead of
   silently counted as healthy.
 - **`Guardian Scan` red → hard stop.** `release.yml` re-runs this gate against the tag, and a block
   there publishes no image and no GitHub Release (`RELEASING.md` job graph). Print the findings from
-  the run's artifact and stop; the fix is a dependency bump on `main`, or an admin
+  the run's artifact and stop; the fix is a dependency or Go toolchain bump on `main` (see "A red
+  Guardian after the merge" in Phase D for how to still release the version), or an admin
   `skip_security_checks` decision, not this skill's call:
   ```
   gdir=$(mktemp -d)   # TMPDIR is often unset; never build the path from it
@@ -114,6 +119,8 @@ nightly, the others run on other refs or are not ours to fix.
      "$gdir"/*/guardian-vulnerability-gate-response.json
   ```
   `until_block=null` on a High means it is already blocking; a number is days left before it does.
+  If `gh run download` finds no artifact, the red is not a vulnerability block (a build, FOSSA or
+  Prisma failure): read the failed job in the run instead, and ignore the dependency-bump advice.
 - **Any other workflow red → stop and ask the operator** whether to proceed, naming the workflow,
   trigger, commit and URL. Proceed only on an explicit yes, and say so in the PR body.
 - Nothing red → continue (still report any `NO-RESULT` workflow names).
@@ -307,6 +314,14 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   stop and surface only on an actual failure. A red Guardian is a hard stop: print its findings as in
   A1b — tagging would only spend the LLM eval run and leave an unpublished tag. If no run record
   appears for either workflow within ~2 min of the merge, flag it rather than tagging.
+  - **A red Guardian after the merge** (a finding crossed its blocking date between A1b and the
+    merge): the dated `## [X.Y.Z]` block is already on `main`, so every resume lands on the same red
+    run. The way out, with nothing tagged yet, is to fix forward under the same version: land the
+    dependency or toolchain fix on `main` in a PR that also puts its Security entry into the
+    `## [X.Y.Z]` block and updates `.github/release-notes/vX.Y.Z.md`, wait for that commit's
+    `build-and-test` and `Guardian Scan` push runs, and tag **that PR's merge commit** (it replaces
+    the changelog PR's `MERGE_SHA`). This is how v1.2.1 was released. The alternative is an admin
+    `skip_security_checks` decision, which skips only a Guardian block and is not this skill's call.
 - **Tag the exact merged commit** (not the branch tip — `origin/main` may have advanced since the
   merge) and push:
   ```
@@ -356,6 +371,7 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 - Never reuse or force-update a tag; never tag when the tagged commit's `origin/main` block is
   missing or entry-less, or its `build-and-test` or `Guardian Scan` push run is not `success`
   (Phase D). Never start a release while `Guardian Scan` is red on `main` (A1b).
-- Tag the exact merge commit captured in Phase C, verified to be an ancestor of `origin/main` —
+- Tag the exact merge commit captured in Phase C (or, on the red-Guardian path in Phase D, the merge
+  commit of the fix PR that re-greened `main`), verified to be an ancestor of `origin/main` —
   never the branch tip or local `HEAD`.
 - Do not modify the `/changelog` skill — invoke it unchanged for gap drafting.
