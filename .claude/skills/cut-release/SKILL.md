@@ -73,33 +73,50 @@ Check, in order:
 
 **A1b. Main-health preflight (clean start only).** Post-merge runs on `main` are not required
 checks, so a red one blocks nothing and is easy to miss, yet the release re-runs the same gates at
-the tag. Before any branch or PR exists, take the latest *completed* run of every workflow on
-`main`, `push` and `schedule` (nightly) events only, and list those that are not green:
+the tag. Before any branch or PR exists, take the latest *completed* run of **each active workflow**
+on `main`, `push` and `schedule` (nightly) events only. Query workflows one by one: a single
+`gh run list --branch main --limit 100` is capped before any filtering, so on a busy `main` it can
+hide a workflow's latest result (a red nightly followed by 100 newer runs) and report a false
+"nothing red". A workflow with no eligible run is reported as `NO-RESULT`, never treated as green:
 ```
-gh run list --branch main --limit 100 \
-  --json workflowName,event,status,conclusion,createdAt,headSha,url,databaseId \
-  --jq '[.[] | select((.event=="push" or .event=="schedule") and .status=="completed"
-                      and (.conclusion | IN("success","failure","timed_out")))]
-        | group_by(.workflowName) | map(max_by(.createdAt))
-        | map(select(.conclusion != "success"))
-        | .[] | "\(.workflowName)\t\(.event)\t\(.conclusion)\t\(.headSha[0:8])\t\(.url)"'
+gh workflow list --limit 200 --json id,name,state \
+  --jq '.[] | select(.state=="active") | "\(.id)\t\(.name)"' |
+while IFS=$'\t' read -r id name; do
+  gh run list --workflow "$id" --branch main --limit 30 \
+    --json workflowName,event,status,conclusion,createdAt,headSha,url,databaseId |
+  jq -r --arg n "$name" '
+    [.[] | select((.event=="push" or .event=="schedule") and .status=="completed"
+                  and (.conclusion | IN("success","failure","timed_out")))]
+    | sort_by(.createdAt) | last
+    | if . == null then "NO-RESULT\t\($n)"
+      elif .conclusion != "success"
+        then "RED\t\(.workflowName)\t\(.event)\t\(.conclusion)\t\(.headSha[0:8])\t\(.url)\t\(.databaseId)"
+      else empty end'
+done
 ```
-Cancelled and skipped runs are ignored, as are `pull_request`, `merge_group` and
-`workflow_dispatch` runs: the last must not hide a red nightly, the others run on other refs.
+It makes one call per workflow (about 40 s for the ~17 active workflows here). Green workflows print
+nothing. Cancelled and skipped runs are ignored, as are `pull_request`, `merge_group`,
+`workflow_dispatch` and GitHub-managed `dynamic` runs: `workflow_dispatch` must not hide a red
+nightly, the others run on other refs or are not ours to fix.
+- **`NO-RESULT` lines are not a pass.** Most are workflows that never run on `main` (PR-only,
+  release or tag workflows, GitHub-managed ones). Do not stop on them, but list their names in the
+  report so a workflow that has not run on `main` within its last 30 runs is visible instead of
+  silently counted as healthy.
 - **`Guardian Scan` red → hard stop.** `release.yml` re-runs this gate against the tag, and a block
   there publishes no image and no GitHub Release (`RELEASING.md` job graph). Print the findings from
   the run's artifact and stop; the fix is a dependency bump on `main`, or an admin
   `skip_security_checks` decision, not this skill's call:
   ```
-  gh run download <databaseId> -p 'guardian-vulnerability-gate-*' -D "$TMPDIR/guardian"
+  gdir=$(mktemp -d)   # TMPDIR is often unset; never build the path from it
+  gh run download <databaseId> -p 'guardian-vulnerability-gate-*' -D "$gdir"
   jq -r '.results[] | (.vulnerabilities[]?, .vulnerabilities_pending[]?)
          | "\(.cve_id) \(.component_name) \(.component_version) \(.severity) fix=\(.fix_versions|join(",")) open=\(.days_open)d until_block=\(.days_until_blocking)"' \
-     "$TMPDIR"/guardian/*/guardian-vulnerability-gate-response.json
+     "$gdir"/*/guardian-vulnerability-gate-response.json
   ```
   `until_block=null` on a High means it is already blocking; a number is days left before it does.
 - **Any other workflow red → stop and ask the operator** whether to proceed, naming the workflow,
   trigger, commit and URL. Proceed only on an explicit yes, and say so in the PR body.
-- Nothing red → continue silently.
+- Nothing red → continue (still report any `NO-RESULT` workflow names).
 
 **A2. Gap detection + auto-draft.** Enumerate PRs merged since `vPREV`:
 ```
