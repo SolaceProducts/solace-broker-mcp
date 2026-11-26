@@ -68,8 +68,38 @@ Check, in order:
 - An open PR from `release/vX.Y.Z` (`gh pr list --head "release/vX.Y.Z" --state open`) → resume the
   Phase C watch on it.
 - A `release/vX.Y.Z` branch exists (local or remote) but no PR → push it and open the PR (Phase B).
-- None of the above → create the release branch from the fresh remote tip
+- None of the above → run A1b, then create the release branch from the fresh remote tip
   (`git switch -c release/vX.Y.Z origin/main`) so promotion runs on the latest `main`, then start at A2.
+
+**A1b. Main-health preflight (clean start only).** Post-merge runs on `main` are not required
+checks, so a red one blocks nothing and is easy to miss, yet the release re-runs the same gates at
+the tag. Before any branch or PR exists, take the latest *completed* run of every workflow on
+`main`, `push` and `schedule` (nightly) events only, and list those that are not green:
+```
+gh run list --branch main --limit 100 \
+  --json workflowName,event,status,conclusion,createdAt,headSha,url,databaseId \
+  --jq '[.[] | select((.event=="push" or .event=="schedule") and .status=="completed"
+                      and (.conclusion | IN("success","failure","timed_out")))]
+        | group_by(.workflowName) | map(max_by(.createdAt))
+        | map(select(.conclusion != "success"))
+        | .[] | "\(.workflowName)\t\(.event)\t\(.conclusion)\t\(.headSha[0:8])\t\(.url)"'
+```
+Cancelled and skipped runs are ignored, as are `pull_request`, `merge_group` and
+`workflow_dispatch` runs: the last must not hide a red nightly, the others run on other refs.
+- **`Guardian Scan` red → hard stop.** `release.yml` re-runs this gate against the tag, and a block
+  there publishes no image and no GitHub Release (`RELEASING.md` job graph). Print the findings from
+  the run's artifact and stop; the fix is a dependency bump on `main`, or an admin
+  `skip_security_checks` decision, not this skill's call:
+  ```
+  gh run download <databaseId> -p 'guardian-vulnerability-gate-*' -D "$TMPDIR/guardian"
+  jq -r '.results[] | (.vulnerabilities[]?, .vulnerabilities_pending[]?)
+         | "\(.cve_id) \(.component_name) \(.component_version) \(.severity) fix=\(.fix_versions|join(",")) open=\(.days_open)d until_block=\(.days_until_blocking)"' \
+     "$TMPDIR"/guardian/*/guardian-vulnerability-gate-response.json
+  ```
+  `until_block=null` on a High means it is already blocking; a number is days left before it does.
+- **Any other workflow red → stop and ask the operator** whether to proceed, naming the workflow,
+  trigger, commit and URL. Proceed only on an explicit yes, and say so in the PR body.
+- Nothing red → continue silently.
 
 **A2. Gap detection + auto-draft.** Enumerate PRs merged since `vPREV`:
 ```
@@ -240,16 +270,26 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   ```
 - **Confirm the tagged commit is releasable — scoped to the commit, not the branch.** Verify
   `MERGE_SHA` is contained in `origin/main` (`git merge-base --is-ancestor <MERGE_SHA> origin/main`),
-  then capture the `build-and-test` run id for that exact commit and block on it once (don't
-  foreground-poll):
+  then capture the `build-and-test` **and `Guardian Scan`** run ids for that exact commit and block on
+  each once (don't foreground-poll). Filter to `--event push`: the same commit also has a
+  `merge_group` run of each workflow, and the `merge_group` Guardian run can be green while the
+  `push` one is red, so an unfiltered `.[0]` can report the wrong verdict:
   ```
-  run_id=$(gh run list --workflow=build-and-test.yml --commit <MERGE_SHA> \
+  run_id=$(gh run list --workflow=build-and-test.yml --event push --commit <MERGE_SHA> \
              --json databaseId --jq '.[0].databaseId')
   gh run watch "$run_id" --exit-status   # blocks to completion; exit 0 = success, non-zero = failure
+
+  g_id=$(gh run list --workflow=guardian-scan.yaml --event push --commit <MERGE_SHA> \
+           --json databaseId --jq '.[0].databaseId')
+  gh run watch "$g_id" --exit-status     # same gate release.yml re-runs at the tag
   ```
-  Right after a merge the run is normally still `in_progress`/`queued` — that is not a failure;
-  `gh run watch` blocks until it finishes (run it backgrounded), expected ~5–10 min. Proceed only on
-  a zero exit; stop and surface only on an actual failure.
+  Right after a merge both runs are normally still `in_progress`/`queued` — that is not a failure;
+  `gh run watch` blocks until each finishes. Start both watches backgrounded **in parallel**: the
+  build takes ~10–14 min and Guardian ~2–3 min (measured on `main` push runs), so waiting on both
+  costs no extra time, and a red Guardian ends the wait early. Proceed only when **both** exit zero;
+  stop and surface only on an actual failure. A red Guardian is a hard stop: print its findings as in
+  A1b — tagging would only spend the LLM eval run and leave an unpublished tag. If no run record
+  appears for either workflow within ~2 min of the merge, flag it rather than tagging.
 - **Tag the exact merged commit** (not the branch tip — `origin/main` may have advanced since the
   merge) and push:
   ```
@@ -297,7 +337,8 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   `CHANGELOG.md`. Never rewrite existing bullets or the bottom `## Release Process` / `##
   Versioning` sections.
 - Never reuse or force-update a tag; never tag when the tagged commit's `origin/main` block is
-  missing or entry-less, or its `build-and-test` run is not `success` (Phase D).
+  missing or entry-less, or its `build-and-test` or `Guardian Scan` push run is not `success`
+  (Phase D). Never start a release while `Guardian Scan` is red on `main` (A1b).
 - Tag the exact merge commit captured in Phase C, verified to be an ancestor of `origin/main` —
   never the branch tip or local `HEAD`.
 - Do not modify the `/changelog` skill — invoke it unchanged for gap drafting.
