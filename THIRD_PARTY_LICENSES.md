@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-11-25 with
+**Generated** 2026-11-26 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -94,7 +94,7 @@ under MPL-2.0.
 | `go.opentelemetry.io/otel/trace` | v1.47.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/trace/v1.47.0/LICENSE) |
 | `go.opentelemetry.io/proto/otlp` | v1.11.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.1/otlp/LICENSE) |
 | `go.yaml.in/yaml/v4` | v4.0.0 | Apache-2.0 | [license](https://github.com/yaml/go-yaml/blob/v4.0.0/LICENSE) |
-| `golang.org/x/net` | v0.61.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.61.0:LICENSE) |
+| `golang.org/x/net` | v0.62.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.62.0:LICENSE) |
 | `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
 | `golang.org/x/sync` | v0.25.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.25.0:LICENSE) |
 | `golang.org/x/sys/cpu` | v0.49.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.49.0:LICENSE) |

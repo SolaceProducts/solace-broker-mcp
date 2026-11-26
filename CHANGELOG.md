@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.11 rolling release (`10.26.11.15216`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.11.json` and continue to be sourced from the private-extended variant.
 
+### Security
+
+- `golang.org/x/net` is now v0.62.0 (was v0.61.0), fixing CVE-2026-78661 (high; HTML tokenizer quadratic-time parsing, GO-2026-6860) and CVE-2026-97045 (medium, GO-2026-6866). Tracked under SOL-157721.
+
 ## [1.2.0] - 2026-11-11
 
 ### Added
