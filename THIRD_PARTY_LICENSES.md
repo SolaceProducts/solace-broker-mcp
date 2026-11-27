@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-11-26 with
+**Generated** 2026-11-27 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -65,11 +65,11 @@ under MPL-2.0.
 | `github.com/maypok86/otter/v2` | v2.4.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.4.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.8.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/LICENSE) |
 | `github.com/munnerz/goautoneg` | a7dc8b61c822 | BSD-3-Clause | [license](https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE) |
-| `github.com/pandatix/go-abnf` | v0.5.3 | MIT | [license](https://github.com/pandatix/go-abnf/blob/v0.5.3/LICENSE) |
+| `github.com/pandatix/go-abnf` | v0.5.5 | MIT | [license](https://github.com/pandatix/go-abnf/blob/v0.5.5/LICENSE) |
 | `github.com/prometheus/client_golang` | v1.25.0 | Apache-2.0 | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/LICENSE) |
 | `github.com/prometheus/client_golang/internal/github.com/golang/gddo` | v1.25.0 | BSD-3-Clause | [license](https://github.com/prometheus/client_golang/blob/v1.25.0/internal/github.com/golang/gddo/LICENSE) |
 | `github.com/prometheus/client_model` | v0.6.3 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.3/LICENSE) |
-| `github.com/prometheus/common` | v0.73.1 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.73.1/LICENSE) |
+| `github.com/prometheus/common` | v0.74.0 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.74.0/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |
 | `github.com/prometheus/procfs` | v0.22.0 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.22.0/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.3 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/LICENSE) |
@@ -95,7 +95,7 @@ under MPL-2.0.
 | `go.opentelemetry.io/proto/otlp` | v1.11.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.11.1/otlp/LICENSE) |
 | `go.yaml.in/yaml/v4` | v4.0.0 | Apache-2.0 | [license](https://github.com/yaml/go-yaml/blob/v4.0.0/LICENSE) |
 | `golang.org/x/net` | v0.62.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/net/+/v0.62.0:LICENSE) |
-| `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE) |
+| `golang.org/x/oauth2` | v0.38.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.38.0:LICENSE) |
 | `golang.org/x/sync` | v0.25.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.25.0:LICENSE) |
 | `golang.org/x/sys/cpu` | v0.49.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.49.0:LICENSE) |
 | `golang.org/x/text` | v0.43.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.43.0:LICENSE) |
