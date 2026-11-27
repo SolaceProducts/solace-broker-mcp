@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Built with Go 1.26.11 (was 1.26.10), fixing CVE-2026-97054 (medium; `net/http` MaxBytesReader header race, GO-2026-6859). Tracked under SOL-158633.
+
 ## [1.2.1] - 2026-11-26
 
 ### Changed
